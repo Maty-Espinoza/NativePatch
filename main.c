@@ -10,6 +10,7 @@
 #include <systemctrl.h>
 
 #include "ge_constants.h"
+#include "log.h"
 
 PSP_MODULE_INFO("GePatch", 0x1007, 1, 0);
 
@@ -29,35 +30,21 @@ PSP_MODULE_INFO("GePatch", 0x1007, 1, 0);
 #define VRAM_DEPTH_BUFFER_OFFSET 0x04100000
 #define VRAM_1KB 0x041ff000
 
-#define log(...) \
-{ \
-  char msg[256]; \
-  sprintf(msg,__VA_ARGS__); \
-  logmsg(msg); \
-}
+#define STATS_EVERY 600 // frames entre cada linea de estadisticas (~10 s)
 
-void logmsg(char *msg) {
-  int k1 = pspSdkSetK1(0);
-
-  SceUID fd = sceIoOpen("ms0:/ge_patch.txt", PSP_O_WRONLY | PSP_O_CREAT, 0777);
-  if (fd >= 0) {
-    sceIoLseek(fd, 0, PSP_SEEK_END);
-    sceIoWrite(fd, msg, strlen(msg));
-    sceIoClose(fd);
-  }
-
-  pspSdkSetK1(k1);
-}
+// Contadores baratos que se vuelcan al log cada STATS_EVERY frames
+static struct {
+  u32 lists, heads, stalls, draws, skipped, stack_full, fb_full;
+} st;
 
 int checkAddress(u32 addr) {
   addr &= 0x0fffffff;
   if (addr >= 0x08400000 && addr < 0x0A400000)
     return 0;
   if (addr >= 0x04000000 && addr < 0x04200000) {
-    // log("vram address: %08x\n", addr);
     return -1;
   }
-  log("invalid address: %08x\n", addr);
+  LOG_ONCE(addr >> 12, "direccion invalida %08lx\n", addr);
   return -1;
 }
 
@@ -236,6 +223,8 @@ int push(StackEntry *data) {
     return 0;
   }
 
+  st.stack_full++;
+  LOG_ONCE(0xE1000000, "pila de display list llena (CALL ignorado)\n");
   return -1;
 }
 
@@ -268,6 +257,8 @@ int insertFramebuf(u32 framebuf) {
     return state.framebuf_count++;
   }
 
+  st.fb_full++;
+  LOG_ONCE(0xE2000000, "tabla de framebuffers llena, no se registra %08lx\n", framebuf);
   return -1;
 }
 
@@ -420,6 +411,7 @@ void patchGeList(u32 *list, u32 *stall) {
                 break;
 
               default:
+                LOG_ONCE(0xE3000000 | behaviour, "signal no manejada: behaviour=%d\n", behaviour);
                 break;
             }
             break;
@@ -455,8 +447,10 @@ void patchGeList(u32 *list, u32 *stall) {
 
         if (state.ignore_framebuf || (state.ignore_texture && state.ge_cmd[GE_CMD_TEXTUREMAPENABLE])) {
           *list = 0;
+          st.skipped++;
           break;
         }
+        st.draws++;
 
         if ((state.vertex_type & GE_VTYPE_THROUGH_MASK) == GE_VTYPE_THROUGH) {
           u8 num_points_u = data & 0xff;
@@ -498,8 +492,10 @@ void patchGeList(u32 *list, u32 *stall) {
         // therefore NOPing it makes character invisible.
         if (state.ignore_framebuf || (state.ignore_texture && state.ge_cmd[GE_CMD_TEXTUREMAPENABLE])) {
           *list = 0;
+          st.skipped++;
           break;
         }
+        st.draws++;
 
         if ((state.vertex_type & GE_VTYPE_THROUGH_MASK) == GE_VTYPE_THROUGH) {
           u16 count = data & 0xffff;
@@ -614,6 +610,8 @@ exit_loop:
         // break;
 
       case GE_CMD_FRAMEBUFPIXFORMAT:
+        if (data != PIXELFORMAT)
+          LOG_ONCE(0xE4000000 | data, "el juego pide formato de fb %lu (se fuerza 565)\n", data);
         *list = (cmd << 24) | PIXELFORMAT;
         break;
 
@@ -642,6 +640,8 @@ exit_loop:
             state.ignore_framebuf = 1;
           }
 
+          LOG_ONCE(state.framebuf ^ (pitch << 20), "fb %08lx pitch=%lu%s\n", state.framebuf, pitch,
+                   state.ignore_framebuf ? " -> ignorado (no se dibuja)" : "");
           insertFramebuf(state.framebuf);
 
           state.framebufptr = 0;
@@ -688,6 +688,7 @@ exit_loop:
         if (state.texbufptr[index] && state.texbufwidth[index]) {
           u32 texaddr = ((state.texbufwidth[index] & 0x0f0000) << 8) | (state.texbufptr[index] & 0xffffff);
           if (texaddr != state.framebuf && findFramebuf(texaddr) >= 0) {
+            LOG_ONCE(texaddr ^ 0x7E000000, "textura desde fb %08lx -> draws omitidos\n", texaddr);
             state.ignore_texture = 1;
           } else {
             state.ignore_texture = 0;
@@ -759,11 +760,13 @@ unsigned int sceGeEdramGetSizePatched(void) {
   return 4 * 1024 * 1024;
 }
 
+void guStart(int cid, void *list); // gu.c
+
 void copyFrameBuffer() {
   *(u32 *)DRAW_NATIVE = 1;
 
   // memcpy((void *)DISPLAY_BUFFER, (void *)VRAM_DRAW_BUFFER_OFFSET, 960*544*2);
-  sceGuStart(0, (void *)(RENDER_LIST | 0xA0000000));
+  guStart(0, (void *)(RENDER_LIST | 0xA0000000));
   sceGuCopyImage(PIXELFORMAT, 0, 0, WIDTH, HEIGHT, PITCH,
                  (void *)VRAM_DRAW_BUFFER_OFFSET,
                  0, 0, PITCH, (void *)DISPLAY_BUFFER);
@@ -773,6 +776,7 @@ void copyFrameBuffer() {
 
 int sceGeListUpdateStallAddrPatched(int qid, void *stall) {
   int k1 = pspSdkSetK1(0);
+  st.stalls++;
   char info[64];
   if (_sceGeGetList(qid, info, NULL) == 0) {
     u16 state = *(u16 *)(info + 0x08);
@@ -790,6 +794,7 @@ int sceGeListUpdateStallAddrPatched(int qid, void *stall) {
 }
 
 int sceGeListEnQueuePatched(const void *list, void *stall, int cbid, PspGeListArgs *arg) {
+  st.lists++;
   if (state.has_draws)
     copyFrameBuffer();
   resetGeState();
@@ -798,12 +803,24 @@ int sceGeListEnQueuePatched(const void *list, void *stall, int cbid, PspGeListAr
 }
 
 int sceGeListEnQueueHeadPatched(const void *list, void *stall, int cbid, PspGeListArgs *arg) {
+  st.heads++;
   resetGeState();
   patchGeList((u32 *)((u32)list & 0x0fffffff), (u32 *)((u32)stall & 0x0fffffff));
   return _sceGeListEnQueueHead(list, stall, cbid, arg);
 }
 
 int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat, int sync) {
+  log_frame++;
+  // Cada buffer distinto que el juego muestra; util para videos (FMV) que no pasan por el GE
+  LOG_ONCE((u32)topaddr ^ (bufferwidth << 20) ^ (pixelformat << 30), "display %08lx ancho=%d fmt=%d\n",
+           (u32)topaddr, bufferwidth, pixelformat);
+
+  if (log_frame % STATS_EVERY == 0) {
+    LOG("stats listas=%lu head=%lu stall=%lu draws=%lu omitidos=%lu pila_llena=%lu fb_lleno=%lu fbs=%lu\n",
+        st.lists, st.heads, st.stalls, st.draws, st.skipped, st.stack_full, st.fb_full, state.framebuf_count);
+    memset(&st, 0, sizeof(st));
+  }
+
   copyFrameBuffer();
   return _sceDisplaySetFrameBuf(topaddr, bufferwidth, pixelformat, sync);
 }
@@ -814,12 +831,18 @@ int module_start(SceSize args, void *argp) {
   if (pad.Buttons & PSP_CTRL_LTRIGGER)
     return 0;
 
+  logInit(pad.Buttons & PSP_CTRL_RTRIGGER);
+
   _sceGeEdramGetAddr = (void *)FindProc("sceGE_Manager", "sceGe_driver", 0xE47E40E4);
   _sceGeEdramGetSize = (void *)FindProc("sceGE_Manager", "sceGe_driver", 0x1F6752AD);
   _sceGeGetList = (void *)FindProc("sceGE_Manager", "sceGe_driver", 0x67B01D8E);
   _sceGeListUpdateStallAddr = (void *)FindProc("sceGE_Manager", "sceGe_driver", 0xE0D68148);
   _sceGeListEnQueue = (void *)FindProc("sceGE_Manager", "sceGe_driver", 0xAB49E76A);
   _sceGeListEnQueueHead = (void *)FindProc("sceGE_Manager", "sceGe_driver", 0x1C0D95A6);
+
+  if (!_sceGeEdramGetAddr || !_sceGeEdramGetSize || !_sceGeGetList ||
+      !_sceGeListUpdateStallAddr || !_sceGeListEnQueue || !_sceGeListEnQueueHead)
+    LOG("ERROR: no se encontro alguna funcion de sceGe_driver\n");
 
   sctrlHENPatchSyscall((u32)_sceGeEdramGetAddr, sceGeEdramGetAddrPatched);
   sctrlHENPatchSyscall((u32)_sceGeEdramGetSize, sceGeEdramGetSizePatched);
@@ -828,6 +851,8 @@ int module_start(SceSize args, void *argp) {
   sctrlHENPatchSyscall((u32)_sceGeListEnQueueHead, sceGeListEnQueueHeadPatched);
 
   _sceDisplaySetFrameBuf = (void *)FindProc("sceDisplay_Service", "sceDisplay_driver", 0x289D82FE);
+  if (!_sceDisplaySetFrameBuf)
+    LOG("ERROR: no se encontro sceDisplaySetFrameBuf\n");
   sctrlHENPatchSyscall((u32)_sceDisplaySetFrameBuf, sceDisplaySetFrameBufPatched);
 
   sceKernelDcacheWritebackInvalidateAll();

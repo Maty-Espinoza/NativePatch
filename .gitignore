@@ -1,0 +1,6 @@
+*.o
+*.elf
+*.prx
+*.SFO
+exports.c
+.DS_Store

@@ -126,7 +126,9 @@ int sceGuFinish(void)
   return 0;
 }
 
-void sceGuStart(int cid, void* list)
+// Se llama guStart y no sceGuStart para no chocar con la firma de pspgu.h,
+// que cambio entre versiones del SDK (void antes, int ahora).
+void guStart(int cid, void* list)
 {
   current = (unsigned int*)((unsigned int)list);
 }

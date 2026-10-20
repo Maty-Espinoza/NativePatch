@@ -1,8 +1,17 @@
+# Ruta al codigo de Adrenaline (para systemctrl.h y libpspsystemctrl_kernel.a).
+# Por defecto se espera clonado al lado de este repo: git clone https://github.com/TheOfficialFloW/Adrenaline
+ADRENALINE ?= ../Adrenaline/cef
+INCDIR = $(ADRENALINE)/include
+LIBDIR = $(ADRENALINE)/lib
+
+# make DEST=/Volumes/VITA/pspemu/seplugins copia el plugin ahi al terminar
 all:
-	cp $(TARGET).prx E:/pspemu/seplugins/$(TARGET).prx
+ifdef DEST
+	cp $(TARGET).prx $(DEST)/$(TARGET).prx
+endif
 
 TARGET = ge_patch
-OBJS = main.o gu.o exports.o
+OBJS = main.o log.o gu.o exports.o
 
 CFLAGS = -O3 -Os -G0 -Wall -fshort-wchar -fno-pic -mno-check-zero-division
 CXXFLAGS = $(CFLAGS) -fno-exceptions -fno-rtti
