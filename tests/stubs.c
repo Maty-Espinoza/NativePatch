@@ -47,12 +47,12 @@ int sceGuFinish(void) { return 0; }
 void sceGuCopyImage(int psm, int sx, int sy, int w, int h, int sw, void *s, int dx, int dy, int dw, void *d) {}
 void guStart(int cid, void *list) {}
 
-// VRAM real (0x04000000, 4 MB) y RAM (0x08000000-0x0A900000: juego, VRAM falsa,
-// buffer de pantalla, memoria de parches y lista de copia del plugin). Como en la PSP,
+// VRAM real (0x04000000, 4 MB) y RAM (0x08000000-0x0AA00000: juego, VRAM falsa,
+// buffer de pantalla, memorias del plugin, sus listas e imagen del menu). Como en la PSP,
 // la misma memoria se ve sin cache en +0x40000000 (el plugin lee/escribe por ahi).
 void mapPspMemory(void) {
   // + la pagina de la bandera DRAW_NATIVE de Adrenaline (0xABCDEF00)
-  struct { unsigned long addr, size; int alias; } r[] = { { 0x04000000, 0x400000, 1 }, { 0x08000000, 0x2900000, 1 }, { 0xABCDE000, 0x2000, 0 } };
+  struct { unsigned long addr, size; int alias; } r[] = { { 0x04000000, 0x400000, 1 }, { 0x08000000, 0x2A00000, 1 }, { 0xABCDE000, 0x2000, 0 } };
   int i, k;
   for (i = 0; i < 3; i++) {
     int fd = memfd_create("psp", 0);

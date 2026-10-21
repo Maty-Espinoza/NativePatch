@@ -12,7 +12,7 @@
 #include "menu.h"
 #include "font.h"
 
-Options opt = { .rt_on = 1, .rt_scale = 1, .omit_fbtex = 1, .fallback = 0, .nop_mark = 1, .walk_new = 1, .v2d = 1 };
+Options opt = { .rt_on = 1, .rt_scale = 1, .omit_fbtex = 1, .fallback = 0, .nop_mark = 1, .walk_new = 1, .v2d = 1, .tx_ge = 1 };
 
 // --- Elementos del menu -----------------------------------------------------
 enum { ACT_NONE, ACT_CAPTURE, ACT_SNAPSHOT, ACT_FLUSH, ACT_CLOSE };
@@ -34,6 +34,7 @@ static const Item items[] = {
   { "Render targets en VRAM alta", &opt.rt_on, 0, 1, 1, no_si },
   { "Escala de render targets", &opt.rt_scale, 1, 2, 1, NULL },
   { "Texturas desde framebuffer", &opt.omit_fbtex, 0, 2, 1, fbtex_modes },
+  { "Videos: escalar copias con el GE", &opt.tx_ge, 0, 1, 1, no_si },
   { "Imagen original escalada (videos)", &opt.fallback, 0, 2, 1, fb_modes },
   { "NOP de draws omitidos", &opt.nop_mark, 0, 1, 1, nop_modes },
   { "Recorrido de listas", &opt.walk_new, 0, 1, 1, walk_modes },
@@ -48,13 +49,16 @@ static const Item items[] = {
 };
 #define N_ITEMS (int)(sizeof(items) / sizeof(items[0]))
 
-static int open, sel, block, prev, held;
+static int open, sel, block, prev, held, dirty;
 
 int menuOpen(void) { return open || block; }
 
 // --- Dibujo -------------------------------------------------------------------
-#define W 960
-#define H 544
+// El menu se dibuja (solo cuando cambia) en una imagen propia de 512 de ancho, y el GE la
+// copia sobre la pantalla despues de cada frame. Antes se dibujaba cada frame con la CPU
+// sobre el buffer grande, que el juego podia estar dibujando ya (parpadeo en Silent Hill).
+#define W MENU_W
+#define H MENU_H
 
 void drawText(u16 *buf, int x, int y, const char *s, u16 fg, u16 bg) {
   for (; *s && x <= W - 8; s++, x += 8) {
@@ -82,25 +86,23 @@ static void fillRect(u16 *buf, int x, int y, int w, int h, u16 c) {
 #define C_DIM   0xad55
 #define C_VAL   0x07ff // amarillo
 
-// Caja alineada a lineas de cache (x 224..735 = 64 bytes exactos por fila): el menu se
-// dibuja con cache y se escribe a memoria de una vez, en vez de pixel a pixel sin cache
 static void drawMenu(u16 *buf) {
-  int x = 232, y = 64, w = 496, i;
+  int x = 8, w = MENU_W - 16, i;
   char line[32];
-  fillRect(buf, 224, y - 8, 512, 16 * (N_ITEMS + 2) + 16, C_BG);
-  drawText(buf, x, y, "GePatch " GEPATCH_VERSION, C_TEXT, C_BG);
+  fillRect(buf, 0, 0, MENU_W, MENU_H, C_BG);
+  drawText(buf, x, 8, "GePatch " GEPATCH_VERSION, C_TEXT, C_BG);
   for (i = 0; i < N_ITEMS; i++) {
     const Item *it = &items[i];
-    int yy = y + 32 + i * 16;
+    int yy = 40 + i * 16;
     u16 bg = i == sel ? C_SEL : C_BG;
-    fillRect(buf, 224, yy, 512, 16, bg);
+    fillRect(buf, 0, yy, MENU_W, 16, bg);
     drawText(buf, x, yy, it->name, C_TEXT, bg);
     if (it->val) {
       if (it->labels)
         snprintf(line, sizeof(line), "%s", it->labels[*it->val - it->min]);
       else
         snprintf(line, sizeof(line), "%d", *it->val);
-      drawText(buf, x + w - 16 - 8 * (int)strlen(line), yy, line, C_VAL, bg);
+      drawText(buf, x + w - 8 * (int)strlen(line), yy, line, C_VAL, bg);
     }
   }
 }
@@ -178,8 +180,9 @@ static void change(const Item *it, int dir) {
     LOG("menu: %s = %d\n", it->name, v);
 }
 
-int menuFrame(u16 *buf) {
+int menuFrame(void) {
   u32 b = readButtons(), pressed = b & ~prev;
+  int was = open, osel = sel;
   u32 combo = PSP_CTRL_LTRIGGER | PSP_CTRL_RTRIGGER | PSP_CTRL_START;
   prev = b;
 
@@ -213,8 +216,12 @@ int menuFrame(u16 *buf) {
       LOG("menu: cerrado\n");
   }
 
-  if (!buf || !open)
+  if (!open)
     return 0;
-  drawMenu(buf);
+  if (!was || dirty || sel != osel || (pressed & (PSP_CTRL_LEFT | PSP_CTRL_RIGHT | PSP_CTRL_CROSS))) {
+    drawMenu((u16 *)MENU_BUF);
+    sceKernelDcacheWritebackRange((void *)MENU_BUF, MENU_W * MENU_H * 2);
+    dirty = 0;
+  }
   return 1;
 }

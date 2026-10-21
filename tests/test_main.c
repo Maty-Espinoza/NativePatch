@@ -37,7 +37,7 @@ static void reset(void) {
   memset((void *)VERTS, 0, 0x10000);
   test_log_len = 0; test_log[0] = 0;
   logResetOnce();
-  Options def = { .rt_on = 1, .rt_scale = 1, .omit_fbtex = 1, .fallback = 0, .nop_mark = 1, .walk_new = 1, .v2d = 1 };
+  Options def = { .rt_on = 1, .rt_scale = 1, .omit_fbtex = 1, .fallback = 0, .nop_mark = 1, .walk_new = 1, .v2d = 1, .tx_ge = 1 };
   opt = def;
   passive = 0; walk_now = 1;
   big_transfer = 0; fbtex_seen = 0; vram_hi = 0; copy_vram = 0;
@@ -309,7 +309,7 @@ static void test_copia_listas_alternas(void) {
   reset();
   _sceGeListEnQueue = fakeEnqueue;
   n_enqueued = 0;
-  copyFrameBuffer(); copyFrameBuffer(); copyFrameBuffer();
+  copyFrameBuffer(0); copyFrameBuffer(0); copyFrameBuffer(0);
   CHECK(last_enqueued[0] != last_enqueued[1] && last_enqueued[0] == last_enqueued[2], "listas de copia: %08lx %08lx %08lx",
         last_enqueued[0], last_enqueued[1], last_enqueued[2]);
 }
@@ -530,6 +530,46 @@ static void test_silent_hill_video(void) {
   CHECK(px == to565(0x00ff0000, 3) && px, "pixel del video en pantalla: %04x", px);
 }
 
+// Copia grande a la pantalla (video de Silent Hill + "PRESS START" dibujado encima): la
+// copia se reemplaza por un CALL a una lista que la hace y la dibuja al doble en su lugar
+static void test_copia_escalada_con_ge(void) {
+  reset();
+  u32 *v = (u32 *)0x09000000;
+  begin();
+  cmd(GE_CMD_BASE, 0x090000);
+  setFb(0x04c000, 512);
+  cmd(GE_CMD_VADDR, 0x123400); // VADDR del juego: debe quedar igual despues de la copia
+  u32 *p = lp;
+  cmd(GE_CMD_TRANSFERSRC, (u32)v & 0xffffff); cmd(GE_CMD_TRANSFERSRCW, (0x09 << 16) | 512); cmd(GE_CMD_TRANSFERSRCPOS, 0);
+  cmd(GE_CMD_TRANSFERDST, 0x04c000); cmd(GE_CMD_TRANSFERDSTW, (0x0a << 16) | 512); cmd(GE_CMD_TRANSFERDSTPOS, 0);
+  cmd(GE_CMD_TRANSFERSIZE, (271 << 10) | 479);
+  u32 *start = cmd(GE_CMD_TRANSFERSTART, 1);
+  cmd(GE_CMD_VERTEXTYPE, GE_VTYPE_THROUGH | GE_VTYPE_POS_16BIT); // texto encima
+  cmd(GE_CMD_PRIM, (GE_PRIM_RECTANGLES << 16) | 2);
+  end();
+  int pass;
+  for (pass = 0; pass < 2; pass++) { // la misma lista dos veces (listas estaticas)
+    memset(&st, 0, sizeof(st));
+    big_transfer = 0;
+    run();
+    CHECK(st.tx_ge == 1 && !big_transfer, "pasada %d: la copia no se escalo con el GE (%lu)", pass, st.tx_ge);
+    CHECK(p[0] == ((GE_CMD_BASE << 24) | 0x0a0000) && (p[1] >> 24) == GE_CMD_CALL && *start == NOP_MARK,
+          "pasada %d: la copia no se reescribio como BASE+CALL: %08lx %08lx %08lx", pass, p[0], p[1], *start);
+    CHECK(state.base == 0x09000000, "pasada %d: el recorrido tomo el BASE del plugin (%08lx)", pass, state.base);
+    u32 *sub = (u32 *)(0x0A000000 | (p[1] & 0xffffff));
+    int k, prim = 0, ret = 0, copy = 0, vaddr = 0;
+    for (k = 0; k < 120 && !ret; k++) {
+      prim |= (sub[k] >> 24) == GE_CMD_PRIM;
+      ret |= (sub[k] >> 24) == GE_CMD_RET;
+      copy |= sub[k] == ((GE_CMD_TRANSFERSTART << 24) | 1);
+      vaddr |= sub[k] == ((GE_CMD_VADDR << 24) | 0x123400) && sub[k - 1] == ((GE_CMD_BASE << 24) | 0x090000);
+    }
+    CHECK(prim && ret && copy && vaddr, "la lista del plugin: copia=%d draw=%d RET=%d VADDR del juego=%d", copy, prim, ret, vaddr);
+    short *q = (short *)((u32)sub + 448);
+    CHECK(q[7] == 960 && q[8] == 544, "el draw de la copia no es al doble: %d,%d", q[7], q[8]);
+  }
+}
+
 // Copia reducida del frame al fb del juego (Gran Turismo lee el frame anterior como textura)
 static void test_copia_reducida(void) {
   reset();
@@ -564,24 +604,23 @@ static void test_copia_reducida(void) {
 extern unsigned int test_buttons;
 static void test_menu(void) {
   reset();
-  static u16 img[960 * 544];
   test_buttons = PSP_CTRL_LTRIGGER | PSP_CTRL_RTRIGGER | PSP_CTRL_START;
-  menuFrame(img);
+  menuFrame();
   CHECK(menuOpen(), "el menu no se abrio");
-  test_buttons = 0; menuFrame(img);
-  test_buttons = PSP_CTRL_RIGHT; menuFrame(img); // primera opcion: render targets si -> no
+  test_buttons = 0; menuFrame();
+  test_buttons = PSP_CTRL_RIGHT; menuFrame(); // primera opcion: render targets si -> no
   CHECK(opt.rt_on == 0 && logHas("menu: Render targets en VRAM alta = no"), "no se cambio la opcion (rt_on=%d)", opt.rt_on);
   CHECK(logHas("rt: se liberaron"), "cambiar render targets no los libero");
-  test_buttons = 0; menuFrame(img);
-  test_buttons = PSP_CTRL_DOWN; menuFrame(img); test_buttons = 0; menuFrame(img);
-  test_buttons = PSP_CTRL_RIGHT; menuFrame(img);
+  test_buttons = 0; menuFrame();
+  test_buttons = PSP_CTRL_DOWN; menuFrame(); test_buttons = 0; menuFrame();
+  test_buttons = PSP_CTRL_RIGHT; menuFrame();
   CHECK(opt.rt_scale == 2, "escala de render targets: %d", opt.rt_scale);
   int dibujado = 0, i;
-  for (i = 0; i < 960 * 544; i++) dibujado += img[i] != 0;
+  for (i = 0; i < MENU_W * MENU_H; i++) dibujado += ((u16 *)MENU_BUF)[i] != 0;
   CHECK(dibujado > 1000, "el menu no se dibujo (%d pixeles)", dibujado);
-  test_buttons = PSP_CTRL_CIRCLE; menuFrame(img);
+  test_buttons = PSP_CTRL_CIRCLE; menuFrame();
   CHECK(menuOpen(), "al cerrar con O el juego no deberia ver el boton hasta soltarlo");
-  test_buttons = 0; menuFrame(img);
+  test_buttons = 0; menuFrame();
   CHECK(!menuOpen(), "el menu no se cerro");
 }
 
@@ -591,7 +630,7 @@ int main(void) {
     test_viewport_scissor_x2, test_viewport_zona, test_memo_lista_grande, test_vertices_2d,
     test_vaddr_avanza_tras_3d, test_bjump_no_salta, test_estado_entre_listas, test_textura_fb_al_dibujar,
     test_render_target, test_textura_dentro_de_rt, test_rt_incompleto, test_rt_escala_1, test_pitch_0,
-    test_robustez, test_copia_listas_alternas, test_fps, test_doble_buffer_alternado, test_nop_no_revive, test_lista_estatica_fb, test_pasivo_no_escribe, test_pasivo_normaliza, test_desplazamiento_y_1024, test_vertices_2d_muchos_buffers, test_pasivo_muestreo, test_silent_hill_video, test_copia_reducida, test_menu,
+    test_robustez, test_copia_listas_alternas, test_fps, test_doble_buffer_alternado, test_nop_no_revive, test_lista_estatica_fb, test_pasivo_no_escribe, test_pasivo_normaliza, test_desplazamiento_y_1024, test_vertices_2d_muchos_buffers, test_pasivo_muestreo, test_silent_hill_video, test_copia_escalada_con_ge, test_copia_reducida, test_menu,
   };
   int i;
   for (i = 0; i < (int)(sizeof(tests) / sizeof(tests[0])); i++)

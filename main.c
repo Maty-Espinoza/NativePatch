@@ -48,7 +48,7 @@ static struct {
   u32 frames, frame_us, frame_max, slow60, slow30; // tiempo entre flips
   u32 patch_us, patch_max, cmds;                   // costo del plugin por frame
   u32 upscale_us, fb_copies;                       // escalado por CPU (videos), copias del frame al fb del juego
-  u32 walked, calls, lookups, v2d, v2d_skip, vevict; // recorrido: frames medidos, CALLs, busquedas en memo, vertices 2D
+  u32 walked, calls, lookups, v2d, v2d_skip, vevict, call_cmds, tx_ge; // recorrido: frames medidos, CALLs, busquedas en memo, vertices 2D
   u32 long_frame_logged;
 } st;
 static u32 patch_us_frame; // costo del plugin en el frame en curso
@@ -114,7 +114,9 @@ static const u8 memo_cmd[256] = {
   [GE_CMD_VIEWPORTXCENTER] = 1, [GE_CMD_VIEWPORTYCENTER] = 1, [GE_CMD_OFFSETX] = 1, [GE_CMD_OFFSETY] = 1,
   [GE_CMD_REGION1] = 1, [GE_CMD_REGION2] = 1, [GE_CMD_SCISSOR1] = 1, [GE_CMD_SCISSOR2] = 1,
   [GE_CMD_TEXADDR0] = 2, [GE_CMD_TEXBUFWIDTH0] = 2, [GE_CMD_TEXSIZE0] = 2, [GE_CMD_TEXFORMAT] = 2,
+  [GE_CMD_BASE] = 3, [GE_CMD_CALL] = 3, // 3 = solo si se reescribio alguna copia (ver txUpscale)
 };
+static int tx_patched_any; // alguna copia grande se reemplazo por un CALL a una lista del plugin
 static int tex_patched_any; // algun comando de textura se redirigio a un render target
 static u32 rt_gen;          // cambia cuando cambia algo que afecta a texCheck (rts, framebuffers)
 
@@ -136,7 +138,7 @@ static inline void vramUse(u32 a) {
 
 // El frame que vio el juego se copia reducido a su fb (opcion "copia"): asi los efectos
 // que leen el frame anterior como textura (Gran Turismo) ven una imagen real
-static int fbtex_seen;
+static int fbtex_seen, menu_shown;
 static u32 copy_vram; // buffer temporal en la VRAM alta (de los render targets)
 
 
@@ -301,6 +303,7 @@ typedef struct {
   u32 *list;
   u32 base;
   u32 offset;
+  int ncmds; // comandos recorridos al entrar (estadistica de sublistas)
 } StackEntry;
 
 typedef struct {
@@ -662,7 +665,7 @@ static int texCheckCalc(void) {
 // que aparecen "con el tiempo"). Ahora va en RAM libre con 32768 entradas (384 KB).
 #define VMEMO_ADDR 0x0A700000
 #define VMEMO_SIZE 32768
-typedef struct { u32 addr, n, hash; } VMemo;
+typedef struct { u32 addr, n, hash, hits; } VMemo; // 16 bytes: 512 KB
 static VMemo *vmemo = (VMemo *)VMEMO_ADDR;
 
 static u32 vertsHash(u32 start, u32 n, int size, int pos_off, int pos_size) {
@@ -675,17 +678,21 @@ static u32 vertsHash(u32 start, u32 n, int size, int pos_off, int pos_size) {
 }
 
 static int vertsPatched(u32 start, u32 n, int size, int pos_off, int pos_size) {
-  int k = (start >> 2) & (VMEMO_SIZE - 1);
-  return vmemo[k].addr == start && vmemo[k].n == n && vmemo[k].hash == vertsHash(start, n, size, pos_off, pos_size);
+  VMemo *e = &vmemo[(start >> 2) & (VMEMO_SIZE - 1)];
+  if (e->addr == start && e->n == n && e->hash == vertsHash(start, n, size, pos_off, pos_size)) {
+    e->hits++;
+    return 1;
+  }
+  return 0;
 }
 
 static void vertsRemember(u32 start, u32 n, u32 hash) {
-  int k = (start >> 2) & (VMEMO_SIZE - 1);
-  if (vmemo[k].addr && vmemo[k].addr != start)
-    st.vevict++; // otro buffer ocupaba la entrada: si vuelve, se duplicaria otra vez
-  vmemo[k].addr = start;
-  vmemo[k].n = n;
-  vmemo[k].hash = hash;
+  VMemo *e = &vmemo[(start >> 2) & (VMEMO_SIZE - 1)];
+  // Choque solo si se expulsa un buffer estatico (ya visto de nuevo): ese se duplicaria otra
+  // vez. Los buffers dinamicos (Gran Turismo: direccion nueva cada frame) no cuentan.
+  if (e->addr && e->addr != start && e->hits)
+    st.vevict++;
+  e->addr = start; e->n = n; e->hash = hash; e->hits = 0;
 }
 
 void AdvanceVerts(int count, int vertex_size) {
@@ -695,6 +702,79 @@ void AdvanceVerts(int count, int vertex_size) {
   } else {
     state.vertex_addr += count * vertex_size;
   }
+}
+
+// Copia grande (video) a la pantalla: en vez de escalar con la CPU al final del frame lo
+// que se copio (y perder lo que el juego dibuja encima despues, como "PRESS START" en
+// Silent Hill), se reemplaza la copia por un CALL a una lista del plugin que hace la copia
+// original (la VRAM falsa queda igual) y ademas dibuja la imagen al doble en el buffer
+// grande, en el mismo lugar de la lista. Luego deja el estado del GE como estaba.
+// Las 8 palabras de la copia (sceGuCopyImage) se reescriben como BASE + CALL + NOPs.
+#define TX_RING (RENDER_LIST + 0x8000) // 64 listas de 512 bytes
+static const u8 tx_seq[7] = { GE_CMD_TRANSFERSRC, GE_CMD_TRANSFERSRCW, GE_CMD_TRANSFERSRCPOS, GE_CMD_TRANSFERDST,
+                              GE_CMD_TRANSFERDSTW, GE_CMD_TRANSFERDSTPOS, GE_CMD_TRANSFERSIZE };
+static const u8 tx_saved[] = { GE_CMD_TEXTUREMAPENABLE, GE_CMD_TEXMODE, GE_CMD_TEXFORMAT, GE_CMD_TEXADDR0,
+  GE_CMD_TEXBUFWIDTH0, GE_CMD_TEXSIZE0, GE_CMD_TEXFILTER, GE_CMD_TEXWRAP, GE_CMD_TEXFUNC, GE_CMD_ALPHABLENDENABLE,
+  GE_CMD_ALPHATESTENABLE, GE_CMD_ZTESTENABLE, GE_CMD_STENCILTESTENABLE, GE_CMD_LOGICOPENABLE, GE_CMD_COLORTESTENABLE,
+  GE_CMD_ZWRITEDISABLE, GE_CMD_MASKRGB, GE_CMD_MASKALPHA, GE_CMD_VERTEXTYPE, GE_CMD_CLEARMODE, GE_CMD_TEXMAPMODE };
+
+static int lg2(u32 v) { int n = 0; while ((1u << n) < v) n++; return n; }
+
+static int txUpscale(u32 *list, u32 dst, u32 w, u32 h, int bpp) {
+  static int slot;
+  u32 *p = list - 7, k;
+  if (passive || state.cur_rt || state.ignore_framebuf || dst != state.framebuf || !validAddr((u32)p) ||
+      ((u32)list >= TX_RING && (u32)list < TX_RING + 64 * 512))
+    return 0;
+  for (k = 0; k < 7; k++)
+    if ((origOp(p + k) >> 24) != tx_seq[k])
+      return 0; // no es la secuencia de sceGuCopyImage
+  u32 src = ((state.ge_cmd[GE_CMD_TRANSFERSRCW] & 0xff0000) << 8) | (state.ge_cmd[GE_CMD_TRANSFERSRC] & 0xffffff);
+  u32 sw = state.ge_cmd[GE_CMD_TRANSFERSRCW] & 0x7ff, sp = state.ge_cmd[GE_CMD_TRANSFERSRCPOS];
+  u32 dp = state.ge_cmd[GE_CMD_TRANSFERDSTPOS], tex = src + (((sp >> 10) & 0x3ff) * sw + (sp & 0x3ff)) * bpp;
+  int dx = (int)(dp & 0x3ff) - state.offx, dy = (int)((dp >> 10) & 0x3ff) - state.offy;
+  if ((tex & 15) || !validAddr(tex) || w > 512 || h > 512 || sw > 1024)
+    return 0;
+  u32 sl = TX_RING + (slot++ & 63) * 512, *l = (u32 *)(sl | 0x40000000);
+  short *v = (short *)((sl + 448) | 0x40000000);
+  u32 target = (FAKE_VRAM | ((sl - state.offset) & 0xffffff)) + state.offset;
+  if (target != sl)
+    return 0; // el CALL no puede llegar a la lista con el OFFSETADDR del juego
+  #define C(c, d) (*l++ = ((c) << 24) | ((d) & 0xffffff))
+  for (k = 0; k < 7; k++)
+    *l++ = origOp(p + k);                       // la copia original, tal cual
+  *l++ = origOp(list);
+  C(GE_CMD_OFFSETADDR, 0);                      // el RET restaura el del juego
+  C(GE_CMD_TEXTUREMAPENABLE, 1); C(GE_CMD_TEXMODE, 0);
+  C(GE_CMD_TEXFORMAT, bpp == 4 ? 3 : state.ge_cmd[GE_CMD_FRAMEBUFPIXFORMAT] & 3);
+  C(GE_CMD_TEXADDR0, tex); C(GE_CMD_TEXBUFWIDTH0, ((tex >> 24) << 16) | sw);
+  C(GE_CMD_TEXSIZE0, (lg2(h) << 8) | lg2(w));
+  C(GE_CMD_TEXFILTER, (1 << 8) | 1); C(GE_CMD_TEXWRAP, (1 << 8) | 1); C(GE_CMD_TEXFUNC, 3); C(GE_CMD_TEXFLUSH, 0);
+  for (k = 9; k < 15; k++)
+    C(tx_saved[k], 0);                          // sin blend, alpha/z/stencil test, logic op, color test
+  C(GE_CMD_ZWRITEDISABLE, 1); C(GE_CMD_MASKRGB, 0); C(GE_CMD_MASKALPHA, 0);
+  C(GE_CMD_CLEARMODE, 0); C(GE_CMD_TEXMAPMODE, 0);
+  C(GE_CMD_VERTEXTYPE, GE_VTYPE_THROUGH | GE_VTYPE_TC_16BIT | GE_VTYPE_POS_16BIT);
+  short q[10] = { 0, 0, dx * 2, dy * 2, 0, w, h, (dx + w) * 2, (dy + h) * 2, 0 };
+  memcpy(v, q, sizeof(q));
+  C(GE_CMD_BASE, ((sl + 448) >> 8) & 0x0f0000); C(GE_CMD_VADDR, sl + 448);
+  C(GE_CMD_PRIM, (GE_PRIM_RECTANGLES << 16) | 2);
+  for (k = 0; k < sizeof(tx_saved); k++)
+    C(tx_saved[k], state.ge_cmd[tx_saved[k]]); // estado del juego
+  C(GE_CMD_TEXFLUSH, 0);
+  C(GE_CMD_BASE, (state.vertex_addr >> 8) & 0x0f0000); C(GE_CMD_VADDR, state.vertex_addr);
+  C(GE_CMD_BASE, state.base >> 8);
+  C(GE_CMD_RET, 0);
+  #undef C
+  setOp(p, origOp(p), (GE_CMD_BASE << 24) | ((FAKE_VRAM >> 8) & 0x0f0000));
+  setOp(p + 1, origOp(p + 1), (GE_CMD_CALL << 24) | ((sl - state.offset) & 0xffffff));
+  for (k = 2; k < 7; k++)
+    setOp(p + k, origOp(p + k), NOP_MARK);
+  setOp(list, origOp(list), NOP_MARK);
+  tx_patched_any = 1;
+  st.tx_ge++;
+  LOG_ONCE(0xE7000000 ^ dst, "copia %lux%lu a fb %08lx -> se escala con el GE en su lugar de la lista\n", w, h, dst);
+  return 1;
 }
 
 void patchGeList(u32 *list, u32 *stall) {
@@ -725,7 +805,7 @@ void patchGeList(u32 *list, u32 *stall) {
     u32 op = *list, m = memo_cmd[op >> 24];
     if (m == 1 && op == (GE_CMD_NOP << 24) && opt.nop_mark)
       m = 0; // NOP 0 del juego: con la marca activa no puede ser un draw anulado por el plugin
-    if (m == 1 || (m == 2 && tex_patched_any)) {
+    if (m == 1 || (m == 2 && tex_patched_any) || (m == 3 && tx_patched_any)) {
       st.lookups++;
       op = origOp(list);
       // FBPTR 0x000000 del juego es igual al parche del buffer grande. Si el FBWIDTH de al
@@ -803,6 +883,8 @@ void patchGeList(u32 *list, u32 *stall) {
       // TODO: need to save other states, too?
       case GE_CMD_CALL:
         state.address = ((state.base | data) + state.offset) & 0x0ffffffc;
+        if (state.address >= TX_RING && state.address < TX_RING + 64 * 512)
+          break; // lista del plugin (copia escalada): no se recorre
         if (!validAddr(state.address) || !validAddr(state.address + 12 * 4)) {
           LOG_ONCE((state.address >> 12) ^ 0xD1000000, "CALL a direccion invalida %08lx, se ignora\n", state.address);
           break;
@@ -817,6 +899,7 @@ void patchGeList(u32 *list, u32 *stall) {
         stack_entry->list = list;
         stack_entry->base = state.base; // antes quedaba sin inicializar y un SIGNAL RET lo restauraba
         stack_entry->offset = state.offset;
+        stack_entry->ncmds = ncmds;
         if (push(stack_entry) == 0) {
           list = (u32 *)(state.address - 4);
           lim = NULL;
@@ -839,6 +922,8 @@ void patchGeList(u32 *list, u32 *stall) {
         // Ignore returns when the stack is empty
         stack_entry = pop();
         if (stack_entry) {
+          if (!state.curr_stack)
+            st.call_cmds += ncmds - stack_entry->ncmds;
           list = stack_entry->list;
           state.offset = stack_entry->offset;
           lim = NULL;
@@ -872,6 +957,7 @@ void patchGeList(u32 *list, u32 *stall) {
                 stack_entry->list = list;
                 stack_entry->base = state.base;
                 stack_entry->offset = state.offset;
+                stack_entry->ncmds = ncmds;
                 if (push(stack_entry) == 0)
                   list = (u32 *)(target - 4);
                 break;
@@ -1216,7 +1302,7 @@ exit_loop:
         int f = inFramebuf(dst) - 1;
         if (f >= 0) {
           st.fb_transfers++;
-          if (w * h >= 240 * 136 && pitch >= 480) {
+          if (w * h >= 240 * 136 && pitch >= 480 && !(opt.tx_ge && txUpscale(list, dst, w, h, bpp))) {
             big_transfer = 1;
             big_tx.addr = dst; big_tx.w = pitch;
             big_tx.fmt = (data & 1) ? 3 : state.ge_cmd[GE_CMD_FRAMEBUFPIXFORMAT] & 3;
@@ -1327,7 +1413,7 @@ void guStart(int cid, void *list); // gu.c
 // Copia el buffer de alta resolucion al que muestra Adrenaline, con una lista propia del GE.
 // Se alternan dos listas: con una sola, una copia nueva podia reescribir la lista
 // mientras el GE aun ejecutaba la anterior (imagen corrupta o cuelgue).
-void copyFrameBuffer() {
+void copyFrameBuffer(int menu) {
   static int which;
   u32 rl = RENDER_LIST + (which ^= 1) * 0x1000;
   *(u32 *)DRAW_NATIVE = 1;
@@ -1336,6 +1422,8 @@ void copyFrameBuffer() {
   sceGuCopyImage(PIXELFORMAT, 0, 0, WIDTH, HEIGHT, PITCH,
                  (void *)VRAM_DRAW_BUFFER_OFFSET,
                  0, 0, PITCH, (void *)DISPLAY_BUFFER);
+  if (menu) // el menu encima, despues de la copia (antes la CPU dibujaba sobre el buffer grande)
+    sceGuCopyImage(PIXELFORMAT, 0, 0, MENU_W, MENU_H, MENU_W, (void *)MENU_BUF, MENU_X, MENU_Y, PITCH, (void *)DISPLAY_BUFFER);
   sceGuFinish();
   _sceGeListEnQueue((void *)rl, NULL, -1, NULL);
 }
@@ -1371,7 +1459,7 @@ int sceGeListEnQueuePatched(const void *list, void *stall, int cbid, PspGeListAr
   // Antes se copiaba al encolar cada lista, y en juegos con varias listas por frame eso
   // mostraba frames a medio dibujar (parpadeo, tearing). Ahora solo si no hubo flip en 100 ms.
   if (!passive && state.has_draws && sceKernelGetSystemTimeLow() - last_flip > 100000) {
-    copyFrameBuffer();
+    copyFrameBuffer(menu_shown);
     st.enq_copies++;
   }
   u32 t0 = sceKernelGetSystemTimeLow();
@@ -1634,11 +1722,15 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
           bufferwidth >= 480 && bufferwidth <= 512)
         fbCopyDown(disp, bufferwidth, pixelformat);
     }
-    // Menu: se dibuja con cache sobre la imagen antes de copiarla a la pantalla
-    if (menuFrame(draw))
-      sceKernelDcacheWritebackInvalidateAll();
+    int menu = menu_shown = menuFrame();
+    if (menu && draw == (u16 *)DISPLAY_BUFFER) { // imagen escalada por CPU: el menu se pone igual
+      int y;
+      for (y = 0; y < MENU_H; y++)
+        memcpy(draw + (MENU_Y + y) * PITCH + MENU_X, (u16 *)MENU_BUF + y * MENU_W, MENU_W * 2);
+      sceKernelDcacheWritebackRange(draw + MENU_Y * PITCH, MENU_H * PITCH * 2);
+    }
     if (draw != (u16 *)DISPLAY_BUFFER)
-      copyFrameBuffer();
+      copyFrameBuffer(menu);
   }
 
   st.patch_us += patch_us_frame;
@@ -1665,8 +1757,9 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
       LOG("stats %s: %lu us/frame (max %lu) comandos/frame=%lu draws/frame=%lu escalado_cpu=%lu us/frame\n",
           passive ? "observacion" : "plugin", st.patch_us / w, st.patch_max, st.cmds / w, (st.draws + st.skipped) / w,
           st.fallback ? st.upscale_us / st.fallback : 0);
-      LOG("stats recorrido: frames_medidos=%lu/%lu calls/frame=%lu memo/frame=%lu vert2d=%lu ya2d=%lu choques2d=%lu\n",
-          st.walked, st.frames, st.calls / w, st.lookups / w, st.v2d, st.v2d_skip, st.vevict);
+      LOG("stats recorrido: frames_medidos=%lu/%lu calls/frame=%lu comandos_en_sublistas/frame=%lu memo/frame=%lu\n",
+          st.walked, st.frames, st.calls / w, st.call_cmds / w, st.lookups / w);
+      LOG("stats 2d: vert2d=%lu ya2d=%lu choques2d=%lu | copias escaladas con GE=%lu\n", st.v2d, st.v2d_skip, st.vevict, st.tx_ge);
     }
     if (rt_count || st.rt_fail) {
       LOG("stats rt: draws_en_rt=%lu draws_con_tex_rt=%lu rt_incompletos=%lu fallos=%lu rts=%d vram_libre=%lu KB\n",
