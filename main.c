@@ -34,18 +34,18 @@ PSP_MODULE_INFO("GePatch", 0x1007, 1, 0);
 
 // Contadores baratos que se vuelcan al log cada STATS_EVERY frames
 static struct {
-  u32 lists, heads, stalls, draws, skipped, stack_full, fb_full;
+  u32 lists, heads, stalls, draws, skipped, stack_full, transfers, fb_transfers, fallback, enq_copies, idle_frames;
 } st;
 
-int checkAddress(u32 addr) {
+#define MAX_CMDS 200000 // tope de comandos por recorrido, para no colgarse en listas en bucle
+
+// Estado entre un flip (sceDisplaySetFrameBuf) y el siguiente
+static u32 draws_since_flip, big_transfer, last_flip;
+
+// 1 si se puede leer: VRAM real o RAM (incluye la VRAM falsa en 0x0A000000)
+int validAddr(u32 addr) {
   addr &= 0x0fffffff;
-  if (addr >= 0x08400000 && addr < 0x0A400000)
-    return 0;
-  if (addr >= 0x04000000 && addr < 0x04200000) {
-    return -1;
-  }
-  LOG_ONCE(addr >> 12, "direccion invalida %08lx\n", addr);
-  return -1;
+  return (addr >= 0x04000000 && addr < 0x04200000) || (addr >= 0x08000000 && addr < 0x0A400000);
 }
 
 static const u8 tcsize[4] = { 0, 2, 4, 8 }, tcalign[4] = { 0, 1, 2, 4 };
@@ -209,12 +209,20 @@ typedef struct {
 
   u32 framebuf_addr[16];
   u32 framebuf_count;
+  u32 framebuf_next; // al llenarse la tabla se reemplaza el mas antiguo
 } GeState;
 
 static GeState state;
 
+// Se llama al encolar una lista nueva. Solo se reinicia el recorrido (pila, offset):
+// los registros del GE (BASE, direcciones de vertices, framebuffer, texturas...) se
+// mantienen entre listas igual que en el hardware. Antes se borraba todo, y una lista
+// que dibujaba sin volver a fijar BASE o VADDR hacia que se leyera/parcheara memoria
+// equivocada (posible causa de glitches y cuelgues).
 void resetGeState() {
-  memset(&state, 0, sizeof(GeState));
+  state.offset = 0;
+  state.curr_stack = 0;
+  state.has_draws = 0;
 }
 
 int push(StackEntry *data) {
@@ -252,14 +260,25 @@ int insertFramebuf(u32 framebuf) {
   if (res >= 0)
     return res;
 
-  if (state.framebuf_count < (sizeof(state.framebuf_addr) / sizeof(u32))) {
+  int n = sizeof(state.framebuf_addr) / sizeof(u32);
+  if (state.framebuf_count < n) {
     state.framebuf_addr[state.framebuf_count] = framebuf;
     return state.framebuf_count++;
   }
 
-  st.fb_full++;
-  LOG_ONCE(0xE2000000, "tabla de framebuffers llena, no se registra %08lx\n", framebuf);
-  return -1;
+  LOG_ONCE(0xE2000000, "tabla de framebuffers llena, se reemplaza el mas antiguo\n");
+  int i = state.framebuf_next++ % n;
+  state.framebuf_addr[i] = framebuf;
+  return i;
+}
+
+// 1 si addr cae dentro de algun framebuffer conocido (480x272 a 32 bpp como maximo)
+int inFramebuf(u32 addr) {
+  int i;
+  for (i = 0; i < state.framebuf_count; i++)
+    if (addr >= state.framebuf_addr[i] && addr < state.framebuf_addr[i] + 512 * 272 * 4)
+      return 1;
+  return 0;
 }
 
 void AdvanceVerts(int count, int vertex_size) {
@@ -280,10 +299,18 @@ void patchGeList(u32 *list, u32 *stall) {
 
   StackEntry *stack_entry;
   StackEntry stack_entry_buf;
+  int ncmds = 0;
 
   for (; list && (!stall || (stall && list != stall)); list++) {
-    // if (checkAddress((u32)list) < 0)
-      // goto finish;
+    // Nunca leer fuera de la memoria valida ni recorrer para siempre
+    if (!validAddr((u32)list)) {
+      LOG_ONCE(((u32)list >> 12) ^ 0xD0000000, "lista apunta a direccion invalida %08lx, se corta\n", (u32)list);
+      goto finish;
+    }
+    if (++ncmds > MAX_CMDS) {
+      LOG_ONCE(0xE6000000, "lista con mas de %d comandos (bucle?), se corta\n", MAX_CMDS);
+      goto finish;
+    }
 
     u32 op = *list;
     u32 cmd = op >> 24;
@@ -336,6 +363,10 @@ void patchGeList(u32 *list, u32 *stall) {
       // TODO: need to save other states, too?
       case GE_CMD_CALL:
         state.address = ((state.base | data) + state.offset) & 0x0ffffffc;
+        if (!validAddr(state.address) || !validAddr(state.address + 12 * 4)) {
+          LOG_ONCE((state.address >> 12) ^ 0xD1000000, "CALL a direccion invalida %08lx, se ignora\n", state.address);
+          break;
+        }
         if (*(u32 *)(state.address) >> 24 == GE_CMD_BONEMATRIXDATA &&
             *(u32 *)(state.address+11*4) >> 24 == GE_CMD_BONEMATRIXDATA &&
             *(u32 *)(state.address+12*4) >> 24 == GE_CMD_RET) {
@@ -343,16 +374,17 @@ void patchGeList(u32 *list, u32 *stall) {
         }
         stack_entry = &stack_entry_buf;
         stack_entry->list = list;
+        stack_entry->base = state.base; // antes quedaba sin inicializar y un SIGNAL RET lo restauraba
         stack_entry->offset = state.offset;
         if (push(stack_entry) == 0) {
           list = (u32 *)(state.address - 4);
         }
         break;
 
-      // TODO: is it okay to always take the branch?
+      // BJUMP salta solo si la caja de BOUNDINGBOX quedo fuera de pantalla. Antes siempre
+      // se saltaba, y los draws que el GE si ejecuta (caja visible) quedaban sin parchear:
+      // geometria en la esquina o que aparece/desaparece. Seguir de largo recorre ambos caminos.
       case GE_CMD_BJUMP:
-        state.address = ((state.base | data) + state.offset) & 0x0ffffffc;
-        list = (u32 *)(state.address - 4);
         break;
 
       case GE_CMD_JUMP:
@@ -444,6 +476,7 @@ void patchGeList(u32 *list, u32 *stall) {
       case GE_CMD_SPLINE:
       {
         state.has_draws = 1;
+        draws_since_flip++;
 
         if (state.ignore_framebuf || (state.ignore_texture && state.ge_cmd[GE_CMD_TEXTUREMAPENABLE])) {
           *list = 0;
@@ -487,6 +520,7 @@ void patchGeList(u32 *list, u32 *stall) {
       case GE_CMD_PRIM:
       {
         state.has_draws = 1;
+        draws_since_flip++;
 
         // Dragon Ball Z Tenkaichi Tag Team uses the same GE list again,
         // therefore NOPing it makes character invisible.
@@ -497,18 +531,29 @@ void patchGeList(u32 *list, u32 *stall) {
         }
         st.draws++;
 
-        if ((state.vertex_type & GE_VTYPE_THROUGH_MASK) == GE_VTYPE_THROUGH) {
-          u16 count = data & 0xffff;
+        u16 count = data & 0xffff;
+        u8 vertex_size = 0, pos_off = 0, visit_off = 0;
+        getVertexInfo(state.vertex_type, &vertex_size, &pos_off, &visit_off);
 
-          u8 vertex_size = 0, pos_off = 0, visit_off = 0;
-          getVertexInfo(state.vertex_type, &vertex_size, &pos_off, &visit_off);
+        // El GE avanza VADDR/IADDR despues de cada draw, este o no en modo through.
+        // Antes solo se avanzaba en through, y un draw 2D posterior sin VADDR propio
+        // parcheaba (duplicaba) los vertices del draw 3D anterior.
+        int indexed = (state.vertex_type & GE_VTYPE_IDX_MASK) != GE_VTYPE_IDX_NONE;
+        if ((state.vertex_type & GE_VTYPE_THROUGH_MASK) != GE_VTYPE_THROUGH ||
+            !validAddr(state.vertex_addr) || (indexed && !validAddr(state.index_addr))) {
+          AdvanceVerts(count, vertex_size);
+          break;
+        }
 
+        {
           u16 lower = 0;
           u16 upper = count;
-          if ((state.vertex_type & GE_VTYPE_IDX_MASK) != GE_VTYPE_IDX_NONE) {
+          if (indexed) {
             GetIndexBounds((void *)state.index_addr, count, state.vertex_type, &lower, &upper);
             upper += 1;
           }
+          if (!validAddr(state.vertex_addr + upper * vertex_size))
+            goto exit_loop;
 
           int pos = (state.vertex_type & GE_VTYPE_POS_MASK) >> GE_VTYPE_POS_SHIFT;
           int pos_size = possize[pos] / 3;
@@ -622,7 +667,7 @@ exit_loop:
           *list = (cmd << 24) | (VRAM_DRAW_BUFFER_OFFSET & 0xffffff);
           state.framebufptr = op;
         } else {
-          u16 pitch = (op & 0xffff) != 512 ? (op & 0xffff) : 960;
+          u16 pitch = ((op & 0xffff) == 512 || (op & 0xffff) == 480) ? 960 : (op & 0xffff);
           *list = (cmd << 24) | ((VRAM_DRAW_BUFFER_OFFSET >> 24) << 16) | pitch;
           state.framebufwidth = op;
           state.framebufwidth_addr = list;
@@ -633,7 +678,8 @@ exit_loop:
 
           // This allows more games to work, but causes weird triangles in Sonic.
           u32 pitch = state.framebufwidth & 0xffff;
-          if (pitch == 512 || pitch == 960) {
+          // 480 tambien es un buffer de pantalla completa (Ridge Racer lo usa al iniciar)
+          if (pitch == 512 || pitch == 480 || pitch == 960) {
             state.ignore_framebuf = 0;
           } else {
             *state.framebufwidth_addr = (GE_CMD_FRAMEBUFWIDTH << 24) | ((VRAM_1KB >> 24) << 16) | 0;
@@ -698,6 +744,23 @@ exit_loop:
           state.texbufwidth[index] = 0;
         }
 
+        break;
+      }
+
+      // Copias de bloque (sceGuCopyImage). No pasan por los vertices, asi que no se
+      // ven en el buffer de alta resolucion. Videos y logos suelen dibujarse asi.
+      case GE_CMD_TRANSFERSTART:
+      {
+        u32 dst = ((state.ge_cmd[GE_CMD_TRANSFERDSTW] & 0xff0000) << 8) | (state.ge_cmd[GE_CMD_TRANSFERDST] & 0xffffff);
+        u32 w = (state.ge_cmd[GE_CMD_TRANSFERSIZE] & 0x3ff) + 1;
+        u32 h = ((state.ge_cmd[GE_CMD_TRANSFERSIZE] >> 10) & 0x3ff) + 1;
+        st.transfers++;
+        if (inFramebuf(dst)) {
+          st.fb_transfers++;
+          if (w * h >= 240 * 136)
+            big_transfer = 1;
+          LOG_ONCE(dst ^ (w << 20) ^ h, "transfer a fb %08lx %lux%lu\n", dst, w, h);
+        }
         break;
       }
 
@@ -795,8 +858,13 @@ int sceGeListUpdateStallAddrPatched(int qid, void *stall) {
 
 int sceGeListEnQueuePatched(const void *list, void *stall, int cbid, PspGeListArgs *arg) {
   st.lists++;
-  if (state.has_draws)
+  // Juegos con un solo buffer casi no llaman sceDisplaySetFrameBuf: para ellos se copia aqui.
+  // Antes se copiaba al encolar cada lista, y en juegos con varias listas por frame eso
+  // mostraba frames a medio dibujar (parpadeo, tearing). Ahora solo si no hubo flip en 100 ms.
+  if (state.has_draws && sceKernelGetSystemTimeLow() - last_flip > 100000) {
     copyFrameBuffer();
+    st.enq_copies++;
+  }
   resetGeState();
   patchGeList((u32 *)((u32)list & 0x0fffffff), (u32 *)((u32)stall & 0x0fffffff));
   return _sceGeListEnQueue(list, stall, cbid, arg);
@@ -809,19 +877,78 @@ int sceGeListEnQueueHeadPatched(const void *list, void *stall, int cbid, PspGeLi
   return _sceGeListEnQueueHead(list, stall, cbid, arg);
 }
 
+// Convierte un pixel del formato del juego a 565
+static inline u16 to565(u32 c, int fmt) {
+  switch (fmt) {
+    case 0: return c; // 565
+    case 1: return (c & 0x1f) | (((c >> 5) & 0x1f) << 6) | (((c >> 10) & 0x1f) << 11); // 5551
+    case 2: return ((c & 0xf) << 1) | (((c >> 4) & 0xf) << 7) | (((c >> 8) & 0xf) << 12); // 4444
+    default: return ((c >> 3) & 0x1f) | (((c >> 10) & 0x3f) << 5) | (((c >> 19) & 0x1f) << 11); // 8888
+  }
+}
+
+// 1 si el buffer que muestra el juego tiene algo dibujado (muestra 64 pixeles).
+// El GE nunca escribe ahi (sus draws van al buffer grande), asi que si tiene contenido
+// es porque lo puso la CPU o una copia de bloque: un video, un logo...
+static int hasContent(u32 addr, int width, int fmt) {
+  int bpp = fmt == 3 ? 4 : 2, x, y;
+  if (!addr || !validAddr(addr) || !validAddr(addr + width * 272 * bpp - 1))
+    return 0;
+  u8 *p = (u8 *)((addr & 0x0fffffff) | 0x40000000); // sin cache
+  for (y = 17; y < 272; y += 34)
+    for (x = 30; x < 480; x += 60)
+      if (bpp == 4 ? *(u32 *)(p + (y * width + x) * 4) & 0xffffff : *(u16 *)(p + (y * width + x) * 2))
+        return 1;
+  return 0;
+}
+
+// Escala x2 la imagen original del juego al buffer de alta resolucion (por CPU, ~1 ms)
+static void upscaleGameBuffer(u32 addr, int width, int fmt) {
+  u8 *src = (u8 *)((addr & 0x0fffffff) | 0x40000000);
+  u32 *dst = (u32 *)(DISPLAY_BUFFER | 0x40000000);
+  int x, y;
+  for (y = 0; y < 272; y++) {
+    u32 *row = dst + y * 2 * (PITCH / 2);
+    for (x = 0; x < 480; x++) {
+      u32 c = fmt == 3 ? ((u32 *)src)[y * width + x] : ((u16 *)src)[y * width + x];
+      c = to565(c, fmt);
+      row[x] = row[x + PITCH / 2] = c | (c << 16);
+    }
+  }
+  *(u32 *)DRAW_NATIVE = 1;
+}
+
 int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat, int sync) {
   log_frame++;
+  if (log_frame == 30)
+    logGameId(); // en module_start el disco aun no esta montado
   // Cada buffer distinto que el juego muestra; util para videos (FMV) que no pasan por el GE
   LOG_ONCE((u32)topaddr ^ (bufferwidth << 20) ^ (pixelformat << 30), "display %08lx ancho=%d fmt=%d\n",
            (u32)topaddr, bufferwidth, pixelformat);
 
+  // Si este frame no paso por el GE (video por CPU) o tuvo una copia de bloque grande
+  // al framebuffer (video/logo con sceGuCopyImage), el buffer de alta resolucion no lo
+  // tiene: se muestra la imagen original escalada en vez de una pantalla negra.
+  if (!draws_since_flip)
+    st.idle_frames++;
+  if ((!draws_since_flip || big_transfer) && hasContent((u32)topaddr, bufferwidth, pixelformat)) {
+    LOG_ONCE(0xE5000000, "imagen original escalada (video/imagen fuera del GE)\n");
+    upscaleGameBuffer((u32)topaddr, bufferwidth, pixelformat);
+    st.fallback++;
+  } else {
+    copyFrameBuffer();
+  }
+  draws_since_flip = big_transfer = 0;
+  last_flip = sceKernelGetSystemTimeLow();
+
   if (log_frame % STATS_EVERY == 0) {
-    LOG("stats listas=%lu head=%lu stall=%lu draws=%lu omitidos=%lu pila_llena=%lu fb_lleno=%lu fbs=%lu\n",
-        st.lists, st.heads, st.stalls, st.draws, st.skipped, st.stack_full, st.fb_full, state.framebuf_count);
+    LOG("stats listas=%lu head=%lu stall=%lu draws=%lu omitidos=%lu frames_sin_draws=%lu transfers=%lu a_fb=%lu "
+        "escalados=%lu copias_en_lista=%lu pila_llena=%lu fbs=%lu\n",
+        st.lists, st.heads, st.stalls, st.draws, st.skipped, st.idle_frames, st.transfers, st.fb_transfers,
+        st.fallback, st.enq_copies, st.stack_full, state.framebuf_count);
     memset(&st, 0, sizeof(st));
   }
 
-  copyFrameBuffer();
   return _sceDisplaySetFrameBuf(topaddr, bufferwidth, pixelformat, sync);
 }
 

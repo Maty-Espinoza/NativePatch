@@ -75,6 +75,21 @@ int logOnce(u32 key) {
   return res; // si la tabla se llena, no se loguean eventos nuevos
 }
 
+// ID del juego desde el disco (ISO/UMD). Se llama unos frames despues de iniciar,
+// porque en module_start el disco aun no esta montado. En juegos PSN no existe.
+void logGameId(void) {
+  char id[11] = "?";
+  int k1 = pspSdkSetK1(0);
+  SceUID fd = sceIoOpen("disc0:/UMD_DATA.BIN", PSP_O_RDONLY, 0);
+  if (fd >= 0) {
+    if (sceIoRead(fd, id, 10) == 10)
+      id[10] = 0;
+    sceIoClose(fd);
+  }
+  pspSdkSetK1(k1);
+  LOG("juego=%s\n", id);
+}
+
 static int flushThread(SceSize args, void *argp) {
   for (;;) {
     sceKernelDelayThread(1000 * 1000);
@@ -88,20 +103,12 @@ void logInit(int sync) {
   sceIoRemove(LOG_PREV);
   sceIoRename(LOG_PATH, LOG_PREV);
 
-  // ID del juego (solo existe en ISOs/UMD; en juegos PSN queda '?', pero el archivo lo dice)
-  char id[11] = "?";
-  SceUID fd = sceIoOpen("disc0:/UMD_DATA.BIN", PSP_O_RDONLY, 0);
-  if (fd >= 0) {
-    if (sceIoRead(fd, id, 10) == 10)
-      id[10] = 0;
-    sceIoClose(fd);
-  }
   char *file = sceKernelInitFileName();
   pspSdkSetK1(k1);
 
   sync_mode = sync;
   LOG("GePatch %s (build %s %s) modo=%s\n", GEPATCH_VERSION, __DATE__, __TIME__, sync ? "sync" : "async");
-  LOG("juego=%s archivo=%s\n", id, file ? file : "?");
+  LOG("archivo=%s\n", file ? file : "?");
   logFlush();
 
   if (!sync) {
