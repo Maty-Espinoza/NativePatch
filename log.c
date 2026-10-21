@@ -13,7 +13,7 @@
 u32 log_frame;
 
 static char buf[2][8192]; // doble buffer: se llena uno mientras se escribe el otro
-static int cur, len, dropped, written, sync_mode;
+static int cur, len, dropped, written, sync_mode, eager;
 static u32 seen[256];     // keys ya vistas por logOnce
 
 void logWrite(const char *s, int n) {
@@ -26,7 +26,14 @@ void logWrite(const char *s, int n) {
   }
   sceKernelCpuResumeIntr(intr);
 
-  if (sync_mode)
+  if (sync_mode || (eager && len > (int)sizeof(buf[0]) / 2))
+    logFlush();
+}
+
+// Durante una captura se escriben muchas lineas: volcar apenas el buffer va por la mitad
+void logEager(int on) {
+  eager = on;
+  if (!on)
     logFlush();
 }
 

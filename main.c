@@ -65,6 +65,7 @@ static float game_offx = 2048 - 240, game_offy = 2048 - 136;
 // Estado entre un flip (sceDisplaySetFrameBuf) y el siguiente
 static u32 draws_since_flip, big_transfer, last_flip;
 
+
 // 1 si se puede leer: VRAM real o RAM (incluye la VRAM falsa en 0x0A000000)
 int validAddr(u32 addr) {
   addr &= 0x0fffffff;
@@ -236,6 +237,53 @@ typedef struct {
 } GeState;
 
 static GeState state;
+
+// --- Captura de un frame (L+R+SELECT): cada draw y cambio de estado relevante ---
+static int capturing;
+static u32 cap_last[0x100]; // ultimo valor logueado por comando, para no repetir
+static struct { u32 prim, vt, tex, flags, n, verts; } cd; // draws iguales seguidos se agrupan
+
+static void capFlush(void) {
+  if (cd.n)
+    LOG("  draw prim=%lu vt=%06lx tex=%08lx%s%s x%lu (%lu vert)\n", cd.prim, cd.vt, cd.tex,
+        cd.flags & 2 ? " 2D" : "", cd.flags & 1 ? " OMITIDO" : "", cd.n, cd.verts);
+  cd.n = cd.verts = 0;
+}
+
+static void capDraw(u32 prim, u32 count, int omit) {
+  u32 tex = state.ge_cmd[GE_CMD_TEXTUREMAPENABLE] & 1 ?
+            ((state.ge_cmd[GE_CMD_TEXBUFWIDTH0] & 0x0f0000) << 8) | state.ge_cmd[GE_CMD_TEXADDR0] : 0;
+  u32 flags = omit | (((state.vertex_type & GE_VTYPE_THROUGH_MASK) == GE_VTYPE_THROUGH) << 1);
+  if (cd.n && (cd.prim != prim || cd.vt != state.vertex_type || cd.tex != tex || cd.flags != flags))
+    capFlush();
+  cd.prim = prim; cd.vt = state.vertex_type; cd.tex = tex; cd.flags = flags;
+  cd.n++; cd.verts += count;
+}
+
+// Comandos de estado que interesan en la captura (nombre corto) o NULL
+static const char *capName(u32 cmd) {
+  switch (cmd) {
+    case GE_CMD_FRAMEBUFPTR: return "fb_ptr";
+    case GE_CMD_FRAMEBUFWIDTH: return "fb_ancho";
+    case GE_CMD_FRAMEBUFPIXFORMAT: return "fb_fmt";
+    case GE_CMD_VIEWPORTXSCALE: return "vp_xscale";
+    case GE_CMD_VIEWPORTYSCALE: return "vp_yscale";
+    case GE_CMD_VIEWPORTXCENTER: return "vp_xcentro";
+    case GE_CMD_VIEWPORTYCENTER: return "vp_ycentro";
+    case GE_CMD_OFFSETX: return "offset_x";
+    case GE_CMD_OFFSETY: return "offset_y";
+    case GE_CMD_SCISSOR1: return "scissor1";
+    case GE_CMD_SCISSOR2: return "scissor2";
+    case GE_CMD_REGION1: return "region1";
+    case GE_CMD_REGION2: return "region2";
+    case GE_CMD_TEXADDR0: return "tex_ptr";
+    case GE_CMD_TEXBUFWIDTH0: return "tex_ancho";
+    case GE_CMD_TEXSIZE0: return "tex_tam";
+    case GE_CMD_TEXFORMAT: return "tex_fmt";
+    case GE_CMD_TRANSFERSTART: return "transfer";
+    default: return NULL;
+  }
+}
 
 // Se llama al encolar una lista nueva. Solo se reinicia el recorrido (pila, offset):
 // los registros del GE (BASE, direcciones de vertices, framebuffer, texturas...) se
@@ -501,7 +549,10 @@ void patchGeList(u32 *list, u32 *stall) {
         state.has_draws = 1;
         draws_since_flip++;
 
-        if (state.ignore_framebuf || (state.ignore_texture && state.ge_cmd[GE_CMD_TEXTUREMAPENABLE])) {
+        int omit = state.ignore_framebuf || (state.ignore_texture && state.ge_cmd[GE_CMD_TEXTUREMAPENABLE]);
+        if (capturing)
+          capDraw(cmd == GE_CMD_PRIM ? (data >> 16) & 7 : cmd, cmd == GE_CMD_PRIM ? data & 0xffff : (data & 0xff) * ((data >> 8) & 0xff), omit);
+        if (omit) {
           setOp(list, op, 0);
           st.skipped++;
           break;
@@ -549,7 +600,10 @@ void patchGeList(u32 *list, u32 *stall) {
 
         // Dragon Ball Z Tenkaichi Tag Team uses the same GE list again,
         // therefore NOPing it makes character invisible.
-        if (state.ignore_framebuf || (state.ignore_texture && state.ge_cmd[GE_CMD_TEXTUREMAPENABLE])) {
+        int omit = state.ignore_framebuf || (state.ignore_texture && state.ge_cmd[GE_CMD_TEXTUREMAPENABLE]);
+        if (capturing)
+          capDraw(cmd == GE_CMD_PRIM ? (data >> 16) & 7 : cmd, cmd == GE_CMD_PRIM ? data & 0xffff : (data & 0xff) * ((data >> 8) & 0xff), omit);
+        if (omit) {
           setOp(list, op, 0);
           st.skipped++;
           break;
@@ -843,6 +897,15 @@ exit_loop:
       default:
         break;
     }
+
+    if (capturing && capName(cmd) && cap_last[cmd] != (*list | 0x80000000)) {
+      cap_last[cmd] = *list | 0x80000000;
+      capFlush();
+      if ((*list & 0xffffff) != data)
+        LOG("  %s %06lx -> %06lx\n", capName(cmd), data, *list & 0xffffff);
+      else
+        LOG("  %s %06lx\n", capName(cmd), data);
+    }
   }
 
 finish:
@@ -901,6 +964,10 @@ int sceGeListUpdateStallAddrPatched(int qid, void *stall) {
 
 int sceGeListEnQueuePatched(const void *list, void *stall, int cbid, PspGeListArgs *arg) {
   st.lists++;
+  if (capturing) {
+    capFlush();
+    LOG(" lista %08lx\n", (u32)list);
+  }
   // Juegos con un solo buffer casi no llaman sceDisplaySetFrameBuf: para ellos se copia aqui.
   // Antes se copiaba al encolar cada lista, y en juegos con varias listas por frame eso
   // mostraba frames a medio dibujar (parpadeo, tearing). Ahora solo si no hubo flip en 100 ms.
@@ -978,6 +1045,28 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
   log_frame++;
   if (log_frame == 30)
     logGameId(); // en module_start el disco aun no esta montado
+
+  // L+R+SELECT: captura detallada de lo que se procese hasta el proximo flip
+  static int prev_combo;
+  SceCtrlData pad;
+  int k1 = pspSdkSetK1(0);
+  sceCtrlPeekBufferPositive(&pad, 1);
+  pspSdkSetK1(k1);
+  u32 combo_mask = PSP_CTRL_LTRIGGER | PSP_CTRL_RTRIGGER | PSP_CTRL_SELECT;
+  int combo = (pad.Buttons & combo_mask) == combo_mask;
+  if (capturing) {
+    capFlush();
+    LOG("== fin captura ==\n");
+    capturing = 0;
+    logEager(0);
+  } else if (combo && !prev_combo) {
+    memset(cap_last, 0, sizeof(cap_last));
+    logEager(1);
+    LOG("== captura frame %lu: display %08lx ancho=%d fmt=%d, offset juego=(%d,%d) ==\n",
+        log_frame, (u32)topaddr, bufferwidth, pixelformat, (int)game_offx, (int)game_offy);
+    capturing = 1;
+  }
+  prev_combo = combo;
   // Cada buffer distinto que el juego muestra; util para videos (FMV) que no pasan por el GE
   LOG_ONCE((u32)topaddr ^ (bufferwidth << 20) ^ (pixelformat << 30), "display %08lx ancho=%d fmt=%d\n",
            (u32)topaddr, bufferwidth, pixelformat);

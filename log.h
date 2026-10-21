@@ -9,9 +9,10 @@
 // asi el hilo del juego nunca espera por la memory stick.
 // Mantener R al iniciar el juego activa el modo sincrono: escribe cada linea al
 // instante (mas lento, pero no se pierde nada si el juego se cuelga).
+// L+R+SELECT durante el juego: captura detallada de un frame (draws y estado del GE).
 // Cada linea parte con el numero de frame (cuantas veces se llamo sceDisplaySetFrameBuf).
 
-#define GEPATCH_VERSION "0.2-dev3"
+#define GEPATCH_VERSION "0.2-dev4"
 
 extern u32 log_frame;
 
@@ -19,6 +20,7 @@ void logInit(int sync);
 void logWrite(const char *s, int n);
 void logFlush(void);
 void logGameId(void);
+void logEager(int on);
 int logOnce(u32 key); // 1 la primera vez que se ve 'key', 0 las siguientes
 
 #define LOG(...) do { \
