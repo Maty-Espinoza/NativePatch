@@ -640,7 +640,8 @@ static void test_sublistas_sin_cambios(void) {
   CHECK(state.vertex_addr == va && state.ge_cmd[GE_CMD_TEXADDR0] == ta && state.vertex_type == vt,
         "el estado tras saltar difiere del recorrido: %08lx/%08lx %06lx/%06lx", va, state.vertex_addr, ta, state.ge_cmd[GE_CMD_TEXADDR0]);
   opt.walk_cache = 1; memset(&st, 0, sizeof(st));
-  s[5] = (GE_CMD_PRIM << 24) | (GE_PRIM_TRIANGLES << 16) | 6; // el juego cambio la sublista
+  s[5] = (GE_CMD_PRIM << 24) | (GE_PRIM_TRIANGLES << 16) | 6; // el juego cambio la sublista (otro frame)
+  log_frame++;
   run();
   CHECK(st.wc_miss == 1 && st.wc_hits == 2, "sublista cambiada: miss=%lu hits=%lu", st.wc_miss, st.wc_hits);
   CHECK(state.vertex_addr == VERTS + 9 * 6, "VADDR tras la sublista cambiada: %08lx", state.vertex_addr);
@@ -720,7 +721,8 @@ static void test_sublistas_anidadas(void) {
   run();
   CHECK(st.wc_hits == 2 && st.draws == 9, "anidadas: esperaba 2 saltadas y 9 draws: %lu %lu", st.wc_hits, st.draws);
   u32 va = state.vertex_addr;
-  c[5] = (GE_CMD_PRIM << 24) | (GE_PRIM_TRIANGLES << 16) | 6; // cambia la de dentro
+  c[5] = (GE_CMD_PRIM << 24) | (GE_PRIM_TRIANGLES << 16) | 6; // cambia la de dentro (otro frame)
+  log_frame++;
   memset(&st, 0, sizeof(st));
   run();
   CHECK(st.wc_miss >= 1 && st.draws == 9 && state.vertex_addr == va + 3 * 6, "la de dentro cambio y se salto igual: miss=%lu va=%08lx/%08lx",
@@ -770,6 +772,7 @@ static void test_copia_formulario(void) {
   reset();
   rt_enabled = 1;
   begin();
+  setFb(0x000000, 480); // otro fb justo antes: la copia es del de 0x04c000, no de este
   setFb(0x04c000, 512);
   cmd(GE_CMD_TRANSFERDST, 0x7f6960); cmd(GE_CMD_TRANSFERDSTW, (0x09 << 16) | 256);
   cmd(GE_CMD_TRANSFERSRC, 0x04c000); cmd(GE_CMD_TRANSFERSRCW, (0x0a << 16) | 512);

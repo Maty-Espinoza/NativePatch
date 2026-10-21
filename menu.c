@@ -33,6 +33,7 @@ static const char *const no_si[] = { "no", "si" };
 static const char *const fb_modes[] = { "auto", "siempre", "nunca" };
 static const char *const nop_modes[] = { "0 (antiguo)", "marca" };
 static const char *const fbtex_modes[] = { "leer memoria", "omitir", "copia reducida" };
+static const char *const every_modes[] = { "1 frame", "2 frames", "4 frames", "8 frames" };
 static const char *const walk_modes[] = { "antiguo", "nuevo" };
 
 static const Item items[] = {
@@ -44,6 +45,7 @@ static const Item items[] = {
   { "nop", "NOP de draws omitidos", &opt.nop_mark, 0, 1, 1, nop_modes },
   { "recorrido", "Recorrido de listas", &opt.walk_new, 0, 1, 1, walk_modes },
   { "sublistas", "Saltar sublistas sin cambios", &opt.walk_cache, 0, 1, 1, no_si },
+  { "comprobar", "Comprobar sublistas cada", &opt.wc_check, 0, 3, 1, every_modes },
   { "v2d", "Duplicar vertices 2D (HUD, sprites)", &opt.v2d, 0, 1, 1, no_si },
   { "fb1024", "Framebuffer de 1024 como pantalla", &opt.wide1024, 0, 1, 1, no_si },
   { "vram_real", "VRAM real del juego -> VRAM falsa", &opt.vram_fix, 0, 1, 1, no_si },

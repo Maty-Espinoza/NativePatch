@@ -49,7 +49,7 @@ static struct {
   u32 patch_us, patch_max, cmds;                   // costo del plugin por frame
   u32 upscale_us, fb_copies;                       // escalado por CPU (videos), copias del frame al fb del juego
   u32 walked, calls, lookups, v2d, v2d_skip, vevict, call_cmds, tx_ge, tx_screen, vram_fix;
-  u32 wc_hits, wc_miss, wc_cmds;                   // sublistas sin cambios que no se recorrieron
+  u32 wc_hits, wc_miss, wc_cmds, wc_summed;                   // sublistas sin cambios que no se recorrieron
   u32 wc_why[8];                                   // por que no se guardaron (ver W_*) // recorrido: frames medidos, CALLs, busquedas en memo, vertices 2D
   u32 long_frame_logged;
 } st;
@@ -490,11 +490,14 @@ int insertFramebuf(u32 framebuf) {
 
 // 1 si addr cae dentro de algun framebuffer conocido (480x272 a 32 bpp como maximo)
 int inFramebuf(u32 addr) {
-  int i;
-  for (i = 0; i < state.framebuf_count; i++)
-    if (addr >= state.framebuf_addr[i] && addr < state.framebuf_addr[i] + 512 * 272 * 4)
-      return i + 1; // indice + 1 (0 = no)
-  return 0;
+  int i, best = 0;
+  u32 bo = 512 * 272 * 4;
+  for (i = 0; i < state.framebuf_count; i++) // el mas cercano por debajo: Silent Hill tiene un fb en
+    if (addr >= state.framebuf_addr[i] && addr - state.framebuf_addr[i] < bo) { // 0a000000 y otro en 0a04c000
+      bo = addr - state.framebuf_addr[i];
+      best = i + 1;
+    }
+  return best; // indice + 1 (0 = no)
 }
 
 static inline int wideScreen(u32 pitch) { return pitch == 1024 && opt.wide1024; }
@@ -927,8 +930,8 @@ static int txFromScreen(u32 *list, u32 src, u32 dst, u32 w, u32 h, int bpp) {
   const char *why = x + w > 480 || y + h > 272 ? "fuera de 480x272" : !(reg = txIsCopy(list, 1)) ? "no se puede reescribir"
                   : !(sl = txSlot()) ? "CALL inalcanzable" : NULL;
   if (why) {
-    LOG_ONCE_CAP(0xEA000000 ^ src ^ dst, "copia desde la pantalla %lux%lu -> %08lx NO reemplazada: %s (antes: %08lx %08lx %08lx)\n",
-                 w, h, dst, why, origOp(list - 3), origOp(list - 2), origOp(list - 1));
+    LOG_ONCE_CAP(0xEA000000 ^ src ^ dst, "copia desde la pantalla %lux%lu (%lu,%lu) -> %08lx NO reemplazada: %s (antes: %08lx %08lx %08lx)\n",
+                 w, h, x, y, dst, why, origOp(list - 3), origOp(list - 2), origOp(list - 1));
     return 0;
   }
   u32 *l = (u32 *)(sl | 0x40000000);
@@ -1019,6 +1022,7 @@ typedef struct {
   u32 addr, n, sum, base_in, offset_in, gen, fb_in, ndraws, touch, vset, iset;
   void *rt_in;
   u32 vaddr, iaddr, vtype, base_out, tex[5], nchild, child[32];
+  u32 checked; // ultimo frame en que se comprobo la suma
   u32 *tex_p[4];
   u32 tex_o[4];
 } WalkCache;
@@ -1098,6 +1102,7 @@ static void wcStore(u32 *ret) {
   e->iaddr = r->iset ? state.index_addr : state.index_addr - r->iaddr0;
   e->vtype = state.vertex_type; e->base_out = state.base;
   e->nchild = r->nchild;
+  e->checked = log_frame;
   for (i = 0; i < r->nchild; i++)
     e->child[i] = r->child[i];
   for (i = 0; i < 5; i++)
@@ -1110,10 +1115,19 @@ static void wcStore(u32 *ret) {
 }
 
 // La sublista guardada en addr (y las que tiene dentro) sigue igual; devuelve sus palabras
+// La suma se comprueba una vez por frame (una sublista llamada varias veces en el frame, como
+// las ruedas de los autos, no se vuelve a sumar), o cada N frames segun la opcion del menu.
 static u32 wcValid(u32 addr, int depth) {
   WalkCache *e = &wc[WC_SLOT(addr)];
-  if (e->addr != addr || depth > WC_DEPTH || !validAddr(addr + e->n * 4) || wcSum((u32 *)addr, e->n) != e->sum)
+  if (e->addr != addr || depth > WC_DEPTH || !validAddr(addr + e->n * 4))
     return 0;
+  u32 every = 1u << opt.wc_check; // 1, 2, 4 u 8 frames
+  if (log_frame - e->checked >= every || log_frame < e->checked) {
+    if (wcSum((u32 *)addr, e->n) != e->sum)
+      return 0;
+    e->checked = log_frame;
+    st.wc_summed += e->n;
+  }
   u32 n = e->n, i, c;
   for (i = 0; i < e->nchild; i++) {
     if (!(c = wcValid(e->child[i], depth + 1)))
@@ -2172,8 +2186,8 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
           st.walked, st.frames, st.calls / w, st.call_cmds / w, st.lookups / w);
       LOG("stats 2d: vert2d=%lu ya2d=%lu choques2d=%lu | copias escaladas con GE=%lu desde_pantalla=%lu vram_real_corregida=%lu\n",
           st.v2d, st.v2d_skip, st.vevict, st.tx_ge, st.tx_screen, st.vram_fix);
-      LOG("stats sublistas sin cambios: saltadas/frame=%lu cambiadas/frame=%lu comandos_no_recorridos/frame=%lu\n",
-          st.wc_hits / w, st.wc_miss / w, st.wc_cmds / w);
+      LOG("stats sublistas sin cambios: saltadas/frame=%lu cambiadas/frame=%lu comandos_no_recorridos/frame=%lu sumados/frame=%lu\n",
+          st.wc_hits / w, st.wc_miss / w, st.wc_cmds / w, st.wc_summed / w);
       LOG("stats sublistas no guardadas/frame: parches=%lu 2d=%lu omitidos_o_rt=%lu saltos=%lu anidadas=%lu copias=%lu offset=%lu\n",
           st.wc_why[W_PATCH] / w, st.wc_why[W_2D] / w, st.wc_why[W_OMIT] / w, st.wc_why[W_JUMP] / w,
           st.wc_why[W_NESTED] / w, st.wc_why[W_COPY] / w, st.wc_why[W_OFFSET] / w);
