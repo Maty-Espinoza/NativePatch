@@ -6,7 +6,6 @@
 #include <pspctrl.h>
 #include <string.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <systemctrl.h>
 
 #include "log.h"
@@ -151,7 +150,12 @@ int menuParse(const char *s) {
       const Item *it = &items[i];
       int l = it->key ? strlen(it->key) : 0;
       if (l && !strncmp(s, it->key, l) && s[l] == '=') {
-        int v = atoi(s + l + 1);
+        const char *q = s + l + 1; // atoi no esta en el kernel
+        int v = 0, neg = *q == '-';
+        for (q += neg; *q >= '0' && *q <= '9'; q++)
+          v = v * 10 + *q - '0';
+        if (neg)
+          v = -v;
         if (v >= it->min && v <= it->max) {
           *it->val = v;
           n++;
