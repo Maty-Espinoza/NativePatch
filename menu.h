@@ -16,9 +16,11 @@ typedef struct {
   int dx, dy;     // desplazamiento del area visible dentro del framebuffer del juego (px)
   int v2d;        // duplicar vertices 2D (HUD, menus, sprites)
   int tx_ge;      // copias grandes a la pantalla (videos): escalar con el GE en su lugar de la lista
+  int walk_cache; // no recorrer de nuevo sublistas que no cambiaron
 } Options;
 
 extern Options opt;
+extern u32 opt_gen; // cambia con cada cambio en el menu
 
 // Lo llama el flip: lee los botones y maneja el menu. Devuelve 1 si esta abierto; su
 // imagen (MENU_W x MENU_H, 565) queda en MENU_BUF y va en (MENU_X, MENU_Y) de la pantalla.

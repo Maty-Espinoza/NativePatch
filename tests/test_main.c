@@ -37,10 +37,11 @@ static void reset(void) {
   memset((void *)VERTS, 0, 0x10000);
   test_log_len = 0; test_log[0] = 0;
   logResetOnce();
-  Options def = { .rt_on = 1, .rt_scale = 1, .omit_fbtex = 1, .fallback = 0, .nop_mark = 1, .walk_new = 1, .v2d = 1, .tx_ge = 1 };
+  Options def = { .rt_on = 1, .rt_scale = 1, .omit_fbtex = 1, .fallback = 0, .nop_mark = 1, .walk_new = 1, .v2d = 1, .tx_ge = 1, .walk_cache = 1 };
   opt = def;
   passive = 0; walk_now = 1;
-  big_transfer = 0; fbtex_seen = 0; vram_hi = 0; copy_vram = 0;
+  big_transfer = 0; fbtex_seen = 0; vram_hi = 0; copy_vram = 0; tx_patched_any = 0;
+  memset(wc, 0, WC_SIZE * sizeof(WalkCache)); memset(&rec, 0, sizeof(rec));
 }
 
 // ---------------------------------------------------------------------------
@@ -534,6 +535,7 @@ static void test_silent_hill_video(void) {
 // copia se reemplaza por un CALL a una lista que la hace y la dibuja al doble en su lugar
 static void test_copia_escalada_con_ge(void) {
   reset();
+  rt_enabled = 1;
   u32 *v = (u32 *)0x09000000;
   begin();
   cmd(GE_CMD_BASE, 0x090000);
@@ -565,8 +567,8 @@ static void test_copia_escalada_con_ge(void) {
       vaddr |= sub[k] == ((GE_CMD_VADDR << 24) | 0x123400) && sub[k - 1] == ((GE_CMD_BASE << 24) | 0x090000);
     }
     CHECK(prim && ret && copy && vaddr, "la lista del plugin: copia=%d draw=%d RET=%d VADDR del juego=%d", copy, prim, ret, vaddr);
-    short *q = (short *)((u32)sub + 448);
-    CHECK(q[7] == 960 && q[8] == 544, "el draw de la copia no es al doble: %d,%d", q[7], q[8]);
+    short *q = (short *)((u32)sub + 512) + 14 * 10; // ultima de 15 franjas de 32 texeles
+    CHECK(q[5] == 480 && q[7] == 960 && q[8] == 544, "el draw de la copia no es al doble: %d -> %d,%d", q[5], q[7], q[8]);
   }
 }
 
@@ -600,6 +602,61 @@ static void test_copia_reducida(void) {
   CHECK(logHas("memoria (test): vram del juego usada hasta"), "no se registro la memoria");
 }
 
+// Sublistas sin cambios: la segunda vez no se recorren y el estado queda igual que al recorrerlas
+static u32 *sub(u32 at, int through, u32 tex) {
+  u32 *save = lp, *s = (u32 *)at;
+  lp = s;
+  cmd(GE_CMD_VERTEXTYPE, (through ? GE_VTYPE_THROUGH : 0) | GE_VTYPE_POS_16BIT);
+  cmd(GE_CMD_VADDR, VERTS & 0xffffff);
+  cmd(GE_CMD_TEXTUREMAPENABLE, 1);
+  cmd(GE_CMD_TEXADDR0, tex & 0xffffff); cmd(GE_CMD_TEXBUFWIDTH0, ((tex >> 8) & 0x0f0000) | 64);
+  cmd(GE_CMD_PRIM, (GE_PRIM_TRIANGLES << 16) | 3);
+  cmd(GE_CMD_PRIM, (GE_PRIM_TRIANGLES << 16) | 3);
+  cmd(GE_CMD_RET, 0);
+  lp = save;
+  return s;
+}
+static void callList(u32 at, int n) {
+  int i;
+  begin();
+  setFb(0x044000, 512);
+  setFb(0x000000, 512);
+  cmd(GE_CMD_BASE, 0x080000);
+  for (i = 0; i < n; i++)
+    cmd(GE_CMD_CALL, at & 0xffffff);
+  end();
+}
+static void test_sublistas_sin_cambios(void) {
+  reset();
+  u32 at = LIST + 0x8000;
+  u32 *s = sub(at, 0, 0x09100000);
+  callList(at, 3);
+  memset(&st, 0, sizeof(st));
+  run();
+  CHECK(st.wc_hits == 2 && st.draws == 6, "esperaba 2 saltadas y 6 draws: %lu %lu", st.wc_hits, st.draws);
+  u32 va = state.vertex_addr, ta = state.ge_cmd[GE_CMD_TEXADDR0], vt = state.vertex_type;
+  opt.walk_cache = 0; memset(&st, 0, sizeof(st));
+  run();
+  CHECK(st.wc_hits == 0 && st.draws == 6, "sin la opcion se saltaron %lu", st.wc_hits);
+  CHECK(state.vertex_addr == va && state.ge_cmd[GE_CMD_TEXADDR0] == ta && state.vertex_type == vt,
+        "el estado tras saltar difiere del recorrido: %08lx/%08lx %06lx/%06lx", va, state.vertex_addr, ta, state.ge_cmd[GE_CMD_TEXADDR0]);
+  opt.walk_cache = 1; memset(&st, 0, sizeof(st));
+  s[5] = (GE_CMD_PRIM << 24) | (GE_PRIM_TRIANGLES << 16) | 6; // el juego cambio la sublista
+  run();
+  CHECK(st.wc_miss == 1 && st.wc_hits == 2, "sublista cambiada: miss=%lu hits=%lu", st.wc_miss, st.wc_hits);
+  CHECK(state.vertex_addr == VERTS + 9 * 6, "VADDR tras la sublista cambiada: %08lx", state.vertex_addr);
+
+  // Con un draw 2D o una textura desde fb hay que recorrerla siempre
+  reset();
+  sub(at, 1, 0x09100000); callList(at, 3);
+  memset(&st, 0, sizeof(st)); run();
+  CHECK(st.wc_hits == 0, "una sublista con draws 2D se salto");
+  reset();
+  sub(at, 0, 0x0A044000); callList(at, 3);
+  memset(&st, 0, sizeof(st)); run();
+  CHECK(st.wc_hits == 0 && st.skipped == 6, "sublista con textura desde fb: hits=%lu omitidos=%lu", st.wc_hits, st.skipped);
+}
+
 // Menu: abrir con L+R+START, cambiar una opcion, cerrar, y que el juego no vea botones mientras
 extern unsigned int test_buttons;
 static void test_menu(void) {
@@ -630,7 +687,7 @@ int main(void) {
     test_viewport_scissor_x2, test_viewport_zona, test_memo_lista_grande, test_vertices_2d,
     test_vaddr_avanza_tras_3d, test_bjump_no_salta, test_estado_entre_listas, test_textura_fb_al_dibujar,
     test_render_target, test_textura_dentro_de_rt, test_rt_incompleto, test_rt_escala_1, test_pitch_0,
-    test_robustez, test_copia_listas_alternas, test_fps, test_doble_buffer_alternado, test_nop_no_revive, test_lista_estatica_fb, test_pasivo_no_escribe, test_pasivo_normaliza, test_desplazamiento_y_1024, test_vertices_2d_muchos_buffers, test_pasivo_muestreo, test_silent_hill_video, test_copia_escalada_con_ge, test_copia_reducida, test_menu,
+    test_robustez, test_copia_listas_alternas, test_fps, test_doble_buffer_alternado, test_nop_no_revive, test_lista_estatica_fb, test_pasivo_no_escribe, test_pasivo_normaliza, test_desplazamiento_y_1024, test_vertices_2d_muchos_buffers, test_pasivo_muestreo, test_silent_hill_video, test_copia_escalada_con_ge, test_copia_reducida, test_sublistas_sin_cambios, test_menu,
   };
   int i;
   for (i = 0; i < (int)(sizeof(tests) / sizeof(tests[0])); i++)

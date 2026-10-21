@@ -12,7 +12,8 @@
 #include "menu.h"
 #include "font.h"
 
-Options opt = { .rt_on = 1, .rt_scale = 1, .omit_fbtex = 1, .fallback = 0, .nop_mark = 1, .walk_new = 1, .v2d = 1, .tx_ge = 1 };
+Options opt = { .rt_on = 1, .rt_scale = 1, .omit_fbtex = 1, .fallback = 0, .nop_mark = 1, .walk_new = 1, .v2d = 1, .tx_ge = 1, .walk_cache = 1 };
+u32 opt_gen;
 
 // --- Elementos del menu -----------------------------------------------------
 enum { ACT_NONE, ACT_CAPTURE, ACT_SNAPSHOT, ACT_FLUSH, ACT_CLOSE };
@@ -38,6 +39,7 @@ static const Item items[] = {
   { "Imagen original escalada (videos)", &opt.fallback, 0, 2, 1, fb_modes },
   { "NOP de draws omitidos", &opt.nop_mark, 0, 1, 1, nop_modes },
   { "Recorrido de listas", &opt.walk_new, 0, 1, 1, walk_modes },
+  { "Saltar sublistas sin cambios", &opt.walk_cache, 0, 1, 1, no_si },
   { "Duplicar vertices 2D (HUD, sprites)", &opt.v2d, 0, 1, 1, no_si },
   { "Framebuffer de 1024 como pantalla", &opt.wide1024, 0, 1, 1, no_si },
   { "Desplazamiento X (px del juego)", &opt.dx, -512, 512, 16, NULL },
@@ -171,6 +173,7 @@ static void change(const Item *it, int dir) {
   if (v == *it->val)
     return;
   *it->val = v;
+  opt_gen++;
   if (it->val == &opt.rt_scale || it->val == &opt.rt_on)
     rtReset(); // los render targets se reservan segun la escala
   logResetOnce(); // los eventos vuelven a registrarse, para ver en el log el efecto del cambio
