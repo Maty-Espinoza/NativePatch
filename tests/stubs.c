@@ -1,9 +1,11 @@
+#define _GNU_SOURCE
 // Funciones falsas del sistema de la PSP para correr el plugin en el PC.
 // La memoria de la PSP se mapea en sus direcciones reales (ver mapPspMemory).
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <sys/mman.h>
+#include <unistd.h>
 #include "psp_stub.h"
 
 // --- Log: lo que el plugin escribe a ms0:/ge_patch.log queda aqui para revisarlo
@@ -46,17 +48,23 @@ void sceGuCopyImage(int psm, int sx, int sy, int w, int h, int sw, void *s, int 
 void guStart(int cid, void *list) {}
 
 // VRAM real (0x04000000, 4 MB) y RAM (0x08000000-0x0A900000: juego, VRAM falsa,
-// buffer de pantalla, memoria de parches y lista de copia del plugin)
+// buffer de pantalla, memoria de parches y lista de copia del plugin). Como en la PSP,
+// la misma memoria se ve sin cache en +0x40000000 (el plugin lee/escribe por ahi).
 void mapPspMemory(void) {
   // + la pagina de la bandera DRAW_NATIVE de Adrenaline (0xABCDEF00)
-  struct { unsigned long addr, size; } r[] = { { 0x04000000, 0x400000 }, { 0x08000000, 0x2900000 }, { 0xABCDE000, 0x2000 } };
-  int i;
+  struct { unsigned long addr, size; int alias; } r[] = { { 0x04000000, 0x400000, 1 }, { 0x08000000, 0x2900000, 1 }, { 0xABCDE000, 0x2000, 0 } };
+  int i, k;
   for (i = 0; i < 3; i++) {
-    void *p = mmap((void *)r[i].addr, r[i].size, PROT_READ | PROT_WRITE,
-                   MAP_PRIVATE | MAP_ANONYMOUS | (getenv("TEST_MAP_FIXED") ? MAP_FIXED : MAP_FIXED_NOREPLACE), -1, 0);
-    if (p != (void *)r[i].addr) {
-      fprintf(stderr, "no se pudo mapear %08lx (compilar con -m32 -pie)\n", r[i].addr);
-      exit(2);
+    int fd = memfd_create("psp", 0);
+    if (fd < 0 || ftruncate(fd, r[i].size) < 0) { perror("memfd"); exit(2); }
+    for (k = 0; k <= r[i].alias; k++) {
+      unsigned long a = r[i].addr + k * 0x40000000;
+      void *p = mmap((void *)a, r[i].size, PROT_READ | PROT_WRITE,
+                     MAP_SHARED | (getenv("TEST_MAP_FIXED") ? MAP_FIXED : MAP_FIXED_NOREPLACE), fd, 0);
+      if (p != (void *)a) {
+        fprintf(stderr, "no se pudo mapear %08lx (compilar con -m32 -pie)\n", a);
+        exit(2);
+      }
     }
   }
 }

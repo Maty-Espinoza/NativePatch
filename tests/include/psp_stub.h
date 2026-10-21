@@ -8,7 +8,8 @@
 typedef uint8_t u8; typedef uint16_t u16; typedef unsigned long u32; // en la PSP u32 es unsigned long
 typedef int SceUID; typedef unsigned int SceSize;
 typedef struct { unsigned int TimeStamp, Buttons; unsigned char Lx, Ly, Rsrv[6]; } SceCtrlData;
-typedef struct { unsigned int size; void *context; } PspGeListArgs;
+typedef struct { unsigned int context[512]; } PspGeContext;
+typedef struct { unsigned int size; PspGeContext *context; } PspGeListArgs;
 
 #define PSP_MODULE_INFO(name, attr, maj, min) static const char *module_name_unused = name
 #define PSP_CTRL_SELECT   0x000001

@@ -15,7 +15,7 @@
 Options opt = { .rt_on = 1, .rt_scale = 1, .omit_fbtex = 1, .fallback = 0, .nop_mark = 1, .walk_new = 1, .v2d = 1 };
 
 // --- Elementos del menu -----------------------------------------------------
-enum { ACT_NONE, ACT_CAPTURE, ACT_FLUSH, ACT_CLOSE };
+enum { ACT_NONE, ACT_CAPTURE, ACT_SNAPSHOT, ACT_FLUSH, ACT_CLOSE };
 typedef struct {
   const char *name;
   int *val;
@@ -27,22 +27,22 @@ typedef struct {
 static const char *const no_si[] = { "no", "si" };
 static const char *const fb_modes[] = { "auto", "siempre", "nunca" };
 static const char *const nop_modes[] = { "0 (antiguo)", "marca" };
-static const char *const auto_si_no[] = { "auto", "si", "no" };
+static const char *const fbtex_modes[] = { "leer memoria", "omitir", "copia reducida" };
 static const char *const walk_modes[] = { "antiguo", "nuevo" };
 
 static const Item items[] = {
   { "Render targets en VRAM alta", &opt.rt_on, 0, 1, 1, no_si },
   { "Escala de render targets", &opt.rt_scale, 1, 2, 1, NULL },
-  { "Omitir texturas desde framebuffer", &opt.omit_fbtex, 0, 1, 1, no_si },
+  { "Texturas desde framebuffer", &opt.omit_fbtex, 0, 2, 1, fbtex_modes },
   { "Imagen original escalada (videos)", &opt.fallback, 0, 2, 1, fb_modes },
   { "NOP de draws omitidos", &opt.nop_mark, 0, 1, 1, nop_modes },
   { "Recorrido de listas", &opt.walk_new, 0, 1, 1, walk_modes },
   { "Duplicar vertices 2D (HUD, sprites)", &opt.v2d, 0, 1, 1, no_si },
-  { "Framebuffer de 1024 como pantalla", &opt.wide1024, 0, 2, 1, auto_si_no },
+  { "Framebuffer de 1024 como pantalla", &opt.wide1024, 0, 1, 1, no_si },
   { "Desplazamiento X (px del juego)", &opt.dx, -512, 512, 16, NULL },
   { "Desplazamiento Y (px del juego)", &opt.dy, -272, 272, 8, NULL },
-  { "Indicador en pantalla", &opt.osd, 0, 1, 1, no_si },
   { "Capturar el proximo frame al log", NULL, 0, 0, 0, NULL, ACT_CAPTURE },
+  { "Memoria y CPU al log", NULL, 0, 0, 0, NULL, ACT_SNAPSHOT },
   { "Escribir el log ahora", NULL, 0, 0, 0, NULL, ACT_FLUSH },
   { "Cerrar", NULL, 0, 0, 0, NULL, ACT_CLOSE },
 };
@@ -82,24 +82,25 @@ static void fillRect(u16 *buf, int x, int y, int w, int h, u16 c) {
 #define C_DIM   0xad55
 #define C_VAL   0x07ff // amarillo
 
-static void drawMenu(u16 *buf, const char *info) {
-  int x = 240, y = 64, w = 480, h = 16 * (N_ITEMS + 4), i;
-  char line[64];
-  fillRect(buf, x - 8, y - 8, w + 16, h + 16, C_BG);
-  drawText(buf, x, y, "GePatch " GEPATCH_VERSION " - diagnostico", C_TEXT, C_BG);
-  drawText(buf, x, y + 16, info && *info ? info : "arriba/abajo, izq/der cambia, X activa, O cierra", C_DIM, C_BG);
+// Caja alineada a lineas de cache (x 224..735 = 64 bytes exactos por fila): el menu se
+// dibuja con cache y se escribe a memoria de una vez, en vez de pixel a pixel sin cache
+static void drawMenu(u16 *buf) {
+  int x = 232, y = 64, w = 496, i;
+  char line[32];
+  fillRect(buf, 224, y - 8, 512, 16 * (N_ITEMS + 2) + 16, C_BG);
+  drawText(buf, x, y, "GePatch " GEPATCH_VERSION, C_TEXT, C_BG);
   for (i = 0; i < N_ITEMS; i++) {
     const Item *it = &items[i];
-    int yy = y + 48 + i * 16;
+    int yy = y + 32 + i * 16;
     u16 bg = i == sel ? C_SEL : C_BG;
-    fillRect(buf, x - 4, yy, w + 8, 16, bg);
+    fillRect(buf, 224, yy, 512, 16, bg);
     drawText(buf, x, yy, it->name, C_TEXT, bg);
     if (it->val) {
       if (it->labels)
         snprintf(line, sizeof(line), "%s", it->labels[*it->val - it->min]);
       else
         snprintf(line, sizeof(line), "%d", *it->val);
-      drawText(buf, x + w - 8 * (int)strlen(line), yy, line, C_VAL, bg);
+      drawText(buf, x + w - 16 - 8 * (int)strlen(line), yy, line, C_VAL, bg);
     }
   }
 }
@@ -177,7 +178,7 @@ static void change(const Item *it, int dir) {
     LOG("menu: %s = %d\n", it->name, v);
 }
 
-void menuFrame(u16 *buf, const char *osd_text, const char *info) {
+int menuFrame(u16 *buf) {
   u32 b = readButtons(), pressed = b & ~prev;
   u32 combo = PSP_CTRL_LTRIGGER | PSP_CTRL_RTRIGGER | PSP_CTRL_START;
   prev = b;
@@ -202,6 +203,7 @@ void menuFrame(u16 *buf, const char *osd_text, const char *info) {
     if (pressed & PSP_CTRL_CROSS) {
       const Item *it = &items[sel];
       if (it->action == ACT_CAPTURE) menuRequestCapture();
+      else if (it->action == ACT_SNAPSHOT) memSnapshot("menu");
       else if (it->action == ACT_FLUSH) logFlush();
       else if (it->action == ACT_CLOSE) open = 0;
       else if (it->labels) change(it, 1);
@@ -211,10 +213,8 @@ void menuFrame(u16 *buf, const char *osd_text, const char *info) {
       LOG("menu: cerrado\n");
   }
 
-  if (!buf)
-    return;
-  if (opt.osd && osd_text)
-    drawText(buf, 8, 8, osd_text, C_VAL, 0);
-  if (open)
-    drawMenu(buf, info);
+  if (!buf || !open)
+    return 0;
+  drawMenu(buf);
+  return 1;
 }

@@ -47,7 +47,7 @@ static struct {
   // Rendimiento (microsegundos)
   u32 frames, frame_us, frame_max, slow60, slow30; // tiempo entre flips
   u32 patch_us, patch_max, cmds;                   // costo del plugin por frame
-  u32 upscale_us;                                  // escalado por CPU (videos)
+  u32 upscale_us, fb_copies;                       // escalado por CPU (videos), copias del frame al fb del juego
   u32 walked, calls, lookups, v2d, v2d_skip, vevict; // recorrido: frames medidos, CALLs, busquedas en memo, vertices 2D
   u32 long_frame_logged;
 } st;
@@ -123,11 +123,21 @@ static float game_offx = 2048 - 240, game_offy = 2048 - 136;
 
 // Estado entre un flip (sceDisplaySetFrameBuf) y el siguiente
 static u32 draws_since_flip, big_transfer, last_flip;
-static int big_transfer_fb = -1; // fb que recibio la copia grande del frame
+// Ultima copia grande (TRANSFER) a un fb en el frame: de ahi sale la imagen original
+// escalada. Silent Hill copia el video a un fb de 512 que despues pasa por otro de 1024.
+static struct { u32 addr, w, fmt; } big_tx;
 
-// Pantalla de 1024 de ancho (Silent Hill): si el juego muestra un fb de 1024 desde x>0,
-// en modo "auto" esos fb se tratan como pantalla con ese desplazamiento (ver el flip)
-static int disp_wide, disp_x, disp_y;
+// Uso de la VRAM del juego (VRAM falsa): direccion mas alta vista en fb, texturas y copias
+static u32 vram_hi;
+static inline void vramUse(u32 a) {
+  if (a >= FAKE_VRAM && a < FAKE_VRAM + 0x400000 && a > vram_hi)
+    vram_hi = a;
+}
+
+// El frame que vio el juego se copia reducido a su fb (opcion "copia"): asi los efectos
+// que leen el frame anterior como textura (Gran Turismo) ven una imagen real
+static int fbtex_seen;
+static u32 copy_vram; // buffer temporal en la VRAM alta (de los render targets)
 
 
 // 1 si se puede leer: VRAM real o RAM (incluye la VRAM falsa en 0x0A000000)
@@ -463,10 +473,7 @@ int inFramebuf(u32 addr) {
   return 0;
 }
 
-// Un fb de 1024 de ancho se trata como pantalla (opcion: 0 auto, 1 si, 2 no)
-static inline int wideScreen(u32 pitch) {
-  return pitch == 1024 && (opt.wide1024 == 1 || (opt.wide1024 == 0 && disp_wide));
-}
+static inline int wideScreen(u32 pitch) { return pitch == 1024 && opt.wide1024; }
 
 // ---------------------------------------------------------------------------
 // Render targets (render a textura)
@@ -504,6 +511,7 @@ void rtReset(void) {
   rt_count = 0;
   rt_next = RT_BASE;
   rt_gen++;
+  copy_vram = 0; // estaba en la misma zona
   LOG("rt: se liberaron los render targets\n");
 }
 
@@ -599,7 +607,15 @@ int texCheck(void) {
 static int texCheckCalc(void) {
   if (!(state.ge_cmd[GE_CMD_TEXTUREMAPENABLE] & 1))
     return 0;
-  u32 tex = normVram(((state.ge_cmd[GE_CMD_TEXBUFWIDTH0] & 0x0f0000) << 8) | (state.ge_cmd[GE_CMD_TEXADDR0] & 0xffffff));
+  u32 tex = ((state.ge_cmd[GE_CMD_TEXBUFWIDTH0] & 0x0f0000) << 8) | (state.ge_cmd[GE_CMD_TEXADDR0] & 0xffffff);
+  // Silent Hill lee su fb con la direccion de la VRAM real (0x04...) y no la que le da el
+  // plugin (0x0A...): para reconocerlo se mira igual que la VRAM falsa
+  if ((tex & 0x0f000000) == 0x04000000) {
+    if (!passive)
+      LOG_ONCE(tex ^ 0x7C000000, "textura en VRAM real %08lx (el juego no usa la direccion que le da el plugin)\n", tex);
+    tex = FAKE_VRAM | (tex & 0xffffff);
+  }
+  vramUse(tex);
 
   RenderTarget *r = rt_enabled && opt.rt_on ? rtFindTex(tex) : NULL;
   if (r) {
@@ -631,9 +647,10 @@ static int texCheckCalc(void) {
     LOG_ONCE(tex ^ 0x7D000000, "textura desde fb %08lx llenado por copia (video?) -> se dibuja\n", tex);
     return 0;
   }
-  LOG_ONCE(tex ^ 0x7E000000, "textura desde fb %08lx -> draws omitidos%s\n", tex,
-           opt.omit_fbtex ? "" : " (desactivado en el menu: se dibujan)");
-  return opt.omit_fbtex ? 1 : 0;
+  fbtex_seen = 1;
+  LOG_ONCE(tex ^ 0x7E000000, "textura desde fb %08lx -> %s\n", tex,
+           opt.omit_fbtex == 1 ? "draws omitidos" : opt.omit_fbtex == 2 ? "se lee la copia reducida del frame" : "se lee la memoria tal cual");
+  return opt.omit_fbtex == 1;
 }
 
 // Memoria de vertices 2D ya duplicados: direccion, cantidad y hash de las posiciones
@@ -1126,8 +1143,8 @@ exit_loop:
           state.offx = state.offy = 0;
           if (pitch == 512 || pitch == 480 || pitch == 960 || wideScreen(pitch)) {
             state.ignore_framebuf = 0;
-            state.offx = opt.dx + (pitch == 1024 && opt.wide1024 == 0 ? disp_x : 0);
-            state.offy = opt.dy + (pitch == 1024 && opt.wide1024 == 0 ? disp_y : 0);
+            state.offx = opt.dx;
+            state.offy = opt.dy;
           } else if (rt_enabled && opt.rt_on && pitch >= 16 && (r = rtGet(state.framebuf, pitch)) &&
                      canRepatch(state.framebufptr_addr, state.framebufptr) &&
                      canRepatch(state.framebufwidth_addr, state.framebufwidth)) {
@@ -1148,12 +1165,13 @@ exit_loop:
           }
 
           if (passive) // el plugin no actua: indicar que haria con este framebuffer
-            LOG_ONCE(state.framebuf ^ (pitch << 20), "fb %08lx pitch=%lu%s\n", state.framebuf, pitch,
+            LOG_ONCE(state.framebuf ^ (pitch << 20) ^ 7, "fb %08lx pitch=%lu%s\n", state.framebuf, pitch,
                      (pitch == 512 || pitch == 480 || pitch == 960) ? "" : pitch >= 16 ? " (activo: seria render target)" : " (activo: se ignoraria)");
           else
-            LOG_ONCE(state.framebuf ^ (pitch << 20), "fb %08lx pitch=%lu%s\n", state.framebuf, pitch,
+            LOG_ONCE(state.framebuf ^ (pitch << 20) ^ 7, "fb %08lx pitch=%lu%s\n", state.framebuf, pitch,
                      state.cur_rt ? " -> render target" : state.ignore_framebuf ? " -> ignorado (no se dibuja)" : "");
           state.cur_fb = insertFramebuf(state.framebuf);
+          vramUse(state.framebuf + pitch * 272 * ((state.ge_cmd[GE_CMD_FRAMEBUFPIXFORMAT] & 3) == 3 ? 4 : 2) - 1);
 
           state.framebufptr = 0;
           state.framebufwidth = 0;
@@ -1193,12 +1211,15 @@ exit_loop:
         u32 w = (state.ge_cmd[GE_CMD_TRANSFERSIZE] & 0x3ff) + 1;
         u32 h = ((state.ge_cmd[GE_CMD_TRANSFERSIZE] >> 10) & 0x3ff) + 1;
         st.transfers++;
+        u32 pitch = state.ge_cmd[GE_CMD_TRANSFERDSTW] & 0x7ff, bpp = (data & 1) ? 4 : 2;
+        vramUse(dst + pitch * h * bpp - 1);
         int f = inFramebuf(dst) - 1;
         if (f >= 0) {
           st.fb_transfers++;
-          if (w * h >= 240 * 136) {
+          if (w * h >= 240 * 136 && pitch >= 480) {
             big_transfer = 1;
-            big_transfer_fb = f;
+            big_tx.addr = dst; big_tx.w = pitch;
+            big_tx.fmt = (data & 1) ? 3 : state.ge_cmd[GE_CMD_FRAMEBUFPIXFORMAT] & 3;
           }
           if (!state.fb_tx[f]) { // su contenido valido esta en la VRAM falsa (ver texCheckCalc)
             state.fb_tx[f] = 1;
@@ -1371,6 +1392,85 @@ int sceGeListEnQueueHeadPatched(const void *list, void *stall, int cbid, PspGeLi
   return _sceGeListEnQueueHead(list, stall, cbid, arg);
 }
 
+// Copia el frame de alta resolucion, reducido a 480x272, al fb que el juego acaba de
+// mostrar (en la VRAM falsa), para los efectos que lo leen como textura. Se hace con una
+// lista propia del GE: 4 sprites con filtro lineal hacia un buffer temporal en la VRAM
+// alta, y una copia de bloque de ahi al fb del juego. El GE guarda y restaura su estado
+// (contexto de la lista), asi que las listas del juego no notan nada.
+static void fbCopyDown(u32 dst, int width, int fmt) {
+  static PspGeContext ctx;
+  static int which;
+  if (!copy_vram) {
+    if (rt_next + 0x88000 > RT_END) {
+      LOG_ONCE(0xC2000000, "copia del frame: sin VRAM libre para el buffer temporal -> no se copia\n");
+      return;
+    }
+    copy_vram = rt_next;
+    rt_next += 0x88000; // 512x272 a 32 bpp
+    LOG("copia del frame: buffer temporal en %08lx (fb del juego %08lx ancho %d fmt %d)\n", copy_vram, dst, width, fmt);
+  }
+  u32 rl = RENDER_LIST + 0x2000 + (which ^= 1) * 0x1000, *l = (u32 *)(rl | 0x40000000); // sin cache
+  short *v = (short *)((rl + 0x800) | 0x40000000);
+  #define C(c, d) (*l++ = ((c) << 24) | ((d) & 0xffffff))
+  C(GE_CMD_FRAMEBUFPIXFORMAT, fmt);
+  C(GE_CMD_FRAMEBUFPTR, copy_vram); C(GE_CMD_FRAMEBUFWIDTH, ((copy_vram >> 24) << 16) | 512);
+  C(GE_CMD_SCISSOR1, 0); C(GE_CMD_SCISSOR2, (271 << 10) | 479);
+  C(GE_CMD_REGION1, 0); C(GE_CMD_REGION2, (271 << 10) | 479);
+  static const u8 off[] = { GE_CMD_ALPHATESTENABLE, GE_CMD_ZTESTENABLE, GE_CMD_ALPHABLENDENABLE, GE_CMD_STENCILTESTENABLE,
+    GE_CMD_FOGENABLE, GE_CMD_LOGICOPENABLE, GE_CMD_COLORTESTENABLE, GE_CMD_CULLFACEENABLE, GE_CMD_LIGHTINGENABLE,
+    GE_CMD_DITHERENABLE, GE_CMD_MASKRGB, GE_CMD_MASKALPHA, GE_CMD_TEXMAPMODE, GE_CMD_TEXMODE, GE_CMD_TEXFORMAT };
+  int i;
+  for (i = 0; i < (int)sizeof(off); i++)
+    C(off[i], 0);
+  C(GE_CMD_ZWRITEDISABLE, 1);
+  C(GE_CMD_TEXTUREMAPENABLE, 1);
+  C(GE_CMD_TEXSIZE0, (9 << 8) | 9);                 // 512x512 (se usan 480x272)
+  C(GE_CMD_TEXFILTER, (1 << 8) | 1);                // lineal: promedia los 4 pixeles
+  C(GE_CMD_TEXWRAP, (1 << 8) | 1);
+  C(GE_CMD_TEXFUNC, 3);                             // reemplazar
+  C(GE_CMD_VERTEXTYPE, GE_VTYPE_THROUGH | GE_VTYPE_TC_16BIT | GE_VTYPE_POS_16BIT);
+  C(GE_CMD_BASE, ((rl + 0x800) >> 8) & 0x0f0000); C(GE_CMD_OFFSETADDR, 0);
+  for (i = 0; i < 4; i++) { // 4 cuartos de 480x272: la textura del GE es de 512 como maximo
+    int tx = (i & 1) * 480, ty = (i >> 1) * 272;
+    u32 src = VRAM_DRAW_BUFFER_OFFSET + (ty * PITCH + tx) * 2;
+    short q[10] = { 0, 0, tx / 2, ty / 2, 0, 480, 272, tx / 2 + 240, ty / 2 + 136, 0 };
+    memcpy(v + i * 10, q, sizeof(q));
+    C(GE_CMD_TEXADDR0, src); C(GE_CMD_TEXBUFWIDTH0, ((src >> 24) << 16) | PITCH);
+    C(GE_CMD_TEXFLUSH, 0);
+    C(GE_CMD_VADDR, (rl + 0x800 + i * 20) & 0xffffff);
+    C(GE_CMD_PRIM, (GE_PRIM_RECTANGLES << 16) | 2);
+  }
+  C(GE_CMD_TRANSFERSRC, copy_vram); C(GE_CMD_TRANSFERSRCW, ((copy_vram >> 24) << 16) | 512);
+  C(GE_CMD_TRANSFERDST, dst); C(GE_CMD_TRANSFERDSTW, ((dst >> 24) << 16) | width);
+  C(GE_CMD_TRANSFERSRCPOS, 0); C(GE_CMD_TRANSFERDSTPOS, 0);
+  C(GE_CMD_TRANSFERSIZE, (271 << 10) | 479);
+  C(GE_CMD_TRANSFERSTART, fmt == 3);
+  C(GE_CMD_FINISH, 0); C(GE_CMD_END, 0);
+  #undef C
+  PspGeListArgs args = { 8, &ctx };
+  _sceGeListEnQueue((void *)rl, NULL, -1, &args);
+  st.fb_copies++;
+}
+
+// Memoria y CPU en este momento (al iniciar, en cada estadistica y desde el menu)
+void memSnapshot(const char *why) {
+  static int (*freeTotal)(void), (*freeMax)(void), (*cpu)(void), (*bus)(void), init;
+  if (!init) {
+    init = 1;
+    freeTotal = (void *)FindProc("sceSystemMemoryManager", "SysMemUserForUser", 0xF919F628);
+    freeMax = (void *)FindProc("sceSystemMemoryManager", "SysMemUserForUser", 0xA291F107);
+    cpu = (void *)FindProc("scePower_Service", "scePower", 0xFDB5BFE9);
+    bus = (void *)FindProc("scePower_Service", "scePower", 0xBD681969);
+  }
+  int k1 = pspSdkSetK1(0);
+  int ft = freeTotal ? freeTotal() / 1024 : -1, fm = freeMax ? freeMax() / 1024 : -1;
+  int c = cpu ? cpu() : -1, b = bus ? bus() : -1;
+  pspSdkSetK1(k1);
+  LOG("memoria (%s): ram del juego libre=%d KB (bloque mayor %d KB) | cpu=%d MHz bus=%d MHz\n", why, ft, fm, c, b);
+  LOG("memoria (%s): vram del juego usada hasta %lu KB de 4096 | vram real: pantalla+z 2040 KB, rt+copia %lu KB, libre %lu KB\n",
+      why, vram_hi ? (vram_hi - FAKE_VRAM) / 1024 + 1 : 0, (rt_next - RT_BASE) / 1024, rt_enabled ? (RT_END - rt_next) / 1024 : 0);
+}
+
 // Convierte un pixel del formato del juego a 565
 static inline u16 to565(u32 c, int fmt) {
   switch (fmt) {
@@ -1430,8 +1530,10 @@ void menuRequestCapture(void) { cap_request = 1; }
 
 int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat, int sync) {
   log_frame++;
-  if (log_frame == 30)
+  if (log_frame == 30) {
     logGameId(); // en module_start el disco aun no esta montado
+    memSnapshot("inicio");
+  }
 
   // L+R+SELECT: captura detallada de lo que se procese hasta el proximo flip
   static int prev_combo;
@@ -1477,7 +1579,6 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
 
   // Tiempo entre flips (fps) y costo del plugin en este frame
   u32 now = sceKernelGetSystemTimeLow(), dt = now - last_flip;
-  static u32 ema_dt, ema_pl; // promedios suaves para el indicador en pantalla
   if (last_flip && dt < 5000000) {
     st.frames++;
     st.frame_us += dt;
@@ -1489,63 +1590,54 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
       st.long_frame_logged = 1;
       LOG("frame lento: %lu ms (plugin %lu us, %lu draws en el frame)\n", dt / 1000, patch_us_frame, draws_since_flip);
     }
-    ema_dt = ema_dt ? (ema_dt * 15 + dt) / 16 : dt;
   }
-  ema_pl = (ema_pl * 15 + patch_us_frame) / 16;
 
   st.walked += walk_now;
   if (!draws_since_flip && walk_now)
     st.idle_frames++;
   if (!passive) {
-    // Si este frame no paso por el GE (video por CPU) o tuvo una copia de bloque grande
-    // al framebuffer (video/logo con sceGuCopyImage), el buffer de alta resolucion no lo
-    // tiene: se muestra la imagen original escalada en vez de una pantalla negra.
-    // Desde el menu se puede forzar siempre (para comparar con el original) o nunca.
-    // Donde muestra el juego su imagen dentro de su framebuffer (Silent Hill: x=480 en uno
-    // de 1024). En "auto" los fb de 1024 se tratan como pantalla con ese desplazamiento.
-    char info[64] = "";
+    // Donde muestra el juego su imagen dentro de su fb (Silent Hill alterna x=0 y x=480
+    // dentro de uno de 1024: doble buffer en un solo fb)
     int i, bpp = pixelformat == 3 ? 4 : 2, dfb = -1;
-    u32 disp = normVram((u32)topaddr), dx = 0, dy = 0;
-    u32 best = 0x88000; // el fb mas cercano por debajo (antes el primero: en GT decia y=272)
+    u32 disp = normVram((u32)topaddr), best = 0x88000; // el fb mas cercano por debajo
     for (i = 0; i < state.framebuf_count && bufferwidth > 0; i++) {
       u32 off = disp - state.framebuf_addr[i];
       if (disp >= state.framebuf_addr[i] && off < best) {
-        best = off; dfb = i; dx = off / bpp % bufferwidth; dy = off / bpp / bufferwidth;
+        best = off;
+        dfb = i;
       }
     }
-    if (dfb >= 0 && best) {
-      snprintf(info, sizeof(info), "el juego muestra fb %08lx desde x=%lu y=%lu", state.framebuf_addr[dfb], dx, dy);
-      LOG_ONCE(disp ^ 0xB0000000, "display dentro de fb %08lx: x=%lu y=%lu\n", state.framebuf_addr[dfb], dx, dy);
-    }
-    int wide = bufferwidth == 1024 && dfb >= 0;
-    if (wide != disp_wide || (wide && (dx != disp_x || dy != disp_y))) {
-      disp_wide = wide; disp_x = wide ? dx : 0; disp_y = wide ? dy : 0;
-      LOG("pantalla de 1024: %s (x=%d y=%d)%s\n", wide ? "si" : "no", disp_x, disp_y,
-          opt.wide1024 == 0 ? " -> fb de 1024 como pantalla (auto)" : " (opcion fija en el menu)");
-      if (opt.wide1024 == 0)
-        rtReset(); // esos fb dejan de ser render targets
-    }
-    int want = opt.fallback == 1 || (opt.fallback == 0 && (!draws_since_flip || (big_transfer && (dfb < 0 || big_transfer_fb == dfb))));
-    // (una copia grande a otro fb que no es el que se muestra, como el video de Silent Hill,
-    // se dibuja luego como textura en la pantalla: no hace falta la imagen original)
+    if (dfb >= 0 && best)
+      LOG_ONCE(disp ^ 0xB1000000, "display dentro de fb %08lx: x=%lu y=%lu\n", state.framebuf_addr[dfb],
+               best / bpp % bufferwidth, best / bpp / bufferwidth);
+
+    // Si este frame no paso por el GE (video por CPU) o tuvo una copia de bloque grande a
+    // un fb (video/logo), el buffer de alta resolucion no lo tiene: se muestra la imagen
+    // original escalada. La fuente es lo que se copio, no lo que se muestra: Silent Hill
+    // copia el video a un fb de 512 y lo pasa por GE a otro de 1024, que no se dibuja.
+    // Desde el menu se puede forzar siempre (para comparar con el original) o nunca.
+    int want = opt.fallback == 1 || (opt.fallback == 0 && (!draws_since_flip || big_transfer));
+    u32 src = big_transfer ? big_tx.addr : (u32)topaddr;
+    int sw = big_transfer ? (int)big_tx.w : bufferwidth, sf = big_transfer ? (int)big_tx.fmt : pixelformat;
     u16 *draw;
-    if (want && hasContent((u32)topaddr, bufferwidth, pixelformat)) {
-      LOG_ONCE(0xE5000000, "imagen original escalada (video/imagen fuera del GE)\n");
+    if (want && hasContent(src, sw, sf)) {
+      LOG_ONCE(0xE5000000 ^ src, "imagen original escalada desde %08lx ancho=%d fmt=%d (video/imagen fuera del GE)\n", src, sw, sf);
       u32 t0 = sceKernelGetSystemTimeLow();
-      upscaleGameBuffer((u32)topaddr, bufferwidth, pixelformat);
+      upscaleGameBuffer(src, sw, sf);
       st.upscale_us += sceKernelGetSystemTimeLow() - t0;
       st.fallback++;
-      draw = (u16 *)(DISPLAY_BUFFER | 0x40000000);
+      draw = (u16 *)DISPLAY_BUFFER;
     } else {
-      draw = (u16 *)(VRAM_DRAW_BUFFER_OFFSET | 0x40000000);
+      draw = (u16 *)VRAM_DRAW_BUFFER_OFFSET;
+      // Copia reducida del frame al fb mostrado, para los efectos que lo leen (opcion)
+      if (opt.omit_fbtex == 2 && fbtex_seen && rt_enabled && draws_since_flip && dfb >= 0 && !best &&
+          bufferwidth >= 480 && bufferwidth <= 512)
+        fbCopyDown(disp, bufferwidth, pixelformat);
     }
-    // Menu e indicador: se dibujan sobre la imagen antes de copiarla a la pantalla
-    char osd[96];
-    u32 fps10 = ema_dt ? 10000000 / ema_dt : 0;
-    snprintf(osd, sizeof(osd), " %lu.%lu fps | plugin %lu.%lu ms | %lu draws ", fps10 / 10, fps10 % 10,
-             ema_pl / 1000, (ema_pl / 100) % 10, draws_since_flip);
-    menuFrame(draw, osd, info);
-    if (draw != (u16 *)(DISPLAY_BUFFER | 0x40000000))
+    // Menu: se dibuja con cache sobre la imagen antes de copiarla a la pantalla
+    if (menuFrame(draw))
+      sceKernelDcacheWritebackInvalidateAll();
+    if (draw != (u16 *)DISPLAY_BUFFER)
       copyFrameBuffer();
   }
 
@@ -1556,15 +1648,15 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
     LOG("  (plugin %lu us en este frame)\n", patch_us_frame);
   patch_us_frame = 0;
   draws_since_flip = big_transfer = 0;
-  big_transfer_fb = -1;
   last_flip = now;
   walk_now = !passive || capturing || log_frame % PASSIVE_SAMPLE == 0;
 
   if (log_frame % STATS_EVERY == 0) {
     LOG("stats listas=%lu head=%lu stall=%lu draws=%lu omitidos=%lu frames_sin_draws=%lu fbs=%lu\n",
         st.lists, st.heads, st.stalls, st.draws, st.skipped, st.idle_frames, state.framebuf_count);
-    LOG("stats transfers=%lu a_fb=%lu escalados=%lu copias_en_lista=%lu pila_llena=%lu\n",
-        st.transfers, st.fb_transfers, st.fallback, st.enq_copies, st.stack_full);
+    LOG("stats transfers=%lu a_fb=%lu escalados=%lu copias_en_lista=%lu copias_al_fb_juego=%lu pila_llena=%lu\n",
+        st.transfers, st.fb_transfers, st.fallback, st.enq_copies, st.fb_copies, st.stack_full);
+    memSnapshot("stats");
     if (st.frames) {
       u32 fps10 = st.frames * 100000 / (st.frame_us / 100 + 1); // fps x10, sin division de 64 bits
       LOG("stats rendimiento: fps=%lu.%lu frame_max=%lu ms bajo60=%lu bajo30=%lu\n",
