@@ -36,6 +36,10 @@ static void reset(void) {
   memset((void *)LIST, 0, 0x100000);
   memset((void *)VERTS, 0, 0x10000);
   test_log_len = 0; test_log[0] = 0;
+  logResetOnce();
+  Options def = { .rt_on = 1, .rt_scale = 1, .omit_fbtex = 1, .fallback = 0, .nop_mark = 1, .walk_new = 1 };
+  opt = def;
+  passive = 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -380,13 +384,102 @@ static void test_nop_no_revive(void) {
   CHECK(*prim == 0, "un NOP del juego revivio el draw anulado antes: %08lx", *prim);
 }
 
+// Modo pasivo: recorre y registra igual, pero no modifica ni un byte de la lista ni de los vertices
+static void test_pasivo_no_escribe(void) {
+  reset();
+  passive = 1;
+  short *v = (short *)VERTS;
+  v[0] = 10; v[3] = 20;
+  begin();
+  cmd(GE_CMD_BASE, 0x080000);
+  setFb(0x000000, 512);
+  setFb(0x1fe000, 64);
+  cmd(GE_CMD_VIEWPORTXSCALE, f24(240)); cmd(GE_CMD_SCISSOR2, (271 << 10) | 479);
+  cmd(GE_CMD_VERTEXTYPE, GE_VTYPE_THROUGH | GE_VTYPE_POS_16BIT);
+  cmd(GE_CMD_VADDR, VERTS & 0xffffff);
+  cmd(GE_CMD_PRIM, (GE_PRIM_RECTANGLES << 16) | 2);
+  end();
+  static u32 copy[64];
+  int n = lp - (u32 *)LIST;
+  memcpy(copy, (void *)LIST, n * 4);
+  run();
+  CHECK(memcmp(copy, (void *)LIST, n * 4) == 0, "el modo pasivo modifico la lista");
+  CHECK(v[0] == 10 && v[3] == 20, "el modo pasivo modifico vertices: %d %d", v[0], v[3]);
+  CHECK(logHas("fb 0a1fe000 pitch=64 (activo: seria render target)"), "el log pasivo no indica que haria el plugin");
+}
+
+// En pasivo las direcciones de VRAM real (0x04...) se registran como VRAM falsa (0x0A...)
+static void test_pasivo_normaliza(void) {
+  reset();
+  passive = 1;
+  begin();
+  setFb(0x000000, 512);
+  setFb(0x044000, 512);
+  setFb(0x000000, 512);
+  cmd(GE_CMD_TEXTUREMAPENABLE, 1);
+  cmd(GE_CMD_TEXADDR0, 0x044000); cmd(GE_CMD_TEXBUFWIDTH0, (0x04 << 16) | 512); // VRAM real
+  cmd(GE_CMD_VERTEXTYPE, GE_VTYPE_POS_16BIT);
+  cmd(GE_CMD_PRIM, (GE_PRIM_TRIANGLES << 16) | 3);
+  end();
+  run();
+  CHECK(logHas("textura desde fb 0a044000"), "en pasivo no se reconocio la textura desde fb en VRAM real");
+}
+
+// Desplazamiento X (Silent Hill: buffer de 1024 que se muestra desde x=480)
+static void test_desplazamiento_y_1024(void) {
+  reset();
+  opt.wide1024 = 1; opt.dx = 480;
+  short *v = (short *)VERTS;
+  v[0] = 480; v[1] = 0; v[3] = 960; v[4] = 272;
+  begin();
+  cmd(GE_CMD_OFFSETX, (2048 - 512) << 4); cmd(GE_CMD_OFFSETY, (2048 - 136) << 4);
+  u32 *fw = (setFb(0x0d4000, 1024), lp - 1);
+  u32 *xc = cmd(GE_CMD_VIEWPORTXCENTER, f24(2048 - 512 + 480 + 240));
+  u32 *s1 = cmd(GE_CMD_SCISSOR1, 480);
+  cmd(GE_CMD_BASE, 0x080000);
+  cmd(GE_CMD_VERTEXTYPE, GE_VTYPE_THROUGH | GE_VTYPE_POS_16BIT);
+  cmd(GE_CMD_VADDR, VERTS & 0xffffff);
+  cmd(GE_CMD_PRIM, (GE_PRIM_RECTANGLES << 16) | 2);
+  end();
+  run();
+  CHECK(rt_count == 0 && !state.ignore_framebuf && (*fw & 0xffff) == 960, "fb de 1024 no tratado como pantalla");
+  CHECK(fcmd(xc) == 2048, "centro del viewport con desplazamiento: %f", fcmd(xc));
+  CHECK((*s1 & 0x3ff) == 0, "scissor con desplazamiento: %ld", *s1 & 0x3ff);
+  CHECK(v[0] == 0 && v[3] == 960, "vertices 2D con desplazamiento: %d %d", v[0], v[3]);
+}
+
+// Menu: abrir con L+R+START, cambiar una opcion, cerrar, y que el juego no vea botones mientras
+extern unsigned int test_buttons;
+static void test_menu(void) {
+  reset();
+  static u16 img[960 * 544];
+  test_buttons = PSP_CTRL_LTRIGGER | PSP_CTRL_RTRIGGER | PSP_CTRL_START;
+  menuFrame(img, "osd", "");
+  CHECK(menuOpen(), "el menu no se abrio");
+  test_buttons = 0; menuFrame(img, "osd", "");
+  test_buttons = PSP_CTRL_RIGHT; menuFrame(img, "osd", ""); // primera opcion: render targets si -> no
+  CHECK(opt.rt_on == 0 && logHas("menu: Render targets en VRAM alta = no"), "no se cambio la opcion (rt_on=%d)", opt.rt_on);
+  CHECK(logHas("rt: se liberaron"), "cambiar render targets no los libero");
+  test_buttons = 0; menuFrame(img, "osd", "");
+  test_buttons = PSP_CTRL_DOWN; menuFrame(img, "osd", ""); test_buttons = 0; menuFrame(img, "osd", "");
+  test_buttons = PSP_CTRL_RIGHT; menuFrame(img, "osd", "");
+  CHECK(opt.rt_scale == 2, "escala de render targets: %d", opt.rt_scale);
+  int dibujado = 0, i;
+  for (i = 0; i < 960 * 544; i++) dibujado += img[i] != 0;
+  CHECK(dibujado > 1000, "el menu no se dibujo (%d pixeles)", dibujado);
+  test_buttons = PSP_CTRL_CIRCLE; menuFrame(img, "osd", "");
+  CHECK(menuOpen(), "al cerrar con O el juego no deberia ver el boton hasta soltarlo");
+  test_buttons = 0; menuFrame(img, "osd", "");
+  CHECK(!menuOpen(), "el menu no se cerro");
+}
+
 int main(void) {
   mapPspMemory();
   void (*tests[])(void) = {
     test_viewport_scissor_x2, test_viewport_zona, test_memo_lista_grande, test_vertices_2d,
     test_vaddr_avanza_tras_3d, test_bjump_no_salta, test_estado_entre_listas, test_textura_fb_al_dibujar,
     test_render_target, test_textura_dentro_de_rt, test_rt_incompleto, test_rt_escala_1, test_pitch_0,
-    test_robustez, test_copia_listas_alternas, test_fps, test_doble_buffer_alternado, test_nop_no_revive, test_lista_estatica_fb,
+    test_robustez, test_copia_listas_alternas, test_fps, test_doble_buffer_alternado, test_nop_no_revive, test_lista_estatica_fb, test_pasivo_no_escribe, test_pasivo_normaliza, test_desplazamiento_y_1024, test_menu,
   };
   int i;
   for (i = 0; i < (int)(sizeof(tests) / sizeof(tests[0])); i++)

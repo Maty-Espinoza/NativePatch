@@ -12,7 +12,7 @@
 // L+R+SELECT durante el juego: captura detallada de un frame (draws y estado del GE).
 // Cada linea parte con el numero de frame (cuantas veces se llamo sceDisplaySetFrameBuf).
 
-#define GEPATCH_VERSION "0.2-dev13"
+#define GEPATCH_VERSION "0.2-dev14"
 
 extern u32 log_frame;
 
@@ -22,6 +22,7 @@ void logFlush(void);
 void logGameId(void);
 void logEager(int on);
 int logOnce(u32 key); // 1 la primera vez que se ve 'key', 0 las siguientes
+void logResetOnce(void);
 
 #define LOG(...) do { \
   char _b[160]; \

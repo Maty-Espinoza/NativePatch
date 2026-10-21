@@ -11,8 +11,8 @@ ifdef DEST
 endif
 
 TARGET = ge_patch
-OBJS = main.o log.o gu.o exports.o
-main.o log.o: log.h
+OBJS = main.o log.o menu.o gu.o exports.o
+main.o log.o menu.o: log.h menu.h font.h
 
 # Optimizacion: make OPT=-Os para probar la version optimizada para tamano
 OPT ?= -O2

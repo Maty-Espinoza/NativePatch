@@ -5,16 +5,16 @@ CFLAGS = -m32 -fPIE -pie -O1 -g -Wall -Wno-unused-function -Wno-unused-variable 
 test: test_main
 	./test_main
 
-test_main: test_main.c stubs.c ../main.c ../log.c ../log.h ../ge_constants.h
-	$(CC) $(CFLAGS) -o $@ test_main.c stubs.c ../log.c
+test_main: test_main.c stubs.c ../main.c ../log.c ../log.h ../ge_constants.h ../menu.c ../menu.h
+	$(CC) $(CFLAGS) -o $@ test_main.c stubs.c ../log.c ../menu.c
 
 # Benchmark: tiempo de patchGeList con una lista tipo Gran Turismo (para comparar versiones)
 .PHONY: test bench clean
 bench: bench_bin
 	./bench_bin
 
-bench_bin: bench.c test_main.c stubs.c ../main.c ../log.c ../log.h
-	$(CC) $(CFLAGS) -O2 -o $@ bench.c stubs.c ../log.c
+bench_bin: bench.c test_main.c stubs.c ../main.c ../log.c ../log.h ../menu.c
+	$(CC) $(CFLAGS) -O2 -o $@ bench.c stubs.c ../log.c ../menu.c
 
 clean:
 	rm -f test_main bench_bin

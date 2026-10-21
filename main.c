@@ -11,6 +11,7 @@
 
 #include "ge_constants.h"
 #include "log.h"
+#include "menu.h"
 
 PSP_MODULE_INFO("GePatch", 0x1007, 1, 0);
 
@@ -56,8 +57,18 @@ static u32 patch_us_frame; // costo del plugin en el frame en curso
 // NOP del juego), un NOP real escrito luego en esa posicion "revivia" el draw anulado
 // de un frame anterior, con vertices de cualquier cosa (texturas y triangulos basura).
 #define NOP_MARK ((GE_CMD_NOP << 24) | 0x0D1E07)
-static u32 NOP_OMIT = NOP_MARK; // con TRIANGULO al iniciar: NOP 0 como antes de dev12 (prueba)
-static int compat_walk;         // con CIRCULO al iniciar: recorrido de antes de dev12 (prueba)
+#define NOP_OMIT (opt.nop_mark ? NOP_MARK : (GE_CMD_NOP << 24)) // opcion del menu
+#define compat_walk (!opt.walk_new)                               // opcion del menu
+
+// Modo pasivo (L al iniciar): el mismo recorrido de listas y los mismos logs, pero sin
+// escribir nada; el juego corre como en una PSP normal. Sirve de referencia para comparar.
+static int passive;
+
+// En modo pasivo el juego usa la VRAM real (0x04...): se muestra como VRAM falsa (0x0A...)
+// para que los logs de ambos modos se puedan comparar linea por linea.
+static inline u32 normVram(u32 a) {
+  return (passive && (a & 0x0f000000) == 0x04000000) ? 0x0A000000 | (a & 0x00ffffff) : a;
+}
 
 #define MAX_CMDS 200000 // tope de comandos por recorrido, para no colgarse en listas en bucle
 
@@ -78,6 +89,8 @@ static u32 origOp(u32 *p) {
 }
 
 static void setOp(u32 *p, u32 orig, u32 op) {
+  if (passive)
+    return;
   int i = ((u32)p >> 2) & (MEMO_SIZE - 1);
   memo[i].addr = p;
   memo[i].orig = orig;
@@ -447,11 +460,11 @@ int inFramebuf(u32 addr) {
 #define RT_BASE 0x04200000
 #define RT_END  0x04400000
 #define RT_MAX  8
-// Los render targets se dibujan a escala 1 (tamano original). A escala 2 el limite de
-// 4096 px del GE descarta la geometria cercana a la camara, y el mapa de reflejos de
-// Ridge Racer quedaba solo con el color de fondo (reflejos cyan). Son buffers chicos
-// (reflejos, sombras, desenfoque): ganan poco al doble. Se puede probar con 2.
-#define RT_SCALE 1
+// Los render targets se dibujan por defecto a escala 1 (tamano original). A escala 2 el
+// limite de 4096 px del GE descarta la geometria cercana a la camara, y el mapa de
+// reflejos de Ridge Racer quedaba solo con el color de fondo (reflejos cyan). Se puede
+// cambiar a 2 desde el menu (se vuelven a reservar).
+#define RT_SCALE opt.rt_scale
 
 typedef struct RenderTarget {
   u32 addr, pitch;   // framebuffer del juego (direccion en VRAM falsa) y ancho de linea
@@ -464,6 +477,15 @@ typedef struct RenderTarget {
 static RenderTarget rt[RT_MAX];
 static int rt_count, rt_enabled;
 static u32 rt_next = RT_BASE;
+
+// Libera todos los render targets (al cambiar su escala o apagarlos desde el menu)
+void rtReset(void) {
+  memset(rt, 0, sizeof(rt));
+  rt_count = 0;
+  rt_next = RT_BASE;
+  rt_gen++;
+  LOG("rt: se liberaron los render targets\n");
+}
 
 // Busca o reserva el render target para (addr, pitch)
 static RenderTarget *rtGet(u32 addr, u32 pitch) {
@@ -557,9 +579,9 @@ int texCheck(void) {
 static int texCheckCalc(void) {
   if (!(state.ge_cmd[GE_CMD_TEXTUREMAPENABLE] & 1))
     return 0;
-  u32 tex = ((state.ge_cmd[GE_CMD_TEXBUFWIDTH0] & 0x0f0000) << 8) | (state.ge_cmd[GE_CMD_TEXADDR0] & 0xffffff);
+  u32 tex = normVram(((state.ge_cmd[GE_CMD_TEXBUFWIDTH0] & 0x0f0000) << 8) | (state.ge_cmd[GE_CMD_TEXADDR0] & 0xffffff));
 
-  RenderTarget *r = rt_enabled ? rtFindTex(tex) : NULL;
+  RenderTarget *r = rt_enabled && opt.rt_on ? rtFindTex(tex) : NULL;
   if (r) {
     if (r == state.cur_rt) {
       LOG_ONCE(tex ^ 0xC8000000, "rt: el rt %08lx se lee a si mismo -> se omite\n", tex);
@@ -582,8 +604,9 @@ static int texCheckCalc(void) {
   // Textura desde un framebuffer de pantalla (p.ej. el frame anterior): no hay copia
   if (tex == state.framebuf || findFramebuf(tex) < 0)
     return 0;
-  LOG_ONCE(tex ^ 0x7E000000, "textura desde fb %08lx -> draws omitidos\n", tex);
-  return 1;
+  LOG_ONCE(tex ^ 0x7E000000, "textura desde fb %08lx -> draws omitidos%s\n", tex,
+           opt.omit_fbtex ? "" : " (desactivado en el menu: se dibujan)");
+  return opt.omit_fbtex ? 1 : 0;
 }
 
 // Memoria de vertices 2D ya duplicados: direccion, cantidad y hash de las posiciones
@@ -859,7 +882,7 @@ void patchGeList(u32 *list, u32 *stall) {
           }
           break;
         }
-        if (*list != op) // se habia anulado en una pasada anterior: restaurar
+        if (*list != op && !passive) // se habia anulado en una pasada anterior: restaurar
           *list = op;
         st.draws++;
         if (state.cur_rt) {
@@ -920,7 +943,7 @@ void patchGeList(u32 *list, u32 *stall) {
           }
           break;
         }
-        if (*list != op) // se habia anulado en una pasada anterior: restaurar
+        if (*list != op && !passive) // se habia anulado en una pasada anterior: restaurar
           *list = op;
         st.draws++;
         if (state.cur_rt) {
@@ -958,7 +981,7 @@ void patchGeList(u32 *list, u32 *stall) {
 
           // Si estos vertices ya se duplicaron y el juego no los reescribio, no tocarlos
           // (los buffers estaticos se reutilizan cada frame)
-          if (vertsPatched(start, n, vertex_size, pos_off, pos_size))
+          if (passive || vertsPatched(start, n, vertex_size, pos_off, pos_size))
             goto exit_loop;
           if (state.cur_rt && RT_SCALE == 1)
             goto exit_loop; // en un render target a escala 1 las coordenadas quedan igual
@@ -984,8 +1007,9 @@ void patchGeList(u32 *list, u32 *stall) {
             int j;
             for (j = 0; j < 2; j++) {
               u32 addr = vertex_addr + pos_off + j * pos_size;
+              int d = state.cur_rt ? 0 : j ? opt.dy : opt.dx; // desplazamiento del area visible (menu)
               if (pos_size == 2) {
-                short val = *(short *)addr;
+                short val = *(short *)addr - d;
                 if (val == 480 || val == 960)
                   *(short *)addr = 960;
                 else if (val == 272 || val == 544)
@@ -994,6 +1018,7 @@ void patchGeList(u32 *list, u32 *stall) {
                   *(short *)addr = val * 2;
               } else if (pos_size == 4) {
                 t.i = *(u32 *)addr;
+                t.f -= d;
                 if (t.f == 480 || t.f == 960)
                   t.f = 960;
                 else if (t.f == 272 || t.f == 544)
@@ -1033,7 +1058,7 @@ exit_loop:
           state.framebufptr = op;
           state.framebufptr_addr = list;
         } else {
-          u16 pitch = ((op & 0xffff) == 512 || (op & 0xffff) == 480) ? 960 : (op & 0xffff);
+          u16 pitch = ((op & 0xffff) == 512 || (op & 0xffff) == 480 || ((op & 0xffff) == 1024 && opt.wide1024)) ? 960 : (op & 0xffff);
           setOp(list, op, (cmd << 24) | ((VRAM_DRAW_BUFFER_OFFSET >> 24) << 16) | pitch);
           state.framebufwidth = op;
           state.framebufwidth_addr = list;
@@ -1047,9 +1072,9 @@ exit_loop:
           // 480 tambien es un buffer de pantalla completa (Ridge Racer lo usa al iniciar)
           RenderTarget *r = NULL;
           state.cur_rt = NULL;
-          if (pitch == 512 || pitch == 480 || pitch == 960) {
+          if (pitch == 512 || pitch == 480 || pitch == 960 || (pitch == 1024 && opt.wide1024)) {
             state.ignore_framebuf = 0;
-          } else if (rt_enabled && pitch >= 16 && (r = rtGet(state.framebuf, pitch)) &&
+          } else if (rt_enabled && opt.rt_on && pitch >= 16 && (r = rtGet(state.framebuf, pitch)) &&
                      canRepatch(state.framebufptr_addr, state.framebufptr) &&
                      canRepatch(state.framebufwidth_addr, state.framebufwidth)) {
             // Render target: se dibuja al doble en su espacio de la VRAM alta
@@ -1068,8 +1093,12 @@ exit_loop:
             state.ignore_framebuf = 1;
           }
 
-          LOG_ONCE(state.framebuf ^ (pitch << 20), "fb %08lx pitch=%lu%s\n", state.framebuf, pitch,
-                   state.cur_rt ? " -> render target" : state.ignore_framebuf ? " -> ignorado (no se dibuja)" : "");
+          if (passive) // el plugin no actua: indicar que haria con este framebuffer
+            LOG_ONCE(state.framebuf ^ (pitch << 20), "fb %08lx pitch=%lu%s\n", state.framebuf, pitch,
+                     (pitch == 512 || pitch == 480 || pitch == 960) ? "" : pitch >= 16 ? " (activo: seria render target)" : " (activo: se ignoraria)");
+          else
+            LOG_ONCE(state.framebuf ^ (pitch << 20), "fb %08lx pitch=%lu%s\n", state.framebuf, pitch,
+                     state.cur_rt ? " -> render target" : state.ignore_framebuf ? " -> ignorado (no se dibuja)" : "");
           insertFramebuf(state.framebuf);
 
           state.framebufptr = 0;
@@ -1095,7 +1124,7 @@ exit_loop:
       case GE_CMD_TEXFORMAT:
       {
         int k = cmd == GE_CMD_TEXADDR0 ? 0 : cmd == GE_CMD_TEXBUFWIDTH0 ? 1 : cmd == GE_CMD_TEXSIZE0 ? 2 : 3;
-        if (*list != op)
+        if (*list != op && !passive)
           *list = op;
         state.tex_p[k] = list;
         state.tex_o[k] = op;
@@ -1106,7 +1135,7 @@ exit_loop:
       // ven en el buffer de alta resolucion. Videos y logos suelen dibujarse asi.
       case GE_CMD_TRANSFERSTART:
       {
-        u32 dst = ((state.ge_cmd[GE_CMD_TRANSFERDSTW] & 0xff0000) << 8) | (state.ge_cmd[GE_CMD_TRANSFERDST] & 0xffffff);
+        u32 dst = normVram(((state.ge_cmd[GE_CMD_TRANSFERDSTW] & 0xff0000) << 8) | (state.ge_cmd[GE_CMD_TRANSFERDST] & 0xffffff));
         u32 w = (state.ge_cmd[GE_CMD_TRANSFERSIZE] & 0x3ff) + 1;
         u32 h = ((state.ge_cmd[GE_CMD_TRANSFERSIZE] >> 10) & 0x3ff) + 1;
         st.transfers++;
@@ -1133,13 +1162,13 @@ exit_loop:
 
       case GE_CMD_VIEWPORTXCENTER:
         t.i = data << 8;
-        t.f = (2048 - WIDTH / 2) + (state.cur_rt ? RT_SCALE : 2) * (t.f - game_offx);
+        t.f = (2048 - WIDTH / 2) + (state.cur_rt ? RT_SCALE : 2) * (t.f - game_offx - (state.cur_rt ? 0 : opt.dx));
         setOp(list, op, (cmd << 24) | (t.i >> 8));
         break;
 
       case GE_CMD_VIEWPORTYCENTER:
         t.i = data << 8;
-        t.f = (2048 - HEIGHT / 2) + (state.cur_rt ? RT_SCALE : 2) * (t.f - game_offy);
+        t.f = (2048 - HEIGHT / 2) + (state.cur_rt ? RT_SCALE : 2) * (t.f - game_offy - (state.cur_rt ? 0 : opt.dy));
         setOp(list, op, (cmd << 24) | (t.i >> 8));
         break;
 
@@ -1156,7 +1185,9 @@ exit_loop:
       case GE_CMD_REGION1:
       case GE_CMD_SCISSOR1:
       {
-        u32 sc = state.cur_rt ? RT_SCALE : 2, x = (data & 0x3ff) * sc, y = ((data >> 10) & 0x3ff) * sc;
+        int sc = state.cur_rt ? RT_SCALE : 2, dx = state.cur_rt ? 0 : opt.dx, dy = state.cur_rt ? 0 : opt.dy;
+        int x = ((int)(data & 0x3ff) - dx) * sc, y = ((int)((data >> 10) & 0x3ff) - dy) * sc;
+        x = x < 0 ? 0 : x; y = y < 0 ? 0 : y;
         setOp(list, op, (cmd << 24) | ((y > 1023 ? 1023 : y) << 10) | (x > 1023 ? 1023 : x));
         break;
       }
@@ -1164,7 +1195,9 @@ exit_loop:
       case GE_CMD_REGION2:
       case GE_CMD_SCISSOR2:
       {
-        u32 sc = state.cur_rt ? RT_SCALE : 2, x = (data & 0x3ff) * sc + sc - 1, y = ((data >> 10) & 0x3ff) * sc + sc - 1;
+        int sc = state.cur_rt ? RT_SCALE : 2, dx = state.cur_rt ? 0 : opt.dx, dy = state.cur_rt ? 0 : opt.dy;
+        int x = ((int)(data & 0x3ff) - dx) * sc + sc - 1, y = ((int)((data >> 10) & 0x3ff) - dy) * sc + sc - 1;
+        x = x < 0 ? 0 : x; y = y < 0 ? 0 : y;
         setOp(list, op, (cmd << 24) | ((y > 1023 ? 1023 : y) << 10) | (x > 1023 ? 1023 : x));
         break;
       }
@@ -1255,7 +1288,7 @@ int sceGeListEnQueuePatched(const void *list, void *stall, int cbid, PspGeListAr
   // Juegos con un solo buffer casi no llaman sceDisplaySetFrameBuf: para ellos se copia aqui.
   // Antes se copiaba al encolar cada lista, y en juegos con varias listas por frame eso
   // mostraba frames a medio dibujar (parpadeo, tearing). Ahora solo si no hubo flip en 100 ms.
-  if (state.has_draws && sceKernelGetSystemTimeLow() - last_flip > 100000) {
+  if (!passive && state.has_draws && sceKernelGetSystemTimeLow() - last_flip > 100000) {
     copyFrameBuffer();
     st.enq_copies++;
   }
@@ -1329,6 +1362,9 @@ static void upscaleGameBuffer(u32 addr, int width, int fmt) {
   *(u32 *)DRAW_NATIVE = 1;
 }
 
+static int cap_request; // captura pedida desde el menu
+void menuRequestCapture(void) { cap_request = 1; }
+
 int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat, int sync) {
   log_frame++;
   if (log_frame == 30)
@@ -1342,6 +1378,11 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
   pspSdkSetK1(k1);
   u32 combo_mask = PSP_CTRL_LTRIGGER | PSP_CTRL_RTRIGGER | PSP_CTRL_SELECT;
   int combo = (pad.Buttons & combo_mask) == combo_mask;
+  if (cap_request) { // desde el menu: como si se hubiera presionado la combinacion
+    cap_request = 0;
+    combo = 1;
+    prev_combo = 0;
+  }
   if (capturing) {
     capFlush();
     // Los 10 tipos de comando mas frecuentes del frame (para saber en que se va el tiempo)
@@ -1362,31 +1403,18 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
     memset(cap_last, 0, sizeof(cap_last));
     memset(cap_hist, 0, sizeof(cap_hist));
     logEager(1);
-    LOG("== captura frame %lu: display %08lx ancho=%d fmt=%d, offset juego=(%d,%d) ==\n",
-        log_frame, (u32)topaddr, bufferwidth, pixelformat, (int)game_offx, (int)game_offy);
+    LOG("== captura frame %lu: display %08lx ancho=%d fmt=%d, offset juego=(%d,%d)%s ==\n",
+        log_frame, normVram((u32)topaddr), bufferwidth, pixelformat, (int)game_offx, (int)game_offy, passive ? " PASIVO" : "");
     capturing = 1;
   }
   prev_combo = combo;
   // Cada buffer distinto que el juego muestra; util para videos (FMV) que no pasan por el GE
-  LOG_ONCE((u32)topaddr ^ (bufferwidth << 20) ^ (pixelformat << 30), "display %08lx ancho=%d fmt=%d\n",
-           (u32)topaddr, bufferwidth, pixelformat);
+  LOG_ONCE(normVram((u32)topaddr) ^ (bufferwidth << 20) ^ (pixelformat << 30), "display %08lx ancho=%d fmt=%d\n",
+           normVram((u32)topaddr), bufferwidth, pixelformat);
 
-  // Si este frame no paso por el GE (video por CPU) o tuvo una copia de bloque grande
-  // al framebuffer (video/logo con sceGuCopyImage), el buffer de alta resolucion no lo
-  // tiene: se muestra la imagen original escalada en vez de una pantalla negra.
-  if (!draws_since_flip)
-    st.idle_frames++;
-  if ((!draws_since_flip || big_transfer) && hasContent((u32)topaddr, bufferwidth, pixelformat)) {
-    LOG_ONCE(0xE5000000, "imagen original escalada (video/imagen fuera del GE)\n");
-    u32 t0 = sceKernelGetSystemTimeLow();
-    upscaleGameBuffer((u32)topaddr, bufferwidth, pixelformat);
-    st.upscale_us += sceKernelGetSystemTimeLow() - t0;
-    st.fallback++;
-  } else {
-    copyFrameBuffer();
-  }
   // Tiempo entre flips (fps) y costo del plugin en este frame
   u32 now = sceKernelGetSystemTimeLow(), dt = now - last_flip;
+  static u32 ema_dt, ema_pl; // promedios suaves para el indicador en pantalla
   if (last_flip && dt < 5000000) {
     st.frames++;
     st.frame_us += dt;
@@ -1398,7 +1426,54 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
       st.long_frame_logged = 1;
       LOG("frame lento: %lu ms (plugin %lu us, %lu draws en el frame)\n", dt / 1000, patch_us_frame, draws_since_flip);
     }
+    ema_dt = ema_dt ? (ema_dt * 15 + dt) / 16 : dt;
   }
+  ema_pl = (ema_pl * 15 + patch_us_frame) / 16;
+
+  if (!draws_since_flip)
+    st.idle_frames++;
+  if (!passive) {
+    // Si este frame no paso por el GE (video por CPU) o tuvo una copia de bloque grande
+    // al framebuffer (video/logo con sceGuCopyImage), el buffer de alta resolucion no lo
+    // tiene: se muestra la imagen original escalada en vez de una pantalla negra.
+    // Desde el menu se puede forzar siempre (para comparar con el original) o nunca.
+    int want = opt.fallback == 1 || (opt.fallback == 0 && (!draws_since_flip || big_transfer));
+    u16 *draw;
+    if (want && hasContent((u32)topaddr, bufferwidth, pixelformat)) {
+      LOG_ONCE(0xE5000000, "imagen original escalada (video/imagen fuera del GE)\n");
+      u32 t0 = sceKernelGetSystemTimeLow();
+      upscaleGameBuffer((u32)topaddr, bufferwidth, pixelformat);
+      st.upscale_us += sceKernelGetSystemTimeLow() - t0;
+      st.fallback++;
+      draw = (u16 *)(DISPLAY_BUFFER | 0x40000000);
+    } else {
+      draw = (u16 *)(VRAM_DRAW_BUFFER_OFFSET | 0x40000000);
+    }
+    // Menu e indicador: se dibujan sobre la imagen antes de copiarla a la pantalla
+    char osd[96];
+    u32 fps10 = ema_dt ? 10000000 / ema_dt : 0;
+    snprintf(osd, sizeof(osd), " %lu.%lu fps | plugin %lu.%lu ms | %lu draws ", fps10 / 10, fps10 % 10,
+             ema_pl / 1000, (ema_pl / 100) % 10, draws_since_flip);
+    // Donde muestra el juego su imagen dentro de su framebuffer (Silent Hill: x=480 en uno
+    // de 1024): es el valor a probar en "Desplazamiento X" del menu
+    char info[64] = "";
+    int i, bpp = pixelformat == 3 ? 4 : 2;
+    u32 disp = normVram((u32)topaddr);
+    for (i = 0; i < state.framebuf_count && bufferwidth > 0; i++) {
+      u32 off = disp - state.framebuf_addr[i];
+      if (disp > state.framebuf_addr[i] && off < 0x88000) {
+        u32 px = off / bpp, x = px % bufferwidth, y = px / bufferwidth;
+        snprintf(info, sizeof(info), "el juego muestra fb %08lx desde x=%lu y=%lu", state.framebuf_addr[i], x, y);
+        LOG_ONCE(disp ^ 0xB0000000, "display dentro de fb %08lx: x=%lu y=%lu (probar Desplazamiento X/Y)\n",
+                 state.framebuf_addr[i], x, y);
+        break;
+      }
+    }
+    menuFrame(draw, osd, info);
+    if (draw != (u16 *)(DISPLAY_BUFFER | 0x40000000))
+      copyFrameBuffer();
+  }
+
   st.patch_us += patch_us_frame;
   if (patch_us_frame > st.patch_max)
     st.patch_max = patch_us_frame;
@@ -1417,8 +1492,8 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
       u32 fps10 = st.frames * 100000 / (st.frame_us / 100 + 1); // fps x10, sin division de 64 bits
       LOG("stats rendimiento: fps=%lu.%lu frame_max=%lu ms bajo60=%lu bajo30=%lu\n",
           fps10 / 10, fps10 % 10, st.frame_max / 1000, st.slow60, st.slow30);
-      LOG("stats plugin: %lu us/frame (max %lu) comandos/frame=%lu draws/frame=%lu escalado_cpu=%lu us/frame\n",
-          st.patch_us / st.frames, st.patch_max, st.cmds / st.frames, (st.draws + st.skipped) / st.frames,
+      LOG("stats %s: %lu us/frame (max %lu) comandos/frame=%lu draws/frame=%lu escalado_cpu=%lu us/frame\n",
+          passive ? "observacion" : "plugin", st.patch_us / st.frames, st.patch_max, st.cmds / st.frames, (st.draws + st.skipped) / st.frames,
           st.fallback ? st.upscale_us / st.fallback : 0);
     }
     if (rt_count || st.rt_fail) {
@@ -1501,16 +1576,19 @@ static void probeVram(void) {
 int module_start(SceSize args, void *argp) {
   SceCtrlData pad;
   sceCtrlPeekBufferPositive(&pad, 1);
-  if (pad.Buttons & PSP_CTRL_LTRIGGER)
-    return 0;
+  // L al iniciar: modo pasivo (antes desactivaba el plugin del todo y no habia log)
+  passive = !!(pad.Buttons & PSP_CTRL_LTRIGGER);
 
   logInit(pad.Buttons & PSP_CTRL_RTRIGGER);
-  // Botones al iniciar el juego para probar cambios sospechosos sin recompilar
+  // Botones al iniciar el juego (tambien se pueden cambiar despues desde el menu)
   if (pad.Buttons & PSP_CTRL_TRIANGLE)
-    NOP_OMIT = GE_CMD_NOP << 24;
-  compat_walk = !!(pad.Buttons & PSP_CTRL_CIRCLE);
-  LOG("opciones: nop_omitido=%s recorrido=%s compilado=%s\n", NOP_OMIT == NOP_MARK ? "marca" : "0 (antiguo)",
-      compat_walk ? "antiguo" : "nuevo", BUILD_OPT);
+    opt.nop_mark = 0;
+  if (pad.Buttons & PSP_CTRL_CIRCLE)
+    opt.walk_new = 0;
+  LOG("opciones: nop_omitido=%s recorrido=%s compilado=%s\n", opt.nop_mark ? "marca" : "0 (antiguo)",
+      opt.walk_new ? "nuevo" : "antiguo", BUILD_OPT);
+  if (passive)
+    LOG("modo PASIVO (L): el juego corre sin cambios; se mide y registra igual para comparar\n");
 
   _sceGeEdramGetAddr = (void *)FindProc("sceGE_Manager", "sceGe_driver", 0xE47E40E4);
   _sceGeEdramGetSize = (void *)FindProc("sceGE_Manager", "sceGe_driver", 0x1F6752AD);
@@ -1523,19 +1601,24 @@ int module_start(SceSize args, void *argp) {
       !_sceGeListUpdateStallAddr || !_sceGeListEnQueue || !_sceGeListEnQueueHead)
     LOG("ERROR: no se encontro alguna funcion de sceGe_driver\n");
 
-  sctrlHENPatchSyscall((u32)_sceGeEdramGetAddr, sceGeEdramGetAddrPatched);
-  sctrlHENPatchSyscall((u32)_sceGeEdramGetSize, sceGeEdramGetSizePatched);
+  if (!passive) { // en pasivo el juego usa la VRAM real
+    sctrlHENPatchSyscall((u32)_sceGeEdramGetAddr, sceGeEdramGetAddrPatched);
+    sctrlHENPatchSyscall((u32)_sceGeEdramGetSize, sceGeEdramGetSizePatched);
+  }
   sctrlHENPatchSyscall((u32)_sceGeListUpdateStallAddr, sceGeListUpdateStallAddrPatched);
   sctrlHENPatchSyscall((u32)_sceGeListEnQueue, sceGeListEnQueuePatched);
   sctrlHENPatchSyscall((u32)_sceGeListEnQueueHead, sceGeListEnQueueHeadPatched);
 
   memset(memo, 0, MEMO_SIZE * sizeof(MemoEntry));
-  probeVram();
+  if (!passive)
+    probeVram();
 
   _sceDisplaySetFrameBuf = (void *)FindProc("sceDisplay_Service", "sceDisplay_driver", 0x289D82FE);
   if (!_sceDisplaySetFrameBuf)
     LOG("ERROR: no se encontro sceDisplaySetFrameBuf\n");
   sctrlHENPatchSyscall((u32)_sceDisplaySetFrameBuf, sceDisplaySetFrameBufPatched);
+  if (!passive)
+    menuInstallCtrlHooks();
 
   sceKernelDcacheWritebackInvalidateAll();
   sceKernelIcacheClearAll();

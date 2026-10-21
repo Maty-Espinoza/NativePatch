@@ -73,6 +73,11 @@ void logFlush(void) {
   flushing = 0;
 }
 
+// Olvida los eventos ya registrados: vuelven a aparecer en el log (tests, o tras cambiar opciones)
+void logResetOnce(void) {
+  memset(seen, 0, sizeof(seen));
+}
+
 int logOnce(u32 key) {
   if (!key)
     key = 1; // 0 marca casilla vacia
