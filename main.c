@@ -835,10 +835,23 @@ static int txIsReg(u32 op) {
       return 1;
   return 0;
 }
-static int txIsCopy(u32 *list, int temp) {
-  if (passive || !validAddr((u32)(list - 1)) || ((u32)list >= TX_RING && (u32)list < TX_RING + 64 * TX_SLOT) || (temp && !copyVram()))
-    return 0;
-  return txIsReg(origOp(list - 1));
+// Silent Hill pone otros comandos entre el ultimo registro y el TRANSFERSTART: se busca el
+// registro hasta 8 palabras antes; lo que haya entre medio no debe depender de BASE
+// (direcciones, saltos), porque se ejecutara con el BASE del plugin. Devuelve la palabra.
+static u32 *txIsCopy(u32 *list, int temp) {
+  int k;
+  if (passive || ((u32)list >= TX_RING && (u32)list < TX_RING + 64 * TX_SLOT) || (temp && !copyVram()))
+    return NULL;
+  for (k = 1; k <= 8 && validAddr((u32)(list - k)); k++) {
+    u32 c = origOp(list - k) >> 24;
+    if (txIsReg(origOp(list - k)))
+      return list - k;
+    if (c == GE_CMD_VADDR || c == GE_CMD_IADDR || c == GE_CMD_BASE || c == GE_CMD_CALL || c == GE_CMD_JUMP ||
+        c == GE_CMD_BJUMP || c == GE_CMD_ORIGIN || c == GE_CMD_OFFSETADDR || c == GE_CMD_RET || c == GE_CMD_END ||
+        c == GE_CMD_TRANSFERSTART)
+      break;
+  }
+  return NULL;
 }
 
 // Palabra del registro cmd de esta copia (hasta 16 palabras antes), o NULL
@@ -870,9 +883,9 @@ static u32 txSlot(void) {
   return (FAKE_VRAM | ((sl - state.offset) & 0xffffff)) + state.offset == sl ? sl : 0;
 }
 
-// Reescribe el ultimo registro y el TRANSFERSTART como BASE + CALL a la lista sl
-static void txCall(u32 *list, u32 sl) {
-  setOp(list - 1, origOp(list - 1), (GE_CMD_BASE << 24) | ((FAKE_VRAM >> 8) & 0x0f0000));
+// Reescribe el ultimo registro (reg) y el TRANSFERSTART como BASE + CALL a la lista sl
+static void txCall(u32 *list, u32 *reg, u32 sl) {
+  setOp(reg, origOp(reg), (GE_CMD_BASE << 24) | ((FAKE_VRAM >> 8) & 0x0f0000));
   setOp(list, origOp(list), (GE_CMD_CALL << 24) | ((sl - state.offset) & 0xffffff));
   tx_patched_any = 1;
 }
@@ -906,14 +919,18 @@ static u32 *txRestore(u32 *l, int fb) {
 // buffer grande. Se reemplaza por: reducir el buffer grande al temporal y copiar de ahi.
 static int txFromScreen(u32 *list, u32 src, u32 dst, u32 w, u32 h, int bpp) {
   int f = inFramebuf(src) - 1;
-  u32 sw = state.ge_cmd[GE_CMD_TRANSFERSRCW] & 0x7ff, sl;
-  if (f < 0 || (sw != 512 && sw != 480) || rtFindTex(state.framebuf_addr[f]) || state.fb_layer[f] || inFramebuf(dst) ||
-      !txIsCopy(list, 1) || !(sl = txSlot()))
+  u32 sw = state.ge_cmd[GE_CMD_TRANSFERSRCW] & 0x7ff, sl = 0, *reg = NULL;
+  if (f < 0 || (sw != 512 && sw != 480) || rtFindTex(state.framebuf_addr[f]) || state.fb_layer[f] || inFramebuf(dst))
     return 0;
   u32 off = (src - state.framebuf_addr[f]) / bpp, sp = state.ge_cmd[GE_CMD_TRANSFERSRCPOS];
   u32 x = off % sw + (sp & 0x3ff), y = off / sw + ((sp >> 10) & 0x3ff);
-  if (x + w > 480 || y + h > 272)
+  const char *why = x + w > 480 || y + h > 272 ? "fuera de 480x272" : !(reg = txIsCopy(list, 1)) ? "no se puede reescribir"
+                  : !(sl = txSlot()) ? "CALL inalcanzable" : NULL;
+  if (why) {
+    LOG_ONCE_CAP(0xEA000000 ^ src ^ dst, "copia desde la pantalla %lux%lu -> %08lx NO reemplazada: %s (antes: %08lx %08lx %08lx)\n",
+                 w, h, dst, why, origOp(list - 3), origOp(list - 2), origOp(list - 1));
     return 0;
+  }
   u32 *l = (u32 *)(sl | 0x40000000);
   l = emitDownscale(l, sl + 640, bpp == 4 ? 3 : state.ge_cmd[GE_CMD_FRAMEBUFPIXFORMAT] & 3);
   #define C(c, d) (*l++ = ((c) << 24) | ((d) & 0xffffff))
@@ -924,7 +941,7 @@ static int txFromScreen(u32 *list, u32 src, u32 dst, u32 w, u32 h, int bpp) {
   C(GE_CMD_TRANSFERSTART, bpp == 4);
   #undef C
   txRestore(l, 1);
-  txCall(list, sl);
+  txCall(list, reg, sl);
   st.tx_screen++;
   LOG_ONCE_CAP(0xE8000000 ^ src ^ dst, "copia desde la pantalla %lux%lu (%lu,%lu) -> %08lx: se toma del buffer grande reducido\n",
                w, h, x, y, dst);
@@ -932,8 +949,8 @@ static int txFromScreen(u32 *list, u32 src, u32 dst, u32 w, u32 h, int bpp) {
 }
 
 static int txUpscale(u32 *list, u32 dst, u32 w, u32 h, int bpp) {
-  u32 k;
-  if (state.cur_rt || state.ignore_framebuf || dst != state.framebuf || !txIsCopy(list, 1))
+  u32 k, *reg;
+  if (state.cur_rt || state.ignore_framebuf || dst != state.framebuf || !(reg = txIsCopy(list, 1)))
     return 0;
   u32 src = ((state.ge_cmd[GE_CMD_TRANSFERSRCW] & 0xff0000) << 8) | (state.ge_cmd[GE_CMD_TRANSFERSRC] & 0xffffff);
   u32 sw = state.ge_cmd[GE_CMD_TRANSFERSRCW] & 0x7ff, sp = state.ge_cmd[GE_CMD_TRANSFERSRCPOS];
@@ -977,7 +994,7 @@ static int txUpscale(u32 *list, u32 dst, u32 w, u32 h, int bpp) {
   }
   #undef C
   txRestore(l, 0);
-  txCall(list, sl);
+  txCall(list, reg, sl);
   st.tx_ge++;
   LOG_ONCE(0xE7000000 ^ dst, "copia %lux%lu a fb %08lx -> se escala con el GE en su lugar de la lista\n", w, h, dst);
   return 1;

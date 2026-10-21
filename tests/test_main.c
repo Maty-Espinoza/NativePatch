@@ -773,12 +773,13 @@ static void test_copia_formulario(void) {
   setFb(0x04c000, 512);
   cmd(GE_CMD_TRANSFERDST, 0x7f6960); cmd(GE_CMD_TRANSFERDSTW, (0x09 << 16) | 256);
   cmd(GE_CMD_TRANSFERSRC, 0x04c000); cmd(GE_CMD_TRANSFERSRCW, (0x0a << 16) | 512);
-  cmd(GE_CMD_TRANSFERSIZE, (255 << 10) | 255); cmd(GE_CMD_TRANSFERSRCPOS, 0); cmd(GE_CMD_TRANSFERDSTPOS, 0);
+  cmd(GE_CMD_TRANSFERSIZE, (255 << 10) | 255); cmd(GE_CMD_TRANSFERSRCPOS, 0); u32 *reg = cmd(GE_CMD_TRANSFERDSTPOS, 0);
+  cmd(GE_CMD_TEXFLUSH, 0); cmd(GE_CMD_NOP, 0); // otros comandos antes del TRANSFERSTART
   u32 *start = cmd(GE_CMD_TRANSFERSTART, 1);
   end();
   memset(&st, 0, sizeof(st));
   run();
-  CHECK(st.tx_screen == 1 && (*start >> 24) == GE_CMD_CALL, "la copia del formulario no se reemplazo (%lu)", st.tx_screen);
+  CHECK(st.tx_screen == 1 && (*start >> 24) == GE_CMD_CALL && (*reg >> 24) == GE_CMD_BASE, "la copia del formulario no se reemplazo (%lu)", st.tx_screen);
   CHECK(logHas("copia desde la pantalla 256x256 (0,0) -> 097f6960"), "no se registro la copia del formulario");
 }
 
