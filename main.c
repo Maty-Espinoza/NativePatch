@@ -364,6 +364,34 @@ int texFromFramebuf(void) {
   return 1;
 }
 
+// Memoria de vertices 2D ya duplicados: direccion, cantidad y hash de las posiciones
+// tal como quedaron. Si al volver a verlos el hash coincide, ya estan duplicados.
+// Antes se marcaba en bytes de relleno del vertice, y los formatos sin relleno
+// (p.ej. los sprites que limpian la pantalla) se duplicaban de nuevo cada frame.
+#define VMEMO_SIZE 512
+static struct { u32 addr, n, hash; } vmemo[VMEMO_SIZE];
+
+static u32 vertsHash(u32 start, u32 n, int size, int pos_off, int pos_size) {
+  u32 h = n, i;
+  for (i = 0; i < n; i++, start += size) {
+    u32 p = start + pos_off;
+    h = h * 31 + (pos_size == 2 ? (*(u16 *)p | (*(u16 *)(p + 2) << 16)) : *(u32 *)p ^ *(u32 *)(p + 4));
+  }
+  return h;
+}
+
+static int vertsPatched(u32 start, u32 n, int size, int pos_off, int pos_size) {
+  int k = (start >> 2) & (VMEMO_SIZE - 1);
+  return vmemo[k].addr == start && vmemo[k].n == n && vmemo[k].hash == vertsHash(start, n, size, pos_off, pos_size);
+}
+
+static void vertsRemember(u32 start, u32 n, u32 hash) {
+  int k = (start >> 2) & (VMEMO_SIZE - 1);
+  vmemo[k].addr = start;
+  vmemo[k].n = n;
+  vmemo[k].hash = hash;
+}
+
 void AdvanceVerts(int count, int vertex_size) {
   if ((state.vertex_type & GE_VTYPE_IDX_MASK) != GE_VTYPE_IDX_NONE) {
     int index_shift = ((state.vertex_type & GE_VTYPE_IDX_MASK) >> GE_VTYPE_IDX_SHIFT) - 1;
@@ -649,89 +677,39 @@ void patchGeList(u32 *list, u32 *stall) {
 
           int pos = (state.vertex_type & GE_VTYPE_POS_MASK) >> GE_VTYPE_POS_SHIFT;
           int pos_size = possize[pos] / 3;
+          u32 start = state.vertex_addr + lower * vertex_size, n = upper - lower;
 
-          // TODO: we may patch the same vertex again and again...
-          u8 decoded = 0, encoded = 0;
-          u32 vertex_addr = state.vertex_addr + lower * vertex_size;
-          int i;
-          for (i = lower; i < upper; i++, vertex_addr += vertex_size) {
+          // Si estos vertices ya se duplicaron y el juego no los reescribio, no tocarlos
+          // (los buffers estaticos se reutilizan cada frame)
+          if (vertsPatched(start, n, vertex_size, pos_off, pos_size))
+            goto exit_loop;
+
+          u32 vertex_addr = start, i;
+          for (i = 0; i < n; i++, vertex_addr += vertex_size) {
             int j;
             for (j = 0; j < 2; j++) {
               u32 addr = vertex_addr + pos_off + j * pos_size;
-              switch (pos_size) {
-                case 2:
-                {
-                  short val = *(short *)addr;
-                  if (val != 0) {
-                    // Decode and check if we already doubled at least one of the vertices
-                    // If that's the case, let's assume all other vertices have been doubled, too
-                    if (!decoded && visit_off && upper - i >= 2) {
-                      if (*(u8 *)(vertex_addr + visit_off + 0 * vertex_size) == ((val >> 0) & 0xff) &&
-                          *(u8 *)(vertex_addr + visit_off + 1 * vertex_size) == ((val >> 8) & 0xff)) {
-                        goto exit_loop;
-                      }
-                      decoded = 1;
-                    }
-
-                    if (val == 480 || val == 960)
-                      *(short *)addr = 960;
-                    else if (val == 272 || val == 544)
-                      *(short *)addr = 544;
-                    else if (val > -2048 && val < 2048)
-                      *(short *)addr *= 2;
-
-                    // Encode that we already doubled one of the vertices
-                    if (!encoded && visit_off && upper - i >= 2) {
-                      val = *(short *)addr;
-                      *(u8 *)(vertex_addr + visit_off + 0 * vertex_size) = (val >> 0) & 0xff;
-                      *(u8 *)(vertex_addr + visit_off + 1 * vertex_size) = (val >> 8) & 0xff;
-                      encoded = 1;
-                    }
-                  }
-                  break;
-                }
-
-                case 4:
-                {
-                  t.i = *(u32 *)addr;
-                  if (t.f != 0) {
-                    // Decode and check if we already doubled at least one of the vertices
-                    // If that's the case, let's assume all other vertices have been doubled, too
-                    if (!decoded && visit_off && upper - i >= 4) {
-                      if (*(u8 *)(vertex_addr + visit_off + 0 * vertex_size) == ((t.i >> 0) & 0xff) &&
-                          *(u8 *)(vertex_addr + visit_off + 1 * vertex_size) == ((t.i >> 8) & 0xff) &&
-                          *(u8 *)(vertex_addr + visit_off + 2 * vertex_size) == ((t.i >> 16) & 0xff) &&
-                          *(u8 *)(vertex_addr + visit_off + 3 * vertex_size) == ((t.i >> 24) & 0xff)) {
-                        goto exit_loop;
-                      }
-                      decoded = 1;
-                    }
-
-                    if (t.f == 480 || t.f == 960) {
-                      t.f = 960;
-                      *(u32 *)addr = t.i;
-                    } else if (t.f == 272 || t.f == 544) {
-                      t.f = 544;
-                      *(u32 *)addr = t.i;
-                    } else if (t.f > -2048 && t.f < 2048) {
-                      t.f *= 2;
-                      *(u32 *)addr = t.i;
-                    }
-
-                    // Encode that we already doubled one of the vertices
-                    if (!encoded && visit_off && upper - i >= 4) {
-                      *(u8 *)(vertex_addr + visit_off + 0 * vertex_size) = (t.i >> 0) & 0xff;
-                      *(u8 *)(vertex_addr + visit_off + 1 * vertex_size) = (t.i >> 8) & 0xff;
-                      *(u8 *)(vertex_addr + visit_off + 2 * vertex_size) = (t.i >> 16) & 0xff;
-                      *(u8 *)(vertex_addr + visit_off + 3 * vertex_size) = (t.i >> 24) & 0xff;
-                      encoded = 1;
-                    }
-                  }
-                  break;
-                }
+              if (pos_size == 2) {
+                short val = *(short *)addr;
+                if (val == 480 || val == 960)
+                  *(short *)addr = 960;
+                else if (val == 272 || val == 544)
+                  *(short *)addr = 544;
+                else if (val > -2048 && val < 2048)
+                  *(short *)addr = val * 2;
+              } else if (pos_size == 4) {
+                t.i = *(u32 *)addr;
+                if (t.f == 480 || t.f == 960)
+                  t.f = 960;
+                else if (t.f == 272 || t.f == 544)
+                  t.f = 544;
+                else if (t.f > -2048 && t.f < 2048)
+                  t.f *= 2;
+                *(u32 *)addr = t.i;
               }
             }
           }
+          vertsRemember(start, n, vertsHash(start, n, vertex_size, pos_off, pos_size));
 
 exit_loop:
           AdvanceVerts(count, vertex_size);
@@ -1066,6 +1044,49 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
   return _sceDisplaySetFrameBuf(topaddr, bufferwidth, pixelformat, sync);
 }
 
+// Prueba de VRAM de 4 MB (solo diagnostico: no cambia como se dibuja).
+// Los modelos PSP-2000 en adelante tienen 4 MB de VRAM, pero el sistema expone 2 MB.
+// Se pide 4 MB con sceGeEdramSetSize y se comprueba que la zona 2-4 MB exista de verdad
+// (CPU) y que el GE pueda escribir en ella (copia de bloque). Resultado en el log.
+static void probeVram(void) {
+  int (*setSize)(int) = (void *)FindProc("sceGE_Manager", "sceGe_driver", 0x5BAA5439);
+  int (*drawSync)(int) = (void *)FindProc("sceGE_Manager", "sceGe_driver", 0xB287BD61);
+  volatile u32 *lo = (u32 *)0x44000000, *hi = (u32 *)0x44300000; // sin cache
+  u32 before = (u32)_sceGeEdramGetSize(), res = setSize ? setSize(0x400000) : 0xFFFFFFFF;
+  u32 after = (u32)_sceGeEdramGetSize();
+  LOG("vram: tamano=%lu KB, SetSize(4MB)=%08lx, ahora=%lu KB\n", before / 1024, res, after / 1024);
+  logFlush(); // por si lo siguiente cuelga la consola
+
+  // CPU: escribir arriba y comprobar que no pisa la parte baja (si fueran 2 MB reflejados)
+  u32 save = *lo;
+  *lo = 0x11111111;
+  *hi = 0x22222222;
+  int cpu_ok = *hi == 0x22222222, alias = *lo == 0x22222222;
+  *lo = save;
+  LOG("vram: CPU en 3 MB %s%s\n", cpu_ok ? "ok" : "FALLA", alias ? " (es un reflejo de los primeros 2 MB)" : "");
+  logFlush();
+
+  // GE: copiar 16x16 pixeles desde la parte baja a 3 MB y leerlos
+  int ge_ok = 0;
+  if (cpu_ok && !alias && drawSync) {
+    int i;
+    for (i = 0; i < 16 * 16 / 2; i++) {
+      lo[i] = 0xA5A50000 | i;
+      hi[i] = 0;
+    }
+    guStart(0, (void *)(RENDER_LIST | 0xA0000000));
+    sceGuCopyImage(GE_FORMAT_565, 0, 0, 16, 16, 16, (void *)0x04000000, 0, 0, 16, (void *)0x04300000);
+    sceGuFinish();
+    _sceGeListEnQueue((void *)RENDER_LIST, NULL, -1, NULL);
+    drawSync(0);
+    for (ge_ok = 1, i = 0; i < 16 * 16 / 2; i++)
+      if (hi[i] != (0xA5A50000 | i))
+        ge_ok = 0;
+  }
+  LOG("vram: GE en 3 MB %s\n", ge_ok ? "ok -> hay 4 MB utilizables" : "no comprobado o FALLA");
+  logFlush();
+}
+
 int module_start(SceSize args, void *argp) {
   SceCtrlData pad;
   sceCtrlPeekBufferPositive(&pad, 1);
@@ -1090,6 +1111,8 @@ int module_start(SceSize args, void *argp) {
   sctrlHENPatchSyscall((u32)_sceGeListUpdateStallAddr, sceGeListUpdateStallAddrPatched);
   sctrlHENPatchSyscall((u32)_sceGeListEnQueue, sceGeListEnQueuePatched);
   sctrlHENPatchSyscall((u32)_sceGeListEnQueueHead, sceGeListEnQueueHeadPatched);
+
+  probeVram();
 
   _sceDisplaySetFrameBuf = (void *)FindProc("sceDisplay_Service", "sceDisplay_driver", 0x289D82FE);
   if (!_sceDisplaySetFrameBuf)
