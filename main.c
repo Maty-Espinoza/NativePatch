@@ -26,7 +26,11 @@ PSP_MODULE_INFO("GePatch", 0x1007, 1, 0);
 #define VERTICES_BUFFER 0x0A600000
 #define RENDER_LIST 0x0A800000
 
-#define VRAM_DRAW_BUFFER_OFFSET 0x04000000
+// El buffer grande empieza 0x40 bytes adentro de la VRAM: si empezara en 0x000000 (donde
+// la mayoria de los juegos pone su primer buffer), la memoria de parches no podria
+// distinguir un FBPTR 0x000000 del juego de su propio parche, y en juegos con doble
+// buffer confundia el framebuffer actual un frame si y otro no (texturas corruptas).
+#define VRAM_DRAW_BUFFER_OFFSET 0x04000040
 #define VRAM_DEPTH_BUFFER_OFFSET 0x04100000
 #define VRAM_1KB 0x041ff000
 
@@ -43,6 +47,11 @@ static struct {
   u32 long_frame_logged;
 } st;
 static u32 patch_us_frame; // costo del plugin en el frame en curso
+
+// Un draw anulado se reemplaza por un NOP con esta marca. Con NOP 0x00000000 (igual al
+// NOP del juego), un NOP real escrito luego en esa posicion "revivia" el draw anulado
+// de un frame anterior, con vertices de cualquier cosa (texturas y triangulos basura).
+#define NOP_OMIT ((GE_CMD_NOP << 24) | 0x0D1E07)
 
 #define MAX_CMDS 200000 // tope de comandos por recorrido, para no colgarse en listas en bucle
 
@@ -93,9 +102,20 @@ static u32 draws_since_flip, big_transfer, last_flip;
 
 
 // 1 si se puede leer: VRAM real o RAM (incluye la VRAM falsa en 0x0A000000)
-int validAddr(u32 addr) {
+static inline int validAddr(u32 addr) {
   addr &= 0x0fffffff;
   return (addr >= 0x04000000 && addr < 0x04200000) || (addr >= 0x08000000 && addr < 0x0A400000);
+}
+
+// Fin de la region valida que contiene addr, o NULL si addr no es valida. El recorrido
+// solo vuelve a validar al cruzar este limite o al saltar (antes validaba cada comando).
+static inline u32 *regionEnd(u32 *p) {
+  u32 a = (u32)p & 0x0fffffff;
+  if (a >= 0x04000000 && a < 0x04200000)
+    return (u32 *)(((u32)p & 0xf0000000) | 0x04200000);
+  if (a >= 0x08000000 && a < 0x0A400000)
+    return (u32 *)(((u32)p & 0xf0000000) | 0x0A400000);
+  return NULL;
 }
 
 static const u8 tcsize[4] = { 0, 2, 4, 8 }, tcalign[4] = { 0, 1, 2, 4 };
@@ -284,6 +304,7 @@ static GeState state;
 // --- Captura de un frame (L+R+SELECT): cada draw y cambio de estado relevante ---
 static int capturing;
 static u32 cap_last[0x100]; // ultimo valor logueado por comando, para no repetir
+static u32 cap_hist[0x100]; // cuantos comandos de cada tipo hubo en el frame capturado
 static struct { u32 prim, vt, tex, flags, n, verts; } cd; // draws iguales seguidos se agrupan
 
 static void capFlush(void) {
@@ -605,12 +626,15 @@ void patchGeList(u32 *list, u32 *stall) {
   StackEntry *stack_entry;
   StackEntry stack_entry_buf;
   int ncmds = 0;
+  u32 *lim = NULL; // fin de la region valida actual; NULL = validar de nuevo (tras un salto)
 
   for (; list && (!stall || (stall && list != stall)); list++) {
     // Nunca leer fuera de la memoria valida ni recorrer para siempre
-    if (!validAddr((u32)list)) {
-      LOG_ONCE(((u32)list >> 12) ^ 0xD0000000, "lista apunta a direccion invalida %08lx, se corta\n", (u32)list);
-      goto finish;
+    if (!lim || list >= lim) {
+      if (!(lim = regionEnd(list))) {
+        LOG_ONCE(((u32)list >> 12) ^ 0xD0000000, "lista apunta a direccion invalida %08lx, se corta\n", (u32)list);
+        goto finish;
+      }
     }
     if (++ncmds > MAX_CMDS) {
       LOG_ONCE(0xE6000000, "lista con mas de %d comandos (bucle?), se corta\n", MAX_CMDS);
@@ -625,6 +649,8 @@ void patchGeList(u32 *list, u32 *stall) {
     u32 data = op & 0xffffff;
 
     state.ge_cmd[cmd] = data;
+    if (capturing)
+      cap_hist[cmd]++;
 
     switch (cmd) {
       // Skip matrix data
@@ -653,6 +679,21 @@ void patchGeList(u32 *list, u32 *stall) {
         // if (*(list+16) >> 24 == GE_CMD_PROJMATRIXDATA)
           // list += 16;
         // break;
+
+      // Datos de matriz (12-16 seguidos por objeto 3D): el plugin no los toca, se saltan
+      // los iguales seguidos sin pasar por todo el ciclo
+      case GE_CMD_BONEMATRIXDATA:
+      case GE_CMD_WORLDMATRIXDATA:
+      case GE_CMD_VIEWMATRIXDATA:
+      case GE_CMD_PROJMATRIXDATA:
+      case GE_CMD_TGENMATRIXDATA:
+        while (list + 1 < lim && list + 1 != stall && (list[1] >> 24) == cmd && ncmds < MAX_CMDS) {
+          list++;
+          ncmds++;
+          if (capturing)
+            cap_hist[cmd]++;
+        }
+        break;
 
       // Handle control flow commands
 
@@ -686,6 +727,7 @@ void patchGeList(u32 *list, u32 *stall) {
         stack_entry->offset = state.offset;
         if (push(stack_entry) == 0) {
           list = (u32 *)(state.address - 4);
+          lim = NULL;
         }
         break;
 
@@ -698,6 +740,7 @@ void patchGeList(u32 *list, u32 *stall) {
       case GE_CMD_JUMP:
         state.address = ((state.base | data) + state.offset) & 0x0ffffffc;
         list = (u32 *)(state.address - 4);
+        lim = NULL;
         break;
 
       case GE_CMD_RET:
@@ -706,6 +749,7 @@ void patchGeList(u32 *list, u32 *stall) {
         if (stack_entry) {
           list = stack_entry->list;
           state.offset = stack_entry->offset;
+          lim = NULL;
         }
         break;
 
@@ -754,6 +798,7 @@ void patchGeList(u32 *list, u32 *stall) {
                 LOG_ONCE(0xE3000000 | behaviour, "signal no manejada: behaviour=%d\n", behaviour);
                 break;
             }
+            lim = NULL;
             break;
           }
 
@@ -792,7 +837,7 @@ void patchGeList(u32 *list, u32 *stall) {
           capDraw(cmd == GE_CMD_PRIM ? (data >> 16) & 7 : cmd, cmd == GE_CMD_PRIM ? data & 0xffff : (data & 0xff) * ((data >> 8) & 0xff),
                   omit | (texmode == 2 ? 4 : 0) | (state.cur_rt ? 8 : 0));
         if (omit) {
-          setOp(list, op, 0);
+          setOp(list, op, NOP_OMIT);
           st.skipped++;
           if (state.cur_rt && !state.cur_rt->incomplete) {
             state.cur_rt->incomplete = 1;
@@ -853,7 +898,7 @@ void patchGeList(u32 *list, u32 *stall) {
           capDraw(cmd == GE_CMD_PRIM ? (data >> 16) & 7 : cmd, cmd == GE_CMD_PRIM ? data & 0xffff : (data & 0xff) * ((data >> 8) & 0xff),
                   omit | (texmode == 2 ? 4 : 0) | (state.cur_rt ? 8 : 0));
         if (omit) {
-          setOp(list, op, 0);
+          setOp(list, op, NOP_OMIT);
           st.skipped++;
           if (state.cur_rt && !state.cur_rt->incomplete) {
             state.cur_rt->incomplete = 1;
@@ -1285,11 +1330,23 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
   int combo = (pad.Buttons & combo_mask) == combo_mask;
   if (capturing) {
     capFlush();
+    // Los 10 tipos de comando mas frecuentes del frame (para saber en que se va el tiempo)
+    int k, i, best;
+    for (k = 0; k < 10; k++) {
+      for (best = -1, i = 0; i < 0x100; i++)
+        if (cap_hist[i] && (best < 0 || cap_hist[i] > cap_hist[best]))
+          best = i;
+      if (best < 0)
+        break;
+      LOG("  comando %02x: %lu veces\n", best, cap_hist[best]);
+      cap_hist[best] = 0;
+    }
     LOG("== fin captura ==\n");
     capturing = 0;
     logEager(0);
   } else if (combo && !prev_combo) {
     memset(cap_last, 0, sizeof(cap_last));
+    memset(cap_hist, 0, sizeof(cap_hist));
     logEager(1);
     LOG("== captura frame %lu: display %08lx ancho=%d fmt=%d, offset juego=(%d,%d) ==\n",
         log_frame, (u32)topaddr, bufferwidth, pixelformat, (int)game_offx, (int)game_offy);
@@ -1338,16 +1395,17 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
   last_flip = now;
 
   if (log_frame % STATS_EVERY == 0) {
-    LOG("stats listas=%lu head=%lu stall=%lu draws=%lu omitidos=%lu frames_sin_draws=%lu transfers=%lu a_fb=%lu "
-        "escalados=%lu copias_en_lista=%lu pila_llena=%lu fbs=%lu\n",
-        st.lists, st.heads, st.stalls, st.draws, st.skipped, st.idle_frames, st.transfers, st.fb_transfers,
-        st.fallback, st.enq_copies, st.stack_full, state.framebuf_count);
+    LOG("stats listas=%lu head=%lu stall=%lu draws=%lu omitidos=%lu frames_sin_draws=%lu fbs=%lu\n",
+        st.lists, st.heads, st.stalls, st.draws, st.skipped, st.idle_frames, state.framebuf_count);
+    LOG("stats transfers=%lu a_fb=%lu escalados=%lu copias_en_lista=%lu pila_llena=%lu\n",
+        st.transfers, st.fb_transfers, st.fallback, st.enq_copies, st.stack_full);
     if (st.frames) {
       u32 fps10 = st.frames * 100000 / (st.frame_us / 100 + 1); // fps x10, sin division de 64 bits
-      LOG("stats rendimiento: fps=%lu.%lu frame_max=%lu ms bajo60=%lu bajo30=%lu | plugin=%lu us/frame (max %lu) "
-          "comandos/frame=%lu escalado_cpu=%lu us/frame\n",
-          fps10 / 10, fps10 % 10, st.frame_max / 1000, st.slow60, st.slow30, st.patch_us / st.frames, st.patch_max,
-          st.cmds / st.frames, st.fallback ? st.upscale_us / st.fallback : 0);
+      LOG("stats rendimiento: fps=%lu.%lu frame_max=%lu ms bajo60=%lu bajo30=%lu\n",
+          fps10 / 10, fps10 % 10, st.frame_max / 1000, st.slow60, st.slow30);
+      LOG("stats plugin: %lu us/frame (max %lu) comandos/frame=%lu draws/frame=%lu escalado_cpu=%lu us/frame\n",
+          st.patch_us / st.frames, st.patch_max, st.cmds / st.frames, (st.draws + st.skipped) / st.frames,
+          st.fallback ? st.upscale_us / st.fallback : 0);
     }
     if (rt_count || st.rt_fail) {
       LOG("stats rt: draws_en_rt=%lu draws_con_tex_rt=%lu rt_incompletos=%lu fallos=%lu rts=%d vram_libre=%lu KB\n",

@@ -29,12 +29,16 @@ int main(void) {
   end();
   printf("comandos en la lista: %ld\n", (long)(lp - (u32 *)LIST));
   struct timespec a, b;
-  int reps = 50;
+  int reps = 40, round;
+  double best = 1e30;
   run(); // calentar
-  clock_gettime(CLOCK_MONOTONIC, &a);
-  for (i = 0; i < reps; i++) run();
-  clock_gettime(CLOCK_MONOTONIC, &b);
-  double us = ((b.tv_sec - a.tv_sec) * 1e9 + (b.tv_nsec - a.tv_nsec)) / 1e3 / reps;
-  printf("patchGeList: %.0f us por frame en este PC (%.1f ns por comando)\n", us, us * 1000 / (lp - (u32 *)LIST));
+  for (round = 0; round < 7; round++) { // la mejor de 7 rondas: el PC puede estar ocupado
+    clock_gettime(CLOCK_MONOTONIC, &a);
+    for (i = 0; i < reps; i++) run();
+    clock_gettime(CLOCK_MONOTONIC, &b);
+    double us = ((b.tv_sec - a.tv_sec) * 1e9 + (b.tv_nsec - a.tv_nsec)) / 1e3 / reps;
+    if (us < best) best = us;
+  }
+  printf("patchGeList: %.0f us por frame en este PC (%.1f ns por comando)\n", best, best * 1000 / (lp - (u32 *)LIST));
   return 0;
 }

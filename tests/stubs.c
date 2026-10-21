@@ -53,7 +53,7 @@ void mapPspMemory(void) {
   int i;
   for (i = 0; i < 3; i++) {
     void *p = mmap((void *)r[i].addr, r[i].size, PROT_READ | PROT_WRITE,
-                   MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+                   MAP_PRIVATE | MAP_ANONYMOUS | (getenv("TEST_MAP_FIXED") ? MAP_FIXED : MAP_FIXED_NOREPLACE), -1, 0);
     if (p != (void *)r[i].addr) {
       fprintf(stderr, "no se pudo mapear %08lx (compilar con -m32 -pie)\n", r[i].addr);
       exit(2);

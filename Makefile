@@ -14,7 +14,7 @@ TARGET = ge_patch
 OBJS = main.o log.o gu.o exports.o
 main.o log.o: log.h
 
-CFLAGS = -O3 -Os -G0 -Wall -fshort-wchar -fno-pic -mno-check-zero-division
+CFLAGS = -O2 -G0 -Wall -fshort-wchar -fno-pic -mno-check-zero-division
 CXXFLAGS = $(CFLAGS) -fno-exceptions -fno-rtti
 ASFLAGS = $(CFLAGS)
 

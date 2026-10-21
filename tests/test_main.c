@@ -176,7 +176,7 @@ static void test_textura_fb_al_dibujar(void) {
   u32 *prim = cmd(GE_CMD_PRIM, (GE_PRIM_RECTANGLES << 16) | 2);
   end();
   run();
-  CHECK(*prim == 0, "el draw que lee otro framebuffer no se omitio");
+  CHECK(*prim == NOP_OMIT, "el draw que lee otro framebuffer no se omitio");
 }
 
 // Render target: se dibuja en la VRAM alta y la textura se redirige
@@ -197,10 +197,10 @@ static void test_render_target(void) {
   run();
   CHECK(rt_count == 1, "rt_count=%d", rt_count);
   CHECK((*fp & 0xffffff) == (RT_BASE & 0xffffff) && (*fw & 0xffff) == 64 * RT_SCALE, "fb no redirigido: %06lx %06lx", *fp & 0xffffff, *fw & 0xffffff);
-  CHECK(*prim != 0, "el draw que usa el render target se omitio");
+  CHECK(*prim != NOP_OMIT, "el draw que usa el render target se omitio");
   CHECK((*ta & 0xffffff) == (RT_BASE & 0xffffff) && ((*tw >> 16) & 0xff) == 0x04, "textura no redirigida: %06lx %06lx", *ta & 0xffffff, *tw & 0xffffff);
   run(); // reejecutar la lista da el mismo resultado
-  CHECK((*ta & 0xffffff) == (RT_BASE & 0xffffff) && *prim != 0, "segunda pasada distinta");
+  CHECK((*ta & 0xffffff) == (RT_BASE & 0xffffff) && *prim != NOP_OMIT, "segunda pasada distinta");
 }
 
 // Regresion dev8: una textura normal que cae dentro del rango de un render target no se omite
@@ -217,7 +217,7 @@ static void test_textura_dentro_de_rt(void) {
   u32 *prim = cmd(GE_CMD_PRIM, (GE_PRIM_TRIANGLES << 16) | 3);
   end();
   run();
-  CHECK(*prim != 0, "textura de la pista omitida por caer dentro de un render target");
+  CHECK(*prim != NOP_OMIT, "textura de la pista omitida por caer dentro de un render target");
   CHECK((*ta & 0xffffff) == 0x19a040, "textura normal redirigida: %06lx", *ta & 0xffffff);
 }
 
@@ -238,7 +238,7 @@ static void test_rt_incompleto(void) {
   u32 *prim = cmd(GE_CMD_PRIM, (GE_PRIM_RECTANGLES << 16) | 2);
   end();
   run();
-  CHECK(*prim == 0, "se uso un render target incompleto");
+  CHECK(*prim == NOP_OMIT, "se uso un render target incompleto");
 }
 
 // Dentro de un render target a escala 1 no se escalan viewport, scissor ni vertices 2D
@@ -326,13 +326,56 @@ static void test_fps(void) {
   CHECK(logHas("bajo60=0 bajo30=0"), "frames lentos mal contados");
 }
 
+// Doble buffer: la misma posicion de la lista alterna FBPTR 0x044000 / 0x000000 cada frame.
+// El buffer real del plugin tambien es 0x000000: la memoria de parches no debe confundir
+// el 0x000000 que escribe el juego con su propio parche del frame anterior.
+static void test_doble_buffer_alternado(void) {
+  reset();
+  u32 ptrs[4] = { 0x044000, 0x000000, 0x044000, 0x000000 };
+  int i;
+  for (i = 0; i < 4; i++) {
+    begin();
+    setFb(ptrs[i], 512);
+    end();
+    run();
+    CHECK(state.framebuf == (FAKE_VRAM | ptrs[i]), "frame %d: framebuffer %08lx, el juego uso %08lx", i, state.framebuf, FAKE_VRAM | ptrs[i]);
+  }
+}
+
+// Un draw anulado no debe "revivir" si el juego luego escribe un NOP real en esa posicion
+static void test_nop_no_revive(void) {
+  reset();
+  begin();
+  setFb(0x000000, 512);
+  setFb(0x088000, 512);
+  cmd(GE_CMD_TEXTUREMAPENABLE, 1);
+  cmd(GE_CMD_TEXADDR0, 0x000000); cmd(GE_CMD_TEXBUFWIDTH0, (0x0a << 16) | 512);
+  cmd(GE_CMD_VERTEXTYPE, GE_VTYPE_POS_16BIT);
+  u32 *prim = cmd(GE_CMD_PRIM, (GE_PRIM_TRIANGLES << 16) | 3); // lee otro fb: se anula
+  end();
+  run();
+  CHECK((*prim >> 24) == GE_CMD_NOP, "el draw no se anulo");
+  // Siguiente frame: el juego arma otra lista en la misma memoria; en esa posicion
+  // ahora hay un NOP de verdad y la textura es normal (el draw ya no se anularia)
+  begin();
+  setFb(0x000000, 512);
+  cmd(GE_CMD_TEXTUREMAPENABLE, 1);
+  cmd(GE_CMD_TEXADDR0, 0x100000); cmd(GE_CMD_TEXBUFWIDTH0, (0x0a << 16) | 64);
+  cmd(GE_CMD_VERTEXTYPE, GE_VTYPE_POS_16BIT);
+  while (lp < prim) cmd(GE_CMD_NOP, 0);
+  cmd(GE_CMD_NOP, 0);
+  end();
+  run();
+  CHECK(*prim == 0, "un NOP del juego revivio el draw anulado antes: %08lx", *prim);
+}
+
 int main(void) {
   mapPspMemory();
   void (*tests[])(void) = {
     test_viewport_scissor_x2, test_viewport_zona, test_memo_lista_grande, test_vertices_2d,
     test_vaddr_avanza_tras_3d, test_bjump_no_salta, test_estado_entre_listas, test_textura_fb_al_dibujar,
     test_render_target, test_textura_dentro_de_rt, test_rt_incompleto, test_rt_escala_1, test_pitch_0,
-    test_robustez, test_copia_listas_alternas, test_fps,
+    test_robustez, test_copia_listas_alternas, test_fps, test_doble_buffer_alternado, test_nop_no_revive,
   };
   int i;
   for (i = 0; i < (int)(sizeof(tests) / sizeof(tests[0])); i++)
