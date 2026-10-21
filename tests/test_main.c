@@ -342,6 +342,17 @@ static void test_doble_buffer_alternado(void) {
   }
 }
 
+// Lista estatica (el juego no la reescribe): FBPTR quedo parcheado a 0x000000 y su FBWIDTH
+// tambien; ahi si hay que confiar en la memoria de parches y recordar el 0x044000 original
+static void test_lista_estatica_fb(void) {
+  reset();
+  begin();
+  setFb(0x044000, 512);
+  end();
+  run(); run(); run();
+  CHECK(state.framebuf == (FAKE_VRAM | 0x044000), "lista reutilizada: framebuffer %08lx", state.framebuf);
+}
+
 // Un draw anulado no debe "revivir" si el juego luego escribe un NOP real en esa posicion
 static void test_nop_no_revive(void) {
   reset();
@@ -375,7 +386,7 @@ int main(void) {
     test_viewport_scissor_x2, test_viewport_zona, test_memo_lista_grande, test_vertices_2d,
     test_vaddr_avanza_tras_3d, test_bjump_no_salta, test_estado_entre_listas, test_textura_fb_al_dibujar,
     test_render_target, test_textura_dentro_de_rt, test_rt_incompleto, test_rt_escala_1, test_pitch_0,
-    test_robustez, test_copia_listas_alternas, test_fps, test_doble_buffer_alternado, test_nop_no_revive,
+    test_robustez, test_copia_listas_alternas, test_fps, test_doble_buffer_alternado, test_nop_no_revive, test_lista_estatica_fb,
   };
   int i;
   for (i = 0; i < (int)(sizeof(tests) / sizeof(tests[0])); i++)

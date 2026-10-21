@@ -14,6 +14,8 @@ typedef struct { unsigned int size; void *context; } PspGeListArgs;
 #define PSP_CTRL_SELECT   0x000001
 #define PSP_CTRL_LTRIGGER 0x000100
 #define PSP_CTRL_RTRIGGER 0x000200
+#define PSP_CTRL_TRIANGLE 0x001000
+#define PSP_CTRL_CIRCLE   0x002000
 #define PSP_O_RDONLY 0x0001
 #define PSP_O_WRONLY 0x0002
 #define PSP_O_CREAT  0x0200

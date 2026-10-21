@@ -26,13 +26,17 @@ PSP_MODULE_INFO("GePatch", 0x1007, 1, 0);
 #define VERTICES_BUFFER 0x0A600000
 #define RENDER_LIST 0x0A800000
 
-// El buffer grande empieza 0x40 bytes adentro de la VRAM: si empezara en 0x000000 (donde
-// la mayoria de los juegos pone su primer buffer), la memoria de parches no podria
-// distinguir un FBPTR 0x000000 del juego de su propio parche, y en juegos con doble
-// buffer confundia el framebuffer actual un frame si y otro no (texturas corruptas).
-#define VRAM_DRAW_BUFFER_OFFSET 0x04000040
+// El buffer grande va en 0x000000, igual que el primer buffer de casi todos los juegos.
+// (En dev12 se movio a 0x40 para distinguirlo y Gran Turismo dio pantalla negra en
+// carrera: el emulador probablemente exige framebuffers alineados. La ambiguedad del
+// doble buffer se resuelve en patchGeList mirando el FBWIDTH vecino.)
+#define VRAM_DRAW_BUFFER_OFFSET 0x04000000
 #define VRAM_DEPTH_BUFFER_OFFSET 0x04100000
 #define VRAM_1KB 0x041ff000
+
+#ifndef BUILD_OPT
+#define BUILD_OPT "?"
+#endif
 
 #define STATS_EVERY 600 // frames entre cada linea de estadisticas (~10 s)
 
@@ -51,7 +55,9 @@ static u32 patch_us_frame; // costo del plugin en el frame en curso
 // Un draw anulado se reemplaza por un NOP con esta marca. Con NOP 0x00000000 (igual al
 // NOP del juego), un NOP real escrito luego en esa posicion "revivia" el draw anulado
 // de un frame anterior, con vertices de cualquier cosa (texturas y triangulos basura).
-#define NOP_OMIT ((GE_CMD_NOP << 24) | 0x0D1E07)
+#define NOP_MARK ((GE_CMD_NOP << 24) | 0x0D1E07)
+static u32 NOP_OMIT = NOP_MARK; // con TRIANGULO al iniciar: NOP 0 como antes de dev12 (prueba)
+static int compat_walk;         // con CIRCULO al iniciar: recorrido de antes de dev12 (prueba)
 
 #define MAX_CMDS 200000 // tope de comandos por recorrido, para no colgarse en listas en bucle
 
@@ -630,7 +636,7 @@ void patchGeList(u32 *list, u32 *stall) {
 
   for (; list && (!stall || (stall && list != stall)); list++) {
     // Nunca leer fuera de la memoria valida ni recorrer para siempre
-    if (!lim || list >= lim) {
+    if (compat_walk || !lim || list >= lim) {
       if (!(lim = regionEnd(list))) {
         LOG_ONCE(((u32)list >> 12) ^ 0xD0000000, "lista apunta a direccion invalida %08lx, se corta\n", (u32)list);
         goto finish;
@@ -643,8 +649,16 @@ void patchGeList(u32 *list, u32 *stall) {
 
     // Valor original del juego aunque el comando ya este parcheado (ver memo_cmd)
     u32 op = *list, m = memo_cmd[op >> 24];
-    if (m == 1 || (m == 2 && tex_patched_any))
+    if (m == 1 || (m == 2 && tex_patched_any)) {
       op = origOp(list);
+      // FBPTR 0x000000 del juego es igual al parche del buffer grande. Si el FBWIDTH de al
+      // lado no tiene el parche (el juego reescribio la lista este frame), el valor es del
+      // juego aunque la memoria diga otra cosa: en doble buffer alterna 0x044000/0x000000.
+      if ((op >> 24) == GE_CMD_FRAMEBUFPTR && op != *list &&
+          (((list[1] >> 24) == GE_CMD_FRAMEBUFWIDTH && ((list[1] >> 16) & 0xff) != (VRAM_DRAW_BUFFER_OFFSET >> 24)) ||
+           ((list[-1] >> 24) == GE_CMD_FRAMEBUFWIDTH && ((list[-1] >> 16) & 0xff) != (VRAM_DRAW_BUFFER_OFFSET >> 24))))
+        op = *list;
+    }
     u32 cmd = op >> 24;
     u32 data = op & 0xffffff;
 
@@ -687,7 +701,7 @@ void patchGeList(u32 *list, u32 *stall) {
       case GE_CMD_VIEWMATRIXDATA:
       case GE_CMD_PROJMATRIXDATA:
       case GE_CMD_TGENMATRIXDATA:
-        while (list + 1 < lim && list + 1 != stall && (list[1] >> 24) == cmd && ncmds < MAX_CMDS) {
+        while (!compat_walk && list + 1 < lim && list + 1 != stall && (list[1] >> 24) == cmd && ncmds < MAX_CMDS) {
           list++;
           ncmds++;
           if (capturing)
@@ -1491,6 +1505,12 @@ int module_start(SceSize args, void *argp) {
     return 0;
 
   logInit(pad.Buttons & PSP_CTRL_RTRIGGER);
+  // Botones al iniciar el juego para probar cambios sospechosos sin recompilar
+  if (pad.Buttons & PSP_CTRL_TRIANGLE)
+    NOP_OMIT = GE_CMD_NOP << 24;
+  compat_walk = !!(pad.Buttons & PSP_CTRL_CIRCLE);
+  LOG("opciones: nop_omitido=%s recorrido=%s compilado=%s\n", NOP_OMIT == NOP_MARK ? "marca" : "0 (antiguo)",
+      compat_walk ? "antiguo" : "nuevo", BUILD_OPT);
 
   _sceGeEdramGetAddr = (void *)FindProc("sceGE_Manager", "sceGe_driver", 0xE47E40E4);
   _sceGeEdramGetSize = (void *)FindProc("sceGE_Manager", "sceGe_driver", 0x1F6752AD);
