@@ -208,8 +208,6 @@ typedef struct {
 typedef struct {
   u32 ge_cmd[0x100];
 
-  u32 texbufptr[8];
-  u32 texbufwidth[8];
   u32 framebufptr;
   u32 framebufwidth;
   u32 *framebufwidth_addr;
@@ -224,7 +222,6 @@ typedef struct {
   u32 vertex_type;
 
   u32 ignore_framebuf;
-  u32 ignore_texture;
 
   u32 has_draws;
 
@@ -352,6 +349,21 @@ int inFramebuf(u32 addr) {
   return 0;
 }
 
+// 1 si la textura 0 es otro framebuffer (render a textura). Esos buffers no tienen
+// contenido real (el GE dibuja todo en el buffer grande), asi que el draw se omite.
+// Se evalua en cada draw: antes se calculaba solo al fijar la textura, y si despues
+// el juego cambiaba de framebuffer el resultado quedaba viejo. Asi Ridge Racer
+// dibujaba sobre la pantalla un buffer de 256 px con una imagen vieja.
+int texFromFramebuf(void) {
+  if (!(state.ge_cmd[GE_CMD_TEXTUREMAPENABLE] & 1))
+    return 0;
+  u32 tex = ((state.ge_cmd[GE_CMD_TEXBUFWIDTH0] & 0x0f0000) << 8) | (state.ge_cmd[GE_CMD_TEXADDR0] & 0xffffff);
+  if (tex == state.framebuf || findFramebuf(tex) < 0)
+    return 0;
+  LOG_ONCE(tex ^ 0x7E000000, "textura desde fb %08lx -> draws omitidos\n", tex);
+  return 1;
+}
+
 void AdvanceVerts(int count, int vertex_size) {
   if ((state.vertex_type & GE_VTYPE_IDX_MASK) != GE_VTYPE_IDX_NONE) {
     int index_shift = ((state.vertex_type & GE_VTYPE_IDX_MASK) >> GE_VTYPE_IDX_SHIFT) - 1;
@@ -361,7 +373,6 @@ void AdvanceVerts(int count, int vertex_size) {
   }
 }
 
-// TODO: when ignore_framebuf=1 or ignore_texture=1, dummy all non-control-flow instructions
 void patchGeList(u32 *list, u32 *stall) {
   union {
     float f;
@@ -549,7 +560,7 @@ void patchGeList(u32 *list, u32 *stall) {
         state.has_draws = 1;
         draws_since_flip++;
 
-        int omit = state.ignore_framebuf || (state.ignore_texture && state.ge_cmd[GE_CMD_TEXTUREMAPENABLE]);
+        int omit = state.ignore_framebuf || texFromFramebuf();
         if (capturing)
           capDraw(cmd == GE_CMD_PRIM ? (data >> 16) & 7 : cmd, cmd == GE_CMD_PRIM ? data & 0xffff : (data & 0xff) * ((data >> 8) & 0xff), omit);
         if (omit) {
@@ -578,7 +589,7 @@ void patchGeList(u32 *list, u32 *stall) {
 
       case GE_CMD_BOUNDINGBOX:
       {
-        if (state.ignore_framebuf || (state.ignore_texture && state.ge_cmd[GE_CMD_TEXTUREMAPENABLE]))
+        if (state.ignore_framebuf || texFromFramebuf())
           break;
 
         if ((state.vertex_type & GE_VTYPE_THROUGH_MASK) == GE_VTYPE_THROUGH) {
@@ -600,7 +611,7 @@ void patchGeList(u32 *list, u32 *stall) {
 
         // Dragon Ball Z Tenkaichi Tag Team uses the same GE list again,
         // therefore NOPing it makes character invisible.
-        int omit = state.ignore_framebuf || (state.ignore_texture && state.ge_cmd[GE_CMD_TEXTUREMAPENABLE]);
+        int omit = state.ignore_framebuf || texFromFramebuf();
         if (capturing)
           capDraw(cmd == GE_CMD_PRIM ? (data >> 16) & 7 : cmd, cmd == GE_CMD_PRIM ? data & 0xffff : (data & 0xff) * ((data >> 8) & 0xff), omit);
         if (omit) {
@@ -786,48 +797,6 @@ exit_loop:
         setOp(list, op, (cmd << 24) | ((VRAM_DEPTH_BUFFER_OFFSET >> 24) << 16) | PITCH);
         break;
 
-      case GE_CMD_TEXADDR0:
-      case GE_CMD_TEXADDR1:
-      case GE_CMD_TEXADDR2:
-      case GE_CMD_TEXADDR3:
-      case GE_CMD_TEXADDR4:
-      case GE_CMD_TEXADDR5:
-      case GE_CMD_TEXADDR6:
-      case GE_CMD_TEXADDR7:
-      case GE_CMD_TEXBUFWIDTH0:
-      case GE_CMD_TEXBUFWIDTH1:
-      case GE_CMD_TEXBUFWIDTH2:
-      case GE_CMD_TEXBUFWIDTH3:
-      case GE_CMD_TEXBUFWIDTH4:
-      case GE_CMD_TEXBUFWIDTH5:
-      case GE_CMD_TEXBUFWIDTH6:
-      case GE_CMD_TEXBUFWIDTH7:
-      {
-        int index;
-        if (cmd >= GE_CMD_TEXADDR0 && cmd <= GE_CMD_TEXADDR7) {
-          index = cmd - GE_CMD_TEXADDR0;
-          state.texbufptr[index] = op;
-        } else {
-          index = cmd - GE_CMD_TEXBUFWIDTH0;
-          state.texbufwidth[index] = op;
-        }
-
-        if (state.texbufptr[index] && state.texbufwidth[index]) {
-          u32 texaddr = ((state.texbufwidth[index] & 0x0f0000) << 8) | (state.texbufptr[index] & 0xffffff);
-          if (texaddr != state.framebuf && findFramebuf(texaddr) >= 0) {
-            LOG_ONCE(texaddr ^ 0x7E000000, "textura desde fb %08lx -> draws omitidos\n", texaddr);
-            state.ignore_texture = 1;
-          } else {
-            state.ignore_texture = 0;
-          }
-
-          state.texbufptr[index] = 0;
-          state.texbufwidth[index] = 0;
-        }
-
-        break;
-      }
-
       // Copias de bloque (sceGuCopyImage). No pasan por los vertices, asi que no se
       // ven en el buffer de alta resolucion. Videos y logos suelen dibujarse asi.
       case GE_CMD_TRANSFERSTART:
@@ -898,8 +867,8 @@ exit_loop:
         break;
     }
 
-    if (capturing && capName(cmd) && cap_last[cmd] != (*list | 0x80000000)) {
-      cap_last[cmd] = *list | 0x80000000;
+    if (capturing && capName(cmd) && cap_last[cmd] != (data | 0x80000000)) {
+      cap_last[cmd] = data | 0x80000000;
       capFlush();
       if ((*list & 0xffffff) != data)
         LOG("  %s %06lx -> %06lx\n", capName(cmd), data, *list & 0xffffff);
