@@ -39,6 +39,29 @@ static struct {
 
 #define MAX_CMDS 200000 // tope de comandos por recorrido, para no colgarse en listas en bucle
 
+// Memoria de parches. Muchos juegos vuelven a ejecutar la misma lista, cuyos comandos
+// ya estan parcheados: sin esto se leia el valor parcheado como si fuera del juego
+// (framebuffer mal identificado, y no se podria escalar viewport/scissor sin duplicar
+// dos veces). Se guarda el original por direccion de comando.
+#define MEMO_SIZE 2048
+static struct { u32 *addr; u32 orig, patched; } memo[MEMO_SIZE];
+
+static u32 origOp(u32 *p) {
+  int i = ((u32)p >> 2) & (MEMO_SIZE - 1);
+  return (memo[i].addr == p && *p == memo[i].patched) ? memo[i].orig : *p;
+}
+
+static void setOp(u32 *p, u32 orig, u32 op) {
+  int i = ((u32)p >> 2) & (MEMO_SIZE - 1);
+  memo[i].addr = p;
+  memo[i].orig = orig;
+  memo[i].patched = op;
+  *p = op;
+}
+
+// Ultimos OFFSETX/Y del juego (en pixeles), para escalar el centro del viewport
+static float game_offx = 2048 - 240, game_offy = 2048 - 136;
+
 // Estado entre un flip (sceDisplaySetFrameBuf) y el siguiente
 static u32 draws_since_flip, big_transfer, last_flip;
 
@@ -312,7 +335,7 @@ void patchGeList(u32 *list, u32 *stall) {
       goto finish;
     }
 
-    u32 op = *list;
+    u32 op = origOp(list); // valor original del juego aunque ya este parcheado
     u32 cmd = op >> 24;
     u32 data = op & 0xffffff;
 
@@ -479,10 +502,12 @@ void patchGeList(u32 *list, u32 *stall) {
         draws_since_flip++;
 
         if (state.ignore_framebuf || (state.ignore_texture && state.ge_cmd[GE_CMD_TEXTUREMAPENABLE])) {
-          *list = 0;
+          setOp(list, op, 0);
           st.skipped++;
           break;
         }
+        if (*list != op) // se habia anulado en una pasada anterior: restaurar
+          *list = op;
         st.draws++;
 
         if ((state.vertex_type & GE_VTYPE_THROUGH_MASK) == GE_VTYPE_THROUGH) {
@@ -525,10 +550,12 @@ void patchGeList(u32 *list, u32 *stall) {
         // Dragon Ball Z Tenkaichi Tag Team uses the same GE list again,
         // therefore NOPing it makes character invisible.
         if (state.ignore_framebuf || (state.ignore_texture && state.ge_cmd[GE_CMD_TEXTUREMAPENABLE])) {
-          *list = 0;
+          setOp(list, op, 0);
           st.skipped++;
           break;
         }
+        if (*list != op) // se habia anulado en una pasada anterior: restaurar
+          *list = op;
         st.draws++;
 
         u16 count = data & 0xffff;
@@ -657,18 +684,18 @@ exit_loop:
       case GE_CMD_FRAMEBUFPIXFORMAT:
         if (data != PIXELFORMAT)
           LOG_ONCE(0xE4000000 | data, "el juego pide formato de fb %lu (se fuerza 565)\n", data);
-        *list = (cmd << 24) | PIXELFORMAT;
+        setOp(list, op, (cmd << 24) | PIXELFORMAT);
         break;
 
       case GE_CMD_FRAMEBUFPTR:
       case GE_CMD_FRAMEBUFWIDTH:
       {
         if (cmd == GE_CMD_FRAMEBUFPTR) {
-          *list = (cmd << 24) | (VRAM_DRAW_BUFFER_OFFSET & 0xffffff);
+          setOp(list, op, (cmd << 24) | (VRAM_DRAW_BUFFER_OFFSET & 0xffffff));
           state.framebufptr = op;
         } else {
           u16 pitch = ((op & 0xffff) == 512 || (op & 0xffff) == 480) ? 960 : (op & 0xffff);
-          *list = (cmd << 24) | ((VRAM_DRAW_BUFFER_OFFSET >> 24) << 16) | pitch;
+          setOp(list, op, (cmd << 24) | ((VRAM_DRAW_BUFFER_OFFSET >> 24) << 16) | pitch);
           state.framebufwidth = op;
           state.framebufwidth_addr = list;
         }
@@ -682,7 +709,7 @@ exit_loop:
           if (pitch == 512 || pitch == 480 || pitch == 960) {
             state.ignore_framebuf = 0;
           } else {
-            *state.framebufwidth_addr = (GE_CMD_FRAMEBUFWIDTH << 24) | ((VRAM_1KB >> 24) << 16) | 0;
+            setOp(state.framebufwidth_addr, state.framebufwidth, (GE_CMD_FRAMEBUFWIDTH << 24) | ((VRAM_1KB >> 24) << 16) | 0);
             state.ignore_framebuf = 1;
           }
 
@@ -698,11 +725,11 @@ exit_loop:
       }
 
       case GE_CMD_ZBUFPTR:
-        *list = (cmd << 24) | (VRAM_DEPTH_BUFFER_OFFSET & 0xffffff);
+        setOp(list, op, (cmd << 24) | (VRAM_DEPTH_BUFFER_OFFSET & 0xffffff));
         break;
 
       case GE_CMD_ZBUFWIDTH:
-        *list = (cmd << 24) | ((VRAM_DEPTH_BUFFER_OFFSET >> 24) << 16) | PITCH;
+        setOp(list, op, (cmd << 24) | ((VRAM_DEPTH_BUFFER_OFFSET >> 24) << 16) | PITCH);
         break;
 
       case GE_CMD_TEXADDR0:
@@ -764,38 +791,54 @@ exit_loop:
         break;
       }
 
+      // Viewport, offset y scissor: se escalan x2 a partir de los valores del juego.
+      // Antes se forzaban a pantalla completa, y lo que el juego dibuja en una zona
+      // (espejo retrovisor, HUD 3D, pantalla dividida) salia agrandado y fuera de lugar.
+      // OFFSET queda fijo para que el area de dibujo siga centrada en 2048.
       case GE_CMD_VIEWPORTXSCALE:
-        t.f = ((data << 8) >> 31) ? -(WIDTH / 2) : (WIDTH / 2);
-        *list = (cmd << 24) | (t.i >> 8);
-        break;
-
       case GE_CMD_VIEWPORTYSCALE:
-        t.f = ((data << 8) >> 31) ? -(HEIGHT / 2) : (HEIGHT / 2);
-        *list = (cmd << 24) | (t.i >> 8);
+        t.i = data << 8;
+        t.f *= 2;
+        setOp(list, op, (cmd << 24) | (t.i >> 8));
         break;
 
       case GE_CMD_VIEWPORTXCENTER:
-        t.f = 2048;
-        *list = (cmd << 24) | (t.i >> 8);
+        t.i = data << 8;
+        t.f = (2048 - WIDTH / 2) + 2 * (t.f - game_offx);
+        setOp(list, op, (cmd << 24) | (t.i >> 8));
         break;
 
       case GE_CMD_VIEWPORTYCENTER:
-        t.f = 2048;
-        *list = (cmd << 24) | (t.i >> 8);
+        t.i = data << 8;
+        t.f = (2048 - HEIGHT / 2) + 2 * (t.f - game_offy);
+        setOp(list, op, (cmd << 24) | (t.i >> 8));
         break;
 
       case GE_CMD_OFFSETX:
-        *list = (cmd << 24) | ((2048 - (WIDTH / 2)) << 4);
+        game_offx = (data & 0xffff) / 16.0f;
+        setOp(list, op, (cmd << 24) | ((2048 - (WIDTH / 2)) << 4));
         break;
 
       case GE_CMD_OFFSETY:
-        *list = (cmd << 24) | ((2048 - (HEIGHT / 2)) << 4);
+        game_offy = (data & 0xffff) / 16.0f;
+        setOp(list, op, (cmd << 24) | ((2048 - (HEIGHT / 2)) << 4));
         break;
+
+      case GE_CMD_REGION1:
+      case GE_CMD_SCISSOR1:
+      {
+        u32 x = (data & 0x3ff) * 2, y = ((data >> 10) & 0x3ff) * 2;
+        setOp(list, op, (cmd << 24) | ((y > 1023 ? 1023 : y) << 10) | (x > 1023 ? 1023 : x));
+        break;
+      }
 
       case GE_CMD_REGION2:
       case GE_CMD_SCISSOR2:
-        *list = (cmd << 24) | ((HEIGHT - 1) << 10) | (WIDTH - 1);
+      {
+        u32 x = (data & 0x3ff) * 2 + 1, y = ((data >> 10) & 0x3ff) * 2 + 1;
+        setOp(list, op, (cmd << 24) | ((y > 1023 ? 1023 : y) << 10) | (x > 1023 ? 1023 : x));
         break;
+      }
 
       default:
         break;
@@ -902,19 +945,32 @@ static int hasContent(u32 addr, int width, int fmt) {
   return 0;
 }
 
-// Escala x2 la imagen original del juego al buffer de alta resolucion (por CPU, ~1 ms)
+// Escala x2 la imagen original del juego al buffer de alta resolucion (por CPU).
+// Lee y escribe con cache (antes era sin cache y el video quedaba a pocos fps).
 static void upscaleGameBuffer(u32 addr, int width, int fmt) {
-  u8 *src = (u8 *)((addr & 0x0fffffff) | 0x40000000);
-  u32 *dst = (u32 *)(DISPLAY_BUFFER | 0x40000000);
-  int x, y;
+  int bpp = fmt == 3 ? 4 : 2, x, y;
+  u8 *src = (u8 *)(addr & 0x0fffffff);
+  u32 *dst = (u32 *)DISPLAY_BUFFER;
+  // Lo escribio otro (CPU del juego, ME o GE): escribir lo pendiente y descartar la copia vieja
+  sceKernelDcacheWritebackInvalidateRange(src, width * 272 * bpp);
   for (y = 0; y < 272; y++) {
-    u32 *row = dst + y * 2 * (PITCH / 2);
-    for (x = 0; x < 480; x++) {
-      u32 c = fmt == 3 ? ((u32 *)src)[y * width + x] : ((u16 *)src)[y * width + x];
-      c = to565(c, fmt);
-      row[x] = row[x + PITCH / 2] = c | (c << 16);
+    u32 *row = dst + y * PITCH, *row2 = row + PITCH / 2;
+    if (fmt == 3) {
+      u32 *s32 = (u32 *)src + y * width;
+      for (x = 0; x < 480; x++) {
+        u32 c = to565(s32[x], 3);
+        row[x] = row2[x] = c | (c << 16);
+      }
+    } else {
+      u32 *s32 = (u32 *)((u16 *)src + y * width); // 2 pixeles por lectura
+      for (x = 0; x < 240; x++) {
+        u32 p = s32[x], a = to565(p & 0xffff, fmt), b = to565(p >> 16, fmt);
+        row[x * 2] = row2[x * 2] = a | (a << 16);
+        row[x * 2 + 1] = row2[x * 2 + 1] = b | (b << 16);
+      }
     }
   }
+  sceKernelDcacheWritebackRange((void *)DISPLAY_BUFFER, PITCH * HEIGHT * 2);
   *(u32 *)DRAW_NATIVE = 1;
 }
 

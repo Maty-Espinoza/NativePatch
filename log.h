@@ -11,7 +11,7 @@
 // instante (mas lento, pero no se pierde nada si el juego se cuelga).
 // Cada linea parte con el numero de frame (cuantas veces se llamo sceDisplaySetFrameBuf).
 
-#define GEPATCH_VERSION "0.2-dev2"
+#define GEPATCH_VERSION "0.2-dev3"
 
 extern u32 log_frame;
 
