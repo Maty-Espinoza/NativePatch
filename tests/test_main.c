@@ -521,7 +521,6 @@ static void test_silent_hill_video(void) {
   memset(&st, 0, sizeof(st));
   run();
   CHECK(rt_count == 1 && (*fw & 0xffff) != 960, "el fb de 1024 deberia ser render target (rts %d)", rt_count);
-  CHECK(logHas("textura en VRAM real 0404c000"), "no se registro la textura en VRAM real");
   CHECK(logHas("textura desde fb 0a04c000"), "la textura 0x0404c000 no se reconocio como el fb 0a04c000");
   (void)prim;
   sceDisplaySetFrameBufPatched((void *)0x0A0D43C0, 1024, 0, 0);
@@ -728,6 +727,61 @@ static void test_sublistas_anidadas(void) {
         st.wc_miss, state.vertex_addr, va + 18);
 }
 
+// Silent Hill usa la VRAM real fija (0x04...). Texturas y copias que no son fbs se llevan a
+// la VRAM falsa; una copia desde la pantalla (formulario del celular) se toma del buffer
+// grande reducido, porque su fb en la VRAM falsa esta vacio.
+static void test_vram_real(void) {
+  reset();
+  rt_enabled = 1;
+  begin();
+  setFb(0x04c000, 512);
+  cmd(GE_CMD_TEXTUREMAPENABLE, 1);
+  cmd(GE_CMD_TEXADDR0, 0x190000); u32 *tbw = cmd(GE_CMD_TEXBUFWIDTH0, (0x04 << 16) | 256);
+  cmd(GE_CMD_VERTEXTYPE, GE_VTYPE_POS_16BIT);
+  cmd(GE_CMD_PRIM, (GE_PRIM_TRIANGLES << 16) | 3);
+  // copia de una textura a la VRAM real
+  cmd(GE_CMD_TRANSFERSRC, 0x100000); cmd(GE_CMD_TRANSFERSRCW, (0x09 << 16) | 256); cmd(GE_CMD_TRANSFERSRCPOS, 0);
+  cmd(GE_CMD_TRANSFERDST, 0x1a0000); u32 *dstw = cmd(GE_CMD_TRANSFERDSTW, (0x04 << 16) | 256); cmd(GE_CMD_TRANSFERDSTPOS, 0);
+  cmd(GE_CMD_TRANSFERSIZE, (63 << 10) | 63); cmd(GE_CMD_TRANSFERSTART, 1);
+  // copia desde la pantalla (256x256 en 0,0) a una textura
+  u32 *p = lp;
+  cmd(GE_CMD_TRANSFERSRC, 0x04c000); cmd(GE_CMD_TRANSFERSRCW, (0x04 << 16) | 512); cmd(GE_CMD_TRANSFERSRCPOS, 0);
+  cmd(GE_CMD_TRANSFERDST, 0x190000); cmd(GE_CMD_TRANSFERDSTW, (0x04 << 16) | 256); cmd(GE_CMD_TRANSFERDSTPOS, 0);
+  cmd(GE_CMD_TRANSFERSIZE, (255 << 10) | 255); cmd(GE_CMD_TRANSFERSTART, 1);
+  end();
+  memset(&st, 0, sizeof(st));
+  run();
+  CHECK((*tbw & 0xff0000) == 0x0a0000 && (*tbw & 0xffff) == 256, "la textura en VRAM real no se llevo a la falsa: %08lx", *tbw);
+  CHECK((*dstw & 0xff0000) == 0x0a0000, "la copia a la VRAM real no se llevo a la falsa: %08lx", *dstw);
+  CHECK(st.tx_screen == 1 && (p[1] >> 24) == GE_CMD_CALL, "la copia desde la pantalla no se reemplazo (%lu)", st.tx_screen);
+  u32 *sub = (u32 *)(0x0A000000 | (p[1] & 0xffffff));
+  int k, src_tmp = 0, dst_ok = 0, ret = 0;
+  for (k = 0; k < 200 && !ret; k++) {
+    src_tmp |= sub[k] == ((GE_CMD_TRANSFERSRC << 24) | (copy_vram & 0xffffff));
+    dst_ok |= sub[k] == ((GE_CMD_TRANSFERDSTW << 24) | (0x0a << 16) | 256);
+    ret |= (sub[k] >> 24) == GE_CMD_RET;
+  }
+  CHECK(src_tmp && dst_ok && ret, "lista de la copia desde la pantalla: desde temporal=%d destino falso=%d RET=%d", src_tmp, dst_ok, ret);
+}
+
+// Gran Turismo alterna dos fb: las sublistas guardadas sirven en ambos
+static void test_sublistas_doble_buffer(void) {
+  reset();
+  u32 at = LIST + 0x8000;
+  sub(at, 0, 0x09100000);
+  int i;
+  for (i = 0; i < 3; i++) {
+    begin();
+    setFb(i & 1 ? 0x044000 : 0x000000, 512);
+    cmd(GE_CMD_BASE, 0x080000);
+    cmd(GE_CMD_CALL, at & 0xffffff);
+    end();
+    memset(&st, 0, sizeof(st));
+    run();
+  }
+  CHECK(st.wc_hits == 1, "con el fb alternado no se salto la sublista (%lu)", st.wc_hits);
+}
+
 // Menu: abrir con L+R+START, cambiar una opcion, cerrar, y que el juego no vea botones mientras
 extern unsigned int test_buttons;
 static void test_menu(void) {
@@ -758,7 +812,7 @@ int main(void) {
     test_viewport_scissor_x2, test_viewport_zona, test_memo_lista_grande, test_vertices_2d,
     test_vaddr_avanza_tras_3d, test_bjump_no_salta, test_estado_entre_listas, test_textura_fb_al_dibujar,
     test_render_target, test_textura_dentro_de_rt, test_rt_incompleto, test_rt_escala_1, test_pitch_0,
-    test_robustez, test_copia_listas_alternas, test_fps, test_doble_buffer_alternado, test_nop_no_revive, test_lista_estatica_fb, test_pasivo_no_escribe, test_pasivo_normaliza, test_desplazamiento_y_1024, test_vertices_2d_muchos_buffers, test_pasivo_muestreo, test_silent_hill_video, test_copia_escalada_con_ge, test_copia_reducida, test_sublistas_sin_cambios, test_sublistas_anidadas, test_fb_intermedio, test_opciones_juego, test_menu,
+    test_robustez, test_copia_listas_alternas, test_fps, test_doble_buffer_alternado, test_nop_no_revive, test_lista_estatica_fb, test_pasivo_no_escribe, test_pasivo_normaliza, test_desplazamiento_y_1024, test_vertices_2d_muchos_buffers, test_pasivo_muestreo, test_silent_hill_video, test_copia_escalada_con_ge, test_copia_reducida, test_sublistas_sin_cambios, test_sublistas_anidadas, test_sublistas_doble_buffer, test_vram_real, test_fb_intermedio, test_opciones_juego, test_menu,
   };
   int i;
   for (i = 0; i < (int)(sizeof(tests) / sizeof(tests[0])); i++)

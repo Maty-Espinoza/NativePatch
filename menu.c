@@ -14,7 +14,7 @@
 
 // Valores originales (por defecto). El menu marca los que se cambiaron para probar.
 const Options opt_default = { .rt_on = 1, .rt_scale = 1, .omit_fbtex = 1, .fallback = 0, .nop_mark = 1, .walk_new = 1,
-                              .v2d = 1, .tx_ge = 1, .walk_cache = 1, .layers = 0, .autocap = 1 };
+                              .v2d = 1, .tx_ge = 1, .walk_cache = 1, .layers = 0, .vram_fix = 1, .autocap = 1 };
 Options opt = opt_default;
 u32 opt_gen;
 
@@ -46,6 +46,7 @@ static const Item items[] = {
   { "sublistas", "Saltar sublistas sin cambios", &opt.walk_cache, 0, 1, 1, no_si },
   { "v2d", "Duplicar vertices 2D (HUD, sprites)", &opt.v2d, 0, 1, 1, no_si },
   { "fb1024", "Framebuffer de 1024 como pantalla", &opt.wide1024, 0, 1, 1, no_si },
+  { "vram_real", "VRAM real del juego -> VRAM falsa", &opt.vram_fix, 0, 1, 1, no_si },
   { "intermedios", "Fb intermedios como render target", &opt.layers, 0, 1, 1, no_si },
   { "dx", "Desplazamiento X (px del juego)", &opt.dx, -512, 512, 16, NULL },
   { "dy", "Desplazamiento Y (px del juego)", &opt.dy, -272, 272, 8, NULL },
