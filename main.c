@@ -825,15 +825,42 @@ static const u8 tx_saved[] = { GE_CMD_TEXTUREMAPENABLE, GE_CMD_TEXMODE, GE_CMD_T
 
 static int lg2(u32 v) { int n = 0; while ((1u << n) < v) n++; return n; }
 
-// Las 8 palabras de sceGuCopyImage terminan en list (TRANSFERSTART) y se pueden reescribir
+// La copia que termina en list (TRANSFERSTART) se puede reescribir como BASE + CALL: hace
+// falta que la palabra anterior sea un registro de copia (la lista del plugin los vuelve a
+// fijar todos). Antes se exigia el orden de sceGuCopyImage y Silent Hill usa otro.
+static int txIsReg(u32 op) {
+  u32 c = op >> 24, k;
+  for (k = 0; k < sizeof(tx_seq); k++)
+    if (c == tx_seq[k])
+      return 1;
+  return 0;
+}
 static int txIsCopy(u32 *list, int temp) {
-  u32 *p = list - 7, k;
-  if (passive || !validAddr((u32)p) || ((u32)list >= TX_RING && (u32)list < TX_RING + 64 * TX_SLOT) || (temp && !copyVram()))
+  if (passive || !validAddr((u32)(list - 1)) || ((u32)list >= TX_RING && (u32)list < TX_RING + 64 * TX_SLOT) || (temp && !copyVram()))
     return 0;
-  for (k = 0; k < 7; k++)
-    if ((origOp(p + k) >> 24) != tx_seq[k])
-      return 0;
-  return 1;
+  return txIsReg(origOp(list - 1));
+}
+
+// Palabra del registro cmd de esta copia (hasta 16 palabras antes), o NULL
+static u32 *txFind(u32 *list, u32 cmd) {
+  int k;
+  for (k = 1; k <= 16 && validAddr((u32)(list - k)); k++) {
+    u32 c = origOp(list - k) >> 24;
+    if (c == cmd)
+      return list - k;
+    if (c == GE_CMD_TRANSFERSTART)
+      break;
+  }
+  return NULL;
+}
+
+// La copia original del juego, con los valores de sus registros
+static u32 *txEmitOrig(u32 *l, u32 start) {
+  u32 k;
+  for (k = 0; k < sizeof(tx_seq); k++)
+    *l++ = (tx_seq[k] << 24) | state.ge_cmd[tx_seq[k]];
+  *l++ = (GE_CMD_TRANSFERSTART << 24) | start;
+  return l;
 }
 
 // Una lista del ring alcanzable con CALL desde la lista del juego (con su OFFSETADDR), o 0
@@ -843,14 +870,10 @@ static u32 txSlot(void) {
   return (FAKE_VRAM | ((sl - state.offset) & 0xffffff)) + state.offset == sl ? sl : 0;
 }
 
-// Reescribe las 8 palabras de la copia como BASE + CALL a la lista sl + NOPs
+// Reescribe el ultimo registro y el TRANSFERSTART como BASE + CALL a la lista sl
 static void txCall(u32 *list, u32 sl) {
-  u32 *p = list - 7, k;
-  setOp(p, origOp(p), (GE_CMD_BASE << 24) | ((FAKE_VRAM >> 8) & 0x0f0000));
-  setOp(p + 1, origOp(p + 1), (GE_CMD_CALL << 24) | ((sl - state.offset) & 0xffffff));
-  for (k = 2; k < 7; k++)
-    setOp(p + k, origOp(p + k), NOP_MARK);
-  setOp(list, origOp(list), NOP_MARK);
+  setOp(list - 1, origOp(list - 1), (GE_CMD_BASE << 24) | ((FAKE_VRAM >> 8) & 0x0f0000));
+  setOp(list, origOp(list), (GE_CMD_CALL << 24) | ((sl - state.offset) & 0xffffff));
   tx_patched_any = 1;
 }
 
@@ -891,14 +914,13 @@ static int txFromScreen(u32 *list, u32 src, u32 dst, u32 w, u32 h, int bpp) {
   u32 x = off % sw + (sp & 0x3ff), y = off / sw + ((sp >> 10) & 0x3ff);
   if (x + w > 480 || y + h > 272)
     return 0;
-  u32 *l = (u32 *)(sl | 0x40000000), k;
+  u32 *l = (u32 *)(sl | 0x40000000);
   l = emitDownscale(l, sl + 640, bpp == 4 ? 3 : state.ge_cmd[GE_CMD_FRAMEBUFPIXFORMAT] & 3);
   #define C(c, d) (*l++ = ((c) << 24) | ((d) & 0xffffff))
   C(GE_CMD_TRANSFERSRC, copy_vram); C(GE_CMD_TRANSFERSRCW, ((copy_vram >> 24) << 16) | 512);
   C(GE_CMD_TRANSFERSRCPOS, (y << 10) | x);
-  for (k = 3; k < 7; k++) // destino, posicion y tamano originales (con el destino ya corregido)
-    *l++ = k == 4 ? (GE_CMD_TRANSFERDSTW << 24) | ((dst >> 8) & 0xff0000) | (state.ge_cmd[GE_CMD_TRANSFERDSTW] & 0xffff)
-         : k == 3 ? (GE_CMD_TRANSFERDST << 24) | (dst & 0xffffff) : origOp(list - 7 + k);
+  C(GE_CMD_TRANSFERDST, dst); C(GE_CMD_TRANSFERDSTW, ((dst >> 8) & 0xff0000) | (state.ge_cmd[GE_CMD_TRANSFERDSTW] & 0xffff));
+  C(GE_CMD_TRANSFERDSTPOS, state.ge_cmd[GE_CMD_TRANSFERDSTPOS]); C(GE_CMD_TRANSFERSIZE, state.ge_cmd[GE_CMD_TRANSFERSIZE]);
   C(GE_CMD_TRANSFERSTART, bpp == 4);
   #undef C
   txRestore(l, 1);
@@ -910,7 +932,7 @@ static int txFromScreen(u32 *list, u32 src, u32 dst, u32 w, u32 h, int bpp) {
 }
 
 static int txUpscale(u32 *list, u32 dst, u32 w, u32 h, int bpp) {
-  u32 *p = list - 7, k;
+  u32 k;
   if (state.cur_rt || state.ignore_framebuf || dst != state.framebuf || !txIsCopy(list, 1))
     return 0;
   u32 src = ((state.ge_cmd[GE_CMD_TRANSFERSRCW] & 0xff0000) << 8) | (state.ge_cmd[GE_CMD_TRANSFERSRC] & 0xffffff);
@@ -925,9 +947,7 @@ static int txUpscale(u32 *list, u32 dst, u32 w, u32 h, int bpp) {
   u32 *l = (u32 *)(sl | 0x40000000), va = sl + 512;
   short *v = (short *)(va | 0x40000000);
   #define C(c, d) (*l++ = ((c) << 24) | ((d) & 0xffffff))
-  for (k = 0; k < 7; k++)
-    *l++ = origOp(p + k);                       // la copia original, tal cual
-  *l++ = origOp(list);
+  l = txEmitOrig(l, bpp == 4);                  // la copia original, tal cual
   C(GE_CMD_OFFSETADDR, 0);                      // el RET restaura el del juego
   // La imagen se pasa a la VRAM antes de usarla como textura: leer una textura grande
   // desde la RAM era muy lento (Silent Hill bajaba a 12 fps en los videos)
@@ -973,7 +993,7 @@ static int txUpscale(u32 *list, u32 dst, u32 w, u32 h, int bpp) {
 // solo se suman sus palabras (~3 instrucciones por palabra en vez de ~40) y se aplica el
 // estado guardado.
 // ---------------------------------------------------------------------------
-#define WC_ADDR 0x0A780000 // 2048 entradas de 152 bytes en RAM libre (hasta 0x0A7CC000)
+#define WC_ADDR 0x0A780000 // 2048 entradas de 248 bytes en RAM libre (hasta 0x0A7FC000)
 #define WC_SIZE 2048
 // Las sublistas suelen estar alineadas: con solo los bits bajos, dos a 16 KB chocaban
 #define WC_SLOT(a) ((((a) >> 2) * 2654435761u) >> 21) // hash multiplicativo: 11 bits = 2048
@@ -981,7 +1001,7 @@ enum { T_TME = 1, T_TADDR = 2, T_TBW = 4, T_TSIZE = 8, T_TFMT = 16, T_VTYPE = 32
 typedef struct {
   u32 addr, n, sum, base_in, offset_in, gen, fb_in, ndraws, touch, vset, iset;
   void *rt_in;
-  u32 vaddr, iaddr, vtype, base_out, tex[5], nchild, child[8];
+  u32 vaddr, iaddr, vtype, base_out, tex[5], nchild, child[32];
   u32 *tex_p[4];
   u32 tex_o[4];
 } WalkCache;
@@ -996,7 +1016,7 @@ enum { W_PATCH, W_2D, W_OMIT, W_JUMP, W_NESTED, W_COPY, W_OFFSET };
 // guardar si las de dentro tambien se pudieron: se guardan sus direcciones y al saltarla
 // se comprueba que ninguna cambio (Gran Turismo: ~150 por frame tenian sublistas dentro).
 #define WC_DEPTH 8
-#define WC_CHILD 8
+#define WC_CHILD 32 // Gran Turismo: autos con muchas piezas
 typedef struct {
   int depth, why, nchild;
   u32 addr, base, offset, setops, draws, touch, vset, iset, vaddr0, iaddr0, child[WC_CHILD];
@@ -1690,12 +1710,12 @@ exit_loop:
           if (txFromScreen(list, src, dst, w, h, bpp))
             break;
           // Copia que usa la VRAM real: se lleva a la VRAM falsa, donde estan los datos del juego
-          if ((rsrc != src || rdst != dst) && txIsCopy(list, 0)) {
-            u32 *p = list - 7;
-            if (rsrc != src)
-              setOp(p + 1, origOp(p + 1), (GE_CMD_TRANSFERSRCW << 24) | ((src >> 8) & 0xff0000) | (state.ge_cmd[GE_CMD_TRANSFERSRCW] & 0xffff));
-            if (rdst != dst)
-              setOp(p + 4, origOp(p + 4), (GE_CMD_TRANSFERDSTW << 24) | ((dst >> 8) & 0xff0000) | (pitch & 0xffff));
+          u32 *ps = rsrc != src ? txFind(list, GE_CMD_TRANSFERSRCW) : NULL, *pd = rdst != dst ? txFind(list, GE_CMD_TRANSFERDSTW) : NULL;
+          if (ps || pd) {
+            if (ps)
+              setOp(ps, origOp(ps), (GE_CMD_TRANSFERSRCW << 24) | ((src >> 8) & 0xff0000) | (state.ge_cmd[GE_CMD_TRANSFERSRCW] & 0xffff));
+            if (pd)
+              setOp(pd, origOp(pd), (GE_CMD_TRANSFERDSTW << 24) | ((dst >> 8) & 0xff0000) | (pitch & 0xffff));
             st.vram_fix++;
             LOG_ONCE_CAP(0xE9000000 ^ rsrc ^ rdst, "copia con VRAM real %08lx -> %08lx: se usa la VRAM falsa\n", rsrc, rdst);
           }
