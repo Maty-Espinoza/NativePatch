@@ -35,6 +35,7 @@ PSP_MODULE_INFO("GePatch", 0x1007, 1, 0);
 // Contadores baratos que se vuelcan al log cada STATS_EVERY frames
 static struct {
   u32 lists, heads, stalls, draws, skipped, stack_full, transfers, fb_transfers, fallback, enq_copies, idle_frames;
+  u32 rt_draws, rt_tex, rt_incomplete, rt_fail;
 } st;
 
 #define MAX_CMDS 200000 // tope de comandos por recorrido, para no colgarse en listas en bucle
@@ -80,7 +81,7 @@ static const u8 wtsize[4] = { 0, 1, 2, 4 }, wtalign[4] = { 0, 1, 2, 4 };
 
 #define ALIGN(x, align) (((x) + ((align) - 1)) & ~((align) - 1))
 
-void getVertexInfo(u32 op, u8 *vertex_size, u8 *pos_off, u8 *visit_off) {
+void getVertexInfo(u32 op, u8 *vertex_size, u8 *pos_off, u8 *visit_off, u8 *tc_off) {
   int tc = (op & GE_VTYPE_TC_MASK) >> GE_VTYPE_TC_SHIFT;
   int col = (op & GE_VTYPE_COL_MASK) >> GE_VTYPE_COL_SHIFT;
   int nrm = (op & GE_VTYPE_NRM_MASK) >> GE_VTYPE_NRM_SHIFT;
@@ -109,7 +110,7 @@ void getVertexInfo(u32 op, u8 *vertex_size, u8 *pos_off, u8 *visit_off) {
     if (!visitoff && aligned_size != size)
       visitoff = size;
     size = aligned_size;
-    // tcoff = size;
+    *tc_off = size;
     size += tcsize[tc];
     if (tcalign[tc] > biggest)
       biggest = tcalign[tc];
@@ -210,8 +211,15 @@ typedef struct {
 
   u32 framebufptr;
   u32 framebufwidth;
+  u32 *framebufptr_addr;
   u32 *framebufwidth_addr;
   u32 framebuf;
+  struct RenderTarget *cur_rt; // render target en uso como destino, o NULL
+
+  // Ultimos comandos de textura (direccion en la lista y valor original), para
+  // redirigirlos a un render target al momento del draw: TEXADDR0, TEXBUFWIDTH0, TEXSIZE0, TEXFORMAT
+  u32 *tex_p[4];
+  u32 tex_o[4];
 
   u32 base;
   u32 offset;
@@ -242,12 +250,13 @@ static struct { u32 prim, vt, tex, flags, n, verts; } cd; // draws iguales segui
 
 static void capFlush(void) {
   if (cd.n)
-    LOG("  draw prim=%lu vt=%06lx tex=%08lx%s%s x%lu (%lu vert)\n", cd.prim, cd.vt, cd.tex,
-        cd.flags & 2 ? " 2D" : "", cd.flags & 1 ? " OMITIDO" : "", cd.n, cd.verts);
+    LOG("  draw prim=%lu vt=%06lx tex=%08lx%s%s%s%s x%lu (%lu vert)\n", cd.prim, cd.vt, cd.tex,
+        cd.flags & 2 ? " 2D" : "", cd.flags & 1 ? " OMITIDO" : "", cd.flags & 4 ? " tex=RT" : "",
+        cd.flags & 8 ? " en_RT" : "", cd.n, cd.verts);
   cd.n = cd.verts = 0;
 }
 
-static void capDraw(u32 prim, u32 count, int omit) {
+static void capDraw(u32 prim, u32 count, int omit) { // omit: 1 omitido, 4 textura rt, 8 dibuja en rt
   u32 tex = state.ge_cmd[GE_CMD_TEXTUREMAPENABLE] & 1 ?
             ((state.ge_cmd[GE_CMD_TEXBUFWIDTH0] & 0x0f0000) << 8) | state.ge_cmd[GE_CMD_TEXADDR0] : 0;
   u32 flags = omit | (((state.vertex_type & GE_VTYPE_THROUGH_MASK) == GE_VTYPE_THROUGH) << 1);
@@ -349,15 +358,131 @@ int inFramebuf(u32 addr) {
   return 0;
 }
 
-// 1 si la textura 0 es otro framebuffer (render a textura). Esos buffers no tienen
-// contenido real (el GE dibuja todo en el buffer grande), asi que el draw se omite.
-// Se evalua en cada draw: antes se calculaba solo al fijar la textura, y si despues
-// el juego cambiaba de framebuffer el resultado quedaba viejo. Asi Ridge Racer
-// dibujaba sobre la pantalla un buffer de 256 px con una imagen vieja.
-int texFromFramebuf(void) {
+// ---------------------------------------------------------------------------
+// Render targets (render a textura)
+//
+// Muchos juegos dibujan en buffers chicos (reflejos, sombras, desenfoque) y luego los
+// usan como textura. La VRAM baja (0-2 MB) esta ocupada por el buffer de 960x544 y su
+// profundidad, asi que estos buffers se dibujan al doble en la zona 2-4 MB, que existe
+// en Adrenaline aunque el sistema diga que hay 2 MB (ver probeVram). Si la prueba de
+// VRAM falla, o no hay espacio, se vuelve al comportamiento anterior: se omiten.
+// ---------------------------------------------------------------------------
+#define RT_BASE 0x04200000
+#define RT_END  0x04400000
+#define RT_MAX  8
+
+typedef struct RenderTarget {
+  u32 addr, pitch;   // framebuffer del juego (direccion en VRAM falsa) y ancho de linea
+  u32 vram, w, h;    // donde quedo en VRAM real, ya al doble
+  u32 incomplete;    // se omitio algo al dibujarlo: su contenido no sirve como textura
+  u32 frame;         // ultimo frame en que se uso como destino
+} RenderTarget;
+
+static RenderTarget rt[RT_MAX];
+static int rt_count, rt_enabled;
+static u32 rt_next = RT_BASE;
+
+// Busca o reserva el render target para (addr, pitch)
+static RenderTarget *rtGet(u32 addr, u32 pitch) {
+  int i;
+  for (i = 0; i < rt_count; i++)
+    if (rt[i].addr == addr && rt[i].pitch == pitch)
+      return &rt[i];
+
+  // Alto desconocido: los de 256 o mas se asumen de pantalla (272), los chicos cuadrados
+  u32 w = pitch * 2, h = (pitch >= 256 ? 272 : pitch) * 2, size = (w * h * 2 + 0x1fff) & ~0x1fff;
+  if (rt_count >= RT_MAX || rt_next + size > RT_END) {
+    st.rt_fail++;
+    LOG_ONCE(addr ^ 0xC1000000, "rt: SIN ESPACIO para fb %08lx pitch=%lu (%lu KB, libres %lu KB, %d/%d usados) -> se omite\n",
+             addr, pitch, size / 1024, (RT_END - rt_next) / 1024, rt_count, RT_MAX);
+    return NULL;
+  }
+  RenderTarget *r = &rt[rt_count++];
+  r->addr = addr; r->pitch = pitch; r->vram = rt_next; r->w = w; r->h = h;
+  r->incomplete = 0;
+  rt_next += size;
+  LOG("rt %d: fb %08lx pitch=%lu -> vram %08lx %lux%lu (%lu KB), libres %lu KB\n",
+      rt_count - 1, addr, pitch, r->vram, w, h, size / 1024, (RT_END - rt_next) / 1024);
+  return r;
+}
+
+// Render target cuya direccion coincide con una textura (solo desde su inicio)
+static RenderTarget *rtFindTex(u32 tex) {
+  int i;
+  for (i = rt_count - 1; i >= 0; i--) {
+    if (rt[i].addr == tex)
+      return &rt[i];
+    if (tex > rt[i].addr && tex < rt[i].addr + rt[i].pitch * rt[i].h / 2 * 4)
+      LOG_ONCE(tex ^ 0xC2000000, "rt: textura %08lx apunta al medio del rt %d (%08lx), no soportado -> se omite\n",
+               tex, i, rt[i].addr);
+  }
+  return NULL;
+}
+
+// Reescribe un comando visto antes (puede estar en otra parte de la lista) solo si sigue
+// siendo el mismo comando original; si la lista ya se reutilizo para otra cosa, no se toca.
+static int canRepatch(u32 *p, u32 orig) {
+  return p && validAddr((u32)p) && origOp(p) == orig;
+}
+
+// Redirige los comandos de textura al render target (direccion, ancho y tamano al doble,
+// formato 565 porque los buffers se dibujan en 565). 1 si se pudo.
+static int rtPatchTex(RenderTarget *r) {
+  u32 fmt = state.ge_cmd[GE_CMD_TEXFORMAT] & 0xf;
+  u32 sz = state.ge_cmd[GE_CMD_TEXSIZE0], lw = (sz & 0xf) + 1, lh = ((sz >> 8) & 0xf) + 1;
+  u32 bw = (state.ge_cmd[GE_CMD_TEXBUFWIDTH0] & 0xffff) * 2;
+  if (fmt > 3) {
+    LOG_ONCE(r->addr ^ 0xC3000000, "rt: textura %08lx con formato %lu (paleta), no soportado -> se omite\n", r->addr, fmt);
+    return 0;
+  }
+  if (lw > 9 || lh > 9 || bw > 1024) {
+    LOG_ONCE(r->addr ^ 0xC4000000, "rt: textura %08lx de %dx%d no cabe al doble (max 512) -> se omite\n",
+             r->addr, 1 << (lw - 1), 1 << (lh - 1));
+    return 0;
+  }
+  if (!canRepatch(state.tex_p[0], state.tex_o[0]) || !canRepatch(state.tex_p[1], state.tex_o[1]) ||
+      !canRepatch(state.tex_p[2], state.tex_o[2]) || (fmt && !canRepatch(state.tex_p[3], state.tex_o[3]))) {
+    LOG_ONCE(r->addr ^ 0xC5000000, "rt: no se encontraron los comandos de textura de %08lx (lista reutilizada?) -> se omite\n", r->addr);
+    return 0;
+  }
+  setOp(state.tex_p[0], state.tex_o[0], (GE_CMD_TEXADDR0 << 24) | (r->vram & 0xffffff));
+  setOp(state.tex_p[1], state.tex_o[1], (GE_CMD_TEXBUFWIDTH0 << 24) | ((r->vram >> 24) << 16) | bw);
+  setOp(state.tex_p[2], state.tex_o[2], (GE_CMD_TEXSIZE0 << 24) | (lh << 8) | lw);
+  if (fmt) {
+    setOp(state.tex_p[3], state.tex_o[3], (GE_CMD_TEXFORMAT << 24) | 0);
+    LOG_ONCE(r->addr ^ 0xC6000000, "rt: textura %08lx formato %lu -> 565 (si otras texturas cambian de color, es esto)\n", r->addr, fmt);
+  }
+  LOG_ONCE(r->addr ^ 0xC7000000, "rt: textura %08lx -> vram %08lx %dx%d ancho %lu\n", r->addr, r->vram, 1 << (lw - 1), 1 << (lh - 1), bw);
+  return 1;
+}
+
+// Decide que hacer con la textura del draw: 0 normal, 1 omitir el draw,
+// 2 textura redirigida a un render target (en 2D hay que duplicar sus coordenadas)
+int texCheck(void) {
   if (!(state.ge_cmd[GE_CMD_TEXTUREMAPENABLE] & 1))
     return 0;
   u32 tex = ((state.ge_cmd[GE_CMD_TEXBUFWIDTH0] & 0x0f0000) << 8) | (state.ge_cmd[GE_CMD_TEXADDR0] & 0xffffff);
+
+  RenderTarget *r = rt_enabled ? rtFindTex(tex) : NULL;
+  if (r) {
+    if (r == state.cur_rt) {
+      LOG_ONCE(tex ^ 0xC8000000, "rt: el rt %08lx se lee a si mismo -> se omite\n", tex);
+      return 1;
+    }
+    if (r->incomplete) {
+      st.rt_incomplete++;
+      LOG_ONCE(tex ^ 0xC9000000, "rt: %08lx quedo incompleto (se omitieron draws al dibujarlo) -> no se usa como textura\n", tex);
+      return 1;
+    }
+    if (!rtPatchTex(r)) {
+      st.rt_fail++;
+      return 1;
+    }
+    st.rt_tex++;
+    return 2;
+  }
+
+  // Textura desde un framebuffer de pantalla (p.ej. el frame anterior): no hay copia
   if (tex == state.framebuf || findFramebuf(tex) < 0)
     return 0;
   LOG_ONCE(tex ^ 0x7E000000, "textura desde fb %08lx -> draws omitidos\n", tex);
@@ -588,17 +713,23 @@ void patchGeList(u32 *list, u32 *stall) {
         state.has_draws = 1;
         draws_since_flip++;
 
-        int omit = state.ignore_framebuf || texFromFramebuf();
+        int texmode = state.ignore_framebuf ? 0 : texCheck();
+        int omit = state.ignore_framebuf || texmode == 1;
         if (capturing)
-          capDraw(cmd == GE_CMD_PRIM ? (data >> 16) & 7 : cmd, cmd == GE_CMD_PRIM ? data & 0xffff : (data & 0xff) * ((data >> 8) & 0xff), omit);
+          capDraw(cmd == GE_CMD_PRIM ? (data >> 16) & 7 : cmd, cmd == GE_CMD_PRIM ? data & 0xffff : (data & 0xff) * ((data >> 8) & 0xff),
+                  omit | (texmode == 2 ? 4 : 0) | (state.cur_rt ? 8 : 0));
         if (omit) {
           setOp(list, op, 0);
           st.skipped++;
+          if (state.cur_rt)
+            state.cur_rt->incomplete = 1;
           break;
         }
         if (*list != op) // se habia anulado en una pasada anterior: restaurar
           *list = op;
         st.draws++;
+        if (state.cur_rt)
+          st.rt_draws++;
 
         if ((state.vertex_type & GE_VTYPE_THROUGH_MASK) == GE_VTYPE_THROUGH) {
           u8 num_points_u = data & 0xff;
@@ -606,8 +737,8 @@ void patchGeList(u32 *list, u32 *stall) {
 
           u32 count = num_points_u * num_points_v;
 
-          u8 vertex_size = 0, pos_off = 0, visit_off = 0;
-          getVertexInfo(state.vertex_type, &vertex_size, &pos_off, &visit_off);
+          u8 vertex_size = 0, pos_off = 0, visit_off = 0, tc_off = 0;
+          getVertexInfo(state.vertex_type, &vertex_size, &pos_off, &visit_off, &tc_off);
 
           AdvanceVerts(count, vertex_size);
         }
@@ -617,14 +748,14 @@ void patchGeList(u32 *list, u32 *stall) {
 
       case GE_CMD_BOUNDINGBOX:
       {
-        if (state.ignore_framebuf || texFromFramebuf())
+        if (state.ignore_framebuf)
           break;
 
         if ((state.vertex_type & GE_VTYPE_THROUGH_MASK) == GE_VTYPE_THROUGH) {
           u32 count = data;
 
-          u8 vertex_size = 0, pos_off = 0, visit_off = 0;
-          getVertexInfo(state.vertex_type, &vertex_size, &pos_off, &visit_off);
+          u8 vertex_size = 0, pos_off = 0, visit_off = 0, tc_off = 0;
+          getVertexInfo(state.vertex_type, &vertex_size, &pos_off, &visit_off, &tc_off);
 
           AdvanceVerts(count, vertex_size);
         }
@@ -639,21 +770,27 @@ void patchGeList(u32 *list, u32 *stall) {
 
         // Dragon Ball Z Tenkaichi Tag Team uses the same GE list again,
         // therefore NOPing it makes character invisible.
-        int omit = state.ignore_framebuf || texFromFramebuf();
+        int texmode = state.ignore_framebuf ? 0 : texCheck();
+        int omit = state.ignore_framebuf || texmode == 1;
         if (capturing)
-          capDraw(cmd == GE_CMD_PRIM ? (data >> 16) & 7 : cmd, cmd == GE_CMD_PRIM ? data & 0xffff : (data & 0xff) * ((data >> 8) & 0xff), omit);
+          capDraw(cmd == GE_CMD_PRIM ? (data >> 16) & 7 : cmd, cmd == GE_CMD_PRIM ? data & 0xffff : (data & 0xff) * ((data >> 8) & 0xff),
+                  omit | (texmode == 2 ? 4 : 0) | (state.cur_rt ? 8 : 0));
         if (omit) {
           setOp(list, op, 0);
           st.skipped++;
+          if (state.cur_rt)
+            state.cur_rt->incomplete = 1;
           break;
         }
         if (*list != op) // se habia anulado en una pasada anterior: restaurar
           *list = op;
         st.draws++;
+        if (state.cur_rt)
+          st.rt_draws++;
 
         u16 count = data & 0xffff;
-        u8 vertex_size = 0, pos_off = 0, visit_off = 0;
-        getVertexInfo(state.vertex_type, &vertex_size, &pos_off, &visit_off);
+        u8 vertex_size = 0, pos_off = 0, visit_off = 0, tc_off = 0;
+        getVertexInfo(state.vertex_type, &vertex_size, &pos_off, &visit_off, &tc_off);
 
         // El GE avanza VADDR/IADDR despues de cada draw, este o no en modo through.
         // Antes solo se avanzaba en through, y un draw 2D posterior sin VADDR propio
@@ -683,6 +820,22 @@ void patchGeList(u32 *list, u32 *stall) {
           // (los buffers estaticos se reutilizan cada frame)
           if (vertsPatched(start, n, vertex_size, pos_off, pos_size))
             goto exit_loop;
+
+          // En 2D las coordenadas de textura estan en texeles: si la textura es un
+          // render target (ahora al doble) tambien se duplican
+          int tc = (state.vertex_type & GE_VTYPE_TC_MASK) >> GE_VTYPE_TC_SHIFT;
+          if (texmode == 2 && tc >= 2) {
+            u32 va = start, k;
+            for (k = 0; k < n; k++, va += vertex_size) {
+              if (tc == 2) {
+                *(u16 *)(va + tc_off) *= 2;
+                *(u16 *)(va + tc_off + 2) *= 2;
+              } else {
+                t.i = *(u32 *)(va + tc_off); t.f *= 2; *(u32 *)(va + tc_off) = t.i;
+                t.i = *(u32 *)(va + tc_off + 4); t.f *= 2; *(u32 *)(va + tc_off + 4) = t.i;
+              }
+            }
+          }
 
           u32 vertex_addr = start, i;
           for (i = 0; i < n; i++, vertex_addr += vertex_size) {
@@ -736,6 +889,7 @@ exit_loop:
         if (cmd == GE_CMD_FRAMEBUFPTR) {
           setOp(list, op, (cmd << 24) | (VRAM_DRAW_BUFFER_OFFSET & 0xffffff));
           state.framebufptr = op;
+          state.framebufptr_addr = list;
         } else {
           u16 pitch = ((op & 0xffff) == 512 || (op & 0xffff) == 480) ? 960 : (op & 0xffff);
           setOp(list, op, (cmd << 24) | ((VRAM_DRAW_BUFFER_OFFSET >> 24) << 16) | pitch);
@@ -749,15 +903,29 @@ exit_loop:
           // This allows more games to work, but causes weird triangles in Sonic.
           u32 pitch = state.framebufwidth & 0xffff;
           // 480 tambien es un buffer de pantalla completa (Ridge Racer lo usa al iniciar)
+          RenderTarget *r = NULL;
+          state.cur_rt = NULL;
           if (pitch == 512 || pitch == 480 || pitch == 960) {
             state.ignore_framebuf = 0;
+          } else if (rt_enabled && (r = rtGet(state.framebuf, pitch)) &&
+                     canRepatch(state.framebufptr_addr, state.framebufptr) &&
+                     canRepatch(state.framebufwidth_addr, state.framebufwidth)) {
+            // Render target: se dibuja al doble en su espacio de la VRAM alta
+            setOp(state.framebufptr_addr, state.framebufptr, (GE_CMD_FRAMEBUFPTR << 24) | (r->vram & 0xffffff));
+            setOp(state.framebufwidth_addr, state.framebufwidth, (GE_CMD_FRAMEBUFWIDTH << 24) | ((r->vram >> 24) << 16) | r->w);
+            state.ignore_framebuf = 0;
+            state.cur_rt = r;
+            r->incomplete = 0;
+            r->frame = log_frame;
           } else {
+            if (r)
+              LOG_ONCE(state.framebuf ^ 0xCA000000, "rt: no se encontraron los comandos de fb de %08lx -> se omite\n", state.framebuf);
             setOp(state.framebufwidth_addr, state.framebufwidth, (GE_CMD_FRAMEBUFWIDTH << 24) | ((VRAM_1KB >> 24) << 16) | 0);
             state.ignore_framebuf = 1;
           }
 
           LOG_ONCE(state.framebuf ^ (pitch << 20), "fb %08lx pitch=%lu%s\n", state.framebuf, pitch,
-                   state.ignore_framebuf ? " -> ignorado (no se dibuja)" : "");
+                   state.cur_rt ? " -> render target" : state.ignore_framebuf ? " -> ignorado (no se dibuja)" : "");
           insertFramebuf(state.framebuf);
 
           state.framebufptr = 0;
@@ -774,6 +942,21 @@ exit_loop:
       case GE_CMD_ZBUFWIDTH:
         setOp(list, op, (cmd << 24) | ((VRAM_DEPTH_BUFFER_OFFSET >> 24) << 16) | PITCH);
         break;
+
+      // Comandos de textura: se dejan con su valor original y se recuerda donde estan;
+      // si el draw usa un render target, texCheck los redirige
+      case GE_CMD_TEXADDR0:
+      case GE_CMD_TEXBUFWIDTH0:
+      case GE_CMD_TEXSIZE0:
+      case GE_CMD_TEXFORMAT:
+      {
+        int k = cmd == GE_CMD_TEXADDR0 ? 0 : cmd == GE_CMD_TEXBUFWIDTH0 ? 1 : cmd == GE_CMD_TEXSIZE0 ? 2 : 3;
+        if (*list != op)
+          *list = op;
+        state.tex_p[k] = list;
+        state.tex_o[k] = op;
+        break;
+      }
 
       // Copias de bloque (sceGuCopyImage). No pasan por los vertices, asi que no se
       // ven en el buffer de alta resolucion. Videos y logos suelen dibujarse asi.
@@ -1038,6 +1221,9 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
         "escalados=%lu copias_en_lista=%lu pila_llena=%lu fbs=%lu\n",
         st.lists, st.heads, st.stalls, st.draws, st.skipped, st.idle_frames, st.transfers, st.fb_transfers,
         st.fallback, st.enq_copies, st.stack_full, state.framebuf_count);
+    if (rt_count || st.rt_fail)
+      LOG("stats rt: draws_en_rt=%lu draws_con_tex_rt=%lu rt_incompletos=%lu fallos=%lu rts=%d vram_libre=%lu KB\n",
+          st.rt_draws, st.rt_tex, st.rt_incomplete, st.rt_fail, rt_count, (RT_END - rt_next) / 1024);
     memset(&st, 0, sizeof(st));
   }
 
@@ -1084,6 +1270,23 @@ static void probeVram(void) {
         ge_ok = 0;
   }
   LOG("vram: GE en 3 MB %s\n", ge_ok ? "ok -> hay 4 MB utilizables" : "no comprobado o FALLA");
+  logFlush();
+
+  // CPU en toda la zona de render targets, cada 256 KB
+  int bad = 0;
+  if (ge_ok) {
+    u32 a;
+    for (a = RT_BASE; a < RT_END; a += 0x40000) {
+      volatile u32 *p = (u32 *)(a | 0x40000000), *q = (u32 *)((a + 0x3fffc) | 0x40000000);
+      *p = a; *q = ~a;
+      if (*p != a || *q != ~a) {
+        LOG("vram: FALLA en %08lx\n", a);
+        bad++;
+      }
+    }
+  }
+  rt_enabled = ge_ok && !bad;
+  LOG("vram: render targets %s\n", rt_enabled ? "ACTIVADOS en 2-4 MB" : "desactivados (se omiten como antes)");
   logFlush();
 }
 
