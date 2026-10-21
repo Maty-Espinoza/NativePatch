@@ -37,7 +37,7 @@ static void reset(void) {
   memset((void *)VERTS, 0, 0x10000);
   test_log_len = 0; test_log[0] = 0;
   logResetOnce();
-  Options def = { .rt_on = 1, .rt_scale = 1, .omit_fbtex = 1, .fallback = 0, .nop_mark = 1, .walk_new = 1, .v2d = 1, .tx_ge = 1, .walk_cache = 1 };
+  Options def = { .rt_on = 1, .rt_scale = 1, .omit_fbtex = 1, .fallback = 0, .nop_mark = 1, .walk_new = 1, .v2d = 1, .tx_ge = 1, .walk_cache = 1, .layers = 1 };
   opt = def;
   passive = 0; walk_now = 1;
   big_transfer = 0; fbtex_seen = 0; vram_hi = 0; copy_vram = 0; tx_patched_any = 0;
@@ -657,6 +657,39 @@ static void test_sublistas_sin_cambios(void) {
   CHECK(st.wc_hits == 0 && st.skipped == 6, "sublista con textura desde fb: hits=%lu omitidos=%lu", st.wc_hits, st.skipped);
 }
 
+// Silent Hill: formulario dibujado en un fb de 512 que nunca se muestra (0x170000) y que
+// luego se pega en la pantalla (0x04c000, que a su vez se copia al fb mostrado de 1024).
+// Ambos iban al mismo buffer grande y el formulario quedaba vacio.
+static void test_fb_intermedio(void) {
+  reset();
+  rt_enabled = 1;
+  _sceGeListEnQueue = fakeEnqueue;
+  _sceDisplaySetFrameBuf = fakeSetFrameBuf;
+  int frame;
+  u32 *w170 = NULL, *w4c = NULL;
+  for (frame = 0; frame < 3; frame++) {
+    begin();
+    cmd(GE_CMD_VERTEXTYPE, GE_VTYPE_POS_16BIT);
+    w170 = (setFb(0x170000, 512), lp - 1);               // formulario
+    cmd(GE_CMD_TEXTUREMAPENABLE, 0);
+    cmd(GE_CMD_PRIM, (GE_PRIM_TRIANGLES << 16) | 3);
+    w4c = (setFb(0x04c000, 512), lp - 1);                // pantalla: pega el formulario
+    cmd(GE_CMD_TEXTUREMAPENABLE, 1);
+    cmd(GE_CMD_TEXADDR0, 0x170000); cmd(GE_CMD_TEXBUFWIDTH0, (0x0a << 16) | 512);
+    cmd(GE_CMD_PRIM, (GE_PRIM_TRIANGLES << 16) | 3);
+    setFb(0x0d4000, 1024);                               // copia al fb mostrado
+    cmd(GE_CMD_TEXADDR0, 0x04c000); cmd(GE_CMD_TEXBUFWIDTH0, (0x04 << 16) | 512);
+    cmd(GE_CMD_PRIM, (GE_PRIM_TRIANGLES << 16) | 3);
+    end();
+    run();
+    sceDisplaySetFrameBufPatched((void *)0x0A0D43C0, 1024, 0, 0);
+  }
+  CHECK(logHas("fb 0a170000: intermedio"), "el fb del formulario no se detecto como intermedio");
+  CHECK(!logHas("fb 0a04c000: intermedio"), "la pantalla se tomo como intermedia");
+  CHECK((*w170 & 0xff0000) == 0x040000 && (*w170 & 0xffff) == 512, "el formulario no va a un render target: %08lx", *w170);
+  CHECK((*w4c & 0xffff) == 960, "la pantalla dejo de ir al buffer grande: %08lx", *w4c);
+}
+
 // Menu: abrir con L+R+START, cambiar una opcion, cerrar, y que el juego no vea botones mientras
 extern unsigned int test_buttons;
 static void test_menu(void) {
@@ -687,7 +720,7 @@ int main(void) {
     test_viewport_scissor_x2, test_viewport_zona, test_memo_lista_grande, test_vertices_2d,
     test_vaddr_avanza_tras_3d, test_bjump_no_salta, test_estado_entre_listas, test_textura_fb_al_dibujar,
     test_render_target, test_textura_dentro_de_rt, test_rt_incompleto, test_rt_escala_1, test_pitch_0,
-    test_robustez, test_copia_listas_alternas, test_fps, test_doble_buffer_alternado, test_nop_no_revive, test_lista_estatica_fb, test_pasivo_no_escribe, test_pasivo_normaliza, test_desplazamiento_y_1024, test_vertices_2d_muchos_buffers, test_pasivo_muestreo, test_silent_hill_video, test_copia_escalada_con_ge, test_copia_reducida, test_sublistas_sin_cambios, test_menu,
+    test_robustez, test_copia_listas_alternas, test_fps, test_doble_buffer_alternado, test_nop_no_revive, test_lista_estatica_fb, test_pasivo_no_escribe, test_pasivo_normaliza, test_desplazamiento_y_1024, test_vertices_2d_muchos_buffers, test_pasivo_muestreo, test_silent_hill_video, test_copia_escalada_con_ge, test_copia_reducida, test_sublistas_sin_cambios, test_fb_intermedio, test_menu,
   };
   int i;
   for (i = 0; i < (int)(sizeof(tests) / sizeof(tests[0])); i++)

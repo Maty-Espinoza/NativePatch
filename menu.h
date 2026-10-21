@@ -17,6 +17,7 @@ typedef struct {
   int v2d;        // duplicar vertices 2D (HUD, menus, sprites)
   int tx_ge;      // copias grandes a la pantalla (videos): escalar con el GE en su lugar de la lista
   int walk_cache; // no recorrer de nuevo sublistas que no cambiaron
+  int layers;     // fb intermedios (nunca mostrados, usados como textura) como render target
 } Options;
 
 extern Options opt;
@@ -26,7 +27,7 @@ extern u32 opt_gen; // cambia con cada cambio en el menu
 // imagen (MENU_W x MENU_H, 565) queda en MENU_BUF y va en (MENU_X, MENU_Y) de la pantalla.
 #define MENU_BUF 0x0A900000
 #define MENU_W 512
-#define MENU_H (16 * 16 + 48) // hasta 16 opciones
+#define MENU_H (16 * 18 + 48) // hasta 18 opciones
 #define MENU_X 224
 #define MENU_Y 56
 int menuFrame(void);

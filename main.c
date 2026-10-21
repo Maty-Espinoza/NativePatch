@@ -341,6 +341,8 @@ typedef struct {
 
   u32 framebuf_addr[16];
   u8 fb_tx[16];      // lo ultimo que escribio en ese fb fue una copia (TRANSFER), no un draw
+  u8 fb_shown[16];   // el juego mostro este fb (o una parte) en pantalla
+  u8 fb_layer[16];   // fb intermedio: nunca se muestra y se usa como textura en la pantalla
   int cur_fb;        // indice del fb actual en framebuf_addr (-1: ninguno)
   int offx, offy;    // desplazamiento del area visible en el fb actual (0 en render targets)
   u32 framebuf_count;
@@ -458,7 +460,7 @@ int insertFramebuf(u32 framebuf) {
   int n = sizeof(state.framebuf_addr) / sizeof(u32);
   rt_gen++;
   if (state.framebuf_count < n) {
-    state.fb_tx[state.framebuf_count] = 0;
+    state.fb_tx[state.framebuf_count] = state.fb_shown[state.framebuf_count] = state.fb_layer[state.framebuf_count] = 0;
     state.framebuf_addr[state.framebuf_count] = framebuf;
     return state.framebuf_count++;
   }
@@ -466,7 +468,7 @@ int insertFramebuf(u32 framebuf) {
   LOG_ONCE(0xE2000000, "tabla de framebuffers llena, se reemplaza el mas antiguo\n");
   int i = state.framebuf_next++ % n;
   state.framebuf_addr[i] = framebuf;
-  state.fb_tx[i] = 0;
+  state.fb_tx[i] = state.fb_shown[i] = state.fb_layer[i] = 0;
   return i;
 }
 
@@ -653,6 +655,19 @@ static int texCheckCalc(void) {
     LOG_ONCE(tex ^ 0x7D000000, "textura desde fb %08lx llenado por copia (video?) -> se dibuja\n", tex);
     return 0;
   }
+  // Silent Hill dibuja formularios/menus en un fb de 512 que nunca muestra y luego lo pega
+  // en la pantalla: como iba al mismo buffer grande que la pantalla, se veia vacio. Un fb
+  // asi (nunca mostrado, leido mientras se dibuja en la pantalla) pasa a render target.
+  // Un fb que se copia al fb mostrado (render target, como el de 1024 de Silent Hill) es
+  // la pantalla de verdad: cuenta como mostrado.
+  int cf = findFramebuf(state.framebuf);
+  if ((state.cur_rt || state.ignore_framebuf) && cf >= 0 && state.fb_shown[cf])
+    state.fb_shown[f] = 1;
+  if (opt.layers && !passive && !state.cur_rt && !state.ignore_framebuf && !state.fb_shown[f] && !state.fb_layer[f]) {
+    state.fb_layer[f] = 1;
+    rt_gen++;
+    LOG("fb %08lx: intermedio (nunca se muestra y se usa como textura) -> render target desde ahora\n", tex);
+  }
   fbtex_seen = 1;
   LOG_ONCE(tex ^ 0x7E000000, "textura desde fb %08lx -> %s\n", tex,
            opt.omit_fbtex == 1 ? "draws omitidos" : opt.omit_fbtex == 2 ? "se lee la copia reducida del frame" : "se lee la memoria tal cual");
@@ -770,6 +785,7 @@ static int txUpscale(u32 *list, u32 dst, u32 w, u32 h, int bpp) {
   C(GE_CMD_TRANSFERSRC, tex); C(GE_CMD_TRANSFERSRCW, ((tex >> 24) << 16) | sw); C(GE_CMD_TRANSFERSRCPOS, 0);
   C(GE_CMD_TRANSFERDST, copy_vram); C(GE_CMD_TRANSFERDSTW, ((copy_vram >> 24) << 16) | 512); C(GE_CMD_TRANSFERDSTPOS, 0);
   C(GE_CMD_TRANSFERSIZE, ((h - 1) << 10) | (w - 1)); C(GE_CMD_TRANSFERSTART, bpp == 4);
+  C(GE_CMD_TEXSYNC, 0); // esperar a que termine la copia antes de leerla (sin esto: cuadros negros/basura)
   C(GE_CMD_TEXTUREMAPENABLE, 1); C(GE_CMD_TEXMODE, 0);
   C(GE_CMD_TEXFORMAT, bpp == 4 ? 3 : state.ge_cmd[GE_CMD_FRAMEBUFPIXFORMAT] & 3);
   C(GE_CMD_TEXADDR0, copy_vram); C(GE_CMD_TEXBUFWIDTH0, ((copy_vram >> 24) << 16) | 512);
@@ -818,8 +834,10 @@ static int txUpscale(u32 *list, u32 dst, u32 w, u32 h, int bpp) {
 // solo se suman sus palabras (~3 instrucciones por palabra en vez de ~40) y se aplica el
 // estado guardado.
 // ---------------------------------------------------------------------------
-#define WC_ADDR 0x0A780000 // 1024 entradas en RAM libre (hasta 0x0A7A0000)
-#define WC_SIZE 1024
+#define WC_ADDR 0x0A780000 // 4096 entradas en RAM libre (hasta 0x0A7F4000)
+#define WC_SIZE 4096
+// Las sublistas suelen estar alineadas: con solo los bits bajos, dos a 16 KB chocaban
+#define WC_SLOT(a) ((((a) >> 4) ^ ((a) >> 16)) & (WC_SIZE - 1))
 enum { T_TME = 1, T_TADDR = 2, T_TBW = 4, T_TSIZE = 8, T_TFMT = 16, T_VTYPE = 32, T_BASE = 64 };
 typedef struct {
   u32 addr, n, sum, base_in, offset_in, gen, fb_in, ndraws, touch, vset, iset;
@@ -860,7 +878,7 @@ static void wcStore(u32 *ret) {
   rec.active = 0;
   if (!rec.clean || n_setops != rec.setops || ret < (u32 *)rec.addr)
     return;
-  WalkCache *e = &wc[(rec.addr >> 2) & (WC_SIZE - 1)];
+  WalkCache *e = &wc[WC_SLOT(rec.addr)];
   int i;
   e->addr = rec.addr; e->n = ret - (u32 *)rec.addr + 1; e->sum = wcSum((u32 *)rec.addr, e->n);
   e->base_in = rec.base; e->offset_in = rec.offset; e->gen = WC_GEN;
@@ -879,7 +897,7 @@ static void wcStore(u32 *ret) {
 
 // En un CALL: si la sublista esta guardada y no cambio, se aplica su efecto y no se recorre
 static int wcSkip(u32 addr) {
-  WalkCache *e = &wc[(addr >> 2) & (WC_SIZE - 1)];
+  WalkCache *e = &wc[WC_SLOT(addr)];
   if (e->addr != addr || e->gen != WC_GEN || e->base_in != state.base || e->offset_in != state.offset ||
       e->fb_in != (state.framebuf | state.ignore_framebuf) || e->rt_in != state.cur_rt || tx_patched_any || !opt.walk_cache)
     return 0;
@@ -1059,8 +1077,7 @@ void patchGeList(u32 *list, u32 *stall) {
       // BJUMP salta solo si la caja de BOUNDINGBOX quedo fuera de pantalla. Antes siempre
       // se saltaba, y los draws que el GE si ejecuta (caja visible) quedaban sin parchear:
       // geometria en la esquina o que aparece/desaparece. Seguir de largo recorre ambos caminos.
-      case GE_CMD_BJUMP:
-        rec.clean = 0;
+      case GE_CMD_BJUMP: // el recorrido sigue de largo igual que al saltar la sublista
         break;
 
       case GE_CMD_JUMP:
@@ -1209,9 +1226,8 @@ void patchGeList(u32 *list, u32 *stall) {
         break;
       }
 
-      case GE_CMD_BOUNDINGBOX:
+      case GE_CMD_BOUNDINGBOX: // (en 2D avanza VADDR: queda en el estado guardado)
       {
-        rec.clean = 0;
         if (state.ignore_framebuf)
           break;
 
@@ -1393,7 +1409,8 @@ exit_loop:
           RenderTarget *r = NULL;
           state.cur_rt = NULL;
           state.offx = state.offy = 0;
-          if (pitch == 512 || pitch == 480 || pitch == 960 || wideScreen(pitch)) {
+          int fi = findFramebuf(state.framebuf), layer = opt.layers && fi >= 0 && state.fb_layer[fi];
+          if ((pitch == 512 || pitch == 480 || pitch == 960 || wideScreen(pitch)) && !layer) {
             state.ignore_framebuf = 0;
             state.offx = opt.dx;
             state.offy = opt.dy;
@@ -1854,6 +1871,13 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
       if (disp >= state.framebuf_addr[i] && off < best) {
         best = off;
         dfb = i;
+      }
+    }
+    if (dfb >= 0 && !state.fb_shown[dfb]) {
+      state.fb_shown[dfb] = 1;
+      if (state.fb_layer[dfb]) { // se creyo intermedio pero se muestra: vuelve a ser pantalla
+        state.fb_layer[dfb] = 0;
+        rt_gen++;
       }
     }
     if (dfb >= 0 && best)

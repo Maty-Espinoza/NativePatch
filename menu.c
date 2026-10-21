@@ -12,7 +12,7 @@
 #include "menu.h"
 #include "font.h"
 
-Options opt = { .rt_on = 1, .rt_scale = 1, .omit_fbtex = 1, .fallback = 0, .nop_mark = 1, .walk_new = 1, .v2d = 1, .tx_ge = 1, .walk_cache = 1 };
+Options opt = { .rt_on = 1, .rt_scale = 1, .omit_fbtex = 1, .fallback = 0, .nop_mark = 1, .walk_new = 1, .v2d = 1, .tx_ge = 1, .walk_cache = 1, .layers = 1 };
 u32 opt_gen;
 
 // --- Elementos del menu -----------------------------------------------------
@@ -42,6 +42,7 @@ static const Item items[] = {
   { "Saltar sublistas sin cambios", &opt.walk_cache, 0, 1, 1, no_si },
   { "Duplicar vertices 2D (HUD, sprites)", &opt.v2d, 0, 1, 1, no_si },
   { "Framebuffer de 1024 como pantalla", &opt.wide1024, 0, 1, 1, no_si },
+  { "Fb intermedios como render target", &opt.layers, 0, 1, 1, no_si },
   { "Desplazamiento X (px del juego)", &opt.dx, -512, 512, 16, NULL },
   { "Desplazamiento Y (px del juego)", &opt.dy, -272, 272, 8, NULL },
   { "Capturar el proximo frame al log", NULL, 0, 0, 0, NULL, ACT_CAPTURE },
