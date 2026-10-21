@@ -49,7 +49,8 @@ static struct {
   u32 patch_us, patch_max, cmds;                   // costo del plugin por frame
   u32 upscale_us, fb_copies;                       // escalado por CPU (videos), copias del frame al fb del juego
   u32 walked, calls, lookups, v2d, v2d_skip, vevict, call_cmds, tx_ge;
-  u32 wc_hits, wc_miss, wc_cmds;                   // sublistas sin cambios que no se recorrieron // recorrido: frames medidos, CALLs, busquedas en memo, vertices 2D
+  u32 wc_hits, wc_miss, wc_cmds;                   // sublistas sin cambios que no se recorrieron
+  u32 wc_why[8];                                   // por que no se guardaron (ver W_*) // recorrido: frames medidos, CALLs, busquedas en memo, vertices 2D
   u32 long_frame_logged;
 } st;
 static u32 patch_us_frame; // costo del plugin en el frame en curso
@@ -627,11 +628,9 @@ static int texCheckCalc(void) {
 
   RenderTarget *r = rt_enabled && opt.rt_on ? rtFindTex(tex) : NULL;
   if (r) {
-    if (r == state.cur_rt) {
-      LOG_ONCE(tex ^ 0xC8000000, "rt: el rt %08lx se lee a si mismo -> se omite\n", tex);
-      return 1;
-    }
-    if (r->incomplete) {
+    if (r == state.cur_rt) // se lee a si mismo (efectos de acumulacion): igual que en la PSP
+      LOG_ONCE(tex ^ 0xC8000000, "rt: el rt %08lx se lee a si mismo -> se permite\n", tex);
+    else if (r->incomplete) {
       st.rt_incomplete++;
       LOG_ONCE(tex ^ 0xC9000000, "rt: %08lx quedo incompleto (se omitieron draws al dibujarlo) -> no se usa como textura\n", tex);
       return 1;
@@ -850,8 +849,11 @@ static WalkCache *wc = (WalkCache *)WC_ADDR;
 // Lo que cambia la decision del plugin sobre los draws: framebuffers y render targets
 // conocidos (rt_gen) y opciones del menu (opt_gen). El fb actual va en cada entrada.
 #define WC_GEN ((rt_gen << 8) ^ opt_gen)
+// Por que una sublista no se pudo guardar (estadistica, para saber que mejorar)
+enum { W_PATCH, W_2D, W_OMIT, W_JUMP, W_NESTED, W_COPY, W_OFFSET };
+#define DIRTY(w) (rec.clean = 0, rec.why |= 1 << (w))
 static struct {
-  int active, clean, depth;
+  int active, clean, depth, why;
   u32 addr, base, offset, setops, draws, touch, vset, iset, vaddr0, iaddr0;
 } rec;
 
@@ -867,6 +869,7 @@ static const u8 wc_tex_cmd[5] = { GE_CMD_TEXTUREMAPENABLE, GE_CMD_TEXADDR0, GE_C
 // Empieza a anotar la sublista en addr (justo despues del CALL)
 static void wcRecord(u32 addr) {
   rec.active = rec.clean = 1;
+  rec.why = 0;
   rec.depth = state.curr_stack;
   rec.addr = addr; rec.base = state.base; rec.offset = state.offset;
   rec.setops = n_setops; rec.draws = st.draws; rec.touch = rec.vset = rec.iset = 0;
@@ -876,8 +879,14 @@ static void wcRecord(u32 addr) {
 // En el RET de la sublista anotada: si quedo limpia, se guarda
 static void wcStore(u32 *ret) {
   rec.active = 0;
-  if (!rec.clean || n_setops != rec.setops || ret < (u32 *)rec.addr)
+  if (n_setops != rec.setops)
+    rec.why |= 1 << W_PATCH;
+  if (rec.why || ret < (u32 *)rec.addr) {
+    int i;
+    for (i = 0; i < 7; i++)
+      st.wc_why[i] += (rec.why >> i) & 1;
     return;
+  }
   WalkCache *e = &wc[WC_SLOT(rec.addr)];
   int i;
   e->addr = rec.addr; e->n = ret - (u32 *)rec.addr + 1; e->sum = wcSum((u32 *)rec.addr, e->n);
@@ -1026,12 +1035,12 @@ void patchGeList(u32 *list, u32 *stall) {
 
       case GE_CMD_OFFSETADDR:
         state.offset = data << 8;
-        rec.clean = 0;
+        DIRTY(W_OFFSET);
         break;
 
       case GE_CMD_ORIGIN:
         state.offset = (u32)list;
-        rec.clean = 0;
+        DIRTY(W_OFFSET);
         break;
 
       case GE_CMD_TEXTUREMAPENABLE:
@@ -1040,7 +1049,7 @@ void patchGeList(u32 *list, u32 *stall) {
 
       case GE_CMD_TRANSFERSRC: case GE_CMD_TRANSFERSRCW: case GE_CMD_TRANSFERSRCPOS: case GE_CMD_TRANSFERDST:
       case GE_CMD_TRANSFERDSTW: case GE_CMD_TRANSFERDSTPOS: case GE_CMD_TRANSFERSIZE:
-        rec.clean = 0; // una copia posterior usaria estos registros
+        DIRTY(W_COPY); // una copia posterior usaria estos registros
         break;
 
       // TODO: need to save other states, too?
@@ -1058,6 +1067,8 @@ void patchGeList(u32 *list, u32 *stall) {
           break;
         }
         st.calls++;
+        if (rec.active)
+          st.wc_why[W_NESTED]++;
         rec.active = 0; // la sublista que la contiene ya no se puede guardar
         if (!capturing && wcSkip(state.address))
           break;
@@ -1081,7 +1092,7 @@ void patchGeList(u32 *list, u32 *stall) {
         break;
 
       case GE_CMD_JUMP:
-        rec.clean = 0;
+        DIRTY(W_JUMP);
         state.address = ((state.base | data) + state.offset) & 0x0ffffffc;
         list = (u32 *)(state.address - 4);
         lim = NULL;
@@ -1104,6 +1115,8 @@ void patchGeList(u32 *list, u32 *stall) {
       case GE_CMD_END:
       {
         u32 prev = *(list-1);
+        if (rec.active)
+          st.wc_why[W_JUMP]++;
         rec.active = 0;
         switch (prev >> 24) {
           case GE_CMD_SIGNAL:
@@ -1181,7 +1194,7 @@ void patchGeList(u32 *list, u32 *stall) {
       case GE_CMD_BEZIER:
       case GE_CMD_SPLINE:
       {
-        rec.clean = 0;
+        DIRTY(W_2D);
         state.has_draws = 1;
         draws_since_flip++;
 
@@ -1256,7 +1269,7 @@ void patchGeList(u32 *list, u32 *stall) {
           capDraw(cmd == GE_CMD_PRIM ? (data >> 16) & 7 : cmd, cmd == GE_CMD_PRIM ? data & 0xffff : (data & 0xff) * ((data >> 8) & 0xff),
                   omit | (texmode == 2 ? 4 : 0) | (state.cur_rt ? 8 : 0));
         if (omit || texmode) {
-          rec.clean = 0; // draw omitido o con textura de render target: hay que verlo cada vez
+          DIRTY(W_OMIT); // draw omitido o con textura de render target: hay que verlo cada vez
         }
         if (omit) {
           setOp(list, op, NOP_OMIT);
@@ -1269,7 +1282,7 @@ void patchGeList(u32 *list, u32 *stall) {
         }
         if (*list != op && !passive) { // se habia anulado en una pasada anterior: restaurar
           *list = op;
-          rec.clean = 0;
+          DIRTY(W_OMIT);
         }
         st.draws++;
         if (state.cur_fb >= 0 && state.fb_tx[state.cur_fb] && !state.cur_rt) {
@@ -1296,7 +1309,7 @@ void patchGeList(u32 *list, u32 *stall) {
         }
 
         {
-          rec.clean = 0; // 2D: vertices que se duplican
+          DIRTY(W_2D); // 2D: vertices que se duplican
           u16 lower = 0;
           u16 upper = count;
           if (indexed) {
@@ -1477,7 +1490,7 @@ exit_loop:
       // ven en el buffer de alta resolucion. Videos y logos suelen dibujarse asi.
       case GE_CMD_TRANSFERSTART:
       {
-        rec.clean = 0;
+        DIRTY(W_COPY);
         u32 dst = normVram(((state.ge_cmd[GE_CMD_TRANSFERDSTW] & 0xff0000) << 8) | (state.ge_cmd[GE_CMD_TRANSFERDST] & 0xffffff));
         u32 w = (state.ge_cmd[GE_CMD_TRANSFERSIZE] & 0x3ff) + 1;
         u32 h = ((state.ge_cmd[GE_CMD_TRANSFERSIZE] >> 10) & 0x3ff) + 1;
@@ -1798,6 +1811,7 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
   log_frame++;
   if (log_frame == 30) {
     logGameId(); // en module_start el disco aun no esta montado
+    menuLoad(game_id);
     memSnapshot("inicio");
   }
 
@@ -1947,6 +1961,9 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
       LOG("stats 2d: vert2d=%lu ya2d=%lu choques2d=%lu | copias escaladas con GE=%lu\n", st.v2d, st.v2d_skip, st.vevict, st.tx_ge);
       LOG("stats sublistas sin cambios: saltadas/frame=%lu cambiadas/frame=%lu comandos_no_recorridos/frame=%lu\n",
           st.wc_hits / w, st.wc_miss / w, st.wc_cmds / w);
+      LOG("stats sublistas no guardadas/frame: parches=%lu 2d=%lu omitidos_o_rt=%lu saltos=%lu anidadas=%lu copias=%lu offset=%lu\n",
+          st.wc_why[W_PATCH] / w, st.wc_why[W_2D] / w, st.wc_why[W_OMIT] / w, st.wc_why[W_JUMP] / w,
+          st.wc_why[W_NESTED] / w, st.wc_why[W_COPY] / w, st.wc_why[W_OFFSET] / w);
     }
     if (rt_count || st.rt_fail) {
       LOG("stats rt: draws_en_rt=%lu draws_con_tex_rt=%lu rt_incompletos=%lu fallos=%lu rts=%d vram_libre=%lu KB\n",

@@ -37,8 +37,7 @@ static void reset(void) {
   memset((void *)VERTS, 0, 0x10000);
   test_log_len = 0; test_log[0] = 0;
   logResetOnce();
-  Options def = { .rt_on = 1, .rt_scale = 1, .omit_fbtex = 1, .fallback = 0, .nop_mark = 1, .walk_new = 1, .v2d = 1, .tx_ge = 1, .walk_cache = 1, .layers = 1 };
-  opt = def;
+  opt = opt_default;
   passive = 0; walk_now = 1;
   big_transfer = 0; fbtex_seen = 0; vram_hi = 0; copy_vram = 0; tx_patched_any = 0;
   memset(wc, 0, WC_SIZE * sizeof(WalkCache)); memset(&rec, 0, sizeof(rec));
@@ -690,6 +689,15 @@ static void test_fb_intermedio(void) {
   CHECK((*w4c & 0xffff) == 960, "la pantalla dejo de ir al buffer grande: %08lx", *w4c);
 }
 
+// Opciones por juego: archivo clave=valor; valores fuera de rango o claves raras se ignoran
+static void test_opciones_juego(void) {
+  reset();
+  int n = menuParse("tex_fb=2\nsublistas=0\r\ndx=480\nrt_escala=9\nnada=1\n");
+  CHECK(n == 3 && opt.omit_fbtex == 2 && opt.walk_cache == 0 && opt.dx == 480 && opt.rt_scale == 1,
+        "menuParse: n=%d tex_fb=%d sublistas=%d dx=%d rt_escala=%d", n, opt.omit_fbtex, opt.walk_cache, opt.dx, opt.rt_scale);
+  opt = opt_default;
+}
+
 // Menu: abrir con L+R+START, cambiar una opcion, cerrar, y que el juego no vea botones mientras
 extern unsigned int test_buttons;
 static void test_menu(void) {
@@ -720,7 +728,7 @@ int main(void) {
     test_viewport_scissor_x2, test_viewport_zona, test_memo_lista_grande, test_vertices_2d,
     test_vaddr_avanza_tras_3d, test_bjump_no_salta, test_estado_entre_listas, test_textura_fb_al_dibujar,
     test_render_target, test_textura_dentro_de_rt, test_rt_incompleto, test_rt_escala_1, test_pitch_0,
-    test_robustez, test_copia_listas_alternas, test_fps, test_doble_buffer_alternado, test_nop_no_revive, test_lista_estatica_fb, test_pasivo_no_escribe, test_pasivo_normaliza, test_desplazamiento_y_1024, test_vertices_2d_muchos_buffers, test_pasivo_muestreo, test_silent_hill_video, test_copia_escalada_con_ge, test_copia_reducida, test_sublistas_sin_cambios, test_fb_intermedio, test_menu,
+    test_robustez, test_copia_listas_alternas, test_fps, test_doble_buffer_alternado, test_nop_no_revive, test_lista_estatica_fb, test_pasivo_no_escribe, test_pasivo_normaliza, test_desplazamiento_y_1024, test_vertices_2d_muchos_buffers, test_pasivo_muestreo, test_silent_hill_video, test_copia_escalada_con_ge, test_copia_reducida, test_sublistas_sin_cambios, test_fb_intermedio, test_opciones_juego, test_menu,
   };
   int i;
   for (i = 0; i < (int)(sizeof(tests) / sizeof(tests[0])); i++)

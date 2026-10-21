@@ -26,6 +26,7 @@ typedef struct { unsigned int size; PspGeContext *context; } PspGeListArgs;
 #define PSP_O_RDONLY 0x0001
 #define PSP_O_WRONLY 0x0002
 #define PSP_O_CREAT  0x0200
+#define PSP_O_TRUNC  0x0400
 #define PSP_SEEK_END 2
 
 int pspSdkSetK1(int k1);

@@ -6,18 +6,23 @@
 #include <pspctrl.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <systemctrl.h>
 
 #include "log.h"
 #include "menu.h"
 #include "font.h"
 
-Options opt = { .rt_on = 1, .rt_scale = 1, .omit_fbtex = 1, .fallback = 0, .nop_mark = 1, .walk_new = 1, .v2d = 1, .tx_ge = 1, .walk_cache = 1, .layers = 1 };
+// Valores originales (por defecto). El menu marca los que se cambiaron para probar.
+const Options opt_default = { .rt_on = 1, .rt_scale = 1, .omit_fbtex = 1, .fallback = 0, .nop_mark = 1, .walk_new = 1,
+                              .v2d = 1, .tx_ge = 1, .walk_cache = 1, .layers = 1 };
+Options opt = opt_default;
 u32 opt_gen;
 
 // --- Elementos del menu -----------------------------------------------------
-enum { ACT_NONE, ACT_CAPTURE, ACT_SNAPSHOT, ACT_FLUSH, ACT_CLOSE };
+enum { ACT_NONE, ACT_CAPTURE, ACT_SNAPSHOT, ACT_FLUSH, ACT_RESTORE, ACT_SAVE, ACT_CLOSE };
 typedef struct {
+  const char *key; // nombre en el archivo de opciones del juego
   const char *name;
   int *val;
   int min, max, step;
@@ -32,25 +37,37 @@ static const char *const fbtex_modes[] = { "leer memoria", "omitir", "copia redu
 static const char *const walk_modes[] = { "antiguo", "nuevo" };
 
 static const Item items[] = {
-  { "Render targets en VRAM alta", &opt.rt_on, 0, 1, 1, no_si },
-  { "Escala de render targets", &opt.rt_scale, 1, 2, 1, NULL },
-  { "Texturas desde framebuffer", &opt.omit_fbtex, 0, 2, 1, fbtex_modes },
-  { "Videos: escalar copias con el GE", &opt.tx_ge, 0, 1, 1, no_si },
-  { "Imagen original escalada (videos)", &opt.fallback, 0, 2, 1, fb_modes },
-  { "NOP de draws omitidos", &opt.nop_mark, 0, 1, 1, nop_modes },
-  { "Recorrido de listas", &opt.walk_new, 0, 1, 1, walk_modes },
-  { "Saltar sublistas sin cambios", &opt.walk_cache, 0, 1, 1, no_si },
-  { "Duplicar vertices 2D (HUD, sprites)", &opt.v2d, 0, 1, 1, no_si },
-  { "Framebuffer de 1024 como pantalla", &opt.wide1024, 0, 1, 1, no_si },
-  { "Fb intermedios como render target", &opt.layers, 0, 1, 1, no_si },
-  { "Desplazamiento X (px del juego)", &opt.dx, -512, 512, 16, NULL },
-  { "Desplazamiento Y (px del juego)", &opt.dy, -272, 272, 8, NULL },
-  { "Capturar el proximo frame al log", NULL, 0, 0, 0, NULL, ACT_CAPTURE },
-  { "Memoria y CPU al log", NULL, 0, 0, 0, NULL, ACT_SNAPSHOT },
-  { "Escribir el log ahora", NULL, 0, 0, 0, NULL, ACT_FLUSH },
-  { "Cerrar", NULL, 0, 0, 0, NULL, ACT_CLOSE },
+  { "rt", "Render targets en VRAM alta", &opt.rt_on, 0, 1, 1, no_si },
+  { "rt_escala", "Escala de render targets", &opt.rt_scale, 1, 2, 1, NULL },
+  { "tex_fb", "Texturas desde framebuffer", &opt.omit_fbtex, 0, 2, 1, fbtex_modes },
+  { "copias_ge", "Videos: escalar copias con el GE", &opt.tx_ge, 0, 1, 1, no_si },
+  { "original", "Imagen original escalada (videos)", &opt.fallback, 0, 2, 1, fb_modes },
+  { "nop", "NOP de draws omitidos", &opt.nop_mark, 0, 1, 1, nop_modes },
+  { "recorrido", "Recorrido de listas", &opt.walk_new, 0, 1, 1, walk_modes },
+  { "sublistas", "Saltar sublistas sin cambios", &opt.walk_cache, 0, 1, 1, no_si },
+  { "v2d", "Duplicar vertices 2D (HUD, sprites)", &opt.v2d, 0, 1, 1, no_si },
+  { "fb1024", "Framebuffer de 1024 como pantalla", &opt.wide1024, 0, 1, 1, no_si },
+  { "intermedios", "Fb intermedios como render target", &opt.layers, 0, 1, 1, no_si },
+  { "dx", "Desplazamiento X (px del juego)", &opt.dx, -512, 512, 16, NULL },
+  { "dy", "Desplazamiento Y (px del juego)", &opt.dy, -272, 272, 8, NULL },
+  { NULL, "Capturar el proximo frame al log", NULL, 0, 0, 0, NULL, ACT_CAPTURE },
+  { NULL, "Memoria y CPU al log", NULL, 0, 0, 0, NULL, ACT_SNAPSHOT },
+  { NULL, "Restaurar valores originales", NULL, 0, 0, 0, NULL, ACT_RESTORE },
+  { NULL, "Guardar opciones para este juego", NULL, 0, 0, 0, NULL, ACT_SAVE },
+  { NULL, "Escribir el log ahora", NULL, 0, 0, 0, NULL, ACT_FLUSH },
+  { NULL, "Cerrar", NULL, 0, 0, 0, NULL, ACT_CLOSE },
 };
 #define N_ITEMS (int)(sizeof(items) / sizeof(items[0]))
+
+// Valor original de una opcion (misma posicion en opt_default que en opt)
+static int defOf(const Item *it) { return *(const int *)((const char *)&opt_default + ((char *)it->val - (char *)&opt)); }
+
+static const char *valText(const Item *it, int v, char *buf, int n) {
+  if (it->labels)
+    return it->labels[v - it->min];
+  snprintf(buf, n, "%d", v);
+  return buf;
+}
 
 static int open, sel, block, prev, held, dirty;
 
@@ -88,6 +105,7 @@ static void fillRect(u16 *buf, int x, int y, int w, int h, u16 c) {
 #define C_TEXT  0xffff
 #define C_DIM   0xad55
 #define C_VAL   0x07ff // amarillo
+#define C_CHG   0x041f // naranjo: valor cambiado (de prueba)
 
 static void drawMenu(u16 *buf) {
   int x = 8, w = MENU_W - 16, i;
@@ -99,15 +117,89 @@ static void drawMenu(u16 *buf) {
     int yy = 40 + i * 16;
     u16 bg = i == sel ? C_SEL : C_BG;
     fillRect(buf, 0, yy, MENU_W, 16, bg);
+    int changed = it->val && *it->val != defOf(it);
+    drawText(buf, x - 8, yy, changed ? "*" : " ", C_CHG, bg);
     drawText(buf, x, yy, it->name, C_TEXT, bg);
     if (it->val) {
-      if (it->labels)
-        snprintf(line, sizeof(line), "%s", it->labels[*it->val - it->min]);
-      else
-        snprintf(line, sizeof(line), "%d", *it->val);
-      drawText(buf, x + w - 8 * (int)strlen(line), yy, line, C_VAL, bg);
+      const char *t = valText(it, *it->val, line, sizeof(line));
+      drawText(buf, x + w - 8 * (int)strlen(t), yy, t, changed ? C_CHG : C_VAL, bg);
     }
   }
+  // Abajo: valor original y valor de prueba de la opcion elegida
+  const Item *it = &items[sel];
+  char foot[64], a[16], b[16];
+  if (it->val && *it->val != defOf(it))
+    snprintf(foot, sizeof(foot), "original: %s   prueba: %s", valText(it, defOf(it), a, sizeof(a)), valText(it, *it->val, b, sizeof(b)));
+  else if (it->val)
+    snprintf(foot, sizeof(foot), "original: %s", valText(it, defOf(it), a, sizeof(a)));
+  else
+    snprintf(foot, sizeof(foot), "X: ejecutar");
+  drawText(buf, x, 40 + N_ITEMS * 16 + 8, foot, C_DIM, C_BG);
+}
+
+// --- Opciones por juego: ms0:/gepatch_<ID>.txt, una linea clave=valor ---------
+static void applyChanged(void) {
+  rtReset(); // por si cambiaron los render targets
+  logResetOnce();
+  opt_gen++;
+}
+
+int menuParse(const char *s) {
+  int n = 0, i;
+  while (*s) {
+    for (i = 0; i < N_ITEMS; i++) {
+      const Item *it = &items[i];
+      int l = it->key ? strlen(it->key) : 0;
+      if (l && !strncmp(s, it->key, l) && s[l] == '=') {
+        int v = atoi(s + l + 1);
+        if (v >= it->min && v <= it->max) {
+          *it->val = v;
+          n++;
+        }
+        break;
+      }
+    }
+    while (*s && *s != '\n') s++;
+    while (*s == '\n' || *s == '\r') s++;
+  }
+  return n;
+}
+
+static void optPath(char *p, int n, const char *id) { snprintf(p, n, "ms0:/gepatch_%s.txt", id); }
+
+void menuLoad(const char *id) {
+  char path[48], buf[512];
+  optPath(path, sizeof(path), id);
+  int k1 = pspSdkSetK1(0), len = -1;
+  SceUID fd = sceIoOpen(path, PSP_O_RDONLY, 0);
+  if (fd >= 0) {
+    len = sceIoRead(fd, buf, sizeof(buf) - 1);
+    sceIoClose(fd);
+  }
+  pspSdkSetK1(k1);
+  if (len <= 0)
+    return;
+  buf[len] = 0;
+  int n = menuParse(buf);
+  applyChanged();
+  LOG("opciones del juego cargadas de %s (%d valores)\n", path, n);
+}
+
+static void menuSave(void) {
+  char path[48], buf[512];
+  int i, len = 0;
+  optPath(path, sizeof(path), game_id);
+  for (i = 0; i < N_ITEMS; i++)
+    if (items[i].key && *items[i].val != defOf(&items[i])) // solo lo que difiere del original
+      len += snprintf(buf + len, sizeof(buf) - len, "%s=%d\n", items[i].key, *items[i].val);
+  int k1 = pspSdkSetK1(0);
+  SceUID fd = sceIoOpen(path, PSP_O_WRONLY | PSP_O_CREAT | PSP_O_TRUNC, 0777);
+  if (fd >= 0) {
+    sceIoWrite(fd, buf, len);
+    sceIoClose(fd);
+  }
+  pspSdkSetK1(k1);
+  LOG("menu: opciones guardadas en %s%s\n", path, fd < 0 ? " (ERROR al escribir)" : "");
 }
 
 // --- Entrada ------------------------------------------------------------------
@@ -211,6 +303,12 @@ int menuFrame(void) {
       const Item *it = &items[sel];
       if (it->action == ACT_CAPTURE) menuRequestCapture();
       else if (it->action == ACT_SNAPSHOT) memSnapshot("menu");
+      else if (it->action == ACT_RESTORE) {
+        opt = opt_default;
+        applyChanged();
+        LOG("menu: valores originales restaurados\n");
+      }
+      else if (it->action == ACT_SAVE) menuSave();
       else if (it->action == ACT_FLUSH) logFlush();
       else if (it->action == ACT_CLOSE) open = 0;
       else if (it->labels) change(it, 1);
