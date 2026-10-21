@@ -31,6 +31,7 @@ static void reset(void) {
   memset(vmemo, 0, sizeof(vmemo));
   memset(rt, 0, sizeof(rt));
   rt_count = 0; rt_next = RT_BASE; rt_enabled = 0;
+  tex_patched_any = 0; rt_gen++; memset(&tcache, 0, sizeof(tcache)); tcache.res = 2; // sin cache valida
   game_offx = 2048 - 240; game_offy = 2048 - 136;
   memset((void *)LIST, 0, 0x100000);
   memset((void *)VERTS, 0, 0x10000);

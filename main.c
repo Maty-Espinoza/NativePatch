@@ -70,6 +70,21 @@ static void setOp(u32 *p, u32 orig, u32 op) {
   *p = op;
 }
 
+// Solo estos comandos pueden haber sido parcheados por el plugin (y NOP = draw anulado).
+// Para el resto no hace falta buscar en la memoria de parches: buscar en cada comando
+// costaba ~0.5 us por comando en la PSP (fallos de cache en una tabla de 768 KB) y en
+// Gran Turismo (52 000 comandos por frame) el plugin solo ya tomaba 30 ms por frame.
+// 2 = comandos de textura: solo se parchean si algun draw uso un render target.
+static const u8 memo_cmd[256] = {
+  [GE_CMD_NOP] = 1, [GE_CMD_FRAMEBUFPTR] = 1, [GE_CMD_FRAMEBUFWIDTH] = 1, [GE_CMD_FRAMEBUFPIXFORMAT] = 1,
+  [GE_CMD_ZBUFPTR] = 1, [GE_CMD_ZBUFWIDTH] = 1, [GE_CMD_VIEWPORTXSCALE] = 1, [GE_CMD_VIEWPORTYSCALE] = 1,
+  [GE_CMD_VIEWPORTXCENTER] = 1, [GE_CMD_VIEWPORTYCENTER] = 1, [GE_CMD_OFFSETX] = 1, [GE_CMD_OFFSETY] = 1,
+  [GE_CMD_REGION1] = 1, [GE_CMD_REGION2] = 1, [GE_CMD_SCISSOR1] = 1, [GE_CMD_SCISSOR2] = 1,
+  [GE_CMD_TEXADDR0] = 2, [GE_CMD_TEXBUFWIDTH0] = 2, [GE_CMD_TEXSIZE0] = 2, [GE_CMD_TEXFORMAT] = 2,
+};
+static int tex_patched_any; // algun comando de textura se redirigio a un render target
+static u32 rt_gen;          // cambia cuando cambia algo que afecta a texCheck (rts, framebuffers)
+
 // Ultimos OFFSETX/Y del juego (en pixeles), para escalar el centro del viewport
 static float game_offx = 2048 - 240, game_offy = 2048 - 136;
 
@@ -168,6 +183,19 @@ void getVertexInfo(u32 op, u8 *vertex_size, u8 *pos_off, u8 *visit_off, u8 *tc_o
   *vertex_size = size;
   *pos_off = posoff;
   *visit_off = visitoff;
+}
+
+// getVertexInfo con cache: los juegos repiten el mismo formato en muchos draws seguidos
+static void vertexInfo(u32 vt, u8 *size, u8 *pos_off, u8 *tc_off) {
+  static u32 last = 0xffffffff;
+  static u8 s, p, t;
+  if (vt != last) {
+    u8 visit;
+    s = p = t = 0;
+    getVertexInfo(vt, &s, &p, &visit, &t);
+    last = vt;
+  }
+  *size = s; *pos_off = p; *tc_off = t;
 }
 
 void GetIndexBounds(const void *inds, int count, u32 vertType, u16 *indexLowerBound, u16 *indexUpperBound) {
@@ -359,6 +387,7 @@ int insertFramebuf(u32 framebuf) {
     return res;
 
   int n = sizeof(state.framebuf_addr) / sizeof(u32);
+  rt_gen++;
   if (state.framebuf_count < n) {
     state.framebuf_addr[state.framebuf_count] = framebuf;
     return state.framebuf_count++;
@@ -428,6 +457,7 @@ static RenderTarget *rtGet(u32 addr, u32 pitch) {
   r->addr = addr; r->pitch = pitch; r->vram = rt_next; r->w = w; r->h = h;
   r->incomplete = 0;
   rt_next += size;
+  rt_gen++;
   LOG("rt %d: fb %08lx pitch=%lu -> vram %08lx %lux%lu (%lu KB), libres %lu KB\n",
       rt_count - 1, addr, pitch, r->vram, w, h, size / 1024, (RT_END - rt_next) / 1024);
   return r;
@@ -470,6 +500,7 @@ static int rtPatchTex(RenderTarget *r) {
     LOG_ONCE(r->addr ^ 0xC5000000, "rt: no se encontraron los comandos de textura de %08lx (lista reutilizada?) -> se omite\n", r->addr);
     return 0;
   }
+  tex_patched_any = 1;
   setOp(state.tex_p[0], state.tex_o[0], (GE_CMD_TEXADDR0 << 24) | (r->vram & 0xffffff));
   setOp(state.tex_p[1], state.tex_o[1], (GE_CMD_TEXBUFWIDTH0 << 24) | ((r->vram >> 24) << 16) | bw);
   setOp(state.tex_p[2], state.tex_o[2], (GE_CMD_TEXSIZE0 << 24) | (lh << 8) | lw);
@@ -483,7 +514,20 @@ static int rtPatchTex(RenderTarget *r) {
 
 // Decide que hacer con la textura del draw: 0 normal, 1 omitir el draw,
 // 2 textura redirigida a un render target (en 2D hay que duplicar sus coordenadas)
+static struct { u32 on, addr, bw, fb, gen; void *cur; int res; } tcache;
+
+static int texCheckCalc(void);
 int texCheck(void) {
+  u32 on = state.ge_cmd[GE_CMD_TEXTUREMAPENABLE] & 1;
+  if (tcache.on == on && tcache.addr == state.ge_cmd[GE_CMD_TEXADDR0] && tcache.bw == state.ge_cmd[GE_CMD_TEXBUFWIDTH0] &&
+      tcache.fb == state.framebuf && tcache.cur == state.cur_rt && tcache.gen == rt_gen && tcache.res != 2)
+    return tcache.res;
+  tcache.on = on; tcache.addr = state.ge_cmd[GE_CMD_TEXADDR0]; tcache.bw = state.ge_cmd[GE_CMD_TEXBUFWIDTH0];
+  tcache.fb = state.framebuf; tcache.cur = state.cur_rt; tcache.gen = rt_gen;
+  return tcache.res = texCheckCalc();
+}
+
+static int texCheckCalc(void) {
   if (!(state.ge_cmd[GE_CMD_TEXTUREMAPENABLE] & 1))
     return 0;
   u32 tex = ((state.ge_cmd[GE_CMD_TEXBUFWIDTH0] & 0x0f0000) << 8) | (state.ge_cmd[GE_CMD_TEXADDR0] & 0xffffff);
@@ -573,7 +617,10 @@ void patchGeList(u32 *list, u32 *stall) {
       goto finish;
     }
 
-    u32 op = origOp(list); // valor original del juego aunque ya este parcheado
+    // Valor original del juego aunque el comando ya este parcheado (ver memo_cmd)
+    u32 op = *list, m = memo_cmd[op >> 24];
+    if (m == 1 || (m == 2 && tex_patched_any))
+      op = origOp(list);
     u32 cmd = op >> 24;
     u32 data = op & 0xffffff;
 
@@ -747,8 +794,10 @@ void patchGeList(u32 *list, u32 *stall) {
         if (omit) {
           setOp(list, op, 0);
           st.skipped++;
-          if (state.cur_rt)
+          if (state.cur_rt && !state.cur_rt->incomplete) {
             state.cur_rt->incomplete = 1;
+            rt_gen++;
+          }
           break;
         }
         if (*list != op) // se habia anulado en una pasada anterior: restaurar
@@ -765,8 +814,8 @@ void patchGeList(u32 *list, u32 *stall) {
 
           u32 count = num_points_u * num_points_v;
 
-          u8 vertex_size = 0, pos_off = 0, visit_off = 0, tc_off = 0;
-          getVertexInfo(state.vertex_type, &vertex_size, &pos_off, &visit_off, &tc_off);
+          u8 vertex_size = 0, pos_off = 0, tc_off = 0;
+          vertexInfo(state.vertex_type, &vertex_size, &pos_off, &tc_off);
 
           AdvanceVerts(count, vertex_size);
         }
@@ -782,8 +831,8 @@ void patchGeList(u32 *list, u32 *stall) {
         if ((state.vertex_type & GE_VTYPE_THROUGH_MASK) == GE_VTYPE_THROUGH) {
           u32 count = data;
 
-          u8 vertex_size = 0, pos_off = 0, visit_off = 0, tc_off = 0;
-          getVertexInfo(state.vertex_type, &vertex_size, &pos_off, &visit_off, &tc_off);
+          u8 vertex_size = 0, pos_off = 0, tc_off = 0;
+          vertexInfo(state.vertex_type, &vertex_size, &pos_off, &tc_off);
 
           AdvanceVerts(count, vertex_size);
         }
@@ -806,8 +855,10 @@ void patchGeList(u32 *list, u32 *stall) {
         if (omit) {
           setOp(list, op, 0);
           st.skipped++;
-          if (state.cur_rt)
+          if (state.cur_rt && !state.cur_rt->incomplete) {
             state.cur_rt->incomplete = 1;
+            rt_gen++;
+          }
           break;
         }
         if (*list != op) // se habia anulado en una pasada anterior: restaurar
@@ -819,8 +870,8 @@ void patchGeList(u32 *list, u32 *stall) {
         }
 
         u16 count = data & 0xffff;
-        u8 vertex_size = 0, pos_off = 0, visit_off = 0, tc_off = 0;
-        getVertexInfo(state.vertex_type, &vertex_size, &pos_off, &visit_off, &tc_off);
+        u8 vertex_size = 0, pos_off = 0, tc_off = 0;
+        vertexInfo(state.vertex_type, &vertex_size, &pos_off, &tc_off);
 
         // El GE avanza VADDR/IADDR despues de cada draw, este o no en modo through.
         // Antes solo se avanzaba en through, y un draw 2D posterior sin VADDR propio
@@ -947,6 +998,8 @@ exit_loop:
             setOp(state.framebufwidth_addr, state.framebufwidth, (GE_CMD_FRAMEBUFWIDTH << 24) | ((r->vram >> 24) << 16) | r->w);
             state.ignore_framebuf = 0;
             state.cur_rt = r;
+            if (r->incomplete)
+              rt_gen++;
             r->incomplete = 0;
             r->frame = log_frame;
           } else {

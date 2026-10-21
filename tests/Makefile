@@ -8,5 +8,13 @@ test: test_main
 test_main: test_main.c stubs.c ../main.c ../log.c ../log.h ../ge_constants.h
 	$(CC) $(CFLAGS) -o $@ test_main.c stubs.c ../log.c
 
+# Benchmark: tiempo de patchGeList con una lista tipo Gran Turismo (para comparar versiones)
+.PHONY: test bench clean
+bench: bench_bin
+	./bench_bin
+
+bench_bin: bench.c test_main.c stubs.c ../main.c ../log.c ../log.h
+	$(CC) $(CFLAGS) -O2 -o $@ bench.c stubs.c ../log.c
+
 clean:
-	rm -f test_main
+	rm -f test_main bench_bin

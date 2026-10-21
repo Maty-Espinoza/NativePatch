@@ -5,3 +5,4 @@
 exports.c
 .DS_Store
 tests/test_main
+tests/bench_bin
