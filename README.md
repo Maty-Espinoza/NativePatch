@@ -74,6 +74,12 @@ Please help testing games and filling out the [spreadsheet](https://docs.google.
 
 - Fixed issue where black rectangles would cover the screen in lots of games.
 
+## Desarrollo
+
+- **Compilar:** necesita el [SDK de PSP](https://github.com/pspdev/pspdev) y el código de [Adrenaline](https://github.com/TheOfficialFloW/Adrenaline) clonado al lado de este repo (`../Adrenaline`). Luego `make`, o `make DEST=/Volumes/<vita>/pspemu/seplugins` para copiar el plugin al terminar.
+- **Tests:** `make -C tests` corre en el PC sin el SDK (necesita gcc con 32 bits: `apt install gcc-multilib`). Arman display lists en una memoria simulada de la PSP y revisan cómo las parchea el plugin. Varios corresponden a bugs ya arreglados: si uno falla, ese bug volvió. GitHub los corre en cada push.
+- **Log:** `ms0:/ge_patch.log` (en la Vita, `ux0:pspemu/ge_patch.log`). Mantener R al iniciar el juego lo escribe sin buffer (para cuelgues); L+R+SELECT durante el juego captura un frame en detalle.
+
 ## Installation
 
 - Before you start make sure that you have
