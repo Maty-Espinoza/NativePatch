@@ -293,13 +293,45 @@ static void test_robustez(void) {
   CHECK(logHas("bucle"), "la lista en bucle no se corto");
 }
 
+// La copia al buffer de pantalla alterna dos listas del GE (antes una sola se reescribia
+// mientras el GE podia estar leyendola)
+static u32 last_enqueued[4]; static int n_enqueued;
+static int fakeEnqueue(const void *l, void *s, int c, PspGeListArgs *a) { last_enqueued[n_enqueued++ & 3] = (u32)l; return 0; }
+static int fakeSetFrameBuf(void *t, int w, int f, int s) { return 0; }
+
+static void test_copia_listas_alternas(void) {
+  reset();
+  _sceGeListEnQueue = fakeEnqueue;
+  n_enqueued = 0;
+  copyFrameBuffer(); copyFrameBuffer(); copyFrameBuffer();
+  CHECK(last_enqueued[0] != last_enqueued[1] && last_enqueued[0] == last_enqueued[2], "listas de copia: %08lx %08lx %08lx",
+        last_enqueued[0], last_enqueued[1], last_enqueued[2]);
+}
+
+// Estadisticas de rendimiento: 600 frames a 60 fps deben reportar ~60 fps
+extern unsigned int test_time;
+static void test_fps(void) {
+  reset();
+  _sceGeListEnQueue = fakeEnqueue;
+  _sceDisplaySetFrameBuf = fakeSetFrameBuf;
+  memset(&st, 0, sizeof(st));
+  log_frame = 0; last_flip = 0; test_time = 1000;
+  int i;
+  for (i = 0; i < STATS_EVERY; i++) {
+    test_time += 16667;
+    sceDisplaySetFrameBufPatched(NULL, 512, 3, 1);
+  }
+  CHECK(logHas("fps=59.9") || logHas("fps=60.0"), "fps mal calculado: %s", strstr(test_log, "fps=") ? strstr(test_log, "fps=") : "(sin linea)");
+  CHECK(logHas("bajo60=0 bajo30=0"), "frames lentos mal contados");
+}
+
 int main(void) {
   mapPspMemory();
   void (*tests[])(void) = {
     test_viewport_scissor_x2, test_viewport_zona, test_memo_lista_grande, test_vertices_2d,
     test_vaddr_avanza_tras_3d, test_bjump_no_salta, test_estado_entre_listas, test_textura_fb_al_dibujar,
     test_render_target, test_textura_dentro_de_rt, test_rt_incompleto, test_rt_escala_1, test_pitch_0,
-    test_robustez,
+    test_robustez, test_copia_listas_alternas, test_fps,
   };
   int i;
   for (i = 0; i < (int)(sizeof(tests) / sizeof(tests[0])); i++)

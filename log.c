@@ -14,6 +14,7 @@ u32 log_frame;
 
 static char buf[2][8192]; // doble buffer: se llena uno mientras se escribe el otro
 static int cur, len, dropped, written, sync_mode, eager;
+static int flushing; // un solo volcado a la vez (el hilo del log y el modo captura podian chocar)
 static u32 seen[256];     // keys ya vistas por logOnce
 
 void logWrite(const char *s, int n) {
@@ -39,14 +40,21 @@ void logEager(int on) {
 
 void logFlush(void) {
   int intr = sceKernelCpuSuspendIntr();
+  if (flushing) { // otro hilo esta escribiendo: estas lineas salen en el proximo volcado
+    sceKernelCpuResumeIntr(intr);
+    return;
+  }
+  flushing = 1;
   char *p = buf[cur];
   int n = len, d = dropped;
   cur ^= 1;
   len = dropped = 0;
   sceKernelCpuResumeIntr(intr);
 
-  if ((!n && !d) || written >= LOG_MAX)
+  if ((!n && !d) || written >= LOG_MAX) {
+    flushing = 0;
     return;
+  }
 
   int k1 = pspSdkSetK1(0);
   SceUID fd = sceIoOpen(LOG_PATH, PSP_O_WRONLY | PSP_O_CREAT, 0777);
@@ -62,6 +70,7 @@ void logFlush(void) {
     sceIoClose(fd);
   }
   pspSdkSetK1(k1);
+  flushing = 0;
 }
 
 int logOnce(u32 key) {

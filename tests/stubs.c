@@ -48,9 +48,10 @@ void guStart(int cid, void *list) {}
 // VRAM real (0x04000000, 4 MB) y RAM (0x08000000-0x0A900000: juego, VRAM falsa,
 // buffer de pantalla, memoria de parches y lista de copia del plugin)
 void mapPspMemory(void) {
-  struct { unsigned long addr, size; } r[] = { { 0x04000000, 0x400000 }, { 0x08000000, 0x2900000 } };
+  // + la pagina de la bandera DRAW_NATIVE de Adrenaline (0xABCDEF00)
+  struct { unsigned long addr, size; } r[] = { { 0x04000000, 0x400000 }, { 0x08000000, 0x2900000 }, { 0xABCDE000, 0x2000 } };
   int i;
-  for (i = 0; i < 2; i++) {
+  for (i = 0; i < 3; i++) {
     void *p = mmap((void *)r[i].addr, r[i].size, PROT_READ | PROT_WRITE,
                    MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
     if (p != (void *)r[i].addr) {

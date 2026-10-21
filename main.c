@@ -36,7 +36,13 @@ PSP_MODULE_INFO("GePatch", 0x1007, 1, 0);
 static struct {
   u32 lists, heads, stalls, draws, skipped, stack_full, transfers, fb_transfers, fallback, enq_copies, idle_frames;
   u32 rt_draws, rt_tex, rt_incomplete, rt_fail;
+  // Rendimiento (microsegundos)
+  u32 frames, frame_us, frame_max, slow60, slow30; // tiempo entre flips
+  u32 patch_us, patch_max, cmds;                   // costo del plugin por frame
+  u32 upscale_us;                                  // escalado por CPU (videos)
+  u32 long_frame_logged;
 } st;
+static u32 patch_us_frame; // costo del plugin en el frame en curso
 
 #define MAX_CMDS 200000 // tope de comandos por recorrido, para no colgarse en listas en bucle
 
@@ -291,6 +297,17 @@ static const char *capName(u32 cmd) {
     case GE_CMD_TEXSIZE0: return "tex_tam";
     case GE_CMD_TEXFORMAT: return "tex_fmt";
     case GE_CMD_TRANSFERSTART: return "transfer";
+    case GE_CMD_TEXTUREMAPENABLE: return "tex_on";
+    case GE_CMD_TEXMAPMODE: return "tex_map";
+    case GE_CMD_TEXMODE: return "tex_modo";
+    case GE_CMD_TEXFUNC: return "tex_func";
+    case GE_CMD_CLEARMODE: return "clear";
+    case GE_CMD_ALPHABLENDENABLE: return "blend_on";
+    case GE_CMD_BLENDMODE: return "blend";
+    case GE_CMD_ALPHATESTENABLE: return "atest_on";
+    case GE_CMD_ZTESTENABLE: return "ztest_on";
+    case GE_CMD_ZWRITEDISABLE: return "zwrite_off";
+    case GE_CMD_ZBUFPTR: return "z_ptr";
     default: return NULL;
   }
 }
@@ -385,6 +402,7 @@ typedef struct RenderTarget {
   u32 vram, w, h;    // donde quedo en VRAM real, ya al doble
   u32 incomplete;    // se omitio algo al dibujarlo: su contenido no sirve como textura
   u32 frame;         // ultimo frame en que se uso como destino
+  u32 draws, reads;  // en el periodo de estadisticas: draws hacia el y draws que lo leen
 } RenderTarget;
 
 static RenderTarget rt[RT_MAX];
@@ -486,6 +504,7 @@ int texCheck(void) {
       return 1;
     }
     st.rt_tex++;
+    r->reads++;
     return 2;
   }
 
@@ -735,8 +754,10 @@ void patchGeList(u32 *list, u32 *stall) {
         if (*list != op) // se habia anulado en una pasada anterior: restaurar
           *list = op;
         st.draws++;
-        if (state.cur_rt)
+        if (state.cur_rt) {
           st.rt_draws++;
+          state.cur_rt->draws++;
+        }
 
         if ((state.vertex_type & GE_VTYPE_THROUGH_MASK) == GE_VTYPE_THROUGH) {
           u8 num_points_u = data & 0xff;
@@ -792,8 +813,10 @@ void patchGeList(u32 *list, u32 *stall) {
         if (*list != op) // se habia anulado en una pasada anterior: restaurar
           *list = op;
         st.draws++;
-        if (state.cur_rt)
+        if (state.cur_rt) {
           st.rt_draws++;
+          state.cur_rt->draws++;
+        }
 
         u16 count = data & 0xffff;
         u8 vertex_size = 0, pos_off = 0, visit_off = 0, tc_off = 0;
@@ -1049,6 +1072,9 @@ exit_loop:
   }
 
 finish:
+  st.cmds += ncmds;
+  // Escribe los parches a memoria y descarta la cache: muchos juegos escriben sus listas
+  // por la direccion sin cache, y sin invalidar se leerian comandos viejos la proxima vez
   sceKernelDcacheWritebackInvalidateAll();
 }
 
@@ -1071,20 +1097,25 @@ unsigned int sceGeEdramGetSizePatched(void) {
 
 void guStart(int cid, void *list); // gu.c
 
+// Copia el buffer de alta resolucion al que muestra Adrenaline, con una lista propia del GE.
+// Se alternan dos listas: con una sola, una copia nueva podia reescribir la lista
+// mientras el GE aun ejecutaba la anterior (imagen corrupta o cuelgue).
 void copyFrameBuffer() {
+  static int which;
+  u32 rl = RENDER_LIST + (which ^= 1) * 0x1000;
   *(u32 *)DRAW_NATIVE = 1;
 
-  // memcpy((void *)DISPLAY_BUFFER, (void *)VRAM_DRAW_BUFFER_OFFSET, 960*544*2);
-  guStart(0, (void *)(RENDER_LIST | 0xA0000000));
+  guStart(0, (void *)(rl | 0xA0000000));
   sceGuCopyImage(PIXELFORMAT, 0, 0, WIDTH, HEIGHT, PITCH,
                  (void *)VRAM_DRAW_BUFFER_OFFSET,
                  0, 0, PITCH, (void *)DISPLAY_BUFFER);
   sceGuFinish();
-  _sceGeListEnQueue((void *)RENDER_LIST, NULL, -1, NULL);
+  _sceGeListEnQueue((void *)rl, NULL, -1, NULL);
 }
 
 int sceGeListUpdateStallAddrPatched(int qid, void *stall) {
   int k1 = pspSdkSetK1(0);
+  u32 t0 = sceKernelGetSystemTimeLow();
   st.stalls++;
   char info[64];
   if (_sceGeGetList(qid, info, NULL) == 0) {
@@ -1098,6 +1129,7 @@ int sceGeListUpdateStallAddrPatched(int qid, void *stall) {
       }
     }
   }
+  patch_us_frame += sceKernelGetSystemTimeLow() - t0;
   pspSdkSetK1(k1);
   return _sceGeListUpdateStallAddr(qid, stall);
 }
@@ -1115,15 +1147,19 @@ int sceGeListEnQueuePatched(const void *list, void *stall, int cbid, PspGeListAr
     copyFrameBuffer();
     st.enq_copies++;
   }
+  u32 t0 = sceKernelGetSystemTimeLow();
   resetGeState();
   patchGeList((u32 *)((u32)list & 0x0fffffff), (u32 *)((u32)stall & 0x0fffffff));
+  patch_us_frame += sceKernelGetSystemTimeLow() - t0;
   return _sceGeListEnQueue(list, stall, cbid, arg);
 }
 
 int sceGeListEnQueueHeadPatched(const void *list, void *stall, int cbid, PspGeListArgs *arg) {
   st.heads++;
+  u32 t0 = sceKernelGetSystemTimeLow();
   resetGeState();
   patchGeList((u32 *)((u32)list & 0x0fffffff), (u32 *)((u32)stall & 0x0fffffff));
+  patch_us_frame += sceKernelGetSystemTimeLow() - t0;
   return _sceGeListEnQueueHead(list, stall, cbid, arg);
 }
 
@@ -1218,22 +1254,59 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
     st.idle_frames++;
   if ((!draws_since_flip || big_transfer) && hasContent((u32)topaddr, bufferwidth, pixelformat)) {
     LOG_ONCE(0xE5000000, "imagen original escalada (video/imagen fuera del GE)\n");
+    u32 t0 = sceKernelGetSystemTimeLow();
     upscaleGameBuffer((u32)topaddr, bufferwidth, pixelformat);
+    st.upscale_us += sceKernelGetSystemTimeLow() - t0;
     st.fallback++;
   } else {
     copyFrameBuffer();
   }
+  // Tiempo entre flips (fps) y costo del plugin en este frame
+  u32 now = sceKernelGetSystemTimeLow(), dt = now - last_flip;
+  if (last_flip && dt < 5000000) {
+    st.frames++;
+    st.frame_us += dt;
+    if (dt > st.frame_max)
+      st.frame_max = dt;
+    st.slow60 += dt > 17500; // bajo 60 fps
+    st.slow30 += dt > 34000; // bajo 30 fps
+    if (dt > 200000 && log_frame > 120 && !st.long_frame_logged) {
+      st.long_frame_logged = 1;
+      LOG("frame lento: %lu ms (plugin %lu us, %lu draws en el frame)\n", dt / 1000, patch_us_frame, draws_since_flip);
+    }
+  }
+  st.patch_us += patch_us_frame;
+  if (patch_us_frame > st.patch_max)
+    st.patch_max = patch_us_frame;
+  if (capturing)
+    LOG("  (plugin %lu us en este frame)\n", patch_us_frame);
+  patch_us_frame = 0;
   draws_since_flip = big_transfer = 0;
-  last_flip = sceKernelGetSystemTimeLow();
+  last_flip = now;
 
   if (log_frame % STATS_EVERY == 0) {
     LOG("stats listas=%lu head=%lu stall=%lu draws=%lu omitidos=%lu frames_sin_draws=%lu transfers=%lu a_fb=%lu "
         "escalados=%lu copias_en_lista=%lu pila_llena=%lu fbs=%lu\n",
         st.lists, st.heads, st.stalls, st.draws, st.skipped, st.idle_frames, st.transfers, st.fb_transfers,
         st.fallback, st.enq_copies, st.stack_full, state.framebuf_count);
-    if (rt_count || st.rt_fail)
+    if (st.frames) {
+      u32 fps10 = st.frames * 100000 / (st.frame_us / 100 + 1); // fps x10, sin division de 64 bits
+      LOG("stats rendimiento: fps=%lu.%lu frame_max=%lu ms bajo60=%lu bajo30=%lu | plugin=%lu us/frame (max %lu) "
+          "comandos/frame=%lu escalado_cpu=%lu us/frame\n",
+          fps10 / 10, fps10 % 10, st.frame_max / 1000, st.slow60, st.slow30, st.patch_us / st.frames, st.patch_max,
+          st.cmds / st.frames, st.fallback ? st.upscale_us / st.fallback : 0);
+    }
+    if (rt_count || st.rt_fail) {
       LOG("stats rt: draws_en_rt=%lu draws_con_tex_rt=%lu rt_incompletos=%lu fallos=%lu rts=%d vram_libre=%lu KB\n",
           st.rt_draws, st.rt_tex, st.rt_incomplete, st.rt_fail, rt_count, (RT_END - rt_next) / 1024);
+      int i;
+      for (i = 0; i < rt_count; i++) {
+        if (rt[i].draws || rt[i].reads)
+          LOG("  rt %d %08lx %lux%lu: dibujos=%lu lecturas=%lu%s\n", i, rt[i].addr, rt[i].w, rt[i].h,
+              rt[i].draws, rt[i].reads, rt[i].incomplete ? " (incompleto)" : "");
+        rt[i].draws = rt[i].reads = 0;
+      }
+    }
     memset(&st, 0, sizeof(st));
   }
 
