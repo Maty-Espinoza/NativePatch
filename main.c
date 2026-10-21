@@ -415,16 +415,14 @@ static RenderTarget *rtGet(u32 addr, u32 pitch) {
   return r;
 }
 
-// Render target cuya direccion coincide con una textura (solo desde su inicio)
+// Render target cuya direccion coincide exactamente con una textura. No se buscan
+// texturas "dentro" del buffer: el alto real es desconocido y en Ridge Racer un render
+// target de 256 px comparte zona con texturas normales de la pista, que se omitian.
 static RenderTarget *rtFindTex(u32 tex) {
   int i;
-  for (i = rt_count - 1; i >= 0; i--) {
+  for (i = rt_count - 1; i >= 0; i--)
     if (rt[i].addr == tex)
       return &rt[i];
-    if (tex > rt[i].addr && tex < rt[i].addr + rt[i].pitch * rt[i].h / RT_SCALE * 4)
-      LOG_ONCE(tex ^ 0xC2000000, "rt: textura %08lx apunta al medio del rt %d (%08lx), no soportado -> se omite\n",
-               tex, i, rt[i].addr);
-  }
   return NULL;
 }
 
