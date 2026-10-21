@@ -804,6 +804,126 @@ static void test_sublistas_doble_buffer(void) {
   CHECK(st.wc_hits == 1, "con el fb alternado no se salto la sublista (%lu)", st.wc_hits);
 }
 
+// Silent Hill (dev26): el formulario se dibujaba en el buffer grande (565, sin alfa) y la
+// copia salia sin transparencia y con texto cortado. Desde el segundo frame ese tramo va a
+// escala 1 y en el formato del juego al buffer temporal, y la copia se toma de ahi.
+static u32 *formFrame(u32 **fmt, u32 **fbp, u32 **start, int copy) {
+  begin();
+  *fmt = cmd(GE_CMD_FRAMEBUFPIXFORMAT, 3);
+  *fbp = lp; setFb(0x04c000, 512);
+  cmd(GE_CMD_SCISSOR1, 0); cmd(GE_CMD_SCISSOR2, (255 << 10) | 255);
+  cmd(GE_CMD_BASE, 0x080000);
+  cmd(GE_CMD_VERTEXTYPE, GE_VTYPE_THROUGH | GE_VTYPE_POS_16BIT);
+  cmd(GE_CMD_VADDR, VERTS & 0xffffff);
+  cmd(GE_CMD_PRIM, (GE_PRIM_RECTANGLES << 16) | 2); // texto del formulario
+  if (copy) {
+    cmd(GE_CMD_TRANSFERSRC, 0x04c000); cmd(GE_CMD_TRANSFERSRCW, (0x04 << 16) | 512); cmd(GE_CMD_TRANSFERSRCPOS, 0);
+    cmd(GE_CMD_TRANSFERDST, 0x7f6960); cmd(GE_CMD_TRANSFERDSTW, (0x09 << 16) | 256); cmd(GE_CMD_TRANSFERDSTPOS, 0);
+    cmd(GE_CMD_TRANSFERSIZE, (255 << 10) | 255);
+  }
+  *start = copy ? cmd(GE_CMD_TRANSFERSTART, 1) : NULL;
+  u32 *sc = cmd(GE_CMD_SCISSOR2, (271 << 10) | 479);
+  cmd(GE_CMD_VADDR, (VERTS + 0x100) & 0xffffff);
+  cmd(GE_CMD_PRIM, (GE_PRIM_RECTANGLES << 16) | 2); // escena
+  end();
+  return sc;
+}
+static void test_formulario_escala1(void) {
+  reset();
+  rt_enabled = 1;
+  short *v = (short *)VERTS, *e = (short *)(VERTS + 0x100);
+  v[0] = v[1] = v[2] = 0; v[3] = 200; v[4] = 100; v[5] = 0; // x, y, z
+  e[0] = e[1] = e[2] = 0; e[3] = 480; e[4] = 272; e[5] = 0;
+  u32 *fmt, *fbp, *start, *sc;
+  formFrame(&fmt, &fbp, &start, 1);
+  memset(&st, 0, sizeof(st));
+  run(); // frame 1: se reduce el buffer grande (como antes) y se anota el fb
+  CHECK(st.tx_screen == 1 && v[3] == 400, "frame 1: copia=%lu formulario x=%d", st.tx_screen, v[3]);
+  CHECK(logHas("el juego copia desde el"), "no se anoto el fb de copia");
+  int f;
+  for (f = 0; f < 2; f++) {
+    sc = formFrame(&fmt, &fbp, &start, 1);
+    run();
+    CHECK(*fbp == ((GE_CMD_FRAMEBUFPTR << 24) | (copy_vram & 0xffffff)) && (fbp[1] & 0xffff) == 512,
+          "frame %d: el formulario no va al buffer temporal: %08lx %08lx", f + 2, *fbp, fbp[1]);
+    CHECK((*fmt & 0xffffff) == 3, "frame %d: formato %06lx (debe quedar el del juego)", f + 2, *fmt & 0xffffff);
+    CHECK(v[3] == 200 && v[4] == 100, "frame %d: vertices del formulario %d,%d (escala 1)", f + 2, v[3], v[4]);
+    CHECK(e[3] == 960 && e[4] == 544, "frame %d: escena %d,%d (x2)", f + 2, e[3], e[4]);
+    CHECK((*sc & 0x3ff) == 959, "frame %d: scissor de la escena %06lx", f + 2, *sc & 0xffffff);
+    CHECK((*start >> 24) == GE_CMD_CALL, "frame %d: la copia no se reemplazo", f + 2);
+    u32 *sub = (u32 *)(0x0A000000 | (*start & 0xffffff));
+    int k, from = 0, big = 0, f565 = 0, ret = 0;
+    for (k = 0; k < 200 && !ret; k++) {
+      from |= sub[k] == ((GE_CMD_TRANSFERSRC << 24) | (copy_vram & 0xffffff));
+      big |= sub[k] == ((GE_CMD_FRAMEBUFPTR << 24) | (VRAM_DRAW_BUFFER_OFFSET & 0xffffff));
+      f565 |= sub[k] == ((GE_CMD_FRAMEBUFPIXFORMAT << 24) | PIXELFORMAT);
+      ret |= (sub[k] >> 24) == GE_CMD_RET;
+    }
+    CHECK(from && big && f565 && ret, "frame %d: lista de la copia: desde temporal=%d vuelve al buffer grande=%d 565=%d RET=%d",
+          f + 2, from, big, f565, ret);
+  }
+  CHECK(logHas("se toma del buffer temporal (escala 1)"), "no se registro la copia desde el buffer temporal");
+  // El juego deja de copiar: tras 3 listas con draws perdidos se vuelve a la pantalla
+  for (f = 0; f < 4; f++) {
+    formFrame(&fmt, &fbp, &start, 0);
+    run();
+  }
+  CHECK(logHas("no hubo copia") && *fbp == (GE_CMD_FRAMEBUFPTR << 24) && (*fmt & 0xffffff) == PIXELFORMAT,
+        "sin copia no se volvio al buffer grande: %08lx fmt %06lx", *fbp, *fmt & 0xffffff);
+}
+
+// Silent Hill: un fb intermedio (render target) que lee la pantalla recien dibujada. Antes
+// se omitia y el render target quedaba incompleto (spinner y puerta sin dibujar)
+static void test_rt_lee_pantalla(void) {
+  reset();
+  rt_enabled = 1;
+  opt.layers = 1;
+  _sceGeListEnQueue = fakeEnqueue;
+  _sceDisplaySetFrameBuf = fakeSetFrameBuf;
+  u32 *prim = NULL, *prev = NULL, *use = NULL;
+  int frame;
+  for (frame = 0; frame < 4; frame++) {
+    begin();
+    setFb(0x04c000, 512);                                 // escena
+    cmd(GE_CMD_TEXTUREMAPENABLE, 0);
+    cmd(GE_CMD_VERTEXTYPE, GE_VTYPE_POS_16BIT);
+    cmd(GE_CMD_PRIM, (GE_PRIM_TRIANGLES << 16) | 3);
+    setFb(0x170000, 512);                                 // fb del spinner: lee la escena
+    cmd(GE_CMD_TEXTUREMAPENABLE, 1);
+    cmd(GE_CMD_TEXFORMAT, 3);
+    cmd(GE_CMD_TEXADDR0, 0x04c000); prev = cmd(GE_CMD_TEXBUFWIDTH0, (0x0a << 16) | 512);
+    prim = cmd(GE_CMD_PRIM, (GE_PRIM_TRIANGLES << 16) | 3);
+    setFb(0x04c000, 512);                                 // la pantalla usa el spinner
+    cmd(GE_CMD_TEXADDR0, 0x170000); cmd(GE_CMD_TEXBUFWIDTH0, (0x0a << 16) | 512); cmd(GE_CMD_TEXSIZE0, 0x0909);
+    use = cmd(GE_CMD_PRIM, (GE_PRIM_TRIANGLES << 16) | 3);
+    setFb(0x0d4000, 1024);
+    cmd(GE_CMD_TEXADDR0, 0x04c000); cmd(GE_CMD_TEXBUFWIDTH0, (0x04 << 16) | 512);
+    cmd(GE_CMD_PRIM, (GE_PRIM_TRIANGLES << 16) | 3);
+    end();
+    run();
+    sceDisplaySetFrameBufPatched((void *)0x0A0D43C0, 1024, 0, 0);
+  }
+  CHECK(logHas("fb 0a170000: intermedio"), "el fb del spinner no se detecto como intermedio");
+  CHECK((*prim >> 24) == GE_CMD_CALL && (*prev >> 24) == GE_CMD_BASE, "el draw que lee la pantalla no se reemplazo: %08lx", *prim);
+  CHECK(*use != NOP_OMIT, "el spinner (render target) no se uso en la pantalla");
+  u32 *sub = (u32 *)(0x0A000000 | (*prim & 0xffffff));
+  int k, tex = 0, draw = 0, orig = 0, ret = 0;
+  for (k = 0; k < 200 && !ret; k++) {
+    tex |= sub[k] == ((GE_CMD_TEXADDR0 << 24) | (copy_vram & 0xffffff));
+    draw |= sub[k] == ((GE_CMD_PRIM << 24) | (GE_PRIM_TRIANGLES << 16) | 3);
+    orig |= sub[k] == ((GE_CMD_TEXBUFWIDTH0 << 24) | (0x0a << 16) | 512);
+    ret |= (sub[k] >> 24) == GE_CMD_RET;
+  }
+  CHECK(tex && draw && orig && ret, "lista del draw: textura temporal=%d draw=%d palabra original=%d RET=%d", tex, draw, orig, ret);
+  // Con la opcion apagada, el draw y la palabra de antes vuelven a ser los del juego
+  opt.layers = 0; opt_gen++; rt_gen++;
+  memset(&tcache, 0, sizeof(tcache)); tcache.res = 2;
+  state.fb_layer[findFramebuf(0x0a170000)] = 0;
+  run();
+  CHECK(*prev == ((GE_CMD_TEXBUFWIDTH0 << 24) | (0x0a << 16) | 512), "la palabra de antes no se restauro: %08lx", *prev);
+  capturing = 0;
+}
+
 // Menu: abrir con L+R+START, cambiar una opcion, cerrar, y que el juego no vea botones mientras
 extern unsigned int test_buttons;
 static void test_menu(void) {
@@ -834,7 +954,7 @@ int main(void) {
     test_viewport_scissor_x2, test_viewport_zona, test_memo_lista_grande, test_vertices_2d,
     test_vaddr_avanza_tras_3d, test_bjump_no_salta, test_estado_entre_listas, test_textura_fb_al_dibujar,
     test_render_target, test_textura_dentro_de_rt, test_rt_incompleto, test_rt_escala_1, test_pitch_0,
-    test_robustez, test_copia_listas_alternas, test_fps, test_doble_buffer_alternado, test_nop_no_revive, test_lista_estatica_fb, test_pasivo_no_escribe, test_pasivo_normaliza, test_desplazamiento_y_1024, test_vertices_2d_muchos_buffers, test_pasivo_muestreo, test_silent_hill_video, test_copia_escalada_con_ge, test_copia_reducida, test_sublistas_sin_cambios, test_sublistas_anidadas, test_sublistas_doble_buffer, test_vram_real, test_copia_formulario, test_fb_intermedio, test_opciones_juego, test_menu,
+    test_robustez, test_copia_listas_alternas, test_fps, test_doble_buffer_alternado, test_nop_no_revive, test_lista_estatica_fb, test_pasivo_no_escribe, test_pasivo_normaliza, test_desplazamiento_y_1024, test_vertices_2d_muchos_buffers, test_pasivo_muestreo, test_silent_hill_video, test_copia_escalada_con_ge, test_copia_reducida, test_sublistas_sin_cambios, test_sublistas_anidadas, test_sublistas_doble_buffer, test_vram_real, test_copia_formulario, test_fb_intermedio, test_opciones_juego, test_formulario_escala1, test_rt_lee_pantalla, test_menu,
   };
   int i;
   for (i = 0; i < (int)(sizeof(tests) / sizeof(tests[0])); i++)

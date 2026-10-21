@@ -175,8 +175,21 @@ int menuParse(const char *s) {
 
 static void optPath(char *p, int n, const char *id) { snprintf(p, n, "ms0:/gepatch_%s.txt", id); }
 
+// Opciones conocidas por juego (se aplican antes del archivo, que manda)
+static const struct { const char *id, *opts; } known[] = {
+  { "ULUS-10450", "intermedios=1\n" }, // Silent Hill Shattered Memories: spinner y puerta
+  { "UCUS-98632", "comprobar=1\n" },   // Gran Turismo: sublistas cada 2 frames, sin glitches
+};
+
 void menuLoad(const char *id) {
   char path[48], buf[512];
+  int i;
+  for (i = 0; i < (int)(sizeof(known) / sizeof(known[0])); i++)
+    if (!strcmp(id, known[i].id)) {
+      menuParse(known[i].opts);
+      applyChanged();
+      LOG("opciones conocidas para %s: %s", id, known[i].opts);
+    }
   optPath(path, sizeof(path), id);
   int k1 = pspSdkSetK1(0), len = -1;
   SceUID fd = sceIoOpen(path, PSP_O_RDONLY, 0);

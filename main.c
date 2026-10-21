@@ -357,6 +357,12 @@ typedef struct {
   u8 fb_tx[16];      // lo ultimo que escribio en ese fb fue una copia (TRANSFER), no un draw
   u8 fb_shown[16];   // el juego mostro este fb (o una parte) en pantalla
   u8 fb_layer[16];   // fb intermedio: nunca se muestra y se usa como textura en la pantalla
+  u8 fb_csrc[16];    // el juego copia desde este fb (formulario de Silent Hill): ver csrc_rt
+  u8 fb_cfail[16];   // veces que eso fallo (con 3 se deja de intentar)
+  u32 *fmt_p, fmt_o; // ultimo FRAMEBUFPIXFORMAT (lugar y valor original)
+  u8 fmt_new;        // hubo un FRAMEBUFPIXFORMAT desde que se armo el ultimo fb
+  u8 fmt_live;       // formato que tiene de verdad el GE (565, o el del juego en csrc_rt)
+  int big_fb;        // 1 + indice del fb que se dibujo por ultima vez en el buffer grande (0: ninguno)
   int cur_fb;        // indice del fb actual en framebuf_addr (-1: ninguno)
   int offx, offy;    // desplazamiento del area visible en el fb actual (0 en render targets)
   u32 framebuf_count;
@@ -373,13 +379,14 @@ static struct { u32 prim, vt, tex, flags, n, verts; } cd; // draws iguales segui
 
 static void capFlush(void) {
   if (cd.n)
-    LOG("  draw prim=%lu vt=%06lx tex=%08lx%s%s%s%s x%lu (%lu vert)\n", cd.prim, cd.vt, cd.tex,
+    LOG("  draw prim=%lu vt=%06lx tex=%08lx%s%s%s%s%s%s x%lu (%lu vert)\n", cd.prim, cd.vt, cd.tex,
         cd.flags & 2 ? " 2D" : "", cd.flags & 1 ? " OMITIDO" : "", cd.flags & 4 ? " tex=RT" : "",
-        cd.flags & 8 ? " en_RT" : "", cd.n, cd.verts);
+        cd.flags & 8 ? " en_RT" : "", cd.flags & 16 ? " tex=pantalla_reducida" : "",
+        cd.flags & 32 ? " escala1" : "", cd.n, cd.verts);
   cd.n = cd.verts = 0;
 }
 
-static void capDraw(u32 prim, u32 count, int omit) { // omit: 1 omitido, 4 textura rt, 8 dibuja en rt
+static void capDraw(u32 prim, u32 count, int omit) { // omit: 1 omitido, 4 textura rt, 8 dibuja en rt, 16 pantalla reducida, 32 fb de copia
   u32 tex = state.ge_cmd[GE_CMD_TEXTUREMAPENABLE] & 1 ?
             ((state.ge_cmd[GE_CMD_TEXBUFWIDTH0] & 0x0f0000) << 8) | state.ge_cmd[GE_CMD_TEXADDR0] : 0;
   u32 flags = omit | (((state.vertex_type & GE_VTYPE_THROUGH_MASK) == GE_VTYPE_THROUGH) << 1);
@@ -431,7 +438,9 @@ static const char *capName(u32 cmd) {
 // que dibujaba sin volver a fijar BASE o VADDR hacia que se leyera/parcheara memoria
 // equivocada (posible causa de glitches y cuelgues).
 static int nrec; // sublistas que se estan anotando (ver wcRecord)
+static void csrcNewList(void);
 void resetGeState() {
+  csrcNewList();
   nrec = 0;
   state.offset = 0;
   state.curr_stack = 0;
@@ -477,6 +486,7 @@ int insertFramebuf(u32 framebuf) {
   rt_gen++;
   if (state.framebuf_count < n) {
     state.fb_tx[state.framebuf_count] = state.fb_shown[state.framebuf_count] = state.fb_layer[state.framebuf_count] = 0;
+    state.fb_csrc[state.framebuf_count] = state.fb_cfail[state.framebuf_count] = 0;
     state.framebuf_addr[state.framebuf_count] = framebuf;
     return state.framebuf_count++;
   }
@@ -484,7 +494,9 @@ int insertFramebuf(u32 framebuf) {
   LOG_ONCE(0xE2000000, "tabla de framebuffers llena, se reemplaza el mas antiguo\n");
   int i = state.framebuf_next++ % n;
   state.framebuf_addr[i] = framebuf;
-  state.fb_tx[i] = state.fb_shown[i] = state.fb_layer[i] = 0;
+  state.fb_tx[i] = state.fb_shown[i] = state.fb_layer[i] = state.fb_csrc[i] = state.fb_cfail[i] = 0;
+  if (state.big_fb == i + 1)
+    state.big_fb = 0;
   return i;
 }
 
@@ -526,11 +538,40 @@ typedef struct RenderTarget {
   u32 incomplete;    // se omitio algo al dibujarlo: su contenido no sirve como textura
   u32 frame;         // ultimo frame en que se uso como destino
   u32 draws, reads;  // en el periodo de estadisticas: draws hacia el y draws que lo leen
+  u32 sc, fmt;       // escala (RT_SCALE al reservarlo; 1 en el fb de copia) y formato de pixel
 } RenderTarget;
 
 static RenderTarget rt[RT_MAX];
+#define SCALE() (state.cur_rt ? (int)state.cur_rt->sc : 2) // escala del destino actual
 static int rt_count, rt_enabled;
 static u32 rt_next = RT_BASE;
+
+// Fb del que el juego copia una parte a una textura (Silent Hill dibuja el formulario en
+// el fb de la pantalla, lo copia a la RAM y despues dibuja la escena en el mismo fb). En
+// el buffer grande (565, sin alfa) la copia salia sin transparencia y con texto cortado:
+// ese tramo se dibuja como un render target a escala 1, en el formato del juego, en el
+// buffer temporal; la copia se toma de ahi y luego se vuelve al buffer grande.
+static RenderTarget csrc_rt;
+static int csrc_fb = -1, csrc_copied; // fb (indice) y si ya se copio en esta lista (draws del tramo: csrc_rt.draws)
+
+// Termina un tramo del fb de copia que no llego a la copia: si tenia draws, no se vieron
+static void csrcEnd(void) {
+  if (state.cur_rt != &csrc_rt || !csrc_rt.draws || csrc_fb < 0)
+    return;
+  state.fb_cfail[csrc_fb]++;
+  LOG_ONCE_CAP(0x7C200000 ^ csrc_rt.addr, "fb %08lx: se dibujo a escala 1 pero no hubo copia (%d draws perdidos, fallo %d de 3)\n",
+               csrc_rt.addr, (int)csrc_rt.draws, state.fb_cfail[csrc_fb]);
+  csrc_rt.draws = 0;
+}
+
+// Lista nueva (Silent Hill: una por frame, formulario -> copia -> escena): un tramo sin
+// copia quedo sin verse, y cada lista arma su propio fb
+static void csrcNewList(void) {
+  csrcEnd();
+  csrc_copied = 0;
+  if (state.cur_rt == &csrc_rt)
+    state.cur_rt = NULL;
+}
 
 // Libera todos los render targets (al cambiar su escala o apagarlos desde el menu)
 void rtReset(void) {
@@ -559,7 +600,7 @@ static RenderTarget *rtGet(u32 addr, u32 pitch) {
   }
   RenderTarget *r = &rt[rt_count++];
   r->addr = addr; r->pitch = pitch; r->vram = rt_next; r->w = w; r->h = h;
-  r->incomplete = 0;
+  r->incomplete = 0; r->sc = RT_SCALE; r->fmt = PIXELFORMAT;
   rt_next += size;
   rt_gen++;
   LOG("rt %d: fb %08lx pitch=%lu -> vram %08lx %lux%lu (%lu KB), libres %lu KB\n",
@@ -588,15 +629,15 @@ static int canRepatch(u32 *p, u32 orig) {
 // formato 565 porque los buffers se dibujan en 565). 1 si se pudo.
 static int rtPatchTex(RenderTarget *r) {
   u32 fmt = state.ge_cmd[GE_CMD_TEXFORMAT] & 0xf;
-  u32 sz = state.ge_cmd[GE_CMD_TEXSIZE0], lw = (sz & 0xf) + RT_SCALE - 1, lh = ((sz >> 8) & 0xf) + RT_SCALE - 1;
-  u32 bw = (state.ge_cmd[GE_CMD_TEXBUFWIDTH0] & 0xffff) * RT_SCALE;
+  u32 sz = state.ge_cmd[GE_CMD_TEXSIZE0], lw = (sz & 0xf) + r->sc - 1, lh = ((sz >> 8) & 0xf) + r->sc - 1;
+  u32 bw = (state.ge_cmd[GE_CMD_TEXBUFWIDTH0] & 0xffff) * r->sc;
   if (fmt > 3) {
     LOG_ONCE(r->addr ^ 0xC3000000, "rt: textura %08lx con formato %lu (paleta), no soportado -> se omite\n", r->addr, fmt);
     return 0;
   }
   if (lw > 9 || lh > 9 || bw > 1024) {
     LOG_ONCE(r->addr ^ 0xC4000000, "rt: textura %08lx de %dx%d no cabe escalada (max 512) -> se omite\n",
-             r->addr, 1 << (lw - RT_SCALE + 1), 1 << (lh - RT_SCALE + 1));
+             r->addr, 1 << (lw - r->sc + 1), 1 << (lh - r->sc + 1));
     return 0;
   }
   if (!canRepatch(state.tex_p[0], state.tex_o[0]) || !canRepatch(state.tex_p[1], state.tex_o[1]) ||
@@ -617,14 +658,16 @@ static int rtPatchTex(RenderTarget *r) {
 }
 
 // Decide que hacer con la textura del draw: 0 normal, 1 omitir el draw,
-// 2 textura redirigida a un render target (en 2D hay que duplicar sus coordenadas)
+// 2 textura redirigida a un render target (en 2D hay que duplicar sus coordenadas),
+// 3 textura de la VRAM real llevada a la falsa, 4 el fb actual, 5 la pantalla leida desde
+// un render target (txDrawFromScreen)
 static struct { u32 on, addr, bw, fb, gen; void *cur; int res; } tcache;
 
 static int texCheckCalc(void);
 int texCheck(void) {
   u32 on = state.ge_cmd[GE_CMD_TEXTUREMAPENABLE] & 1;
   if (tcache.on == on && tcache.addr == state.ge_cmd[GE_CMD_TEXADDR0] && tcache.bw == state.ge_cmd[GE_CMD_TEXBUFWIDTH0] &&
-      tcache.fb == state.framebuf && tcache.cur == state.cur_rt && tcache.gen == rt_gen && tcache.res != 2 && tcache.res != 3)
+      tcache.fb == state.framebuf && tcache.cur == state.cur_rt && tcache.gen == rt_gen && tcache.res != 2 && tcache.res != 3 && tcache.res != 5)
     return tcache.res;
   tcache.on = on; tcache.addr = state.ge_cmd[GE_CMD_TEXADDR0]; tcache.bw = state.ge_cmd[GE_CMD_TEXBUFWIDTH0];
   tcache.fb = state.framebuf; tcache.cur = state.cur_rt; tcache.gen = rt_gen;
@@ -641,7 +684,20 @@ static int texCheckCalc(void) {
   vramUse(tex);
 
   RenderTarget *r = rt_enabled && opt.rt_on ? rtFindTex(tex) : NULL;
+  int lf = findFramebuf(tex);
+  if (r && lf >= 0 && (r->pitch == 512 || r->pitch == 480) && !state.fb_layer[lf])
+    r = NULL; // fb de pantalla que fue intermedio: su render target ya no se usa
   if (r) {
+    // Un fb que se creyo intermedio y se pega en el fb mostrado (el de 1024 de Silent Hill)
+    // es la pantalla: vuelve al buffer grande
+    int cf = findFramebuf(state.framebuf);
+    if (lf >= 0 && state.fb_layer[lf] && state.cur_rt && r != state.cur_rt && cf >= 0 && state.fb_shown[cf]) {
+      state.fb_layer[lf] = 0;
+      state.fb_shown[lf] = 1;
+      rt_gen++;
+      LOG("fb %08lx: se pega en la pantalla -> no es intermedio\n", tex);
+      return 1;
+    }
     if (r == state.cur_rt) // se lee a si mismo (efectos de acumulacion): igual que en la PSP
       LOG_ONCE(tex ^ 0xC8000000, "rt: el rt %08lx se lee a si mismo -> se permite\n", tex);
     else if (r->incomplete) {
@@ -694,6 +750,13 @@ static int texCheckCalc(void) {
     LOG("fb %08lx: intermedio (nunca se muestra y se usa como textura) -> render target desde ahora\n", tex);
     autoCapture();
   }
+  // Un render target que lee la pantalla (en el buffer grande): se reduce en la lista
+  if (state.cur_rt && state.cur_rt != &csrc_rt && opt.omit_fbtex == 1 && !passive && f + 1 == state.big_fb &&
+      (state.ge_cmd[GE_CMD_TEXFORMAT] & 0xf) <= 3) {
+    LOG_ONCE_CAP(tex ^ 0x7E100000, "rt %08lx lee la pantalla %08lx como textura -> se reduce el buffer grande antes del draw\n",
+                 state.cur_rt->addr, tex);
+    return 5;
+  }
   fbtex_seen = 1;
   LOG_ONCE_CAP(tex ^ 0x7E000000, "textura desde fb %08lx -> %s\n", tex,
            opt.omit_fbtex == 1 ? "draws omitidos" : opt.omit_fbtex == 2 ? "se lee la copia reducida del frame" : "se lee la memoria tal cual");
@@ -709,7 +772,8 @@ static int texCheckCalc(void) {
 // que aparecen "con el tiempo"). Ahora va en RAM libre con 32768 entradas (384 KB).
 #define VMEMO_ADDR 0x0A700000
 #define VMEMO_SIZE 32768
-typedef struct { u32 addr, n, hash, hits; } VMemo; // 16 bytes: 512 KB
+typedef struct { u32 addr, n, hash, hits; } VMemo; // 16 bytes: 512 KB. hits bit 31: quedaron a escala 1
+#define VM_NATIVE 0x80000000
 static VMemo *vmemo = (VMemo *)VMEMO_ADDR;
 
 static u32 vertsHash(u32 start, u32 n, int size, int pos_off, int pos_size) {
@@ -721,22 +785,42 @@ static u32 vertsHash(u32 start, u32 n, int size, int pos_off, int pos_size) {
   return h;
 }
 
+// 0: no se conocen, 1: ya duplicados, 2: conocidos a escala 1 (sin duplicar)
 static int vertsPatched(u32 start, u32 n, int size, int pos_off, int pos_size) {
   VMemo *e = &vmemo[(start >> 2) & (VMEMO_SIZE - 1)];
   if (e->addr == start && e->n == n && e->hash == vertsHash(start, n, size, pos_off, pos_size)) {
     e->hits++;
-    return 1;
+    return e->hits & VM_NATIVE ? 2 : 1;
   }
   return 0;
 }
 
-static void vertsRemember(u32 start, u32 n, u32 hash) {
+static void vertsRemember(u32 start, u32 n, u32 hash, u32 native) {
   VMemo *e = &vmemo[(start >> 2) & (VMEMO_SIZE - 1)];
   // Choque solo si se expulsa un buffer estatico (ya visto de nuevo): ese se duplicaria otra
   // vez. Los buffers dinamicos (Gran Turismo: direccion nueva cada frame) no cuentan.
-  if (e->addr && e->addr != start && e->hits)
+  if (e->addr && e->addr != start && (e->hits & ~VM_NATIVE))
     st.vevict++;
-  e->addr = start; e->n = n; e->hash = hash; e->hits = 0;
+  e->addr = start; e->n = n; e->hash = hash; e->hits = native;
+}
+
+// Deshace la duplicacion de posiciones 2D (480/960 y 272/544 vuelven a 480 y 272)
+static void vertsHalve(u32 va, u32 n, int size, int pos_off, int pos_size) {
+  union { float f; u32 i; } t;
+  u32 i, j;
+  for (i = 0; i < n; i++, va += size)
+    for (j = 0; j < 2; j++) {
+      u32 addr = va + pos_off + j * pos_size;
+      int d = j ? state.offy : state.offx;
+      if (pos_size == 2) {
+        short v = *(short *)addr;
+        *(short *)addr = (v == 960 ? 480 : v == 544 ? 272 : v / 2) + d;
+      } else {
+        t.i = *(u32 *)addr;
+        t.f = (t.f == 960 ? 480 : t.f == 544 ? 272 : t.f / 2) + d;
+        *(u32 *)addr = t.i;
+      }
+    }
 }
 
 void AdvanceVerts(int count, int vertex_size) {
@@ -750,7 +834,7 @@ void AdvanceVerts(int count, int vertex_size) {
 
 // Scissor/region escalados (x2, o la escala del render target) con el desplazamiento
 static u32 scPatch(u32 cmd, u32 data) {
-  int sc = state.cur_rt ? RT_SCALE : 2, end = cmd == GE_CMD_SCISSOR2 || cmd == GE_CMD_REGION2;
+  int sc = SCALE(), end = cmd == GE_CMD_SCISSOR2 || cmd == GE_CMD_REGION2;
   int x = ((int)(data & 0x3ff) - state.offx) * sc + (end ? sc - 1 : 0);
   int y = ((int)((data >> 10) & 0x3ff) - state.offy) * sc + (end ? sc - 1 : 0);
   x = x < 0 ? 0 : x > 1023 ? 1023 : x;
@@ -778,7 +862,7 @@ static u32 *emitDownscale(u32 *l, u32 va, int fmt) {
   C(GE_CMD_TEXSIZE0, (9 << 8) | 9);                 // 512x512 (se usan 480x272)
   C(GE_CMD_TEXFILTER, (1 << 8) | 1);                // lineal: promedia los 4 pixeles
   C(GE_CMD_TEXWRAP, (1 << 8) | 1);
-  C(GE_CMD_TEXFUNC, 3);                             // reemplazar
+  C(GE_CMD_TEXFUNC, (1 << 8) | 3);                  // reemplazar, alfa de la textura (opaco)
   C(GE_CMD_VERTEXTYPE, GE_VTYPE_THROUGH | GE_VTYPE_TC_16BIT | GE_VTYPE_POS_16BIT);
   C(GE_CMD_BASE, (va >> 8) & 0x0f0000); C(GE_CMD_OFFSETADDR, 0);
   for (i = 0; i < 4; i++) { // 4 cuartos de 480x272: la textura del GE es de 512 como maximo
@@ -893,8 +977,21 @@ static void txCall(u32 *list, u32 *reg, u32 sl) {
   tx_patched_any = 1;
 }
 
+// Viewport escalado al destino actual (x2 en el buffer grande, la escala del render target)
+static u32 vpPatch(u32 cmd, u32 data) {
+  union { float f; u32 i; } t;
+  t.i = data << 8;
+  if (cmd == GE_CMD_VIEWPORTXCENTER)
+    t.f = (2048 - WIDTH / 2) + SCALE() * (t.f - game_offx - state.offx);
+  else if (cmd == GE_CMD_VIEWPORTYCENTER)
+    t.f = (2048 - HEIGHT / 2) + SCALE() * (t.f - game_offy - state.offy);
+  else
+    t.f *= SCALE();
+  return t.i >> 8;
+}
+
 // Deja el estado del GE como lo tenia el juego (ya parcheado) despues de una lista del plugin
-static u32 *txRestore(u32 *l, int fb) {
+static u32 *txRestoreState(u32 *l, int fb) {
   u32 k;
   #define C(c, d) (*l++ = ((c) << 24) | ((d) & 0xffffff))
   for (k = 0; k < sizeof(tx_saved); k++)
@@ -902,14 +999,26 @@ static u32 *txRestore(u32 *l, int fb) {
   C(GE_CMD_TEXFLUSH, 0);
   if (fb) { // se dibujo en el buffer temporal: framebuffer, scissor y region como estaban
     RenderTarget *r = state.cur_rt;
-    C(GE_CMD_FRAMEBUFPIXFORMAT, PIXELFORMAT); C(GE_CMD_DITHERENABLE, state.ge_cmd[GE_CMD_DITHERENABLE]);
+    C(GE_CMD_FRAMEBUFPIXFORMAT, r ? r->fmt : PIXELFORMAT); C(GE_CMD_DITHERENABLE, state.ge_cmd[GE_CMD_DITHERENABLE]);
     C(GE_CMD_FRAMEBUFPTR, r ? r->vram : VRAM_DRAW_BUFFER_OFFSET);
     C(GE_CMD_FRAMEBUFWIDTH, r ? ((r->vram >> 24) << 16) | r->w : ((VRAM_DRAW_BUFFER_OFFSET >> 24) << 16) | PITCH);
     C(GE_CMD_SCISSOR1, scPatch(GE_CMD_SCISSOR1, state.ge_cmd[GE_CMD_SCISSOR1]));
     C(GE_CMD_SCISSOR2, scPatch(GE_CMD_SCISSOR2, state.ge_cmd[GE_CMD_SCISSOR2]));
     C(GE_CMD_REGION1, scPatch(GE_CMD_REGION1, state.ge_cmd[GE_CMD_REGION1]));
     C(GE_CMD_REGION2, scPatch(GE_CMD_REGION2, state.ge_cmd[GE_CMD_REGION2]));
+    if (r == NULL && state.fmt_live != PIXELFORMAT) // se sale del fb de copia
+      state.fmt_live = PIXELFORMAT;
+    static const u8 vp[] = { GE_CMD_VIEWPORTXSCALE, GE_CMD_VIEWPORTYSCALE, GE_CMD_VIEWPORTXCENTER, GE_CMD_VIEWPORTYCENTER };
+    for (k = 0; k < sizeof(vp); k++) // por si se cambio de escala (fb de copia -> buffer grande)
+      if (state.ge_cmd[vp[k]])
+        C(vp[k], vpPatch(vp[k], state.ge_cmd[vp[k]]));
   }
+  #undef C
+  return l;
+}
+static u32 *txRestore(u32 *l, int fb) {
+  #define C(c, d) (*l++ = ((c) << 24) | ((d) & 0xffffff))
+  l = txRestoreState(l, fb);
   C(GE_CMD_BASE, (state.vertex_addr >> 8) & 0x0f0000); C(GE_CMD_VADDR, state.vertex_addr);
   C(GE_CMD_BASE, state.base >> 8);
   C(GE_CMD_RET, 0);
@@ -948,6 +1057,78 @@ static int txFromScreen(u32 *list, u32 src, u32 dst, u32 w, u32 h, int bpp) {
   st.tx_screen++;
   LOG_ONCE_CAP(0xE8000000 ^ src ^ dst, "copia desde la pantalla %lux%lu (%lu,%lu) -> %08lx: se toma del buffer grande reducido\n",
                w, h, x, y, dst);
+  if (!state.fb_csrc[f] && state.fb_cfail[f] < 3) { // desde el proximo frame: a escala 1 (ver csrc_rt)
+    state.fb_csrc[f] = 1;
+    LOG("fb %08lx: el juego copia desde el -> hasta la copia se dibujara a escala 1 en su formato\n", state.framebuf_addr[f]);
+  }
+  return 1;
+}
+
+// Copia desde el fb de copia mientras se dibuja en el buffer temporal (csrc_rt): se toma de
+// ahi (mismo lugar, escala 1) y la lista del plugin vuelve al buffer grande para lo que sigue
+static int txFromCsrc(u32 *list, u32 src, u32 dst, int bpp) {
+  if (state.cur_rt != &csrc_rt || csrc_fb < 0 || inFramebuf(src) - 1 != csrc_fb)
+    return 0;
+  u32 *reg = txIsCopy(list, 0), sl = reg ? txSlot() : 0;
+  if (!sl || (bpp == 4) != (csrc_rt.fmt == 3)) {
+    state.fb_cfail[csrc_fb] = 255;
+    LOG_ONCE_CAP(0x7C300000 ^ src, "copia desde el fb de copia %08lx: no se puede reemplazar (%s) -> no se usa mas\n", src,
+                 !reg ? "registros" : !sl ? "CALL inalcanzable" : "formato distinto");
+    return 0;
+  }
+  u32 from = copy_vram + (src - csrc_rt.addr), *l = (u32 *)(sl | 0x40000000);
+  #define C(c, d) (*l++ = ((c) << 24) | ((d) & 0xffffff))
+  C(GE_CMD_TRANSFERSRC, from); C(GE_CMD_TRANSFERSRCW, ((from >> 24) << 16) | (state.ge_cmd[GE_CMD_TRANSFERSRCW] & 0xffff));
+  C(GE_CMD_TRANSFERSRCPOS, state.ge_cmd[GE_CMD_TRANSFERSRCPOS]);
+  C(GE_CMD_TRANSFERDST, dst); C(GE_CMD_TRANSFERDSTW, ((dst >> 8) & 0xff0000) | (state.ge_cmd[GE_CMD_TRANSFERDSTW] & 0xffff));
+  C(GE_CMD_TRANSFERDSTPOS, state.ge_cmd[GE_CMD_TRANSFERDSTPOS]); C(GE_CMD_TRANSFERSIZE, state.ge_cmd[GE_CMD_TRANSFERSIZE]);
+  C(GE_CMD_TRANSFERSTART, bpp == 4);
+  #undef C
+  csrc_copied = 1;
+  state.cur_rt = NULL; // lo que sigue va al buffer grande, como la pantalla
+  state.offx = opt.dx; state.offy = opt.dy;
+  txRestore(l, 1);
+  txCall(list, reg, sl);
+  st.tx_screen++;
+  LOG_ONCE_CAP(0x7C400000 ^ src ^ dst, "copia desde el fb de copia %08lx -> %08lx: se toma del buffer temporal (escala 1)\n", src, dst);
+  return 1;
+}
+
+// Draw hacia un render target (fb intermedio) con la pantalla como textura (Silent Hill
+// pasa la escena al fb del spinner/puerta): la pantalla esta en el buffer grande, asi que
+// antes se omitia y el render target quedaba incompleto. Ahora el PRIM (y la palabra de
+// antes) se reemplaza por BASE + CALL a una lista que reduce el buffer grande al temporal,
+// dibuja con esa textura y deja la textura del juego como estaba.
+static void primUnCall(u32 *list) {
+  if (validAddr((u32)(list - 1)) && (list[-1] >> 24) == GE_CMD_BASE && origOp(list - 1) != list[-1])
+    list[-1] = origOp(list - 1);
+}
+static int txDrawFromScreen(u32 *list, u32 op) {
+  u32 *reg = list - 1, sl, fmt = state.ge_cmd[GE_CMD_TEXFORMAT] & 0xf;
+  if (!validAddr((u32)reg) || fmt > 3 || !copyVram())
+    return 0;
+  u32 c = origOp(reg) >> 24;
+  if (c == GE_CMD_CALL || c == GE_CMD_JUMP || c == GE_CMD_BJUMP || c == GE_CMD_RET || c == GE_CMD_END || c == GE_CMD_FINISH ||
+      c == GE_CMD_SIGNAL || c == GE_CMD_PRIM || c == GE_CMD_BEZIER || c == GE_CMD_SPLINE || c == GE_CMD_TRANSFERSTART ||
+      c == GE_CMD_ORIGIN || !(sl = txSlot()))
+    return 0;
+  u32 prev = *reg, *l = (u32 *)(sl | 0x40000000); // con los parches que ya tenga
+  l = emitDownscale(l, sl + 640, fmt);
+  l = txRestoreState(l, 1);
+  #define C(c, d) (*l++ = ((c) << 24) | ((d) & 0xffffff))
+  C(GE_CMD_BASE, state.base >> 8);
+  *l++ = prev; // la palabra que pasa a ser BASE, antes de cambiar la textura (puede ser de textura)
+  C(GE_CMD_TEXADDR0, copy_vram); C(GE_CMD_TEXBUFWIDTH0, ((copy_vram >> 24) << 16) | 512);
+  C(GE_CMD_TEXFLUSH, 0);
+  C(GE_CMD_BASE, (state.vertex_addr >> 8) & 0x0f0000); C(GE_CMD_VADDR, state.vertex_addr);
+  C(GE_CMD_BASE, state.base >> 8);
+  *l++ = op;   // el draw (el GE avanza VADDR como siempre)
+  C(GE_CMD_TEXADDR0, state.ge_cmd[GE_CMD_TEXADDR0]); C(GE_CMD_TEXBUFWIDTH0, state.ge_cmd[GE_CMD_TEXBUFWIDTH0]);
+  C(GE_CMD_TEXFLUSH, 0);
+  C(GE_CMD_RET, 0);
+  #undef C
+  txCall(list, reg, sl);
+  st.tx_screen++;
   return 1;
 }
 
@@ -1433,10 +1614,12 @@ void patchGeList(u32 *list, u32 *stall) {
         draws_since_flip++;
 
         int texmode = state.ignore_framebuf ? 0 : texCheck();
+        if (texmode == 5)
+          texmode = 1; // curvas con la pantalla como textura en un render target: no se reducen
         int omit = state.ignore_framebuf || texmode == 1;
         if (capturing)
           capDraw(cmd == GE_CMD_PRIM ? (data >> 16) & 7 : cmd, cmd == GE_CMD_PRIM ? data & 0xffff : (data & 0xff) * ((data >> 8) & 0xff),
-                  omit | (texmode == 2 ? 4 : 0) | (state.cur_rt ? 8 : 0));
+                  omit | (texmode == 2 ? 4 : 0) | (state.cur_rt ? 8 : 0) | (state.cur_rt == &csrc_rt ? 32 : 0));
         if (omit) {
           setOp(list, op, NOP_OMIT);
           st.skipped++;
@@ -1497,11 +1680,14 @@ void patchGeList(u32 *list, u32 *stall) {
 
         // Dragon Ball Z Tenkaichi Tag Team uses the same GE list again,
         // therefore NOPing it makes character invisible.
+        if (!passive && (*list >> 24) == GE_CMD_CALL)
+          primUnCall(list); // era un CALL de txDrawFromScreen: la palabra de antes vuelve a ser la del juego
         int texmode = state.ignore_framebuf ? 0 : texCheck();
         int omit = state.ignore_framebuf || texmode == 1;
         if (capturing)
           capDraw(cmd == GE_CMD_PRIM ? (data >> 16) & 7 : cmd, cmd == GE_CMD_PRIM ? data & 0xffff : (data & 0xff) * ((data >> 8) & 0xff),
-                  omit | (texmode == 2 ? 4 : 0) | (state.cur_rt ? 8 : 0));
+                  omit | (texmode == 2 ? 4 : 0) | (state.cur_rt ? 8 : 0) | (texmode == 5 ? 16 : 0) |
+                  (state.cur_rt == &csrc_rt ? 32 : 0));
         if (omit || texmode) {
           DIRTY(W_OMIT); // draw omitido o con textura de render target: hay que verlo cada vez
         }
@@ -1517,6 +1703,22 @@ void patchGeList(u32 *list, u32 *stall) {
         if (*list != op && !passive) { // se habia anulado en una pasada anterior: restaurar
           *list = op;
           DIRTY(W_OMIT);
+        }
+        if (!state.cur_rt)
+          state.big_fb = state.cur_fb + 1; // lo que hay en el buffer grande es de este fb
+        if (texmode == 5 && !txDrawFromScreen(list, op)) {
+          LOG_ONCE_CAP(0x7E200000 ^ (u32)list, "draw con la pantalla como textura en rt %08lx: no se pudo reemplazar -> se omite\n",
+                       state.cur_rt->addr);
+          setOp(list, op, NOP_OMIT);
+          st.skipped++;
+          if (!state.cur_rt->incomplete) {
+            state.cur_rt->incomplete = 1;
+            rt_gen++;
+          }
+          u8 vs = 0, po = 0, to = 0;
+          vertexInfo(state.vertex_type, &vs, &po, &to);
+          AdvanceVerts(data & 0xffff, vs);
+          break;
         }
         st.draws++;
         if (state.cur_fb >= 0 && state.fb_tx[state.cur_fb] && !state.cur_rt) {
@@ -1561,13 +1763,21 @@ void patchGeList(u32 *list, u32 *stall) {
           // (los buffers estaticos se reutilizan cada frame)
           if (passive || !opt.v2d)
             goto exit_loop;
-          if (vertsPatched(start, n, vertex_size, pos_off, pos_size)) {
+          // En un render target a escala 1 las coordenadas quedan como las dejo el juego. Si
+          // ya se habian duplicado (el mismo buffer se dibujo antes en la pantalla, como el
+          // formulario de Silent Hill al pasar al fb de copia) se vuelven a la mitad.
+          int known = vertsPatched(start, n, vertex_size, pos_off, pos_size), native = SCALE() == 1;
+          if (known == (native ? 2 : 1)) {
             st.v2d_skip++;
             goto exit_loop;
           }
           st.v2d++;
-          if (state.cur_rt && RT_SCALE == 1)
-            goto exit_loop; // en un render target a escala 1 las coordenadas quedan igual
+          if (native) {
+            if (known == 1)
+              vertsHalve(start, n, vertex_size, pos_off, pos_size);
+            vertsRemember(start, n, vertsHash(start, n, vertex_size, pos_off, pos_size), VM_NATIVE);
+            goto exit_loop;
+          }
 
           // En 2D las coordenadas de textura estan en texeles: si la textura es un
           // render target (ahora al doble) tambien se duplican
@@ -1612,7 +1822,7 @@ void patchGeList(u32 *list, u32 *stall) {
               }
             }
           }
-          vertsRemember(start, n, vertsHash(start, n, vertex_size, pos_off, pos_size));
+          vertsRemember(start, n, vertsHash(start, n, vertex_size, pos_off, pos_size), 0);
 
 exit_loop:
           AdvanceVerts(count, vertex_size);
@@ -1630,6 +1840,12 @@ exit_loop:
       case GE_CMD_FRAMEBUFPIXFORMAT:
         if (data != PIXELFORMAT)
           LOG_ONCE(0xE4000000 | data, "el juego pide formato de fb %lu (se fuerza 565)\n", data);
+        state.fmt_p = list; state.fmt_o = op; state.fmt_new = 1; state.fmt_live = PIXELFORMAT;
+        if (state.cur_rt == &csrc_rt) { // dentro del tramo del fb de copia: el formato del juego
+          setOp(list, op, op);
+          csrc_rt.fmt = state.fmt_live = data & 3;
+          break;
+        }
         setOp(list, op, (cmd << 24) | PIXELFORMAT);
         break;
 
@@ -1654,10 +1870,32 @@ exit_loop:
           u32 pitch = state.framebufwidth & 0xffff;
           // 480 tambien es un buffer de pantalla completa (Ridge Racer lo usa al iniciar)
           RenderTarget *r = NULL;
+          csrcEnd();
           state.cur_rt = NULL;
           state.offx = state.offy = 0;
           int fi = findFramebuf(state.framebuf), layer = opt.layers && fi >= 0 && state.fb_layer[fi];
-          if ((pitch == 512 || pitch == 480 || pitch == 960 || wideScreen(pitch)) && !layer) {
+          u32 gfmt = state.ge_cmd[GE_CMD_FRAMEBUFPIXFORMAT] & 3; // formato que pidio el juego
+          int fmt_ok = gfmt == PIXELFORMAT || (state.fmt_new && canRepatch(state.fmt_p, state.fmt_o));
+          if (fi >= 0 && state.fb_csrc[fi] && state.fb_cfail[fi] < 3 && !csrc_copied && (pitch == 512 || pitch == 480) &&
+              fmt_ok && !passive && copyVram() && canRepatch(state.framebufptr_addr, state.framebufptr) &&
+              canRepatch(state.framebufwidth_addr, state.framebufwidth)) {
+            // fb del que el juego copia: a escala 1 y en su formato en el buffer temporal,
+            // hasta la copia (txFromCsrc), que vuelve al buffer grande
+            setOp(state.framebufptr_addr, state.framebufptr, (GE_CMD_FRAMEBUFPTR << 24) | (copy_vram & 0xffffff));
+            setOp(state.framebufwidth_addr, state.framebufwidth, (GE_CMD_FRAMEBUFWIDTH << 24) | ((copy_vram >> 24) << 16) | pitch);
+            if (gfmt != PIXELFORMAT) {
+              setOp(state.fmt_p, state.fmt_o, state.fmt_o); // el formato original del juego
+              state.fmt_live = gfmt;
+            }
+            memset(&csrc_rt, 0, sizeof(csrc_rt));
+            csrc_rt.addr = state.framebuf; csrc_rt.pitch = pitch; csrc_rt.vram = copy_vram;
+            csrc_rt.w = pitch; csrc_rt.h = 272; csrc_rt.sc = 1; csrc_rt.fmt = gfmt;
+            state.cur_rt = &csrc_rt;
+            state.ignore_framebuf = 0;
+            csrc_fb = fi;
+            LOG_ONCE_CAP(state.framebuf ^ 0x7C000000, "fb %08lx: se dibuja a escala 1 (formato %lu) hasta la copia desde el\n",
+                         state.framebuf, gfmt);
+          } else if ((pitch == 512 || pitch == 480 || pitch == 960 || wideScreen(pitch)) && !layer) {
             state.ignore_framebuf = 0;
             state.offx = opt.dx;
             state.offy = opt.dy;
@@ -1687,6 +1925,15 @@ exit_loop:
             LOG_ONCE(state.framebuf ^ (pitch << 20) ^ 7, "fb %08lx pitch=%lu%s\n", state.framebuf, pitch,
                      state.cur_rt ? " -> render target" : state.ignore_framebuf ? " -> ignorado (no se dibuja)" : "");
           state.cur_fb = insertFramebuf(state.framebuf);
+          // El formato del juego (8888) que se dejo para el fb de copia sigue puesto en el GE
+          // si este fb no trae su FRAMEBUFPIXFORMAT: ya no se puede corregir
+          if (state.fmt_live != PIXELFORMAT && state.cur_rt != &csrc_rt) {
+            LOG_ONCE_CAP(0x7C100000, "fb %08lx sin FRAMEBUFPIXFORMAT tras el fb de copia: formato equivocado -> no se usa mas\n", state.framebuf);
+            if (csrc_fb >= 0)
+              state.fb_cfail[csrc_fb] = 255;
+            state.fmt_live = PIXELFORMAT;
+          }
+          state.fmt_new = 0;
           vramUse(state.framebuf + pitch * 272 * ((state.ge_cmd[GE_CMD_FRAMEBUFPIXFORMAT] & 3) == 3 ? 4 : 2) - 1);
 
           state.framebufptr = 0;
@@ -1738,7 +1985,7 @@ exit_loop:
               rdst, pitch, w, h, bpp * 8);
         }
         if (!passive && opt.vram_fix) {
-          if (txFromScreen(list, src, dst, w, h, bpp))
+          if (txFromCsrc(list, src, dst, bpp) || txFromScreen(list, src, dst, w, h, bpp))
             break;
           // Copia que usa la VRAM real: se lleva a la VRAM falsa, donde estan los datos del juego
           u32 *ps = rsrc != src ? txFind(list, GE_CMD_TRANSFERSRCW) : NULL, *pd = rdst != dst ? txFind(list, GE_CMD_TRANSFERDSTW) : NULL;
@@ -1776,21 +2023,9 @@ exit_loop:
       // En un render target se usa su escala (RT_SCALE) en vez de 2.
       case GE_CMD_VIEWPORTXSCALE:
       case GE_CMD_VIEWPORTYSCALE:
-        t.i = data << 8;
-        t.f *= state.cur_rt ? RT_SCALE : 2;
-        setOp(list, op, (cmd << 24) | (t.i >> 8));
-        break;
-
       case GE_CMD_VIEWPORTXCENTER:
-        t.i = data << 8;
-        t.f = (2048 - WIDTH / 2) + (state.cur_rt ? RT_SCALE : 2) * (t.f - game_offx - state.offx);
-        setOp(list, op, (cmd << 24) | (t.i >> 8));
-        break;
-
       case GE_CMD_VIEWPORTYCENTER:
-        t.i = data << 8;
-        t.f = (2048 - HEIGHT / 2) + (state.cur_rt ? RT_SCALE : 2) * (t.f - game_offy - state.offy);
-        setOp(list, op, (cmd << 24) | (t.i >> 8));
+        setOp(list, op, (cmd << 24) | vpPatch(cmd, data));
         break;
 
       case GE_CMD_OFFSETX:
