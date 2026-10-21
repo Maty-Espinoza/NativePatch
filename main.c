@@ -44,8 +44,12 @@ static struct {
 // ya estan parcheados: sin esto se leia el valor parcheado como si fuera del juego
 // (framebuffer mal identificado, y no se podria escalar viewport/scissor sin duplicar
 // dos veces). Se guarda el original por direccion de comando.
-#define MEMO_SIZE 2048
-static struct { u32 *addr; u32 orig, patched; } memo[MEMO_SIZE];
+// Va en RAM libre (0x0A600000, entre DISPLAY_BUFFER y RENDER_LIST): con 2048 entradas
+// Ridge Racer la desbordaba y se perdian valores originales (y se duplicaban dos veces).
+#define MEMO_ADDR 0x0A600000
+#define MEMO_SIZE 65536 // 768 KB; dos comandos chocan solo si estan a 256 KB de distancia
+typedef struct { u32 *addr; u32 orig, patched; } MemoEntry;
+static MemoEntry *memo = (MemoEntry *)MEMO_ADDR;
 
 static u32 origOp(u32 *p) {
   int i = ((u32)p >> 2) & (MEMO_SIZE - 1);
@@ -370,6 +374,11 @@ int inFramebuf(u32 addr) {
 #define RT_BASE 0x04200000
 #define RT_END  0x04400000
 #define RT_MAX  8
+// Los render targets se dibujan a escala 1 (tamano original). A escala 2 el limite de
+// 4096 px del GE descarta la geometria cercana a la camara, y el mapa de reflejos de
+// Ridge Racer quedaba solo con el color de fondo (reflejos cyan). Son buffers chicos
+// (reflejos, sombras, desenfoque): ganan poco al doble. Se puede probar con 2.
+#define RT_SCALE 1
 
 typedef struct RenderTarget {
   u32 addr, pitch;   // framebuffer del juego (direccion en VRAM falsa) y ancho de linea
@@ -390,7 +399,7 @@ static RenderTarget *rtGet(u32 addr, u32 pitch) {
       return &rt[i];
 
   // Alto desconocido: los de 256 o mas se asumen de pantalla (272), los chicos cuadrados
-  u32 w = pitch * 2, h = (pitch >= 256 ? 272 : pitch) * 2, size = (w * h * 2 + 0x1fff) & ~0x1fff;
+  u32 w = pitch * RT_SCALE, h = (pitch >= 256 ? 272 : pitch) * RT_SCALE, size = (w * h * 2 + 0x1fff) & ~0x1fff;
   if (rt_count >= RT_MAX || rt_next + size > RT_END) {
     st.rt_fail++;
     LOG_ONCE(addr ^ 0xC1000000, "rt: SIN ESPACIO para fb %08lx pitch=%lu (%lu KB, libres %lu KB, %d/%d usados) -> se omite\n",
@@ -412,7 +421,7 @@ static RenderTarget *rtFindTex(u32 tex) {
   for (i = rt_count - 1; i >= 0; i--) {
     if (rt[i].addr == tex)
       return &rt[i];
-    if (tex > rt[i].addr && tex < rt[i].addr + rt[i].pitch * rt[i].h / 2 * 4)
+    if (tex > rt[i].addr && tex < rt[i].addr + rt[i].pitch * rt[i].h / RT_SCALE * 4)
       LOG_ONCE(tex ^ 0xC2000000, "rt: textura %08lx apunta al medio del rt %d (%08lx), no soportado -> se omite\n",
                tex, i, rt[i].addr);
   }
@@ -429,15 +438,15 @@ static int canRepatch(u32 *p, u32 orig) {
 // formato 565 porque los buffers se dibujan en 565). 1 si se pudo.
 static int rtPatchTex(RenderTarget *r) {
   u32 fmt = state.ge_cmd[GE_CMD_TEXFORMAT] & 0xf;
-  u32 sz = state.ge_cmd[GE_CMD_TEXSIZE0], lw = (sz & 0xf) + 1, lh = ((sz >> 8) & 0xf) + 1;
-  u32 bw = (state.ge_cmd[GE_CMD_TEXBUFWIDTH0] & 0xffff) * 2;
+  u32 sz = state.ge_cmd[GE_CMD_TEXSIZE0], lw = (sz & 0xf) + RT_SCALE - 1, lh = ((sz >> 8) & 0xf) + RT_SCALE - 1;
+  u32 bw = (state.ge_cmd[GE_CMD_TEXBUFWIDTH0] & 0xffff) * RT_SCALE;
   if (fmt > 3) {
     LOG_ONCE(r->addr ^ 0xC3000000, "rt: textura %08lx con formato %lu (paleta), no soportado -> se omite\n", r->addr, fmt);
     return 0;
   }
   if (lw > 9 || lh > 9 || bw > 1024) {
-    LOG_ONCE(r->addr ^ 0xC4000000, "rt: textura %08lx de %dx%d no cabe al doble (max 512) -> se omite\n",
-             r->addr, 1 << (lw - 1), 1 << (lh - 1));
+    LOG_ONCE(r->addr ^ 0xC4000000, "rt: textura %08lx de %dx%d no cabe escalada (max 512) -> se omite\n",
+             r->addr, 1 << (lw - RT_SCALE + 1), 1 << (lh - RT_SCALE + 1));
     return 0;
   }
   if (!canRepatch(state.tex_p[0], state.tex_o[0]) || !canRepatch(state.tex_p[1], state.tex_o[1]) ||
@@ -452,7 +461,7 @@ static int rtPatchTex(RenderTarget *r) {
     setOp(state.tex_p[3], state.tex_o[3], (GE_CMD_TEXFORMAT << 24) | 0);
     LOG_ONCE(r->addr ^ 0xC6000000, "rt: textura %08lx formato %lu -> 565 (si otras texturas cambian de color, es esto)\n", r->addr, fmt);
   }
-  LOG_ONCE(r->addr ^ 0xC7000000, "rt: textura %08lx -> vram %08lx %dx%d ancho %lu\n", r->addr, r->vram, 1 << (lw - 1), 1 << (lh - 1), bw);
+  LOG_ONCE(r->addr ^ 0xC7000000, "rt: textura %08lx -> vram %08lx %dx%d ancho %lu\n", r->addr, r->vram, 1 << lw, 1 << lh, bw);
   return 1;
 }
 
@@ -820,11 +829,13 @@ void patchGeList(u32 *list, u32 *stall) {
           // (los buffers estaticos se reutilizan cada frame)
           if (vertsPatched(start, n, vertex_size, pos_off, pos_size))
             goto exit_loop;
+          if (state.cur_rt && RT_SCALE == 1)
+            goto exit_loop; // en un render target a escala 1 las coordenadas quedan igual
 
           // En 2D las coordenadas de textura estan en texeles: si la textura es un
           // render target (ahora al doble) tambien se duplican
           int tc = (state.vertex_type & GE_VTYPE_TC_MASK) >> GE_VTYPE_TC_SHIFT;
-          if (texmode == 2 && tc >= 2) {
+          if (texmode == 2 && tc >= 2 && RT_SCALE == 2) {
             u32 va = start, k;
             for (k = 0; k < n; k++, va += vertex_size) {
               if (tc == 2) {
@@ -907,7 +918,7 @@ exit_loop:
           state.cur_rt = NULL;
           if (pitch == 512 || pitch == 480 || pitch == 960) {
             state.ignore_framebuf = 0;
-          } else if (rt_enabled && (r = rtGet(state.framebuf, pitch)) &&
+          } else if (rt_enabled && pitch >= 16 && (r = rtGet(state.framebuf, pitch)) &&
                      canRepatch(state.framebufptr_addr, state.framebufptr) &&
                      canRepatch(state.framebufwidth_addr, state.framebufwidth)) {
             // Render target: se dibuja al doble en su espacio de la VRAM alta
@@ -979,22 +990,23 @@ exit_loop:
       // Antes se forzaban a pantalla completa, y lo que el juego dibuja en una zona
       // (espejo retrovisor, HUD 3D, pantalla dividida) salia agrandado y fuera de lugar.
       // OFFSET queda fijo para que el area de dibujo siga centrada en 2048.
+      // En un render target se usa su escala (RT_SCALE) en vez de 2.
       case GE_CMD_VIEWPORTXSCALE:
       case GE_CMD_VIEWPORTYSCALE:
         t.i = data << 8;
-        t.f *= 2;
+        t.f *= state.cur_rt ? RT_SCALE : 2;
         setOp(list, op, (cmd << 24) | (t.i >> 8));
         break;
 
       case GE_CMD_VIEWPORTXCENTER:
         t.i = data << 8;
-        t.f = (2048 - WIDTH / 2) + 2 * (t.f - game_offx);
+        t.f = (2048 - WIDTH / 2) + (state.cur_rt ? RT_SCALE : 2) * (t.f - game_offx);
         setOp(list, op, (cmd << 24) | (t.i >> 8));
         break;
 
       case GE_CMD_VIEWPORTYCENTER:
         t.i = data << 8;
-        t.f = (2048 - HEIGHT / 2) + 2 * (t.f - game_offy);
+        t.f = (2048 - HEIGHT / 2) + (state.cur_rt ? RT_SCALE : 2) * (t.f - game_offy);
         setOp(list, op, (cmd << 24) | (t.i >> 8));
         break;
 
@@ -1011,7 +1023,7 @@ exit_loop:
       case GE_CMD_REGION1:
       case GE_CMD_SCISSOR1:
       {
-        u32 x = (data & 0x3ff) * 2, y = ((data >> 10) & 0x3ff) * 2;
+        u32 sc = state.cur_rt ? RT_SCALE : 2, x = (data & 0x3ff) * sc, y = ((data >> 10) & 0x3ff) * sc;
         setOp(list, op, (cmd << 24) | ((y > 1023 ? 1023 : y) << 10) | (x > 1023 ? 1023 : x));
         break;
       }
@@ -1019,7 +1031,7 @@ exit_loop:
       case GE_CMD_REGION2:
       case GE_CMD_SCISSOR2:
       {
-        u32 x = (data & 0x3ff) * 2 + 1, y = ((data >> 10) & 0x3ff) * 2 + 1;
+        u32 sc = state.cur_rt ? RT_SCALE : 2, x = (data & 0x3ff) * sc + sc - 1, y = ((data >> 10) & 0x3ff) * sc + sc - 1;
         setOp(list, op, (cmd << 24) | ((y > 1023 ? 1023 : y) << 10) | (x > 1023 ? 1023 : x));
         break;
       }
@@ -1315,6 +1327,7 @@ int module_start(SceSize args, void *argp) {
   sctrlHENPatchSyscall((u32)_sceGeListEnQueue, sceGeListEnQueuePatched);
   sctrlHENPatchSyscall((u32)_sceGeListEnQueueHead, sceGeListEnQueueHeadPatched);
 
+  memset(memo, 0, MEMO_SIZE * sizeof(MemoEntry));
   probeVram();
 
   _sceDisplaySetFrameBuf = (void *)FindProc("sceDisplay_Service", "sceDisplay_driver", 0x289D82FE);
