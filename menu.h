@@ -12,7 +12,7 @@ typedef struct {
   int fallback;   // imagen original escalada: 0 auto, 1 siempre, 2 nunca
   int nop_mark;   // NOP de omision con marca (1) o NOP 0 como antes de dev12 (0)
   int walk_new;   // recorrido de listas nuevo (1) o el de antes de dev12 (0)
-  int wide1024;   // tratar framebuffers de 1024 de ancho como pantalla
+  int wide1024;   // fb de 1024 de ancho como pantalla: 0 auto (si el juego muestra uno), 1 si, 2 no
   int dx, dy;     // desplazamiento del area visible dentro del framebuffer del juego (px)
   int osd;        // indicador en pantalla: fps, costo del plugin, draws
   int v2d;        // duplicar vertices 2D (HUD, menus, sprites)

@@ -123,6 +123,11 @@ static float game_offx = 2048 - 240, game_offy = 2048 - 136;
 
 // Estado entre un flip (sceDisplaySetFrameBuf) y el siguiente
 static u32 draws_since_flip, big_transfer, last_flip;
+static int big_transfer_fb = -1; // fb que recibio la copia grande del frame
+
+// Pantalla de 1024 de ancho (Silent Hill): si el juego muestra un fb de 1024 desde x>0,
+// en modo "auto" esos fb se tratan como pantalla con ese desplazamiento (ver el flip)
+static int disp_wide, disp_x, disp_y;
 
 
 // 1 si se puede leer: VRAM real o RAM (incluye la VRAM falsa en 0x0A000000)
@@ -319,6 +324,9 @@ typedef struct {
   u32 curr_stack;
 
   u32 framebuf_addr[16];
+  u8 fb_tx[16];      // lo ultimo que escribio en ese fb fue una copia (TRANSFER), no un draw
+  int cur_fb;        // indice del fb actual en framebuf_addr (-1: ninguno)
+  int offx, offy;    // desplazamiento del area visible en el fb actual (0 en render targets)
   u32 framebuf_count;
   u32 framebuf_next; // al llenarse la tabla se reemplaza el mas antiguo
 } GeState;
@@ -434,6 +442,7 @@ int insertFramebuf(u32 framebuf) {
   int n = sizeof(state.framebuf_addr) / sizeof(u32);
   rt_gen++;
   if (state.framebuf_count < n) {
+    state.fb_tx[state.framebuf_count] = 0;
     state.framebuf_addr[state.framebuf_count] = framebuf;
     return state.framebuf_count++;
   }
@@ -441,6 +450,7 @@ int insertFramebuf(u32 framebuf) {
   LOG_ONCE(0xE2000000, "tabla de framebuffers llena, se reemplaza el mas antiguo\n");
   int i = state.framebuf_next++ % n;
   state.framebuf_addr[i] = framebuf;
+  state.fb_tx[i] = 0;
   return i;
 }
 
@@ -449,8 +459,13 @@ int inFramebuf(u32 addr) {
   int i;
   for (i = 0; i < state.framebuf_count; i++)
     if (addr >= state.framebuf_addr[i] && addr < state.framebuf_addr[i] + 512 * 272 * 4)
-      return 1;
+      return i + 1; // indice + 1 (0 = no)
   return 0;
+}
+
+// Un fb de 1024 de ancho se trata como pantalla (opcion: 0 auto, 1 si, 2 no)
+static inline int wideScreen(u32 pitch) {
+  return pitch == 1024 && (opt.wide1024 == 1 || (opt.wide1024 == 0 && disp_wide));
 }
 
 // ---------------------------------------------------------------------------
@@ -607,8 +622,15 @@ static int texCheckCalc(void) {
   }
 
   // Textura desde un framebuffer de pantalla (p.ej. el frame anterior): no hay copia
-  if (tex == state.framebuf || findFramebuf(tex) < 0)
+  int f = findFramebuf(tex);
+  if (tex == state.framebuf || f < 0)
     return 0;
+  // Fb llenado con copias (TRANSFER): video de Silent Hill decodificado por CPU y copiado
+  // a un fb, que luego se dibuja como textura. Esa copia si esta en la VRAM falsa: sirve.
+  if (state.fb_tx[f] && !passive) {
+    LOG_ONCE(tex ^ 0x7D000000, "textura desde fb %08lx llenado por copia (video?) -> se dibuja\n", tex);
+    return 0;
+  }
   LOG_ONCE(tex ^ 0x7E000000, "textura desde fb %08lx -> draws omitidos%s\n", tex,
            opt.omit_fbtex ? "" : " (desactivado en el menu: se dibujan)");
   return opt.omit_fbtex ? 1 : 0;
@@ -901,6 +923,10 @@ void patchGeList(u32 *list, u32 *stall) {
         if (*list != op && !passive) // se habia anulado en una pasada anterior: restaurar
           *list = op;
         st.draws++;
+        if (state.cur_fb >= 0 && state.fb_tx[state.cur_fb] && !state.cur_rt) {
+          state.fb_tx[state.cur_fb] = 0; // ahora se dibuja en el buffer grande
+          rt_gen++;
+        }
         if (state.cur_rt) {
           st.rt_draws++;
           state.cur_rt->draws++;
@@ -962,6 +988,10 @@ void patchGeList(u32 *list, u32 *stall) {
         if (*list != op && !passive) // se habia anulado en una pasada anterior: restaurar
           *list = op;
         st.draws++;
+        if (state.cur_fb >= 0 && state.fb_tx[state.cur_fb] && !state.cur_rt) {
+          state.fb_tx[state.cur_fb] = 0; // ahora se dibuja en el buffer grande
+          rt_gen++;
+        }
         if (state.cur_rt) {
           st.rt_draws++;
           state.cur_rt->draws++;
@@ -1028,7 +1058,7 @@ void patchGeList(u32 *list, u32 *stall) {
             int j;
             for (j = 0; j < 2; j++) {
               u32 addr = vertex_addr + pos_off + j * pos_size;
-              int d = state.cur_rt ? 0 : j ? opt.dy : opt.dx; // desplazamiento del area visible (menu)
+              int d = j ? state.offy : state.offx; // desplazamiento del area visible (menu / auto)
               if (pos_size == 2) {
                 short val = *(short *)addr - d;
                 if (val == 480 || val == 960)
@@ -1079,7 +1109,7 @@ exit_loop:
           state.framebufptr = op;
           state.framebufptr_addr = list;
         } else {
-          u16 pitch = ((op & 0xffff) == 512 || (op & 0xffff) == 480 || ((op & 0xffff) == 1024 && opt.wide1024)) ? 960 : (op & 0xffff);
+          u16 pitch = ((op & 0xffff) == 512 || (op & 0xffff) == 480 || wideScreen(op & 0xffff)) ? 960 : (op & 0xffff);
           setOp(list, op, (cmd << 24) | ((VRAM_DRAW_BUFFER_OFFSET >> 24) << 16) | pitch);
           state.framebufwidth = op;
           state.framebufwidth_addr = list;
@@ -1093,8 +1123,11 @@ exit_loop:
           // 480 tambien es un buffer de pantalla completa (Ridge Racer lo usa al iniciar)
           RenderTarget *r = NULL;
           state.cur_rt = NULL;
-          if (pitch == 512 || pitch == 480 || pitch == 960 || (pitch == 1024 && opt.wide1024)) {
+          state.offx = state.offy = 0;
+          if (pitch == 512 || pitch == 480 || pitch == 960 || wideScreen(pitch)) {
             state.ignore_framebuf = 0;
+            state.offx = opt.dx + (pitch == 1024 && opt.wide1024 == 0 ? disp_x : 0);
+            state.offy = opt.dy + (pitch == 1024 && opt.wide1024 == 0 ? disp_y : 0);
           } else if (rt_enabled && opt.rt_on && pitch >= 16 && (r = rtGet(state.framebuf, pitch)) &&
                      canRepatch(state.framebufptr_addr, state.framebufptr) &&
                      canRepatch(state.framebufwidth_addr, state.framebufwidth)) {
@@ -1120,7 +1153,7 @@ exit_loop:
           else
             LOG_ONCE(state.framebuf ^ (pitch << 20), "fb %08lx pitch=%lu%s\n", state.framebuf, pitch,
                      state.cur_rt ? " -> render target" : state.ignore_framebuf ? " -> ignorado (no se dibuja)" : "");
-          insertFramebuf(state.framebuf);
+          state.cur_fb = insertFramebuf(state.framebuf);
 
           state.framebufptr = 0;
           state.framebufwidth = 0;
@@ -1160,10 +1193,17 @@ exit_loop:
         u32 w = (state.ge_cmd[GE_CMD_TRANSFERSIZE] & 0x3ff) + 1;
         u32 h = ((state.ge_cmd[GE_CMD_TRANSFERSIZE] >> 10) & 0x3ff) + 1;
         st.transfers++;
-        if (inFramebuf(dst)) {
+        int f = inFramebuf(dst) - 1;
+        if (f >= 0) {
           st.fb_transfers++;
-          if (w * h >= 240 * 136)
+          if (w * h >= 240 * 136) {
             big_transfer = 1;
+            big_transfer_fb = f;
+          }
+          if (!state.fb_tx[f]) { // su contenido valido esta en la VRAM falsa (ver texCheckCalc)
+            state.fb_tx[f] = 1;
+            rt_gen++;
+          }
           LOG_ONCE(dst ^ (w << 20) ^ h, "transfer a fb %08lx %lux%lu\n", dst, w, h);
         }
         break;
@@ -1183,13 +1223,13 @@ exit_loop:
 
       case GE_CMD_VIEWPORTXCENTER:
         t.i = data << 8;
-        t.f = (2048 - WIDTH / 2) + (state.cur_rt ? RT_SCALE : 2) * (t.f - game_offx - (state.cur_rt ? 0 : opt.dx));
+        t.f = (2048 - WIDTH / 2) + (state.cur_rt ? RT_SCALE : 2) * (t.f - game_offx - state.offx);
         setOp(list, op, (cmd << 24) | (t.i >> 8));
         break;
 
       case GE_CMD_VIEWPORTYCENTER:
         t.i = data << 8;
-        t.f = (2048 - HEIGHT / 2) + (state.cur_rt ? RT_SCALE : 2) * (t.f - game_offy - (state.cur_rt ? 0 : opt.dy));
+        t.f = (2048 - HEIGHT / 2) + (state.cur_rt ? RT_SCALE : 2) * (t.f - game_offy - state.offy);
         setOp(list, op, (cmd << 24) | (t.i >> 8));
         break;
 
@@ -1206,7 +1246,7 @@ exit_loop:
       case GE_CMD_REGION1:
       case GE_CMD_SCISSOR1:
       {
-        int sc = state.cur_rt ? RT_SCALE : 2, dx = state.cur_rt ? 0 : opt.dx, dy = state.cur_rt ? 0 : opt.dy;
+        int sc = state.cur_rt ? RT_SCALE : 2, dx = state.offx, dy = state.offy;
         int x = ((int)(data & 0x3ff) - dx) * sc, y = ((int)((data >> 10) & 0x3ff) - dy) * sc;
         x = x < 0 ? 0 : x; y = y < 0 ? 0 : y;
         setOp(list, op, (cmd << 24) | ((y > 1023 ? 1023 : y) << 10) | (x > 1023 ? 1023 : x));
@@ -1216,7 +1256,7 @@ exit_loop:
       case GE_CMD_REGION2:
       case GE_CMD_SCISSOR2:
       {
-        int sc = state.cur_rt ? RT_SCALE : 2, dx = state.cur_rt ? 0 : opt.dx, dy = state.cur_rt ? 0 : opt.dy;
+        int sc = state.cur_rt ? RT_SCALE : 2, dx = state.offx, dy = state.offy;
         int x = ((int)(data & 0x3ff) - dx) * sc + sc - 1, y = ((int)((data >> 10) & 0x3ff) - dy) * sc + sc - 1;
         x = x < 0 ? 0 : x; y = y < 0 ? 0 : y;
         setOp(list, op, (cmd << 24) | ((y > 1023 ? 1023 : y) << 10) | (x > 1023 ? 1023 : x));
@@ -1461,7 +1501,33 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
     // al framebuffer (video/logo con sceGuCopyImage), el buffer de alta resolucion no lo
     // tiene: se muestra la imagen original escalada en vez de una pantalla negra.
     // Desde el menu se puede forzar siempre (para comparar con el original) o nunca.
-    int want = opt.fallback == 1 || (opt.fallback == 0 && (!draws_since_flip || big_transfer));
+    // Donde muestra el juego su imagen dentro de su framebuffer (Silent Hill: x=480 en uno
+    // de 1024). En "auto" los fb de 1024 se tratan como pantalla con ese desplazamiento.
+    char info[64] = "";
+    int i, bpp = pixelformat == 3 ? 4 : 2, dfb = -1;
+    u32 disp = normVram((u32)topaddr), dx = 0, dy = 0;
+    u32 best = 0x88000; // el fb mas cercano por debajo (antes el primero: en GT decia y=272)
+    for (i = 0; i < state.framebuf_count && bufferwidth > 0; i++) {
+      u32 off = disp - state.framebuf_addr[i];
+      if (disp >= state.framebuf_addr[i] && off < best) {
+        best = off; dfb = i; dx = off / bpp % bufferwidth; dy = off / bpp / bufferwidth;
+      }
+    }
+    if (dfb >= 0 && best) {
+      snprintf(info, sizeof(info), "el juego muestra fb %08lx desde x=%lu y=%lu", state.framebuf_addr[dfb], dx, dy);
+      LOG_ONCE(disp ^ 0xB0000000, "display dentro de fb %08lx: x=%lu y=%lu\n", state.framebuf_addr[dfb], dx, dy);
+    }
+    int wide = bufferwidth == 1024 && dfb >= 0;
+    if (wide != disp_wide || (wide && (dx != disp_x || dy != disp_y))) {
+      disp_wide = wide; disp_x = wide ? dx : 0; disp_y = wide ? dy : 0;
+      LOG("pantalla de 1024: %s (x=%d y=%d)%s\n", wide ? "si" : "no", disp_x, disp_y,
+          opt.wide1024 == 0 ? " -> fb de 1024 como pantalla (auto)" : " (opcion fija en el menu)");
+      if (opt.wide1024 == 0)
+        rtReset(); // esos fb dejan de ser render targets
+    }
+    int want = opt.fallback == 1 || (opt.fallback == 0 && (!draws_since_flip || (big_transfer && (dfb < 0 || big_transfer_fb == dfb))));
+    // (una copia grande a otro fb que no es el que se muestra, como el video de Silent Hill,
+    // se dibuja luego como textura en la pantalla: no hace falta la imagen original)
     u16 *draw;
     if (want && hasContent((u32)topaddr, bufferwidth, pixelformat)) {
       LOG_ONCE(0xE5000000, "imagen original escalada (video/imagen fuera del GE)\n");
@@ -1478,21 +1544,6 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
     u32 fps10 = ema_dt ? 10000000 / ema_dt : 0;
     snprintf(osd, sizeof(osd), " %lu.%lu fps | plugin %lu.%lu ms | %lu draws ", fps10 / 10, fps10 % 10,
              ema_pl / 1000, (ema_pl / 100) % 10, draws_since_flip);
-    // Donde muestra el juego su imagen dentro de su framebuffer (Silent Hill: x=480 en uno
-    // de 1024): es el valor a probar en "Desplazamiento X" del menu
-    char info[64] = "";
-    int i, bpp = pixelformat == 3 ? 4 : 2;
-    u32 disp = normVram((u32)topaddr);
-    for (i = 0; i < state.framebuf_count && bufferwidth > 0; i++) {
-      u32 off = disp - state.framebuf_addr[i];
-      if (disp > state.framebuf_addr[i] && off < 0x88000) {
-        u32 px = off / bpp, x = px % bufferwidth, y = px / bufferwidth;
-        snprintf(info, sizeof(info), "el juego muestra fb %08lx desde x=%lu y=%lu", state.framebuf_addr[i], x, y);
-        LOG_ONCE(disp ^ 0xB0000000, "display dentro de fb %08lx: x=%lu y=%lu (probar Desplazamiento X/Y)\n",
-                 state.framebuf_addr[i], x, y);
-        break;
-      }
-    }
     menuFrame(draw, osd, info);
     if (draw != (u16 *)(DISPLAY_BUFFER | 0x40000000))
       copyFrameBuffer();
@@ -1505,6 +1556,7 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
     LOG("  (plugin %lu us en este frame)\n", patch_us_frame);
   patch_us_frame = 0;
   draws_since_flip = big_transfer = 0;
+  big_transfer_fb = -1;
   last_flip = now;
   walk_now = !passive || capturing || log_frame % PASSIVE_SAMPLE == 0;
 

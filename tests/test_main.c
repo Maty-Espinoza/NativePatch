@@ -40,6 +40,7 @@ static void reset(void) {
   Options def = { .rt_on = 1, .rt_scale = 1, .omit_fbtex = 1, .fallback = 0, .nop_mark = 1, .walk_new = 1, .v2d = 1 };
   opt = def;
   passive = 0; walk_now = 1;
+  disp_wide = disp_x = disp_y = 0; big_transfer = 0; big_transfer_fb = -1;
 }
 
 // ---------------------------------------------------------------------------
@@ -493,6 +494,48 @@ static void test_pasivo_muestreo(void) {
   CHECK(st.draws >= 3 && st.draws <= 5, "en pasivo se recorrieron %lu de %d frames", st.draws, PASSIVE_SAMPLE * 4);
 }
 
+// Silent Hill: el video se copia (TRANSFER) a un fb de 512 y se dibuja como textura en un
+// fb de 1024 que se muestra desde x=480. Antes: el fb de 1024 era render target, el draw
+// del video se omitia (textura desde fb) y se mostraba la imagen original vacia (blanco).
+static void test_silent_hill_video(void) {
+  reset();
+  rt_enabled = 1;
+  begin();
+  setFb(0x0d4000, 1024);
+  cmd(GE_CMD_VERTEXTYPE, GE_VTYPE_POS_16BIT);
+  cmd(GE_CMD_PRIM, (GE_PRIM_TRIANGLES << 16) | 3); // un draw: no es un frame sin GE
+  end();
+  run();
+  sceDisplaySetFrameBufPatched((void *)0x0A0D43C0, 1024, 0, 0); // auto: se aprende x=480
+  CHECK(disp_wide && disp_x == 480 && disp_y == 0, "no se detecto la pantalla de 1024 (x=%d y=%d)", disp_x, disp_y);
+  CHECK(logHas("pantalla de 1024: si (x=480 y=0)"), "no se registro la pantalla de 1024");
+
+  short *v = (short *)VERTS;
+  v[0] = 480; v[1] = 0; v[2] = 0; v[3] = 960; v[4] = 272; v[5] = 0;
+  begin();
+  setFb(0x04c000, 512);
+  cmd(GE_CMD_TRANSFERDST, 0x04c000); cmd(GE_CMD_TRANSFERDSTW, (0x0a << 16) | 512);
+  cmd(GE_CMD_TRANSFERSIZE, (271 << 10) | 479); cmd(GE_CMD_TRANSFERSTART, 0);
+  u32 *fw = (setFb(0x0d4000, 1024), lp - 1);
+  cmd(GE_CMD_TEXTUREMAPENABLE, 1);
+  cmd(GE_CMD_TEXADDR0, 0x04c000); cmd(GE_CMD_TEXBUFWIDTH0, (0x0a << 16) | 512);
+  cmd(GE_CMD_BASE, 0x080000);
+  cmd(GE_CMD_VERTEXTYPE, GE_VTYPE_THROUGH | GE_VTYPE_POS_16BIT);
+  cmd(GE_CMD_VADDR, VERTS & 0xffffff);
+  u32 *prim = cmd(GE_CMD_PRIM, (GE_PRIM_RECTANGLES << 16) | 2);
+  end();
+  memset(&st, 0, sizeof(st));
+  run();
+  CHECK((*prim >> 24) == GE_CMD_PRIM, "el draw del video se omitio: %08lx", *prim);
+  CHECK((*fw & 0xffff) == 960 && rt_count == 0, "el fb de 1024 no se trato como pantalla (ancho %ld, rts %d)", *fw & 0xffff, rt_count);
+  CHECK(v[0] == 0 && v[3] == 960 && v[4] == 544, "vertices del video: %d %d %d", v[0], v[3], v[4]);
+  sceDisplaySetFrameBufPatched((void *)0x0A0D43C0, 1024, 0, 0);
+  CHECK(st.fallback == 0, "se uso la imagen original escalada (vacia: pantalla blanca)");
+  opt.wide1024 = 2; // "no" en el menu: como antes
+  run();
+  CHECK((*fw & 0xffff) != 960, "con la opcion en 'no' se trato igual como pantalla");
+}
+
 // Menu: abrir con L+R+START, cambiar una opcion, cerrar, y que el juego no vea botones mientras
 extern unsigned int test_buttons;
 static void test_menu(void) {
@@ -524,7 +567,7 @@ int main(void) {
     test_viewport_scissor_x2, test_viewport_zona, test_memo_lista_grande, test_vertices_2d,
     test_vaddr_avanza_tras_3d, test_bjump_no_salta, test_estado_entre_listas, test_textura_fb_al_dibujar,
     test_render_target, test_textura_dentro_de_rt, test_rt_incompleto, test_rt_escala_1, test_pitch_0,
-    test_robustez, test_copia_listas_alternas, test_fps, test_doble_buffer_alternado, test_nop_no_revive, test_lista_estatica_fb, test_pasivo_no_escribe, test_pasivo_normaliza, test_desplazamiento_y_1024, test_vertices_2d_muchos_buffers, test_pasivo_muestreo, test_menu,
+    test_robustez, test_copia_listas_alternas, test_fps, test_doble_buffer_alternado, test_nop_no_revive, test_lista_estatica_fb, test_pasivo_no_escribe, test_pasivo_normaliza, test_desplazamiento_y_1024, test_vertices_2d_muchos_buffers, test_pasivo_muestreo, test_silent_hill_video, test_menu,
   };
   int i;
   for (i = 0; i < (int)(sizeof(tests) / sizeof(tests[0])); i++)

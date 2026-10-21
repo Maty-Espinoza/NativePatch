@@ -27,6 +27,7 @@ typedef struct {
 static const char *const no_si[] = { "no", "si" };
 static const char *const fb_modes[] = { "auto", "siempre", "nunca" };
 static const char *const nop_modes[] = { "0 (antiguo)", "marca" };
+static const char *const auto_si_no[] = { "auto", "si", "no" };
 static const char *const walk_modes[] = { "antiguo", "nuevo" };
 
 static const Item items[] = {
@@ -37,7 +38,7 @@ static const Item items[] = {
   { "NOP de draws omitidos", &opt.nop_mark, 0, 1, 1, nop_modes },
   { "Recorrido de listas", &opt.walk_new, 0, 1, 1, walk_modes },
   { "Duplicar vertices 2D (HUD, sprites)", &opt.v2d, 0, 1, 1, no_si },
-  { "Framebuffer de 1024 como pantalla", &opt.wide1024, 0, 1, 1, no_si },
+  { "Framebuffer de 1024 como pantalla", &opt.wide1024, 0, 2, 1, auto_si_no },
   { "Desplazamiento X (px del juego)", &opt.dx, -512, 512, 16, NULL },
   { "Desplazamiento Y (px del juego)", &opt.dy, -272, 272, 8, NULL },
   { "Indicador en pantalla", &opt.osd, 0, 1, 1, no_si },
