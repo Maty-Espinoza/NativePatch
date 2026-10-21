@@ -15,6 +15,7 @@ typedef struct {
   int wide1024;   // tratar framebuffers de 1024 de ancho como pantalla
   int dx, dy;     // desplazamiento del area visible dentro del framebuffer del juego (px)
   int osd;        // indicador en pantalla: fps, costo del plugin, draws
+  int v2d;        // duplicar vertices 2D (HUD, menus, sprites)
 } Options;
 
 extern Options opt;

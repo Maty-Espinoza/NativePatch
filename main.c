@@ -24,7 +24,6 @@ PSP_MODULE_INFO("GePatch", 0x1007, 1, 0);
 
 #define FAKE_VRAM 0x0A000000
 #define DISPLAY_BUFFER 0x0A400000
-#define VERTICES_BUFFER 0x0A600000
 #define RENDER_LIST 0x0A800000
 
 // El buffer grande va en 0x000000, igual que el primer buffer de casi todos los juegos.
@@ -49,6 +48,7 @@ static struct {
   u32 frames, frame_us, frame_max, slow60, slow30; // tiempo entre flips
   u32 patch_us, patch_max, cmds;                   // costo del plugin por frame
   u32 upscale_us;                                  // escalado por CPU (videos)
+  u32 walked, calls, lookups, v2d, v2d_skip, vevict; // recorrido: frames medidos, CALLs, busquedas en memo, vertices 2D
   u32 long_frame_logged;
 } st;
 static u32 patch_us_frame; // costo del plugin en el frame en curso
@@ -63,6 +63,11 @@ static u32 patch_us_frame; // costo del plugin en el frame en curso
 // Modo pasivo (L al iniciar): el mismo recorrido de listas y los mismos logs, pero sin
 // escribir nada; el juego corre como en una PSP normal. Sirve de referencia para comparar.
 static int passive;
+// En pasivo solo se recorre 1 de cada PASSIVE_SAMPLE frames (y el de la captura): recorrer
+// todas las listas cuesta lo mismo que en modo activo (14-20 ms en Gran Turismo) y el
+// "original" salia igual de lento. Las cifras por frame se calculan sobre los medidos.
+#define PASSIVE_SAMPLE 8
+static int walk_now = 1;
 
 // En modo pasivo el juego usa la VRAM real (0x04...): se muestra como VRAM falsa (0x0A...)
 // para que los logs de ambos modos se puedan comparar linea por linea.
@@ -613,8 +618,13 @@ static int texCheckCalc(void) {
 // tal como quedaron. Si al volver a verlos el hash coincide, ya estan duplicados.
 // Antes se marcaba en bytes de relleno del vertice, y los formatos sin relleno
 // (p.ej. los sprites que limpian la pantalla) se duplicaban de nuevo cada frame.
-#define VMEMO_SIZE 512
-static struct { u32 addr, n, hash; } vmemo[VMEMO_SIZE];
+// Con 512 entradas, en juegos con muchos draws 2D (Gran Turismo) dos buffers chocaban:
+// el expulsado se volvia a duplicar al verlo otra vez (sprites estirados o corridos
+// que aparecen "con el tiempo"). Ahora va en RAM libre con 32768 entradas (384 KB).
+#define VMEMO_ADDR 0x0A700000
+#define VMEMO_SIZE 32768
+typedef struct { u32 addr, n, hash; } VMemo;
+static VMemo *vmemo = (VMemo *)VMEMO_ADDR;
 
 static u32 vertsHash(u32 start, u32 n, int size, int pos_off, int pos_size) {
   u32 h = n, i;
@@ -632,6 +642,8 @@ static int vertsPatched(u32 start, u32 n, int size, int pos_off, int pos_size) {
 
 static void vertsRemember(u32 start, u32 n, u32 hash) {
   int k = (start >> 2) & (VMEMO_SIZE - 1);
+  if (vmemo[k].addr && vmemo[k].addr != start)
+    st.vevict++; // otro buffer ocupaba la entrada: si vuelve, se duplicaria otra vez
   vmemo[k].addr = start;
   vmemo[k].n = n;
   vmemo[k].hash = hash;
@@ -672,7 +684,10 @@ void patchGeList(u32 *list, u32 *stall) {
 
     // Valor original del juego aunque el comando ya este parcheado (ver memo_cmd)
     u32 op = *list, m = memo_cmd[op >> 24];
+    if (m == 1 && op == (GE_CMD_NOP << 24) && opt.nop_mark)
+      m = 0; // NOP 0 del juego: con la marca activa no puede ser un draw anulado por el plugin
     if (m == 1 || (m == 2 && tex_patched_any)) {
+      st.lookups++;
       op = origOp(list);
       // FBPTR 0x000000 del juego es igual al parche del buffer grande. Si el FBWIDTH de al
       // lado no tiene el parche (el juego reescribio la lista este frame), el valor es del
@@ -758,6 +773,7 @@ void patchGeList(u32 *list, u32 *stall) {
             *(u32 *)(state.address+12*4) >> 24 == GE_CMD_RET) {
           break;
         }
+        st.calls++;
         stack_entry = &stack_entry_buf;
         stack_entry->list = list;
         stack_entry->base = state.base; // antes quedaba sin inicializar y un SIGNAL RET lo restauraba
@@ -981,8 +997,13 @@ void patchGeList(u32 *list, u32 *stall) {
 
           // Si estos vertices ya se duplicaron y el juego no los reescribio, no tocarlos
           // (los buffers estaticos se reutilizan cada frame)
-          if (passive || vertsPatched(start, n, vertex_size, pos_off, pos_size))
+          if (passive || !opt.v2d)
             goto exit_loop;
+          if (vertsPatched(start, n, vertex_size, pos_off, pos_size)) {
+            st.v2d_skip++;
+            goto exit_loop;
+          }
+          st.v2d++;
           if (state.cur_rt && RT_SCALE == 1)
             goto exit_loop; // en un render target a escala 1 las coordenadas quedan igual
 
@@ -1269,7 +1290,7 @@ int sceGeListUpdateStallAddrPatched(int qid, void *stall) {
       void *list = *(void **)(info + 0x18); // previous stall
       if (!list)
         list = *(void **)(info + 0x14); // list
-      if (((u32)list & 0x0fffffff) < ((u32)stall & 0x0fffffff)) {
+      if (walk_now && ((u32)list & 0x0fffffff) < ((u32)stall & 0x0fffffff)) {
         patchGeList((u32 *)((u32)list & 0x0fffffff), (u32 *)((u32)stall & 0x0fffffff));
       }
     }
@@ -1294,7 +1315,8 @@ int sceGeListEnQueuePatched(const void *list, void *stall, int cbid, PspGeListAr
   }
   u32 t0 = sceKernelGetSystemTimeLow();
   resetGeState();
-  patchGeList((u32 *)((u32)list & 0x0fffffff), (u32 *)((u32)stall & 0x0fffffff));
+  if (walk_now)
+    patchGeList((u32 *)((u32)list & 0x0fffffff), (u32 *)((u32)stall & 0x0fffffff));
   patch_us_frame += sceKernelGetSystemTimeLow() - t0;
   return _sceGeListEnQueue(list, stall, cbid, arg);
 }
@@ -1303,7 +1325,8 @@ int sceGeListEnQueueHeadPatched(const void *list, void *stall, int cbid, PspGeLi
   st.heads++;
   u32 t0 = sceKernelGetSystemTimeLow();
   resetGeState();
-  patchGeList((u32 *)((u32)list & 0x0fffffff), (u32 *)((u32)stall & 0x0fffffff));
+  if (walk_now)
+    patchGeList((u32 *)((u32)list & 0x0fffffff), (u32 *)((u32)stall & 0x0fffffff));
   patch_us_frame += sceKernelGetSystemTimeLow() - t0;
   return _sceGeListEnQueueHead(list, stall, cbid, arg);
 }
@@ -1430,7 +1453,8 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
   }
   ema_pl = (ema_pl * 15 + patch_us_frame) / 16;
 
-  if (!draws_since_flip)
+  st.walked += walk_now;
+  if (!draws_since_flip && walk_now)
     st.idle_frames++;
   if (!passive) {
     // Si este frame no paso por el GE (video por CPU) o tuvo una copia de bloque grande
@@ -1482,6 +1506,7 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
   patch_us_frame = 0;
   draws_since_flip = big_transfer = 0;
   last_flip = now;
+  walk_now = !passive || capturing || log_frame % PASSIVE_SAMPLE == 0;
 
   if (log_frame % STATS_EVERY == 0) {
     LOG("stats listas=%lu head=%lu stall=%lu draws=%lu omitidos=%lu frames_sin_draws=%lu fbs=%lu\n",
@@ -1492,9 +1517,12 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
       u32 fps10 = st.frames * 100000 / (st.frame_us / 100 + 1); // fps x10, sin division de 64 bits
       LOG("stats rendimiento: fps=%lu.%lu frame_max=%lu ms bajo60=%lu bajo30=%lu\n",
           fps10 / 10, fps10 % 10, st.frame_max / 1000, st.slow60, st.slow30);
+      u32 w = st.walked ? st.walked : 1;
       LOG("stats %s: %lu us/frame (max %lu) comandos/frame=%lu draws/frame=%lu escalado_cpu=%lu us/frame\n",
-          passive ? "observacion" : "plugin", st.patch_us / st.frames, st.patch_max, st.cmds / st.frames, (st.draws + st.skipped) / st.frames,
+          passive ? "observacion" : "plugin", st.patch_us / w, st.patch_max, st.cmds / w, (st.draws + st.skipped) / w,
           st.fallback ? st.upscale_us / st.fallback : 0);
+      LOG("stats recorrido: frames_medidos=%lu/%lu calls/frame=%lu memo/frame=%lu vert2d=%lu ya2d=%lu choques2d=%lu\n",
+          st.walked, st.frames, st.calls / w, st.lookups / w, st.v2d, st.v2d_skip, st.vevict);
     }
     if (rt_count || st.rt_fail) {
       LOG("stats rt: draws_en_rt=%lu draws_con_tex_rt=%lu rt_incompletos=%lu fallos=%lu rts=%d vram_libre=%lu KB\n",
@@ -1610,6 +1638,7 @@ int module_start(SceSize args, void *argp) {
   sctrlHENPatchSyscall((u32)_sceGeListEnQueueHead, sceGeListEnQueueHeadPatched);
 
   memset(memo, 0, MEMO_SIZE * sizeof(MemoEntry));
+  memset(vmemo, 0, VMEMO_SIZE * sizeof(VMemo));
   if (!passive)
     probeVram();
 

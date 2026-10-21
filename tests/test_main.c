@@ -28,7 +28,7 @@ static int logHas(const char *s) { logFlush(); return strstr(test_log, s) != NUL
 static void reset(void) {
   memset(&state, 0, sizeof(state));
   memset(memo, 0, MEMO_SIZE * sizeof(MemoEntry));
-  memset(vmemo, 0, sizeof(vmemo));
+  memset(vmemo, 0, VMEMO_SIZE * sizeof(VMemo));
   memset(rt, 0, sizeof(rt));
   rt_count = 0; rt_next = RT_BASE; rt_enabled = 0;
   tex_patched_any = 0; rt_gen++; memset(&tcache, 0, sizeof(tcache)); tcache.res = 2; // sin cache valida
@@ -37,9 +37,9 @@ static void reset(void) {
   memset((void *)VERTS, 0, 0x10000);
   test_log_len = 0; test_log[0] = 0;
   logResetOnce();
-  Options def = { .rt_on = 1, .rt_scale = 1, .omit_fbtex = 1, .fallback = 0, .nop_mark = 1, .walk_new = 1 };
+  Options def = { .rt_on = 1, .rt_scale = 1, .omit_fbtex = 1, .fallback = 0, .nop_mark = 1, .walk_new = 1, .v2d = 1 };
   opt = def;
-  passive = 0;
+  passive = 0; walk_now = 1;
 }
 
 // ---------------------------------------------------------------------------
@@ -448,6 +448,51 @@ static void test_desplazamiento_y_1024(void) {
   CHECK(v[0] == 0 && v[3] == 960, "vertices 2D con desplazamiento: %d %d", v[0], v[3]);
 }
 
+// Muchos buffers 2D estaticos (Gran Turismo): con 512 entradas en la memoria de vertices
+// dos buffers a 2 KB de distancia chocaban y el expulsado se duplicaba otra vez cada frame
+static void test_vertices_2d_muchos_buffers(void) {
+  reset();
+  int i, k, bad = 0;
+  begin();
+  cmd(GE_CMD_BASE, 0x080000);
+  cmd(GE_CMD_VERTEXTYPE, GE_VTYPE_THROUGH | GE_VTYPE_POS_16BIT);
+  for (k = 0; k < 16; k++) { // 16 buffers separados por 2 KB (misma entrada con 512)
+    short *v = (short *)(VERTS + k * 2048);
+    v[0] = 0; v[1] = 0; v[2] = 0; v[3] = 64; v[4] = 32; v[5] = 0;
+    cmd(GE_CMD_VADDR, (VERTS + k * 2048) & 0xffffff);
+    cmd(GE_CMD_PRIM, (GE_PRIM_RECTANGLES << 16) | 2);
+  }
+  end();
+  for (i = 0; i < 5; i++)
+    run();
+  for (k = 0; k < 16; k++) {
+    short *v = (short *)(VERTS + k * 2048);
+    bad += v[3] != 128 || v[4] != 64;
+  }
+  CHECK(bad == 0, "%d de 16 buffers 2D se duplicaron mas de una vez", bad);
+  CHECK(st.vevict == 0, "choques en la memoria de vertices: %lu", st.vevict);
+  opt.v2d = 0;
+  short *v = (short *)VERTS; v[3] = 64; run();
+  CHECK(v[3] == 64, "con 'Duplicar vertices 2D = no' se duplicaron igual");
+}
+
+// Pasivo: solo se recorre 1 de cada PASSIVE_SAMPLE frames (para no frenar al juego)
+static void test_pasivo_muestreo(void) {
+  reset();
+  passive = 1;
+  begin();
+  cmd(GE_CMD_VERTEXTYPE, GE_VTYPE_POS_16BIT);
+  cmd(GE_CMD_PRIM, (GE_PRIM_TRIANGLES << 16) | 3);
+  end();
+  int i;
+  memset(&st, 0, sizeof(st));
+  for (i = 0; i < PASSIVE_SAMPLE * 4; i++) {
+    sceGeListEnQueuePatched((void *)LIST, NULL, 0, NULL);
+    sceDisplaySetFrameBufPatched((void *)0x04000000, 512, 3, 0);
+  }
+  CHECK(st.draws >= 3 && st.draws <= 5, "en pasivo se recorrieron %lu de %d frames", st.draws, PASSIVE_SAMPLE * 4);
+}
+
 // Menu: abrir con L+R+START, cambiar una opcion, cerrar, y que el juego no vea botones mientras
 extern unsigned int test_buttons;
 static void test_menu(void) {
@@ -479,7 +524,7 @@ int main(void) {
     test_viewport_scissor_x2, test_viewport_zona, test_memo_lista_grande, test_vertices_2d,
     test_vaddr_avanza_tras_3d, test_bjump_no_salta, test_estado_entre_listas, test_textura_fb_al_dibujar,
     test_render_target, test_textura_dentro_de_rt, test_rt_incompleto, test_rt_escala_1, test_pitch_0,
-    test_robustez, test_copia_listas_alternas, test_fps, test_doble_buffer_alternado, test_nop_no_revive, test_lista_estatica_fb, test_pasivo_no_escribe, test_pasivo_normaliza, test_desplazamiento_y_1024, test_menu,
+    test_robustez, test_copia_listas_alternas, test_fps, test_doble_buffer_alternado, test_nop_no_revive, test_lista_estatica_fb, test_pasivo_no_escribe, test_pasivo_normaliza, test_desplazamiento_y_1024, test_vertices_2d_muchos_buffers, test_pasivo_muestreo, test_menu,
   };
   int i;
   for (i = 0; i < (int)(sizeof(tests) / sizeof(tests[0])); i++)
