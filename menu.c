@@ -14,7 +14,7 @@
 
 // Valores originales (por defecto). El menu marca los que se cambiaron para probar.
 const Options opt_default = { .rt_on = 1, .rt_scale = 1, .omit_fbtex = 1, .fallback = 0, .nop_mark = 1, .walk_new = 1,
-                              .v2d = 1, .tx_ge = 1, .walk_cache = 1, .layers = 1 };
+                              .v2d = 1, .tx_ge = 1, .walk_cache = 1, .layers = 0, .autocap = 1 };
 Options opt = opt_default;
 u32 opt_gen;
 
@@ -49,6 +49,7 @@ static const Item items[] = {
   { "intermedios", "Fb intermedios como render target", &opt.layers, 0, 1, 1, no_si },
   { "dx", "Desplazamiento X (px del juego)", &opt.dx, -512, 512, 16, NULL },
   { "dy", "Desplazamiento Y (px del juego)", &opt.dy, -272, 272, 8, NULL },
+  { "autocap", "Capturas automaticas (max 5)", &opt.autocap, 0, 1, 1, no_si },
   { NULL, "Capturar el proximo frame al log", NULL, 0, 0, 0, NULL, ACT_CAPTURE },
   { NULL, "Memoria y CPU al log", NULL, 0, 0, 0, NULL, ACT_SNAPSHOT },
   { NULL, "Restaurar valores originales", NULL, 0, 0, 0, NULL, ACT_RESTORE },

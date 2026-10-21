@@ -85,6 +85,7 @@ int main(void) {
   printf("con sublistas: %ld comandos, recorriendo todo %.0f us", n, best);
   opt.walk_cache = 1;
   double cached = timeRun(40);
-  printf(", saltando las que no cambian %.0f us (x%.1f)\n", cached, best / cached);
+  memset(&st, 0, sizeof(st)); run();
+  printf(", saltando las que no cambian %.0f us (x%.1f; %lu de 1500 saltadas)\n", cached, best / cached, st.wc_hits);
   return 0;
 }

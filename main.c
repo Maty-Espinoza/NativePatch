@@ -65,6 +65,12 @@ static u32 patch_us_frame; // costo del plugin en el frame en curso
 // Modo pasivo (L al iniciar): el mismo recorrido de listas y los mismos logs, pero sin
 // escribir nada; el juego corre como en una PSP normal. Sirve de referencia para comparar.
 static int passive;
+
+// Captura automatica del frame siguiente cuando aparece algo raro por primera vez (fb
+// intermedio, render target incompleto, lista invalida...): asi el log trae el detalle
+// sin tener que presionar L+R+SELECT en el momento justo. Maximo 5 por sesion.
+static void autoCapture(void);
+#define LOG_ONCE_CAP(key, ...) do { if (logOnce(key)) { LOG(__VA_ARGS__); autoCapture(); } } while (0)
 // En pasivo solo se recorre 1 de cada PASSIVE_SAMPLE frames (y el de la captura): recorrer
 // todas las listas cuesta lo mismo que en modo activo (14-20 ms en Gran Turismo) y el
 // "original" salia igual de lento. Las cifras por frame se calculan sobre los medidos.
@@ -417,7 +423,9 @@ static const char *capName(u32 cmd) {
 // mantienen entre listas igual que en el hardware. Antes se borraba todo, y una lista
 // que dibujaba sin volver a fijar BASE o VADDR hacia que se leyera/parcheara memoria
 // equivocada (posible causa de glitches y cuelgues).
+static int nrec; // sublistas que se estan anotando (ver wcRecord)
 void resetGeState() {
+  nrec = 0;
   state.offset = 0;
   state.curr_stack = 0;
   state.has_draws = 0;
@@ -430,7 +438,7 @@ int push(StackEntry *data) {
   }
 
   st.stack_full++;
-  LOG_ONCE(0xE1000000, "pila de display list llena (CALL ignorado)\n");
+  LOG_ONCE_CAP(0xE1000000, "pila de display list llena (CALL ignorado)\n");
   return -1;
 }
 
@@ -535,7 +543,7 @@ static RenderTarget *rtGet(u32 addr, u32 pitch) {
   u32 w = pitch * RT_SCALE, h = (pitch >= 256 ? 272 : pitch) * RT_SCALE, size = (w * h * 2 + 0x1fff) & ~0x1fff;
   if (rt_count >= RT_MAX || rt_next + size > RT_END) {
     st.rt_fail++;
-    LOG_ONCE(addr ^ 0xC1000000, "rt: SIN ESPACIO para fb %08lx pitch=%lu (%lu KB, libres %lu KB, %d/%d usados) -> se omite\n",
+    LOG_ONCE_CAP(addr ^ 0xC1000000, "rt: SIN ESPACIO para fb %08lx pitch=%lu (%lu KB, libres %lu KB, %d/%d usados) -> se omite\n",
              addr, pitch, size / 1024, (RT_END - rt_next) / 1024, rt_count, RT_MAX);
     return NULL;
   }
@@ -632,7 +640,7 @@ static int texCheckCalc(void) {
       LOG_ONCE(tex ^ 0xC8000000, "rt: el rt %08lx se lee a si mismo -> se permite\n", tex);
     else if (r->incomplete) {
       st.rt_incomplete++;
-      LOG_ONCE(tex ^ 0xC9000000, "rt: %08lx quedo incompleto (se omitieron draws al dibujarlo) -> no se usa como textura\n", tex);
+      LOG_ONCE_CAP(tex ^ 0xC9000000, "rt: %08lx quedo incompleto (se omitieron draws al dibujarlo) -> no se usa como textura\n", tex);
       return 1;
     }
     if (!rtPatchTex(r)) {
@@ -666,9 +674,10 @@ static int texCheckCalc(void) {
     state.fb_layer[f] = 1;
     rt_gen++;
     LOG("fb %08lx: intermedio (nunca se muestra y se usa como textura) -> render target desde ahora\n", tex);
+    autoCapture();
   }
   fbtex_seen = 1;
-  LOG_ONCE(tex ^ 0x7E000000, "textura desde fb %08lx -> %s\n", tex,
+  LOG_ONCE_CAP(tex ^ 0x7E000000, "textura desde fb %08lx -> %s\n", tex,
            opt.omit_fbtex == 1 ? "draws omitidos" : opt.omit_fbtex == 2 ? "se lee la copia reducida del frame" : "se lee la memoria tal cual");
   return opt.omit_fbtex == 1;
 }
@@ -833,15 +842,15 @@ static int txUpscale(u32 *list, u32 dst, u32 w, u32 h, int bpp) {
 // solo se suman sus palabras (~3 instrucciones por palabra en vez de ~40) y se aplica el
 // estado guardado.
 // ---------------------------------------------------------------------------
-#define WC_ADDR 0x0A780000 // 4096 entradas en RAM libre (hasta 0x0A7F4000)
-#define WC_SIZE 4096
+#define WC_ADDR 0x0A780000 // 2048 entradas de 152 bytes en RAM libre (hasta 0x0A7CC000)
+#define WC_SIZE 2048
 // Las sublistas suelen estar alineadas: con solo los bits bajos, dos a 16 KB chocaban
-#define WC_SLOT(a) ((((a) >> 4) ^ ((a) >> 16)) & (WC_SIZE - 1))
+#define WC_SLOT(a) ((((a) >> 2) * 2654435761u) >> 21) // hash multiplicativo: 11 bits = 2048
 enum { T_TME = 1, T_TADDR = 2, T_TBW = 4, T_TSIZE = 8, T_TFMT = 16, T_VTYPE = 32, T_BASE = 64 };
 typedef struct {
   u32 addr, n, sum, base_in, offset_in, gen, fb_in, ndraws, touch, vset, iset;
   void *rt_in;
-  u32 vaddr, iaddr, vtype, base_out, tex[5];
+  u32 vaddr, iaddr, vtype, base_out, tex[5], nchild, child[8];
   u32 *tex_p[4];
   u32 tex_o[4];
 } WalkCache;
@@ -851,11 +860,19 @@ static WalkCache *wc = (WalkCache *)WC_ADDR;
 #define WC_GEN ((rt_gen << 8) ^ opt_gen)
 // Por que una sublista no se pudo guardar (estadistica, para saber que mejorar)
 enum { W_PATCH, W_2D, W_OMIT, W_JUMP, W_NESTED, W_COPY, W_OFFSET };
-#define DIRTY(w) (rec.clean = 0, rec.why |= 1 << (w))
-static struct {
-  int active, clean, depth, why;
-  u32 addr, base, offset, setops, draws, touch, vset, iset, vaddr0, iaddr0;
-} rec;
+// Sublistas que se estan anotando, una por nivel de CALL (recs[0] no se usa: es donde
+// escriben los DIRTY/touch cuando no hay ninguna). Una sublista con otras dentro se puede
+// guardar si las de dentro tambien se pudieron: se guardan sus direcciones y al saltarla
+// se comprueba que ninguna cambio (Gran Turismo: ~150 por frame tenian sublistas dentro).
+#define WC_DEPTH 8
+#define WC_CHILD 8
+typedef struct {
+  int depth, why, nchild;
+  u32 addr, base, offset, setops, draws, touch, vset, iset, vaddr0, iaddr0, child[WC_CHILD];
+} Rec;
+static Rec recs[WC_DEPTH + 1];
+#define rec recs[nrec]
+#define DIRTY(w) (rec.why |= 1 << (w))
 
 static inline u32 wcSum(const u32 *p, u32 n) {
   u32 h = n;
@@ -868,40 +885,74 @@ static const u8 wc_tex_cmd[5] = { GE_CMD_TEXTUREMAPENABLE, GE_CMD_TEXADDR0, GE_C
 
 // Empieza a anotar la sublista en addr (justo despues del CALL)
 static void wcRecord(u32 addr) {
-  rec.active = rec.clean = 1;
-  rec.why = 0;
-  rec.depth = state.curr_stack;
-  rec.addr = addr; rec.base = state.base; rec.offset = state.offset;
-  rec.setops = n_setops; rec.draws = st.draws; rec.touch = rec.vset = rec.iset = 0;
-  rec.vaddr0 = state.vertex_addr; rec.iaddr0 = state.index_addr;
+  if (nrec == WC_DEPTH) {
+    DIRTY(W_NESTED);
+    return;
+  }
+  Rec *r = &recs[++nrec];
+  r->why = r->nchild = 0;
+  r->depth = state.curr_stack;
+  r->addr = addr; r->base = state.base; r->offset = state.offset;
+  r->setops = n_setops; r->draws = st.draws; r->touch = r->vset = r->iset = 0;
+  r->vaddr0 = state.vertex_addr; r->iaddr0 = state.index_addr;
+}
+
+// La sublista addr (ya guardada) quedo dentro de la que se anota
+static void wcAddChild(u32 addr, u32 touch, u32 vset, u32 iset) {
+  if (!nrec)
+    return;
+  if (rec.nchild == WC_CHILD)
+    DIRTY(W_NESTED);
+  else
+    rec.child[rec.nchild++] = addr;
+  rec.touch |= touch; rec.vset |= vset; rec.iset |= iset;
 }
 
 // En el RET de la sublista anotada: si quedo limpia, se guarda
 static void wcStore(u32 *ret) {
-  rec.active = 0;
-  if (n_setops != rec.setops)
-    rec.why |= 1 << W_PATCH;
-  if (rec.why || ret < (u32 *)rec.addr) {
+  Rec *r = &recs[nrec--];
+  if (n_setops != r->setops)
+    r->why |= 1 << W_PATCH;
+  if (r->why || ret < (u32 *)r->addr) {
     int i;
     for (i = 0; i < 7; i++)
-      st.wc_why[i] += (rec.why >> i) & 1;
+      st.wc_why[i] += (r->why >> i) & 1;
+    rec.why |= r->why ? r->why : 1 << W_NESTED; // la que la contiene tampoco se puede guardar
     return;
   }
-  WalkCache *e = &wc[WC_SLOT(rec.addr)];
+  WalkCache *e = &wc[WC_SLOT(r->addr)];
   int i;
-  e->addr = rec.addr; e->n = ret - (u32 *)rec.addr + 1; e->sum = wcSum((u32 *)rec.addr, e->n);
-  e->base_in = rec.base; e->offset_in = rec.offset; e->gen = WC_GEN;
+  e->addr = r->addr; e->n = ret - (u32 *)r->addr + 1; e->sum = wcSum((u32 *)r->addr, e->n);
+  e->base_in = r->base; e->offset_in = r->offset; e->gen = WC_GEN;
   e->fb_in = state.framebuf | state.ignore_framebuf; e->rt_in = state.cur_rt;
-  e->ndraws = st.draws - rec.draws; e->touch = rec.touch; e->vset = rec.vset; e->iset = rec.iset;
-  e->vaddr = rec.vset ? state.vertex_addr : state.vertex_addr - rec.vaddr0;
-  e->iaddr = rec.iset ? state.index_addr : state.index_addr - rec.iaddr0;
+  e->ndraws = st.draws - r->draws; e->touch = r->touch; e->vset = r->vset; e->iset = r->iset;
+  e->vaddr = r->vset ? state.vertex_addr : state.vertex_addr - r->vaddr0;
+  e->iaddr = r->iset ? state.index_addr : state.index_addr - r->iaddr0;
   e->vtype = state.vertex_type; e->base_out = state.base;
+  e->nchild = r->nchild;
+  for (i = 0; i < r->nchild; i++)
+    e->child[i] = r->child[i];
   for (i = 0; i < 5; i++)
     e->tex[i] = state.ge_cmd[wc_tex_cmd[i]];
   for (i = 0; i < 4; i++) {
     e->tex_p[i] = state.tex_p[i];
     e->tex_o[i] = state.tex_o[i];
   }
+  wcAddChild(r->addr, r->touch, r->vset, r->iset);
+}
+
+// La sublista guardada en addr (y las que tiene dentro) sigue igual; devuelve sus palabras
+static u32 wcValid(u32 addr, int depth) {
+  WalkCache *e = &wc[WC_SLOT(addr)];
+  if (e->addr != addr || depth > WC_DEPTH || !validAddr(addr + e->n * 4) || wcSum((u32 *)addr, e->n) != e->sum)
+    return 0;
+  u32 n = e->n, i, c;
+  for (i = 0; i < e->nchild; i++) {
+    if (!(c = wcValid(e->child[i], depth + 1)))
+      return 0;
+    n += c;
+  }
+  return n;
 }
 
 // En un CALL: si la sublista esta guardada y no cambio, se aplica su efecto y no se recorre
@@ -910,7 +961,8 @@ static int wcSkip(u32 addr) {
   if (e->addr != addr || e->gen != WC_GEN || e->base_in != state.base || e->offset_in != state.offset ||
       e->fb_in != (state.framebuf | state.ignore_framebuf) || e->rt_in != state.cur_rt || tx_patched_any || !opt.walk_cache)
     return 0;
-  if (!validAddr(addr + e->n * 4) || wcSum((u32 *)addr, e->n) != e->sum) {
+  u32 n = wcValid(addr, 0);
+  if (!n) {
     st.wc_miss++;
     e->addr = 0;
     return 0;
@@ -933,7 +985,8 @@ static int wcSkip(u32 addr) {
   if (e->ndraws)
     state.has_draws = 1;
   st.wc_hits++;
-  st.wc_cmds += e->n;
+  st.wc_cmds += n;
+  wcAddChild(addr, e->touch, e->vset, e->iset);
   return 1;
 }
 
@@ -952,7 +1005,7 @@ void patchGeList(u32 *list, u32 *stall) {
     // Nunca leer fuera de la memoria valida ni recorrer para siempre
     if (compat_walk || !lim || list >= lim) {
       if (!(lim = regionEnd(list))) {
-        LOG_ONCE(((u32)list >> 12) ^ 0xD0000000, "lista apunta a direccion invalida %08lx, se corta\n", (u32)list);
+        LOG_ONCE_CAP(((u32)list >> 12) ^ 0xD0000000, "lista apunta a direccion invalida %08lx, se corta\n", (u32)list);
         goto finish;
       }
     }
@@ -1058,7 +1111,7 @@ void patchGeList(u32 *list, u32 *stall) {
         if (state.address >= TX_RING && state.address < TX_RING + 64 * TX_SLOT)
           break; // lista del plugin (copia escalada): no se recorre
         if (!validAddr(state.address) || !validAddr(state.address + 12 * 4)) {
-          LOG_ONCE((state.address >> 12) ^ 0xD1000000, "CALL a direccion invalida %08lx, se ignora\n", state.address);
+          LOG_ONCE_CAP((state.address >> 12) ^ 0xD1000000, "CALL a direccion invalida %08lx, se ignora\n", state.address);
           break;
         }
         if (*(u32 *)(state.address) >> 24 == GE_CMD_BONEMATRIXDATA &&
@@ -1067,9 +1120,6 @@ void patchGeList(u32 *list, u32 *stall) {
           break;
         }
         st.calls++;
-        if (rec.active)
-          st.wc_why[W_NESTED]++;
-        rec.active = 0; // la sublista que la contiene ya no se puede guardar
         if (!capturing && wcSkip(state.address))
           break;
         stack_entry = &stack_entry_buf;
@@ -1080,6 +1130,8 @@ void patchGeList(u32 *list, u32 *stall) {
         if (push(stack_entry) == 0) {
           if (!capturing)
             wcRecord(state.address);
+          else
+            nrec = 0;
           list = (u32 *)(state.address - 4);
           lim = NULL;
         }
@@ -1100,7 +1152,7 @@ void patchGeList(u32 *list, u32 *stall) {
 
       case GE_CMD_RET:
         // Ignore returns when the stack is empty
-        if (rec.active && rec.depth == (int)state.curr_stack)
+        if (nrec && rec.depth == (int)state.curr_stack)
           wcStore(list);
         stack_entry = pop();
         if (stack_entry) {
@@ -1115,9 +1167,9 @@ void patchGeList(u32 *list, u32 *stall) {
       case GE_CMD_END:
       {
         u32 prev = *(list-1);
-        if (rec.active)
+        if (nrec)
           st.wc_why[W_JUMP]++;
-        rec.active = 0;
+        nrec = 0; // SIGNAL/END: las sublistas que se anotaban no se guardan
         switch (prev >> 24) {
           case GE_CMD_SIGNAL:
           {
@@ -1158,7 +1210,7 @@ void patchGeList(u32 *list, u32 *stall) {
                 break;
 
               default:
-                LOG_ONCE(0xE3000000 | behaviour, "signal no manejada: behaviour=%d\n", behaviour);
+                LOG_ONCE_CAP(0xE3000000 | behaviour, "signal no manejada: behaviour=%d\n", behaviour);
                 break;
             }
             lim = NULL;
@@ -1617,11 +1669,13 @@ void copyFrameBuffer(int menu) {
   *(u32 *)DRAW_NATIVE = 1;
 
   guStart(0, (void *)(rl | 0xA0000000));
+  // El menu se pone en el buffer grande antes de copiarlo, en la misma lista: si se copiaba
+  // despues, Adrenaline a veces mostraba la imagen entre las dos copias (menu parpadeando)
+  if (menu)
+    sceGuCopyImage(PIXELFORMAT, 0, 0, MENU_W, MENU_H, MENU_W, (void *)MENU_BUF, MENU_X, MENU_Y, PITCH, (void *)VRAM_DRAW_BUFFER_OFFSET);
   sceGuCopyImage(PIXELFORMAT, 0, 0, WIDTH, HEIGHT, PITCH,
                  (void *)VRAM_DRAW_BUFFER_OFFSET,
                  0, 0, PITCH, (void *)DISPLAY_BUFFER);
-  if (menu) // el menu encima, despues de la copia (antes la CPU dibujaba sobre el buffer grande)
-    sceGuCopyImage(PIXELFORMAT, 0, 0, MENU_W, MENU_H, MENU_W, (void *)MENU_BUF, MENU_X, MENU_Y, PITCH, (void *)DISPLAY_BUFFER);
   sceGuFinish();
   _sceGeListEnQueue((void *)rl, NULL, -1, NULL);
 }
@@ -1806,6 +1860,16 @@ static void upscaleGameBuffer(u32 addr, int width, int fmt) {
 
 static int cap_request; // captura pedida desde el menu
 void menuRequestCapture(void) { cap_request = 1; }
+static void autoCapture(void) {
+  static int n;
+  static u32 last;
+  if (!opt.autocap || capturing || cap_request || n >= 5 || (n && log_frame - last < 300))
+    return;
+  n++;
+  last = log_frame;
+  cap_request = 1;
+  LOG("captura automatica %d/5 en el frame siguiente (por el evento anterior)\n", n);
+}
 
 int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat, int sync) {
   log_frame++;

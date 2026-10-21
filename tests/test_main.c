@@ -38,9 +38,10 @@ static void reset(void) {
   test_log_len = 0; test_log[0] = 0;
   logResetOnce();
   opt = opt_default;
+  opt.autocap = 0; cap_request = 0; capturing = 0; // las capturas automaticas cambian el recorrido
   passive = 0; walk_now = 1;
   big_transfer = 0; fbtex_seen = 0; vram_hi = 0; copy_vram = 0; tx_patched_any = 0;
-  memset(wc, 0, WC_SIZE * sizeof(WalkCache)); memset(&rec, 0, sizeof(rec));
+  memset(wc, 0, WC_SIZE * sizeof(WalkCache)); memset(recs, 0, sizeof(recs)); nrec = 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -662,6 +663,8 @@ static void test_sublistas_sin_cambios(void) {
 static void test_fb_intermedio(void) {
   reset();
   rt_enabled = 1;
+  opt.layers = 1;
+  opt.autocap = 1; // de paso: la deteccion pide una captura automatica
   _sceGeListEnQueue = fakeEnqueue;
   _sceDisplaySetFrameBuf = fakeSetFrameBuf;
   int frame;
@@ -687,6 +690,8 @@ static void test_fb_intermedio(void) {
   CHECK(!logHas("fb 0a04c000: intermedio"), "la pantalla se tomo como intermedia");
   CHECK((*w170 & 0xff0000) == 0x040000 && (*w170 & 0xffff) == 512, "el formulario no va a un render target: %08lx", *w170);
   CHECK((*w4c & 0xffff) == 960, "la pantalla dejo de ir al buffer grande: %08lx", *w4c);
+  CHECK(logHas("captura automatica 1/5") && logHas("== captura frame"), "no hubo captura automatica");
+  capturing = 0;
 }
 
 // Opciones por juego: archivo clave=valor; valores fuera de rango o claves raras se ignoran
@@ -696,6 +701,31 @@ static void test_opciones_juego(void) {
   CHECK(n == 3 && opt.omit_fbtex == 2 && opt.walk_cache == 0 && opt.dx == 480 && opt.rt_scale == 1,
         "menuParse: n=%d tex_fb=%d sublistas=%d dx=%d rt_escala=%d", n, opt.omit_fbtex, opt.walk_cache, opt.dx, opt.rt_scale);
   opt = opt_default;
+}
+
+// Sublista con otra dentro (Gran Turismo): se guarda si la de dentro tambien, y deja de
+// saltarse si la de dentro cambia
+static void test_sublistas_anidadas(void) {
+  reset();
+  u32 child = LIST + 0x9000, parent = LIST + 0x8000;
+  u32 *c = sub(child, 0, 0x09100000);
+  u32 *save = lp;
+  lp = (u32 *)parent;
+  cmd(GE_CMD_BASE, 0x080000);
+  cmd(GE_CMD_CALL, child & 0xffffff);
+  cmd(GE_CMD_PRIM, (GE_PRIM_TRIANGLES << 16) | 3);
+  cmd(GE_CMD_RET, 0);
+  lp = save;
+  callList(parent, 3);
+  memset(&st, 0, sizeof(st));
+  run();
+  CHECK(st.wc_hits == 2 && st.draws == 9, "anidadas: esperaba 2 saltadas y 9 draws: %lu %lu", st.wc_hits, st.draws);
+  u32 va = state.vertex_addr;
+  c[5] = (GE_CMD_PRIM << 24) | (GE_PRIM_TRIANGLES << 16) | 6; // cambia la de dentro
+  memset(&st, 0, sizeof(st));
+  run();
+  CHECK(st.wc_miss >= 1 && st.draws == 9 && state.vertex_addr == va + 3 * 6, "la de dentro cambio y se salto igual: miss=%lu va=%08lx/%08lx",
+        st.wc_miss, state.vertex_addr, va + 18);
 }
 
 // Menu: abrir con L+R+START, cambiar una opcion, cerrar, y que el juego no vea botones mientras
@@ -728,7 +758,7 @@ int main(void) {
     test_viewport_scissor_x2, test_viewport_zona, test_memo_lista_grande, test_vertices_2d,
     test_vaddr_avanza_tras_3d, test_bjump_no_salta, test_estado_entre_listas, test_textura_fb_al_dibujar,
     test_render_target, test_textura_dentro_de_rt, test_rt_incompleto, test_rt_escala_1, test_pitch_0,
-    test_robustez, test_copia_listas_alternas, test_fps, test_doble_buffer_alternado, test_nop_no_revive, test_lista_estatica_fb, test_pasivo_no_escribe, test_pasivo_normaliza, test_desplazamiento_y_1024, test_vertices_2d_muchos_buffers, test_pasivo_muestreo, test_silent_hill_video, test_copia_escalada_con_ge, test_copia_reducida, test_sublistas_sin_cambios, test_fb_intermedio, test_opciones_juego, test_menu,
+    test_robustez, test_copia_listas_alternas, test_fps, test_doble_buffer_alternado, test_nop_no_revive, test_lista_estatica_fb, test_pasivo_no_escribe, test_pasivo_normaliza, test_desplazamiento_y_1024, test_vertices_2d_muchos_buffers, test_pasivo_muestreo, test_silent_hill_video, test_copia_escalada_con_ge, test_copia_reducida, test_sublistas_sin_cambios, test_sublistas_anidadas, test_fb_intermedio, test_opciones_juego, test_menu,
   };
   int i;
   for (i = 0; i < (int)(sizeof(tests) / sizeof(tests[0])); i++)
