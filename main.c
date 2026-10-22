@@ -362,6 +362,7 @@ typedef struct {
   u8 fb_tx[16];      // lo ultimo que escribio en ese fb fue una copia (TRANSFER), no un draw
   u8 fb_shown[16];   // el juego mostro este fb (o una parte) en pantalla
   u8 fb_layer[16];   // fb intermedio: nunca se muestra y se usa como textura en la pantalla
+  u8 fb_swap[16];    // pase que se mezcla con la pantalla: se dibuja por intercambio (ver swapEnter)
   u8 fb_csrc[16];    // el juego copia desde este fb (formulario de Silent Hill): ver csrc_rt
   u8 fb_cfail[16];   // veces que eso fallo (con 3 se deja de intentar)
   u32 *fmt_p, fmt_o; // ultimo FRAMEBUFPIXFORMAT (lugar y valor original)
@@ -491,6 +492,7 @@ int insertFramebuf(u32 framebuf) {
   rt_gen++;
   if (state.framebuf_count < n) {
     state.fb_tx[state.framebuf_count] = state.fb_shown[state.framebuf_count] = state.fb_layer[state.framebuf_count] = 0;
+    state.fb_swap[state.framebuf_count] = 0;
     state.fb_csrc[state.framebuf_count] = state.fb_cfail[state.framebuf_count] = 0;
     state.framebuf_addr[state.framebuf_count] = framebuf;
     return state.framebuf_count++;
@@ -499,7 +501,7 @@ int insertFramebuf(u32 framebuf) {
   LOG_ONCE(0xE2000000, "tabla de framebuffers llena, se reemplaza el mas antiguo\n");
   int i = state.framebuf_next++ % n;
   state.framebuf_addr[i] = framebuf;
-  state.fb_tx[i] = state.fb_shown[i] = state.fb_layer[i] = state.fb_csrc[i] = state.fb_cfail[i] = 0;
+  state.fb_tx[i] = state.fb_shown[i] = state.fb_layer[i] = state.fb_csrc[i] = state.fb_cfail[i] = state.fb_swap[i] = 0;
   if (state.big_fb == i + 1)
     state.big_fb = 0;
   return i;
@@ -690,10 +692,12 @@ static int rtPatchTex(RenderTarget *r) {
 static struct { u32 on, addr, bw, fb, gen; void *cur; int res; } tcache;
 
 static int texCheckCalc(void);
+// fb en intercambio; pase en curso; ya hecho en esta lista; flips con el pase en curso; lista de la entrada
+static int swap_fb = -1, swap_on, swap_done, swap_flips, swap_list;
 int texCheck(void) {
   u32 on = state.ge_cmd[GE_CMD_TEXTUREMAPENABLE] & 1;
   if (tcache.on == on && tcache.addr == state.ge_cmd[GE_CMD_TEXADDR0] && tcache.bw == state.ge_cmd[GE_CMD_TEXBUFWIDTH0] &&
-      tcache.fb == state.framebuf && tcache.cur == state.cur_rt && tcache.gen == rt_gen && tcache.res != 2 && tcache.res != 3 && tcache.res != 5)
+      tcache.fb == state.framebuf && tcache.cur == state.cur_rt && tcache.gen == rt_gen && tcache.res != 2 && tcache.res != 3 && tcache.res != 5 && tcache.res != 6)
     return tcache.res;
   tcache.on = on; tcache.addr = state.ge_cmd[GE_CMD_TEXADDR0]; tcache.bw = state.ge_cmd[GE_CMD_TEXBUFWIDTH0];
   tcache.fb = state.framebuf; tcache.cur = state.cur_rt; tcache.gen = rt_gen;
@@ -770,6 +774,8 @@ static int texCheckCalc(void) {
   // asi (nunca mostrado, leido mientras se dibuja en la pantalla) pasa a render target.
   // Un fb que se copia al fb mostrado (render target, como el de 1024 de Silent Hill) es
   // la pantalla de verdad: cuenta como mostrado.
+  if (swap_on && f == swap_fb && !state.cur_rt && !state.ignore_framebuf)
+    return 6; // la mezcla del pase con la pantalla: ver swapComposite
   int cf = findFramebuf(state.framebuf);
   if ((state.cur_rt || state.ignore_framebuf) && cf >= 0 && state.fb_shown[cf])
     state.fb_shown[f] = 1;
@@ -1208,6 +1214,138 @@ static int txDrawFromScreen(u32 *list, u32 op) {
   #undef C
   txCall(list, reg, sl);
   st.tx_screen++;
+  return 1;
+}
+
+// Capa intercambiada (VRAM de 2 MB: no hay lugar para render targets). Silent Hill dibuja
+// la escena, luego un pase de luz en otro fb (0a170000, con la profundidad de la escena) y al
+// final pega el pase sobre la escena multiplicando. Aqui: antes del pase, el GE copia la
+// escena del buffer grande a la RAM (LAYER_SAVE); el pase se dibuja en el buffer grande al
+// doble; y en vez de la mezcla del juego se dibuja la escena guardada encima del pase con
+// los factores de mezcla intercambiados (escena x luz = luz x escena).
+#define LAYER_SAVE 0x0A500000           // 960x544 en 565 (1020 KB): libre entre la imagen nativa y los parches
+#define LAYER_VERTS (RENDER_LIST + 0x6000) // 4 cuartos x 8 franjas x 2 vertices x 16 bytes
+
+// Mezcla vista desde el otro lado: lo que era el destino pasa a ser el origen
+static u32 blendSwap(u32 bm) {
+  static const u8 sw[16] = { 0, 1, 4, 5, 2, 3, 8, 9, 6, 7, 10, 11, 12, 13, 14, 15 };
+  u32 eq = (bm >> 8) & 0xf;
+  eq = eq == 1 ? 2 : eq == 2 ? 1 : eq; // resta <-> resta inversa
+  return (eq << 8) | (sw[bm & 0xf] << 4) | sw[(bm >> 4) & 0xf];
+}
+
+// Draw 2D que pega todo un fb 1:1 sobre la pantalla (rectangulos, 16 bits, sin indices).
+// Devuelve su color (todos iguales) o 0 si no es asi.
+static u32 fullCopyColor(u32 count) {
+  u32 vt = state.vertex_type, va = state.vertex_addr, k, col = 0xffffffff;
+  u8 vs = 0, po = 0, to = 0;
+  int minx = 9999, miny = 9999, maxx = -9999, maxy = -9999;
+  if ((vt & ~(GE_VTYPE_COL_MASK)) != (GE_VTYPE_THROUGH | GE_VTYPE_TC_16BIT | GE_VTYPE_POS_16BIT) ||
+      ((vt & GE_VTYPE_COL_MASK) && (vt & GE_VTYPE_COL_MASK) != GE_VTYPE_COL_8888) || count < 2 || count > 256)
+    return 0;
+  vertexInfo(vt, &vs, &po, &to);
+  if (!validAddr(va) || !validAddr(va + count * vs))
+    return 0;
+  for (k = 0; k < count; k++, va += vs) {
+    short *pp = (short *)(va + po);
+    u16 *t = (u16 *)(va + to);
+    if (t[0] != (u16)pp[0] || t[1] != (u16)pp[1])
+      return 0;
+    if (vt & GE_VTYPE_COL_MASK) {
+      u32 c = *(u32 *)(va + to + 4);
+      if (k == 0) col = c; else if (c != col) return 0;
+    }
+    if (pp[0] < minx) minx = pp[0];
+    if (pp[0] > maxx) maxx = pp[0];
+    if (pp[1] < miny) miny = pp[1];
+    if (pp[1] > maxy) maxy = pp[1];
+  }
+  return minx <= 0 && miny <= 0 && maxx >= 480 && maxy >= 272 ? col : 0;
+}
+
+// Draw omitido que pega un fb nunca mostrado sobre la pantalla: desde el proximo frame ese
+// fb se dibuja por intercambio
+static void swapLearn(u32 count) {
+  u32 tex = toFake(((state.ge_cmd[GE_CMD_TEXBUFWIDTH0] & 0x0f0000) << 8) | (state.ge_cmd[GE_CMD_TEXADDR0] & 0xffffff));
+  int f = findFramebuf(tex);
+  if (f < 0 || f == findFramebuf(state.framebuf) || state.fb_shown[f] || state.fb_swap[f] || state.cur_rt ||
+      state.ignore_framebuf || !fullCopyColor(count))
+    return;
+  state.fb_swap[f] = 1;
+  LOG("fb %08lx: pase que se mezcla con la pantalla -> desde el proximo frame se dibuja por intercambio con la RAM\n", tex);
+}
+
+// Entrando al fb del pase (word = la segunda de FRAMEBUFPTR/FRAMEBUFWIDTH, contiguas): esas
+// dos palabras pasan a BASE + CALL a una lista que guarda la escena y fija el buffer grande
+static int swapEnter(u32 *word) {
+  u32 *a = state.framebufptr_addr, *b = state.framebufwidth_addr, sl;
+  if (!(word == a || word == b) || (a != b + 1 && b != a + 1) || word != (a > b ? a : b) || !(sl = txSlot()))
+    return 0;
+  u32 *l = (u32 *)(sl | 0x40000000);
+  #define C(c, d) (*l++ = ((c) << 24) | ((d) & 0xffffff))
+  C(GE_CMD_TRANSFERSRC, VRAM_DRAW_BUFFER_OFFSET); C(GE_CMD_TRANSFERSRCW, ((VRAM_DRAW_BUFFER_OFFSET >> 24) << 16) | PITCH);
+  C(GE_CMD_TRANSFERSRCPOS, 0);
+  C(GE_CMD_TRANSFERDST, LAYER_SAVE); C(GE_CMD_TRANSFERDSTW, ((LAYER_SAVE >> 24) << 16) | PITCH);
+  C(GE_CMD_TRANSFERDSTPOS, 0);
+  C(GE_CMD_TRANSFERSIZE, ((HEIGHT - 1) << 10) | (WIDTH - 1)); C(GE_CMD_TRANSFERSTART, 0);
+  C(GE_CMD_FRAMEBUFPTR, VRAM_DRAW_BUFFER_OFFSET); C(GE_CMD_FRAMEBUFWIDTH, ((VRAM_DRAW_BUFFER_OFFSET >> 24) << 16) | PITCH);
+  C(GE_CMD_BASE, state.base >> 8);
+  C(GE_CMD_RET, 0);
+  #undef C
+  txCall(word, word == a ? b : a, sl);
+  return 1;
+}
+
+// La mezcla del juego (textura = el fb del pase) se reemplaza por la escena guardada
+// dibujada sobre el pase. Devuelve 0 si no se puede (el draw se omite).
+static int swapComposite(u32 *list, u32 op, u32 count) {
+  u32 *reg = list - 1, sl, c, i, x, col = fullCopyColor(count);
+  u32 bm = state.ge_cmd[GE_CMD_BLENDMODE], blend = state.ge_cmd[GE_CMD_ALPHABLENDENABLE] & 1;
+  int mul = (bm & 0xfff) == 0x0a0 && !(state.ge_cmd[GE_CMD_BLENDFIXEDB] & 0xffffff); // origen x destino
+  if (!col || !validAddr((u32)reg) || !(blend ? col == 0xffffffff || mul : col == 0xffffffff))
+    return 0;
+  c = origOp(reg) >> 24;
+  if (c == GE_CMD_CALL || c == GE_CMD_JUMP || c == GE_CMD_BJUMP || c == GE_CMD_RET || c == GE_CMD_END || c == GE_CMD_FINISH ||
+      c == GE_CMD_SIGNAL || c == GE_CMD_PRIM || c == GE_CMD_BEZIER || c == GE_CMD_SPLINE || c == GE_CMD_TRANSFERSTART ||
+      c == GE_CMD_ORIGIN || !(sl = txSlot()))
+    return 0;
+  u32 prev = *reg, *l = (u32 *)(sl | 0x40000000);
+  #define C(c, d) (*l++ = ((c) << 24) | ((d) & 0xffffff))
+  C(GE_CMD_BASE, state.base >> 8);
+  *l++ = prev;
+  if (blend) { // sin mezcla y en blanco, el pase ya es el resultado: no se dibuja nada
+    struct { u16 u, v; u32 c; short x, y, z, pad; } *v = (void *)(LAYER_VERTS | 0x40000000);
+    for (i = 0; i < 4; i++)
+      for (x = 0; x < 480; x += 64, v += 2) {
+        u32 x2 = x + 64 < 480 ? x + 64 : 480, dx = (i & 1) * 480, dy = (i >> 1) * 272;
+        v[0].u = x; v[0].v = 0; v[0].c = col; v[0].x = dx + x; v[0].y = dy; v[0].z = 0;
+        v[1].u = x2; v[1].v = 272; v[1].c = col; v[1].x = dx + x2; v[1].y = dy + 272; v[1].z = 0;
+      }
+    C(GE_CMD_TEXTUREMAPENABLE, 1); C(GE_CMD_TEXMODE, 0); C(GE_CMD_TEXFORMAT, 0); // 565, como el buffer grande
+    C(GE_CMD_TEXSIZE0, (9 << 8) | 9); C(GE_CMD_TEXFILTER, 0); C(GE_CMD_TEXWRAP, (1 << 8) | 1);
+    C(GE_CMD_BLENDMODE, blendSwap(bm));
+    C(GE_CMD_BLENDFIXEDA, state.ge_cmd[GE_CMD_BLENDFIXEDB]); C(GE_CMD_BLENDFIXEDB, state.ge_cmd[GE_CMD_BLENDFIXEDA]);
+    C(GE_CMD_VERTEXTYPE, GE_VTYPE_THROUGH | GE_VTYPE_TC_16BIT | GE_VTYPE_COL_8888 | GE_VTYPE_POS_16BIT);
+    C(GE_CMD_BASE, (LAYER_VERTS >> 8) & 0x0f0000); C(GE_CMD_VADDR, LAYER_VERTS);
+    for (i = 0; i < 4; i++) {
+      u32 src = LAYER_SAVE + ((i >> 1) * 272 * PITCH + (i & 1) * 480) * 2;
+      C(GE_CMD_TEXADDR0, src); C(GE_CMD_TEXBUFWIDTH0, ((src >> 24) << 16) | PITCH);
+      C(GE_CMD_TEXFLUSH, 0);
+      for (x = 0; x < 480; x += 64)
+        C(GE_CMD_PRIM, (GE_PRIM_RECTANGLES << 16) | 2);
+    }
+    static const u8 back[] = { GE_CMD_TEXTUREMAPENABLE, GE_CMD_TEXMODE, GE_CMD_TEXFORMAT, GE_CMD_TEXSIZE0, GE_CMD_TEXFILTER,
+      GE_CMD_TEXWRAP, GE_CMD_TEXADDR0, GE_CMD_TEXBUFWIDTH0, GE_CMD_BLENDMODE, GE_CMD_BLENDFIXEDA, GE_CMD_BLENDFIXEDB,
+      GE_CMD_VERTEXTYPE };
+    for (i = 0; i < sizeof(back); i++)
+      C(back[i], state.ge_cmd[back[i]]);
+    C(GE_CMD_TEXFLUSH, 0);
+    C(GE_CMD_BASE, (state.vertex_addr >> 8) & 0x0f0000); C(GE_CMD_VADDR, state.vertex_addr); // como un draw omitido
+  }
+  C(GE_CMD_BASE, state.base >> 8);
+  C(GE_CMD_RET, 0);
+  #undef C
+  txCall(list, reg, sl);
   return 1;
 }
 
@@ -1740,8 +1878,8 @@ void patchGeList(u32 *list, u32 *stall) {
         draws_since_flip++;
 
         int texmode = state.ignore_framebuf ? 0 : texCheck();
-        if (texmode == 5)
-          texmode = 1; // curvas con la pantalla como textura en un render target: no se reducen
+        if (texmode == 5 || texmode == 6)
+          texmode = 1; // curvas con la pantalla como textura (en un rt o la mezcla de un pase): no se reemplazan
         int omit = state.ignore_framebuf || texmode == 1;
         if (capturing)
           capDraw(cmd == GE_CMD_PRIM ? (data >> 16) & 7 : cmd, cmd == GE_CMD_PRIM ? data & 0xffff : (data & 0xff) * ((data >> 8) & 0xff),
@@ -1821,6 +1959,20 @@ void patchGeList(u32 *list, u32 *stall) {
         if (omit || texmode) {
           DIRTY(W_OMIT); // draw omitido o con textura de render target: hay que verlo cada vez
         }
+        if (texmode == 6) { // mezcla del pase por intercambio
+          swap_on = 0;
+          swap_done = 1;
+          rt_gen++;
+          if (swapComposite(list, op, data & 0xffff)) {
+            LOG_ONCE_CAP(0x5A000000 ^ (u32)list, "fb %08lx: mezcla con la escena guardada en la RAM (intercambio)\n", state.framebuf_addr[swap_fb]);
+            break;
+          }
+          LOG_ONCE_CAP(0x5A100000 ^ (u32)list, "fb %08lx: mezcla que no se puede intercambiar -> se omite y no se intenta mas\n", state.framebuf_addr[swap_fb]);
+          state.fb_swap[swap_fb] = 0;
+          omit = 1;
+        }
+        if (omit && texmode == 1 && opt.swap && !passive && !rt_enabled)
+          swapLearn(data & 0xffff);
         if (omit) {
           setOp(list, op, NOP_OMIT);
           st.skipped++;
@@ -2002,6 +2154,7 @@ exit_loop:
           u32 pitch = state.framebufwidth & 0xffff;
           // 480 tambien es un buffer de pantalla completa (Ridge Racer lo usa al iniciar)
           RenderTarget *r = NULL;
+          int was_big = !state.cur_rt && !state.ignore_framebuf;
           csrcEnd();
           state.cur_rt = NULL;
           state.offx = state.offy = 0;
@@ -2031,6 +2184,18 @@ exit_loop:
             state.ignore_framebuf = 0;
             state.offx = opt.dx;
             state.offy = opt.dy;
+            // Una vez por lista del juego (no por flip: a 18 fps a veces llegan dos listas entre
+            // dos flips y la segunda salia sin mezcla: la puerta parpadeaba)
+            if (opt.swap && !passive && fi >= 0 && state.fb_swap[fi] && (!swap_on || swap_list != (int)(st.lists + st.heads)) &&
+                !swap_done && was_big && state.big_fb && state.big_fb != fi + 1 && swapEnter(list)) {
+              swap_on = 1;
+              swap_fb = fi;
+              swap_flips = 0;
+              swap_list = st.lists + st.heads;
+              rt_gen++; // texCheck: la mezcla cambia de decision
+              LOG_ONCE_CAP(0x5A200000 ^ (u32)list, "fb %08lx: la escena (fb %08lx) se guarda en la RAM y el pase va al buffer grande\n",
+                           state.framebuf, state.framebuf_addr[state.big_fb - 1]);
+            }
           } else if (rt_enabled && opt.rt_on && pitch >= 16 && (r = rtGet(state.framebuf, pitch)) &&
                      canRepatch(state.framebufptr_addr, state.framebufptr) &&
                      canRepatch(state.framebufwidth_addr, state.framebufwidth)) {
@@ -2290,6 +2455,7 @@ int sceGeListUpdateStallAddrPatched(int qid, void *stall) {
 
 int sceGeListEnQueuePatched(const void *list, void *stall, int cbid, PspGeListArgs *arg) {
   st.lists++;
+  swap_done = 0; // lista nueva del juego: el pase se puede intercambiar otra vez
   if (capturing) {
     capFlush();
     LOG(" lista %08lx\n", (u32)list);
@@ -2311,6 +2477,7 @@ int sceGeListEnQueuePatched(const void *list, void *stall, int cbid, PspGeListAr
 
 int sceGeListEnQueueHeadPatched(const void *list, void *stall, int cbid, PspGeListArgs *arg) {
   st.heads++;
+  swap_done = 0;
   u32 t0 = sceKernelGetSystemTimeLow();
   resetGeState();
   if (dumpOnList((u32)list, (u32)stall, 1) || walk_now)
@@ -2494,6 +2661,11 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
   if (combo && !prev_combo) // con los botones (no las capturas automaticas): tambien el volcado binario
     dumpRequest();
   dumpOnFlip((u32)topaddr, bufferwidth, pixelformat);
+  if (swap_on && ++swap_flips > 2) { // el pase nunca se mezclo: la escena quedo en la RAM
+    LOG("fb %08lx: pase sin mezcla -> no se intercambia mas\n", state.framebuf_addr[swap_fb]);
+    state.fb_swap[swap_fb] = 0;
+    swap_on = 0;
+  }
   dump_info.fake_vram_used = vram_hi ? ((vram_hi - FAKE_VRAM) | 0xffff) + 1 : 0;
   if (cap_request) { // desde el menu: como si se hubiera presionado la combinacion
     cap_request = 0;

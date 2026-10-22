@@ -23,6 +23,7 @@ typedef struct {
   int autocap;    // captura automatica cuando aparece algo raro (max 5 por sesion)
   int cpu_draw;   // lo que la CPU dibuja directo en el fb mostrado (spinner de SH) se pega encima
   int csrc;       // fb del que el juego copia: a escala 1 hasta la copia (dev27; falla si un frame no copia)
+  int swap;       // pase que se mezcla con la pantalla: se dibuja en el buffer grande guardando la escena en la RAM
 } Options;
 
 extern Options opt;
@@ -33,7 +34,7 @@ extern u32 opt_gen; // cambia con cada cambio en el menu
 // imagen (MENU_W x MENU_H, 565) queda en MENU_BUF y va en (MENU_X, MENU_Y) de la pantalla.
 #define MENU_BUF 0x0A900000
 #define MENU_W 512
-#define MENU_H (16 * 26 + 48) // hasta 25 opciones + linea de ayuda (termina antes del buffer del volcado)
+#define MENU_H (16 * 27 + 48) // hasta 26 opciones + linea de ayuda (termina antes del buffer del volcado)
 #define MENU_X 224
 #define MENU_Y 56
 int menuFrame(void);

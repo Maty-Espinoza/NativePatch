@@ -44,6 +44,7 @@ static void reset(void) {
   passive = 0; walk_now = 1;
   big_transfer = 0; fbtex_seen = 0; vram_hi = 0; copy_vram = 0; tx_patched_any = 0;
   memset(wc, 0, WC_SIZE * sizeof(WalkCache)); memset(recs, 0, sizeof(recs)); nrec = 0;
+  swap_fb = -1; swap_on = swap_done = swap_flips = 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -1022,6 +1023,66 @@ static void test_volcado_pasivo(void) {
 
 // La VRAM real de la Vita es de 2 MB (dev31): sin render targets; el buffer temporal comparte
 // la VRAM del z-buffer, y el z-buffer queda donde estaba
+// Silent Hill (puerta, linterna): escena en 0a04c000, pase de luz en 0a170000 y la mezcla
+// (escena x luz). Sin VRAM para render targets: frame 1 lo aprende (mezcla omitida); desde
+// el frame 2 la escena se guarda en la RAM al entrar al pase y la mezcla la dibuja encima.
+static u32 *paseFrame(u32 **enter, u32 **mix) {
+  struct { u16 u, v; u32 c; short x, y, z; } *v = (void *)(VERTS + 0x1000);
+  int k;
+  for (k = 0; k < 32; k++) { // 16 franjas de 32 px, uv = posicion
+    v[k].u = v[k].x = (k + 1) / 2 * 32; v[k].v = v[k].y = k & 1 ? 272 : 0; v[k].c = 0xffffffff; v[k].z = 0;
+  }
+  short *e = (short *)VERTS;
+  e[0] = e[1] = e[2] = 0; e[3] = 480; e[4] = 272; e[5] = 0;
+  begin();
+  setFb(0x04c000, 512);
+  cmd(GE_CMD_TEXTUREMAPENABLE, 0); cmd(GE_CMD_ALPHABLENDENABLE, 0);
+  cmd(GE_CMD_VERTEXTYPE, GE_VTYPE_THROUGH | GE_VTYPE_POS_16BIT); cmd(GE_CMD_BASE, 0x080000); cmd(GE_CMD_VADDR, VERTS & 0xffffff);
+  cmd(GE_CMD_PRIM, (GE_PRIM_RECTANGLES << 16) | 2); // la escena
+  setFb(0x170000, 512); *enter = lp - 1;
+  cmd(GE_CMD_VADDR, VERTS & 0xffffff);
+  cmd(GE_CMD_PRIM, (GE_PRIM_RECTANGLES << 16) | 2); // el pase de luz
+  setFb(0x04c000, 512);
+  cmd(GE_CMD_TEXTUREMAPENABLE, 1); cmd(GE_CMD_TEXADDR0, 0x170000); cmd(GE_CMD_TEXBUFWIDTH0, (0x04 << 16) | 512);
+  cmd(GE_CMD_ALPHABLENDENABLE, 1); cmd(GE_CMD_BLENDMODE, 0x0a0); cmd(GE_CMD_BLENDFIXEDB, 0);
+  cmd(GE_CMD_VERTEXTYPE, GE_VTYPE_THROUGH | GE_VTYPE_TC_16BIT | GE_VTYPE_COL_8888 | GE_VTYPE_POS_16BIT);
+  cmd(GE_CMD_VADDR, (VERTS + 0x1000) & 0xffffff); cmd(GE_CMD_IADDR, 0);
+  *mix = cmd(GE_CMD_PRIM, (GE_PRIM_RECTANGLES << 16) | 32);
+  end();
+  return lp;
+}
+static void test_pase_intercambio(void) {
+  reset();
+  vram_swz = 1; // VRAM de 2 MB: sin render targets
+  u32 *enter, *mix;
+  paseFrame(&enter, &mix);
+  run();
+  CHECK(*mix == NOP_OMIT && logHas("pase que se mezcla con la pantalla"), "frame 1: mezcla %08lx (debe omitirse y aprenderse)", *mix);
+  if (getenv("VERLOG")) { logFlush(); printf("%s\n", test_log); }
+  int f;
+  for (f = 0; f < 2; f++) {
+    swap_done = 0; // flip
+    paseFrame(&enter, &mix);
+    run();
+    CHECK((enter[-1] >> 24) == GE_CMD_BASE && (*enter >> 24) == GE_CMD_CALL, "frame %d: entrada al pase %08lx %08lx", f + 2, enter[-1], *enter);
+    u32 *l = (u32 *)(0x0A000000 | (*enter & 0xffffff)), save = 0, big = 0, k;
+    for (k = 0; k < 40 && (l[k] >> 24) != GE_CMD_RET; k++) {
+      save |= l[k] == ((GE_CMD_TRANSFERDST << 24) | (LAYER_SAVE & 0xffffff));
+      big |= l[k] == ((GE_CMD_FRAMEBUFPTR << 24) | (VRAM_DRAW_BUFFER_OFFSET & 0xffffff));
+    }
+    CHECK(save && big, "frame %d: la entrada no guarda la escena (%lu) o no fija el buffer grande (%lu)", f + 2, save, big);
+    CHECK((*mix >> 24) == GE_CMD_CALL, "frame %d: la mezcla no se reemplazo (%08lx)", f + 2, *mix);
+    l = (u32 *)(0x0A000000 | (*mix & 0xffffff));
+    u32 bm = 0, tex = 0, prims = 0;
+    for (k = 0; k < 120 && (l[k] >> 24) != GE_CMD_RET; k++) {
+      bm |= l[k] == ((GE_CMD_BLENDMODE << 24) | 0x00a);
+      tex |= l[k] == ((GE_CMD_TEXADDR0 << 24) | (LAYER_SAVE & 0xffffff));
+      prims += (l[k] >> 24) == GE_CMD_PRIM;
+    }
+    CHECK(bm && tex && prims == 32, "frame %d: mezcla: factores intercambiados=%lu escena guardada=%lu draws=%lu", f + 2, bm, tex, prims);
+  }
+}
+
 static void test_vram_2mb(void) {
   reset();
   vram_swz = 1; rt_enabled = 0;
@@ -1068,7 +1129,7 @@ int main(void) {
     test_viewport_scissor_x2, test_viewport_zona, test_memo_lista_grande, test_vertices_2d,
     test_vaddr_avanza_tras_3d, test_bjump_no_salta, test_estado_entre_listas, test_textura_fb_al_dibujar,
     test_render_target, test_textura_dentro_de_rt, test_rt_incompleto, test_rt_escala_1, test_pitch_0,
-    test_robustez, test_copia_listas_alternas, test_fps, test_doble_buffer_alternado, test_nop_no_revive, test_lista_estatica_fb, test_pasivo_no_escribe, test_pasivo_normaliza, test_desplazamiento_y_1024, test_vertices_2d_muchos_buffers, test_pasivo_muestreo, test_silent_hill_video, test_copia_escalada_con_ge, test_copia_reducida, test_sublistas_sin_cambios, test_sublistas_anidadas, test_sublistas_doble_buffer, test_vram_real, test_copia_formulario, test_fb_intermedio, test_opciones_juego, test_formulario_escala1, test_rt_lee_pantalla, test_volcado, test_volcado_pasivo, test_vram_2mb, test_menu,
+    test_robustez, test_copia_listas_alternas, test_fps, test_doble_buffer_alternado, test_nop_no_revive, test_lista_estatica_fb, test_pasivo_no_escribe, test_pasivo_normaliza, test_desplazamiento_y_1024, test_vertices_2d_muchos_buffers, test_pasivo_muestreo, test_silent_hill_video, test_copia_escalada_con_ge, test_copia_reducida, test_sublistas_sin_cambios, test_sublistas_anidadas, test_sublistas_doble_buffer, test_vram_real, test_copia_formulario, test_fb_intermedio, test_opciones_juego, test_formulario_escala1, test_rt_lee_pantalla, test_volcado, test_volcado_pasivo, test_vram_2mb, test_pase_intercambio, test_menu,
   };
   int i;
   for (i = 0; i < (int)(sizeof(tests) / sizeof(tests[0])); i++)

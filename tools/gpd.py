@@ -21,10 +21,10 @@ B_VERTS, B_VERTS_FINAL, B_INDICES, B_TEX, B_CLUT, B_XFER_SRC = range(1, 7)
 MEM_KIND = {0: 'vram_real_ini', 1: 'vram_falsa_ini', 2: 'vram_real_fin', 3: 'vram_falsa_fin', 4: 'copia_fin'}
 FB_DEC = {0: 'buffer grande', 1: 'render target', 2: 'fb de copia (escala 1)', 3: 'ignorado'}
 TEXMODE = {0: 'normal', 1: 'OMITIR', 2: 'textura render target', 3: 'VRAM real -> falsa', 4: 'fb actual',
-           5: 'pantalla reducida'}
+           5: 'pantalla reducida', 6: 'mezcla por intercambio'}
 PRIMS = ['puntos', 'lineas', 'tira_lineas', 'triangulos', 'tira_tri', 'abanico_tri', 'rectangulos', '?']
 OPT_NAMES = ['rt_on', 'rt_scale', 'omit_fbtex', 'fallback', 'nop_mark', 'walk_new', 'wide1024', 'dx', 'dy', 'v2d',
-             'tx_ge', 'walk_cache', 'wc_check', 'layers', 'vram_fix', 'autocap', 'cpu_draw', 'csrc']  # orden de Options en menu.h
+             'tx_ge', 'walk_cache', 'wc_check', 'layers', 'vram_fix', 'autocap', 'cpu_draw', 'csrc', 'swap']  # orden de Options en menu.h
 
 def cmd_names():
     names = {}
@@ -501,9 +501,14 @@ def ppsspp(dump, out, plugin=False, upto=None, show=None):
         for e in walk(dump):
             if e[0] == 'cmd':
                 final[e[1]] = e[3]
-    if not dump.passive and not plugin:
-        print('aviso: el volcado es ACTIVO; la VRAM y las texturas de fb son las del plugin. Para la referencia, '
-              'volcar con el juego iniciado en modo pasivo (L al arrancar).')
+    # Activo sin --plugin: los comandos del juego apuntan a la VRAM falsa (0x0A...); PPSSPP
+    # siempre dibuja en 0x04..., asi que la VRAM falsa pasa a ser la real (texturas y copias).
+    fake = not dump.passive and not plugin
+    if fake:
+        print('volcado ACTIVO: se reproducen los comandos del juego con su VRAM falsa como VRAM')
+    HI = set(range(0xA8, 0xB0)) | {0xB1, 0xB3, 0xB5}
+    def unfake(c, op):
+        return (op & ~0x0f0000) | 0x040000 if fake and c in HI and (op & 0x0f0000) == 0x0a0000 else op
     r = dump.regs(0)
     ge = list(r['ge']) if r and any(r['ge']) else [(i << 24) | v for i, v in enumerate(r['shadow'] if r else [0] * 256)]
     ge = [(i << 24) | (v & 0xffffff) for i, v in enumerate(ge)]
@@ -535,13 +540,13 @@ def ppsspp(dump, out, plugin=False, upto=None, show=None):
             d = struct.pack('<%dI' % len(regs_pend), *regs_pend); regs_pend.clear()
             cmds.append((1, len(d), push(d)))
     emit(0, struct.pack('<512I', *ctx))
-    vram = dump.mem_at(0, 0x04000000, 0x200000)
+    vram = dump.mem_at(1, 0x0A000000, 0x200000) if fake else dump.mem_at(0, 0x04000000, 0x200000)
     if vram:  # VRAM al empezar (lo que ya estaba dibujado): MEMCPYDEST + MEMCPYDATA
         emit(7, struct.pack('<I', 0x04000000)); emit(8, vram, 1)
     regs, texdata, clut_cache, clut_sent = {}, {}, {}, False
     for e in walk(dump):
         if e[0] == 'cmd' and not e[4]:
-            op = final.get(e[1], e[3]) if plugin else e[2]; c = op >> 24
+            op = final.get(e[1], e[3]) if plugin else e[2]; c = op >> 24; op = unfake(c, op)
             if plugin and c != e[2] >> 24 and c in SKIP_REG:
                 continue  # el plugin lo cambio por un salto a su lista: no se reproduce
             regs[c] = op & 0xffffff
@@ -574,7 +579,8 @@ def ppsspp(dump, out, plugin=False, upto=None, show=None):
                     a = ((regs.get(0xA8 + lv, 0) & 0x0f0000) << 8) | regs.get(0xA0 + lv, 0)
                     b = next((d for (ta, n), d in texdata.items() if ta == a or ta == (0x0A000000 | (a & 0x3fffff))), None)
                     if b is None and (a & 0x0f000000) == 0x04000000:  # textura en la VRAM: de la VRAM guardada
-                        b = dump.mem_at(0, 0x04000000 | (a & 0x1fffff), tex_bytes(regs, lv))
+                        b = dump.mem_at(1, 0x0A000000 | (a & 0x1fffff), tex_bytes(regs, lv)) if fake else \
+                            dump.mem_at(0, 0x04000000 | (a & 0x1fffff), tex_bytes(regs, lv))
                     if b is None:
                         continue
                     if (a & 0x0f000000) == 0x04000000:
@@ -591,7 +597,7 @@ def ppsspp(dump, out, plugin=False, upto=None, show=None):
                 emit(2, vb, 4)
             regs_pend.append(prim[2] if prim else dr['op'])
         elif e[0] == 'flip' and not show:
-            emit(9, struct.pack('<3I', e[1], e[2], e[3]))
+            emit(9, struct.pack('<3I', (e[1] & 0x1fffff) | 0x04000000 if fake else e[1], e[2], e[3]))
     if show:
         emit(9, struct.pack('<3I', *show))
     flush()
