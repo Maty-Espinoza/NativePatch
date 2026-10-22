@@ -687,7 +687,13 @@ static void test_fb_intermedio(void) {
     cmd(GE_CMD_PRIM, (GE_PRIM_TRIANGLES << 16) | 3);
     end();
     run();
+    u16 *sp = (u16 *)0x0A0D43C0; // spinner de la CPU: 20x20 en (440,233) de la mitad mostrada
+    int yy, xx;
+    for (yy = 233; yy < 253; yy++)
+      for (xx = 440; xx < 460; xx++)
+        sp[yy * 1024 + xx] = 0xffff;
     sceDisplaySetFrameBufPatched((void *)0x0A0D43C0, 1024, 0, 0);
+    CHECK(sp[240 * 1024 + 450] == 0, "frame %d: el dibujo de la CPU no se borro del fb mostrado", frame);
   }
   CHECK(logHas("fb 0a170000: intermedio"), "el fb del formulario no se detecto como intermedio");
   CHECK(!logHas("fb 0a04c000: intermedio"), "la pantalla se tomo como intermedia");
@@ -915,11 +921,22 @@ static void test_rt_lee_pantalla(void) {
     comp = cmd(GE_CMD_PRIM, (GE_PRIM_TRIANGLES << 16) | 3);
     end();
     run();
+    u16 *sp = (u16 *)0x0A0D43C0; // spinner de la CPU: 20x20 en (440,233) de la mitad mostrada
+    int yy, xx;
+    for (yy = 233; yy < 253; yy++)
+      for (xx = 440; xx < 460; xx++)
+        sp[yy * 1024 + xx] = 0xffff;
     sceDisplaySetFrameBufPatched((void *)0x0A0D43C0, 1024, 0, 0);
+    CHECK(sp[240 * 1024 + 450] == 0, "frame %d: el dibujo de la CPU no se borro del fb mostrado", frame);
   }
   CHECK(logHas("fb 0a170000: intermedio"), "el fb del spinner no se detecto como intermedio");
   CHECK((*comp >> 24) != GE_CMD_CALL, "la copia al fb mostrado (1024) tambien reducia la pantalla: trabajo de mas cada frame");
   CHECK(st.cpu_overlays > 0, "no se pego lo que dibuja la CPU en el fb mostrado (spinner)");
+  u16 *o = (u16 *)OVL_BUF;
+  int q, white = 0;
+  for (q = 0; q < 2 * OVL_MAX * 2 * OVL_MAX; q++)
+    white += o[q] == 0xffff;
+  CHECK(white == 20 * 20 * 4, "el spinner no quedo al doble en OVL_BUF (%d pixeles)", white);
   CHECK((*prim >> 24) == GE_CMD_CALL && (*prev >> 24) == GE_CMD_BASE, "el draw que lee la pantalla no se reemplazo: %08lx", *prim);
   CHECK(*use != NOP_OMIT, "el spinner (render target) no se uso en la pantalla");
   u32 *sub = (u32 *)(0x0A000000 | (*prim & 0xffffff));

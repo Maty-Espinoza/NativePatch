@@ -2425,6 +2425,11 @@ void guStart(int cid, void *list); // gu.c
 // Copia el buffer de alta resolucion al que muestra Adrenaline, con una lista propia del GE.
 // Se alternan dos listas: con una sola, una copia nueva podia reescribir la lista
 // mientras el GE aun ejecutaba la anterior (imagen corrupta o cuelgue).
+// Dibujo de la CPU a pegar en la copia final (ver cpuOverlay)
+#define OVL_BUF 0x0AF40000 // hasta 192x192 al doble en 565
+#define OVL_MAX 96
+static struct { int x, y, w, h; } ovl;
+
 void copyFrameBuffer(int menu) {
   static int which;
   u32 rl = RENDER_LIST + (which ^= 1) * 0x1000;
@@ -2438,6 +2443,10 @@ void copyFrameBuffer(int menu) {
   sceGuCopyImage(PIXELFORMAT, 0, 0, WIDTH, HEIGHT, PITCH,
                  (void *)VRAM_DRAW_BUFFER_OFFSET,
                  0, 0, PITCH, (void *)DISPLAY_BUFFER);
+  if (ovl.w) { // lo que dibujo la CPU (ver cpuOverlay), encima de la imagen final
+    sceGuCopyImage(PIXELFORMAT, 0, 0, ovl.w * 2, ovl.h * 2, ovl.w * 2, (void *)OVL_BUF, ovl.x * 2, ovl.y * 2, PITCH, (void *)DISPLAY_BUFFER);
+    ovl.w = 0;
+  }
   sceGuFinish();
   _sceGeListEnQueue((void *)rl, NULL, -1, NULL);
 }
@@ -2534,49 +2543,48 @@ static void fbCopyDown(u32 dst, int width, int fmt) {
   st.fb_copies++;
 }
 
-// Lo que la CPU del juego dibuja directo en el fb mostrado (el spinner de carga de Silent Hill)
-// queda en la VRAM falsa, y la pantalla sale del buffer grande: no se veia. Si el fb mostrado
-// es un render target (lo del GE no esta ahi), se pega al doble encima del buffer grande sin
-// el negro (color test). Despues se borra con una copia de ceros, como lo haria el juego al
-// pegar el frame siguiente: si no, un spinner que ya no se dibuja quedaria para siempre.
-#define ZERO_BUF 0x0AF00000 // 256 KB en cero (Adrenaline borra esta zona al arrancar)
+// Lo que la CPU del juego dibuja directo en el fb mostrado (el spinner de carga de Silent
+// Hill) queda en la VRAM falsa, y la pantalla sale del buffer grande: no se veia. Antes se
+// pegaba con una lista propia con contexto, pero en Adrenaline encolarla congelaba el juego
+// (c1-2858-3). Ahora la CPU busca el recuadro con algo dibujado, lo duplica en OVL_BUF y lo
+// borra del fb (como lo tapa el juego al pegar el frame siguiente); la lista de la copia
+// final lo pone encima con una copia de bloque (no cambia el estado de dibujo del GE). El
+// negro alrededor del dibujo se copia tambien: el recuadro es chico.
 static void cpuOverlay(u32 src, int width, int fmt) {
-  static PspGeContext ctx;
-  static int which;
-  int bpp = fmt == 3 ? 4 : 2;
-  u32 rl = RENDER_LIST + 0x4000 + (which ^= 1) * 0x400, va = rl + 0x300, *l = (u32 *)(rl | 0x40000000);
-  short q[10] = { 0, 0, 0, 0, 0, 480, 272, WIDTH, HEIGHT, 0 }, i;
-  memcpy((void *)(va | 0x40000000), q, sizeof(q));
-  sceKernelDcacheWritebackRange((void *)src, width * 272 * bpp);
-  #define C(c, d) (*l++ = ((c) << 24) | ((d) & 0xffffff))
-  C(GE_CMD_FRAMEBUFPIXFORMAT, PIXELFORMAT);
-  C(GE_CMD_FRAMEBUFPTR, VRAM_DRAW_BUFFER_OFFSET); C(GE_CMD_FRAMEBUFWIDTH, ((VRAM_DRAW_BUFFER_OFFSET >> 24) << 16) | PITCH);
-  C(GE_CMD_SCISSOR1, 0); C(GE_CMD_SCISSOR2, ((HEIGHT - 1) << 10) | (WIDTH - 1));
-  C(GE_CMD_REGION1, 0); C(GE_CMD_REGION2, ((HEIGHT - 1) << 10) | (WIDTH - 1));
-  static const u8 off[] = { GE_CMD_ALPHATESTENABLE, GE_CMD_ZTESTENABLE, GE_CMD_ALPHABLENDENABLE, GE_CMD_STENCILTESTENABLE,
-    GE_CMD_LOGICOPENABLE, GE_CMD_DITHERENABLE, GE_CMD_MASKRGB, GE_CMD_MASKALPHA, GE_CMD_TEXMAPMODE, GE_CMD_TEXMODE,
-    GE_CMD_CLEARMODE, GE_CMD_TEXFILTER };
-  for (i = 0; i < (int)sizeof(off); i++)
-    C(off[i], 0);
-  C(GE_CMD_ZWRITEDISABLE, 1);
-  C(GE_CMD_TEXTUREMAPENABLE, 1); C(GE_CMD_TEXFORMAT, fmt & 3);
-  C(GE_CMD_TEXADDR0, src); C(GE_CMD_TEXBUFWIDTH0, ((src >> 24) << 16) | width);
-  C(GE_CMD_TEXSIZE0, (9 << 8) | 9); C(GE_CMD_TEXWRAP, (1 << 8) | 1); C(GE_CMD_TEXFUNC, (1 << 8) | 3);
-  C(GE_CMD_TEXFLUSH, 0);
-  C(GE_CMD_COLORTESTENABLE, 1); C(GE_CMD_COLORTEST, 3); C(GE_CMD_COLORREF, 0); C(GE_CMD_COLORTESTMASK, 0xffffff);
-  C(GE_CMD_VERTEXTYPE, GE_VTYPE_THROUGH | GE_VTYPE_TC_16BIT | GE_VTYPE_POS_16BIT);
-  C(GE_CMD_BASE, (va >> 8) & 0x0f0000); C(GE_CMD_OFFSETADDR, 0); C(GE_CMD_VADDR, va);
-  C(GE_CMD_PRIM, (GE_PRIM_RECTANGLES << 16) | 2);
-  C(GE_CMD_COLORTESTENABLE, 0);
-  l = snapCopy(l, src, width, 480, 272, bpp, fmt & 3, "fb mostrado (lo de la CPU)");
-  l = snapCopy(l, VRAM_DRAW_BUFFER_OFFSET, PITCH, WIDTH, HEIGHT, 2, 0, "pantalla con lo de la CPU");
-  // Borrar lo que se pego (480x272 del fb mostrado) con ceros
-  C(GE_CMD_TRANSFERSRC, ZERO_BUF); C(GE_CMD_TRANSFERSRCW, ((ZERO_BUF >> 24) << 16) | 480); C(GE_CMD_TRANSFERSRCPOS, 0);
-  C(GE_CMD_TRANSFERDST, src); C(GE_CMD_TRANSFERDSTW, ((src >> 24) << 16) | width); C(GE_CMD_TRANSFERDSTPOS, 0);
-  C(GE_CMD_TRANSFERSIZE, (271 << 10) | 479); C(GE_CMD_TRANSFERSTART, bpp == 4);
-  C(GE_CMD_FINISH, 0); C(GE_CMD_END, 0);
-  #undef C
-  geEnqueueCtx(rl, &ctx, "dibujos de la CPU");
+  int x, y, x0 = 480, y0 = 272, x1 = -1, y1 = -1;
+  u16 *fb = (u16 *)src;
+  ovl.w = 0;
+  if (fmt != 0) // solo 565 (el de Silent Hill)
+    return;
+  sceKernelDcacheWritebackInvalidateRange(fb, width * 272 * 2);
+  for (y = 0; y < 272; y += 2) // a saltos: el dibujo es mas grande que 2 px
+    for (x = 0; x < 480; x += 2)
+      if (fb[y * width + x] | fb[y * width + x + 1]) {
+        if (x < x0) x0 = x;
+        if (x > x1) x1 = x;
+        if (y < y0) y0 = y;
+        if (y > y1) y1 = y;
+      }
+  if (x1 < 0)
+    return;
+  x0 = x0 > 2 ? x0 - 2 : 0; y0 = y0 > 2 ? y0 - 2 : 0; // margen por los saltos
+  x1 = x1 + 4 < 480 ? x1 + 4 : 480; y1 = y1 + 4 < 272 ? y1 + 4 : 272;
+  if (x1 - x0 > OVL_MAX || y1 - y0 > OVL_MAX) { // no es un spinner: no se toca
+    LOG_ONCE(0xB3000000 ^ src, "fb mostrado %08lx: dibujo de la CPU de %dx%d (muy grande, no se pega)\n", src, x1 - x0, y1 - y0);
+    return;
+  }
+  ovl.x = x0; ovl.y = y0; ovl.w = (x1 - x0 + 3) & ~3; ovl.h = y1 - y0; // ancho al doble multiplo de 8
+  if (ovl.x + ovl.w > 480)
+    ovl.x = 480 - ovl.w;
+  u16 *d = (u16 *)(OVL_BUF | 0x40000000);
+  for (y = 0; y < ovl.h; y++) {
+    u16 *row = fb + (ovl.y + y) * width + ovl.x, *o = d + y * 2 * ovl.w * 2;
+    for (x = 0; x < ovl.w; x++)
+      o[2 * x] = o[2 * x + 1] = o[2 * ovl.w + 2 * x] = o[2 * ovl.w + 2 * x + 1] = row[x];
+    memset(row, 0, ovl.w * 2);
+  }
+  sceKernelDcacheWritebackRange(fb, width * 272 * 2);
+  LOG_ONCE(0xB2100000 ^ src, "fb mostrado %08lx: dibujo de la CPU en (%d,%d) %dx%d -> se pega al doble\n", src, ovl.x, ovl.y, ovl.w, ovl.h);
   st.cpu_overlays++;
 }
 
@@ -2792,8 +2800,6 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
         fbCopyDown(disp, bufferwidth, pixelformat);
     }
     // El fb mostrado es un render target: lo que tiene en la VRAM falsa lo dibujo la CPU
-    // Apagado por defecto (dev38): desde que la lista se encola de verdad (dev37) Adrenaline
-    // se cerraba al iniciar (c1-2858-3). Para probarlo: activarlo en el menu con el log en sync (R)
     if (opt.cpu_draw && draw != (u16 *)DISPLAY_BUFFER && dfb >= 0 && bufferwidth == 1024 && !opt.wide1024 &&
         (disp & 15) == 0 && bufferwidth <= 1024) {
       LOG_ONCE(0xB2000000 ^ disp, "fb mostrado %08lx de 1024 (el GE no dibuja ahi): se pega encima lo que dibuje la CPU (spinner)\n", disp);
