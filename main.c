@@ -1964,10 +1964,10 @@ void patchGeList(u32 *list, u32 *stall) {
           swap_done = 1;
           rt_gen++;
           if (swapComposite(list, op, data & 0xffff)) {
-            LOG_ONCE_CAP(0x5A000000 ^ (u32)list, "fb %08lx: mezcla con la escena guardada en la RAM (intercambio)\n", state.framebuf_addr[swap_fb]);
+            LOG_ONCE(0x5A000000 ^ state.framebuf_addr[swap_fb], "fb %08lx: mezcla con la escena guardada en la RAM (intercambio)\n", state.framebuf_addr[swap_fb]);
             break;
           }
-          LOG_ONCE_CAP(0x5A100000 ^ (u32)list, "fb %08lx: mezcla que no se puede intercambiar -> se omite y no se intenta mas\n", state.framebuf_addr[swap_fb]);
+          LOG_ONCE(0x5A100000 ^ state.framebuf_addr[swap_fb], "fb %08lx: mezcla que no se puede intercambiar -> se omite y no se intenta mas\n", state.framebuf_addr[swap_fb]);
           state.fb_swap[swap_fb] = 0;
           omit = 1;
         }
@@ -2193,7 +2193,7 @@ exit_loop:
               swap_flips = 0;
               swap_list = st.lists + st.heads;
               rt_gen++; // texCheck: la mezcla cambia de decision
-              LOG_ONCE_CAP(0x5A200000 ^ (u32)list, "fb %08lx: la escena (fb %08lx) se guarda en la RAM y el pase va al buffer grande\n",
+              LOG_ONCE(0x5A200000 ^ state.framebuf, "fb %08lx: la escena (fb %08lx) se guarda en la RAM y el pase va al buffer grande\n",
                            state.framebuf, state.framebuf_addr[state.big_fb - 1]);
             }
           } else if (rt_enabled && opt.rt_on && pitch >= 16 && (r = rtGet(state.framebuf, pitch)) &&
@@ -2545,6 +2545,8 @@ static void cpuOverlay(u32 src, int width, int fmt) {
   C(GE_CMD_BASE, (va >> 8) & 0x0f0000); C(GE_CMD_OFFSETADDR, 0); C(GE_CMD_VADDR, va);
   C(GE_CMD_PRIM, (GE_PRIM_RECTANGLES << 16) | 2);
   C(GE_CMD_COLORTESTENABLE, 0);
+  l = snapCopy(l, src, width, 480, 272, bpp, fmt & 3, "fb mostrado (lo de la CPU)");
+  l = snapCopy(l, VRAM_DRAW_BUFFER_OFFSET, PITCH, WIDTH, HEIGHT, 2, 0, "pantalla con lo de la CPU");
   // Borrar lo que se pego (480x272 del fb mostrado) con ceros
   C(GE_CMD_TRANSFERSRC, ZERO_BUF); C(GE_CMD_TRANSFERSRCW, ((ZERO_BUF >> 24) << 16) | 480); C(GE_CMD_TRANSFERSRCPOS, 0);
   C(GE_CMD_TRANSFERDST, src); C(GE_CMD_TRANSFERDSTW, ((src >> 24) << 16) | width); C(GE_CMD_TRANSFERDSTPOS, 0);
