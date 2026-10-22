@@ -888,6 +888,7 @@ static void test_formulario_escala1(void) {
 // se omitia y el render target quedaba incompleto (spinner y puerta sin dibujar)
 static void test_rt_lee_pantalla(void) {
   reset();
+  opt.cpu_draw = 1; // apagado por defecto desde dev38
   memset(&st, 0, sizeof(st));
   rt_enabled = 1;
   opt.layers = 1;

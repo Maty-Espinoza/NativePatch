@@ -16,7 +16,7 @@
 // Valores originales (por defecto). El menu marca los que se cambiaron para probar.
 const Options opt_default = { .rt_on = 1, .rt_scale = 1, .omit_fbtex = 1, .fallback = 0, .nop_mark = 1, .walk_new = 1,
                               .v2d = 1, .tx_ge = 1, .walk_cache = 1, .layers = 0, .vram_fix = 1, .autocap = 1,
-                              .cpu_draw = 1, .csrc = 0, .swap = 1 };
+                              .cpu_draw = 0, .csrc = 0, .swap = 1 };
 Options opt = opt_default;
 u32 opt_gen;
 

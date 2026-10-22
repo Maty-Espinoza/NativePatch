@@ -147,6 +147,10 @@ static float game_offx = 2048 - 240, game_offy = 2048 - 136;
 
 // Estado entre un flip (sceDisplaySetFrameBuf) y el siguiente
 static u32 draws_since_flip, big_transfer, last_flip;
+// Draws con color en el buffer grande en este frame, y el fb que el juego pego en un fb
+// ignorado (el mostrado de 1024 de Silent Hill). Si no hubo ninguno con color, la imagen
+// esta en ese fb (logo de Silent Hill: lo pone la CPU y el GE solo lo pasa al mostrado)
+static u32 color_draws, disp_tex, disp_tex_w, disp_tex_fmt;
 // Ultima copia grande (TRANSFER) a un fb en el frame: de ahi sale la imagen original
 // escalada. Silent Hill copia el video a un fb de 512 que despues pasa por otro de 1024.
 static struct { u32 addr, w, fmt; } big_tx;
@@ -1948,6 +1952,11 @@ void patchGeList(u32 *list, u32 *stall) {
         // therefore NOPing it makes character invisible.
         if (!passive && (*list >> 24) == GE_CMD_CALL)
           primUnCall(list); // era un CALL de txDrawFromScreen: la palabra de antes vuelve a ser la del juego
+        if (state.ignore_framebuf && (state.ge_cmd[GE_CMD_TEXTUREMAPENABLE] & 1) && (state.ge_cmd[GE_CMD_TEXFORMAT] & 0xf) <= 3) {
+          disp_tex = toFake(((state.ge_cmd[GE_CMD_TEXBUFWIDTH0] & 0x0f0000) << 8) | (state.ge_cmd[GE_CMD_TEXADDR0] & 0xffffff));
+          disp_tex_w = state.ge_cmd[GE_CMD_TEXBUFWIDTH0] & 0x7ff;
+          disp_tex_fmt = state.ge_cmd[GE_CMD_TEXFORMAT] & 3;
+        }
         int texmode = state.ignore_framebuf ? 0 : texCheck();
         int omit = state.ignore_framebuf || texmode == 1;
         if (capturing)
@@ -2003,6 +2012,8 @@ void patchGeList(u32 *list, u32 *stall) {
           break;
         }
         st.draws++;
+        if (!state.cur_rt && (state.ge_cmd[GE_CMD_CLEARMODE] & 0x101) != 0x001) // un clear sin color no cuenta
+          color_draws++;
         if (state.cur_fb >= 0 && state.fb_tx[state.cur_fb] && !state.cur_rt) {
           state.fb_tx[state.cur_fb] = 0; // ahora se dibuja en el buffer grande
           rt_gen++;
@@ -2491,6 +2502,19 @@ int sceGeListEnQueueHeadPatched(const void *list, void *stall, int cbid, PspGeLi
 // lista propia del GE: 4 sprites con filtro lineal hacia un buffer temporal en la VRAM
 // alta, y una copia de bloque de ahi al fb del juego. El GE guarda y restaura su estado
 // (contexto de la lista), asi que las listas del juego no notan nada.
+// Lista propia con contexto (el GE guarda y restaura su estado: las listas del juego no
+// notan nada). El contexto esta en la memoria del plugin (kernel): con el k1 del juego (se
+// llama desde el flip) sceGeListEnQueue lo rechazaba y la lista nunca se ejecutaba (el
+// spinner de Silent Hill no aparecia).
+static void geEnqueueCtx(u32 rl, PspGeContext *ctx, const char *what) {
+  PspGeListArgs args = { 8, ctx };
+  int k1 = pspSdkSetK1(0);
+  int r = _sceGeListEnQueue((void *)rl, NULL, -1, &args);
+  pspSdkSetK1(k1);
+  if (r < 0)
+    LOG_ONCE(0x5B000000 ^ (u32)r, "lista propia (%s) rechazada por el GE: %08x\n", what, r);
+}
+
 static void fbCopyDown(u32 dst, int width, int fmt) {
   static PspGeContext ctx;
   static int which;
@@ -2506,8 +2530,7 @@ static void fbCopyDown(u32 dst, int width, int fmt) {
   C(GE_CMD_TRANSFERSTART, fmt == 3);
   C(GE_CMD_FINISH, 0); C(GE_CMD_END, 0);
   #undef C
-  PspGeListArgs args = { 8, &ctx };
-  _sceGeListEnQueue((void *)rl, NULL, -1, &args);
+  geEnqueueCtx(rl, &ctx, "copia reducida al fb mostrado");
   st.fb_copies++;
 }
 
@@ -2553,8 +2576,7 @@ static void cpuOverlay(u32 src, int width, int fmt) {
   C(GE_CMD_TRANSFERSIZE, (271 << 10) | 479); C(GE_CMD_TRANSFERSTART, bpp == 4);
   C(GE_CMD_FINISH, 0); C(GE_CMD_END, 0);
   #undef C
-  PspGeListArgs args = { 8, &ctx };
-  _sceGeListEnQueue((void *)rl, NULL, -1, &args);
+  geEnqueueCtx(rl, &ctx, "dibujos de la CPU");
   st.cpu_overlays++;
 }
 
@@ -2749,9 +2771,11 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
     // original escalada. La fuente es lo que se copio, no lo que se muestra: Silent Hill
     // copia el video a un fb de 512 y lo pasa por GE a otro de 1024, que no se dibuja.
     // Desde el menu se puede forzar siempre (para comparar con el original) o nunca.
-    int want = opt.fallback == 1 || (opt.fallback == 0 && (!draws_since_flip || big_transfer));
-    u32 src = big_transfer ? big_tx.addr : (u32)topaddr;
-    int sw = big_transfer ? (int)big_tx.w : bufferwidth, sf = big_transfer ? (int)big_tx.fmt : pixelformat;
+    int cpu_fb = draws_since_flip && !color_draws && !big_transfer && disp_tex && disp_tex_w >= 480 && disp_tex_w <= 512;
+    int want = opt.fallback == 1 || (opt.fallback == 0 && (!draws_since_flip || big_transfer || cpu_fb));
+    u32 src = big_transfer ? big_tx.addr : cpu_fb ? disp_tex : (u32)topaddr;
+    int sw = big_transfer ? (int)big_tx.w : cpu_fb ? (int)disp_tex_w : bufferwidth;
+    int sf = big_transfer ? (int)big_tx.fmt : cpu_fb ? (int)disp_tex_fmt : pixelformat;
     u16 *draw;
     if (want && hasContent(src, sw, sf)) {
       LOG_ONCE(0xE5000000 ^ src, "imagen original escalada desde %08lx ancho=%d fmt=%d (video/imagen fuera del GE)\n", src, sw, sf);
@@ -2768,6 +2792,8 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
         fbCopyDown(disp, bufferwidth, pixelformat);
     }
     // El fb mostrado es un render target: lo que tiene en la VRAM falsa lo dibujo la CPU
+    // Apagado por defecto (dev38): desde que la lista se encola de verdad (dev37) Adrenaline
+    // se cerraba al iniciar (c1-2858-3). Para probarlo: activarlo en el menu con el log en sync (R)
     if (opt.cpu_draw && draw != (u16 *)DISPLAY_BUFFER && dfb >= 0 && bufferwidth == 1024 && !opt.wide1024 &&
         (disp & 15) == 0 && bufferwidth <= 1024) {
       LOG_ONCE(0xB2000000 ^ disp, "fb mostrado %08lx de 1024 (el GE no dibuja ahi): se pega encima lo que dibuje la CPU (spinner)\n", disp);
@@ -2790,7 +2816,7 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
   if (capturing)
     LOG("  (plugin %lu us en este frame)\n", patch_us_frame);
   patch_us_frame = 0;
-  draws_since_flip = big_transfer = 0;
+  draws_since_flip = big_transfer = color_draws = disp_tex = 0;
   last_flip = now;
   walk_now = !passive || capturing || log_frame % PASSIVE_SAMPLE == 0;
 
