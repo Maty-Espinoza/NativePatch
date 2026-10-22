@@ -16,7 +16,7 @@
 // Valores originales (por defecto). El menu marca los que se cambiaron para probar.
 const Options opt_default = { .rt_on = 1, .rt_scale = 1, .omit_fbtex = 1, .fallback = 0, .nop_mark = 1, .walk_new = 1,
                               .v2d = 1, .tx_ge = 1, .walk_cache = 1, .layers = 0, .vram_fix = 1, .autocap = 1,
-                              .cpu_draw = 1, .csrc = 0, .swap = 1 };
+                              .cpu_draw = 1, .csrc = 0, .swap = 1, .rt1 = 1 };
 Options opt = opt_default;
 u32 opt_gen;
 
@@ -58,6 +58,7 @@ static const Item items[] = {
   { "cpu", "Dibujos de la CPU en pantalla", &opt.cpu_draw, 0, 1, 1, no_si },
   { "copia_esc1", "Fb de copia a escala 1", &opt.csrc, 0, 1, 1, no_si },
   { "intercambio", "Fb intermedios por intercambio", &opt.swap, 0, 1, 1, no_si },
+  { "rt_esc1", "Render targets a escala 1 (VRAM del z)", &opt.rt1, 0, 1, 1, no_si },
   { NULL, "Capturar el proximo frame al log", NULL, 0, 0, 0, NULL, ACT_CAPTURE },
   { NULL, "Volcar el proximo frame (.gpd)", NULL, 0, 0, 0, NULL, ACT_DUMP },
   { NULL, "Memoria y CPU al log", NULL, 0, 0, 0, NULL, ACT_SNAPSHOT },

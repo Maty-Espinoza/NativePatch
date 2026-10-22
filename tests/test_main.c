@@ -30,7 +30,7 @@ static void reset(void) {
   memset(&state, 0, sizeof(state));
   memset(memo, 0, MEMO_SIZE * sizeof(MemoEntry));
   memset(vmemo, 0, VMEMO_SIZE * sizeof(VMemo));
-  vram_swz = 0; depth_vram = 0x04100000;
+  vram_swz = 0; depth_vram = 0x04100000; rt1_pending = z_used = tx_small = 0; ge_fbs = 0;
   memset(rt, 0, sizeof(rt));
   rt_count = 0; rt_next = RT_BASE; rt_hi_next = RT_HI_BASE; rt_enabled = 0;
   tex_patched_any = 0; rt_gen++; memset(&tcache, 0, sizeof(tcache)); tcache.res = 2; // sin cache valida
@@ -1141,13 +1141,99 @@ static void test_menu(void) {
   CHECK(!menuOpen(), "el menu no se cerro");
 }
 
+// VRAM de 2 MB: render target a escala 1 en la VRAM del z-buffer, copiado a la VRAM falsa al
+// salir (en las palabras del fb siguiente), y la textura que lo lee va a la VRAM falsa (GEPVM)
+static void test_rt_escala1_z(void) {
+  reset();
+  vram_swz = 1; rt_enabled = 0; z_used = 0;
+  begin();
+  cmd(GE_CMD_FRAMEBUFPIXFORMAT, 3);
+  u32 *rp = lp; cmd(GE_CMD_FRAMEBUFPTR, 0x154000); cmd(GE_CMD_FRAMEBUFWIDTH, (0x04 << 16) | 128);
+  cmd(GE_CMD_SCISSOR2, (127 << 10) | 127);
+  cmd(GE_CMD_VERTEXTYPE, GE_VTYPE_THROUGH | GE_VTYPE_POS_16BIT);
+  cmd(GE_CMD_TEXTUREMAPENABLE, 0);
+  u32 *p1 = cmd(GE_CMD_PRIM, (GE_PRIM_TRIANGLES << 16) | 3);
+  cmd(GE_CMD_FRAMEBUFPIXFORMAT, 3);
+  u32 *back = lp; setFb(0, 512);
+  cmd(GE_CMD_TEXTUREMAPENABLE, 1); cmd(GE_CMD_TEXADDR0, 0x154000); u32 *tw = cmd(GE_CMD_TEXBUFWIDTH0, (0x04 << 16) | 128);
+  cmd(GE_CMD_TEXFORMAT, 3);
+  cmd(GE_CMD_VERTEXTYPE, GE_VTYPE_POS_16BIT | GE_VTYPE_TC_16BIT);
+  u32 *p2 = cmd(GE_CMD_PRIM, (GE_PRIM_TRIANGLES << 16) | 3);
+  end();
+  run();
+  // Entrada: las palabras del fb pasan a BASE + CALL (fija tambien su profundidad)
+  CHECK((rp[0] >> 24) == GE_CMD_BASE && (rp[1] >> 24) == GE_CMD_CALL && rp[-1] == ((GE_CMD_FRAMEBUFPIXFORMAT << 24) | 3),
+        "rt a escala 1: entrada %08lx %08lx formato %08lx", rp[0], rp[1], rp[-1]);
+  u32 *e = (u32 *)(0x0A000000 | (rp[1] & 0xffffff)), fbp = 0, zb = 0, sv = 0, ld = 0, k;
+  for (k = 0; k < 40 && (e[k] >> 24) != GE_CMD_RET; k++) {
+    fbp |= e[k] == ((GE_CMD_FRAMEBUFPTR << 24) | 0x100000);
+    zb |= (e[k] >> 24) == GE_CMD_ZBUFPTR && (e[k] & 0xffffff) > 0x100000;
+    sv |= e[k] == ((GE_CMD_TRANSFERDST << 24) | (Z_SAVE & 0xffffff));
+    ld |= e[k] == ((GE_CMD_TRANSFERSRC << 24) | 0x154000) && e[k + 1] == ((GE_CMD_TRANSFERSRCW << 24) | (0x0a << 16) | 128);
+  }
+  CHECK(fbp && zb && !sv && ld, "entrada: fb en la VRAM del z=%lu profundidad propia=%lu carga lo anterior=%lu (sin guardar el z: %lu)", fbp, zb, ld, sv);
+  CHECK(*p1 != NOP_OMIT, "el draw del render target se omitio");
+  CHECK((back[0] >> 24) == GE_CMD_BASE && (back[1] >> 24) == GE_CMD_CALL, "salida del rt: %08lx %08lx (deberia ser BASE + CALL)", back[0], back[1]);
+  u32 *l = (u32 *)(0x0A000000 | (back[1] & 0xffffff)), dst = 0, big = 0, fmt = 0;
+  for (k = 0; k < 40 && (l[k] >> 24) != GE_CMD_RET; k++) {
+    dst |= l[k] == ((GE_CMD_TRANSFERDST << 24) | 0x154000) && l[k + 1] == ((GE_CMD_TRANSFERDSTW << 24) | (0x0a << 16) | 128);
+    big |= l[k] == ((GE_CMD_FRAMEBUFPTR << 24) | 0);
+    fmt |= l[k] == ((GE_CMD_FRAMEBUFPIXFORMAT << 24) | PIXELFORMAT);
+  }
+  CHECK(dst && big && fmt, "salida del rt: copia a la VRAM falsa=%lu buffer grande=%lu formato 565=%lu", dst, big, fmt);
+  CHECK(*p2 != NOP_OMIT && ((*tw >> 16) & 0xff) == 0x0a, "textura del rt: draw %08lx, ancho %08lx (deberia leer la VRAM falsa)", *p2, *tw);
+  // Con profundidad ya usada en el buffer grande (Ridge Racer): se guarda la VRAM del z antes
+  reset();
+  vram_swz = 1; rt_enabled = 0; z_used = 1;
+  begin();
+  rp = lp; setFb(0x154000, 256);
+  cmd(GE_CMD_VERTEXTYPE, GE_VTYPE_THROUGH | GE_VTYPE_POS_16BIT);
+  p1 = cmd(GE_CMD_PRIM, (GE_PRIM_TRIANGLES << 16) | 3);
+  back = lp; setFb(0, 512);
+  end();
+  run();
+  CHECK(*p1 != NOP_OMIT && (rp[1] >> 24) == GE_CMD_CALL, "rt con el z ocupado: draw %08lx entrada %08lx", *p1, rp[1]);
+  e = (u32 *)(0x0A000000 | (rp[1] & 0xffffff)); sv = 0;
+  for (k = 0; k < 40 && (e[k] >> 24) != GE_CMD_RET; k++)
+    sv |= e[k] == ((GE_CMD_TRANSFERDST << 24) | (Z_SAVE & 0xffffff));
+  e = (u32 *)(0x0A000000 | (back[1] & 0xffffff)); u32 rs = 0, zbig = 0;
+  for (k = 0; k < 40 && (e[k] >> 24) != GE_CMD_RET; k++) {
+    rs |= e[k] == ((GE_CMD_TRANSFERSRC << 24) | (Z_SAVE & 0xffffff));
+    zbig |= e[k] == ((GE_CMD_ZBUFPTR << 24) | 0x100000);
+  }
+  CHECK(sv && rs && zbig, "z ocupado: guarda=%lu restaura=%lu profundidad del buffer grande=%lu", sv, rs, zbig);
+  // El rt se lee a si mismo (Ridge Racer): solo ese draw lee la VRAM del z; las palabras de
+  // textura del juego quedan como estaban (dev44 las dejaba en el z: franjas moradas despues)
+  reset();
+  vram_swz = 1; rt_enabled = 0; z_used = 0;
+  begin();
+  setFb(0x154000, 128);
+  cmd(GE_CMD_VERTEXTYPE, GE_VTYPE_THROUGH | GE_VTYPE_POS_16BIT);
+  cmd(GE_CMD_PRIM, (GE_PRIM_TRIANGLES << 16) | 3);
+  cmd(GE_CMD_TEXTUREMAPENABLE, 1); u32 *ta = cmd(GE_CMD_TEXADDR0, 0x154000); tw = cmd(GE_CMD_TEXBUFWIDTH0, (0x04 << 16) | 128);
+  cmd(GE_CMD_TEXFORMAT, 3);
+  cmd(GE_CMD_VERTEXTYPE, GE_VTYPE_POS_16BIT | GE_VTYPE_TC_16BIT);
+  p2 = cmd(GE_CMD_PRIM, (GE_PRIM_TRIANGLES << 16) | 3);
+  setFb(0, 512);
+  end();
+  run();
+  u32 self = 0, after = 0;
+  if ((p2[0] >> 24) == GE_CMD_CALL)
+    for (l = (u32 *)(0x0A000000 | (p2[0] & 0xffffff)), k = 0; k < 20 && (l[k] >> 24) != GE_CMD_RET; k++) {
+      self |= (l[k] >> 24) == GE_CMD_TEXADDR0 && (l[k] & 0xffffff) == 0x100000 && (l[k + 1] & 0xff0000) == 0x040000;
+      after |= self && l[k] == ((GE_CMD_TEXADDR0 << 24) | 0x154000) && (l[k + 1] & 0xff0000) == 0x0a0000;
+    }
+  CHECK(self && after && *ta == ((GE_CMD_TEXADDR0 << 24) | 0x154000) && ((*tw >> 16) & 0xff) == 0x04,
+        "rt que se lee a si mismo: draw en el z=%lu despues la VRAM falsa=%lu, textura del juego %08lx %08lx", self, after, *ta, *tw);
+}
+
 int main(void) {
   mapPspMemory();
   void (*tests[])(void) = {
     test_viewport_scissor_x2, test_viewport_zona, test_memo_lista_grande, test_vertices_2d,
     test_vaddr_avanza_tras_3d, test_bjump_no_salta, test_estado_entre_listas, test_textura_fb_al_dibujar,
     test_render_target, test_textura_dentro_de_rt, test_rt_incompleto, test_rt_escala_1, test_pitch_0,
-    test_robustez, test_copia_listas_alternas, test_fps, test_doble_buffer_alternado, test_nop_no_revive, test_lista_estatica_fb, test_pasivo_no_escribe, test_pasivo_normaliza, test_desplazamiento_y_1024, test_vertices_2d_muchos_buffers, test_pasivo_muestreo, test_silent_hill_video, test_copia_escalada_con_ge, test_copia_reducida, test_sublistas_sin_cambios, test_sublistas_anidadas, test_sublistas_doble_buffer, test_vram_real, test_copia_formulario, test_fb_intermedio, test_opciones_juego, test_formulario_escala1, test_rt_lee_pantalla, test_volcado, test_volcado_pasivo, test_vram_2mb, test_pase_intercambio, test_menu,
+    test_robustez, test_copia_listas_alternas, test_fps, test_doble_buffer_alternado, test_nop_no_revive, test_lista_estatica_fb, test_pasivo_no_escribe, test_pasivo_normaliza, test_desplazamiento_y_1024, test_vertices_2d_muchos_buffers, test_pasivo_muestreo, test_silent_hill_video, test_copia_escalada_con_ge, test_copia_reducida, test_sublistas_sin_cambios, test_sublistas_anidadas, test_sublistas_doble_buffer, test_vram_real, test_copia_formulario, test_fb_intermedio, test_opciones_juego, test_formulario_escala1, test_rt_lee_pantalla, test_volcado, test_volcado_pasivo, test_vram_2mb, test_pase_intercambio, test_rt_escala1_z, test_menu,
   };
   int i;
   for (i = 0; i < (int)(sizeof(tests) / sizeof(tests[0])); i++)

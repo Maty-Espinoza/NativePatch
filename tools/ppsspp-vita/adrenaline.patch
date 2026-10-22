@@ -1,0 +1,831 @@
+diff --git a/Core/CMakeLists.txt b/Core/CMakeLists.txt
+index 9a58593..1d2821d 100644
+--- a/Core/CMakeLists.txt
++++ b/Core/CMakeLists.txt
+@@ -391,6 +391,8 @@ add_library(Core STATIC
+ 	HLE/sceSysreg.cpp
+ 	HLE/Plugins.h
+ 	HLE/Plugins.cpp
++	HLE/Adrenaline.cpp
++	HLE/Adrenaline.h
+ 	HLE/PopsBoot.cpp
+ 	HLE/PopsBoot.h
+ 	HLE/ThreadQueueList.h
+diff --git a/Core/HLE/Adrenaline.cpp b/Core/HLE/Adrenaline.cpp
+new file mode 100644
+index 0000000..289c570
+--- /dev/null
++++ b/Core/HLE/Adrenaline.cpp
+@@ -0,0 +1,194 @@
++// Modelo de Adrenaline: ver Adrenaline.h
++#include <cstdlib>
++#include <cstring>
++#include <set>
++
++#include "Common/File/FileUtil.h"
++#include "Common/File/Path.h"
++#include "Common/Log.h"
++#include "Common/StringUtils.h"
++#include "Core/Config.h"
++#include "Core/Core.h"
++#include "Core/MemMap.h"
++#include "Core/MIPS/MIPS.h"
++#include "Core/HLE/HLE.h"
++#include "Core/HLE/sceKernelMemory.h"
++#include "Core/HLE/Adrenaline.h"
++
++namespace Adrenaline {
++
++enum : u32 {
++	DRAW_NATIVE = 0x0BCDEF00,        // 0xABCDEF00 sin el segmento
++	NATIVE_FRAMEBUFFER = 0x0A400000,
++	NATIVE_W = 960, NATIVE_H = 544,
++	STUB_BLOCK = 0x800,              // 256 stubs de 8 bytes
++};
++
++struct Stub { std::string lib; u32 nid; u32 addr; };
++struct Override { const HLEFunction *func; u32 target; };
++
++static int mode = -1;  // 0 apagado, 1 activo, 2 estricto
++static std::vector<Stub> stubs;
++static std::vector<Override> overrides;
++static std::set<std::string> warned;
++static u32 stubBlock, stubUsed, fileNameAddr;
++static std::string initFileName;
++
++static int Mode() {
++	if (mode < 0) {
++		const char *e = getenv("PPSSPP_ADRENALINE");
++		mode = !e || !*e || !strcmp(e, "0") ? 0 : !strcmp(e, "estricto") ? 2 : 1;
++	}
++	return mode;
++}
++
++bool Enabled() { return Mode() != 0; }
++
++void Reset() {
++	stubs.clear();
++	overrides.clear();
++	warned.clear();
++	stubBlock = stubUsed = fileNameAddr = 0;  // la memoria de kernel se reinicia con el juego
++}
++
++std::vector<std::string> GamePlugins() {
++	std::vector<std::string> out;
++	std::string text;
++	if (!File::ReadTextFileToString(g_Config.memStickDirectory / "seplugins" / "game.txt", &text))
++		return out;
++	std::vector<std::string> lines;
++	SplitString(text, '\n', lines, true);
++	for (const std::string &line : lines) {
++		size_t sp = line.find_last_of(" \t");
++		if (line.empty() || line[0] == '#' || sp == std::string::npos || StripSpaces(line.substr(sp)) != "1")
++			continue;
++		std::string path(StripSpaces(line.substr(0, sp)));
++		// En la Vita las rutas pueden ir por ux0:/pspemu/, que para el PSP es ms0:/
++		if (startsWithNoCase(path, "ux0:/pspemu/"))
++			path = "ms0:/" + path.substr(12);
++		out.push_back(path);
++	}
++	return out;
++}
++
++uint32_t HleStub(const char *library, uint32_t nid) {
++	if (!library || !GetHLEFunc(library, nid))
++		return 0;
++	for (const Stub &s : stubs)
++		if (s.nid == nid && s.lib == library)
++			return s.addr;
++	if (!stubBlock || stubUsed + 8 > STUB_BLOCK) {
++		u32 size = STUB_BLOCK;
++		u32 addr = kernelMemory.Alloc(size, true, "Adrenaline stubs");
++		if (addr == (u32)-1)
++			return 0;
++		stubBlock = addr;
++		stubUsed = 0;
++	}
++	u32 addr = stubBlock + stubUsed;
++	stubUsed += 8;
++	WriteHLESyscall(library, nid, addr);
++	currentMIPS->InvalidateICacheRangeDeferred(addr, 8);
++	stubs.push_back({library, nid, addr});
++	return addr;
++}
++
++bool StubOf(uint32_t addr, std::string *library, uint32_t *nid) {
++	for (const Stub &s : stubs) {
++		if ((s.addr & 0x1FFFFFFF) == (addr & 0x1FFFFFFF)) {
++			*library = s.lib;
++			*nid = s.nid;
++			return true;
++		}
++	}
++	return false;
++}
++
++// La misma funcion del sistema puede exportarse en varias bibliotecas (sceGe_user/sceGe_driver,
++// sceCtrl/sceCtrl_driver): el CFW parcha la entrada de la tabla de syscalls, que es una sola
++void AddOverride(const char *library, uint32_t nid, uint32_t target) {
++	const HLEFunction *f = GetHLEFunc(library, nid);
++	if (!f)
++		return;
++	for (Override &o : overrides) {
++		if (o.func->func == f->func && o.func->ID == f->ID) {
++			o.target = target;
++			return;
++		}
++	}
++	overrides.push_back({f, target});
++}
++
++uint32_t ImportOverride(const char *library, uint32_t nid) {
++	if (overrides.empty())
++		return 0;
++	const HLEFunction *f = GetHLEFunc(library, nid);
++	if (!f)
++		return 0;
++	for (const Override &o : overrides)
++		if (o.func->func == f->func && o.func->ID == f->ID)
++			return o.target;
++	return 0;
++}
++
++void SetInitFileName(const std::string &filename) {
++	initFileName = filename;
++	fileNameAddr = 0;
++}
++
++uint32_t InitFileNameAddr() {
++	if (!fileNameAddr && !initFileName.empty()) {
++		u32 size = (u32)initFileName.size() + 1;
++		u32 addr = kernelMemory.Alloc(size, true, "InitFileName");
++		if (addr == (u32)-1)
++			return 0;
++		Memory::MemcpyUnchecked(addr, initFileName.c_str(), (u32)initFileName.size() + 1);
++		fileNameAddr = addr;
++	}
++	return fileNameAddr;
++}
++
++bool NativeActive() {
++	return Enabled() && Memory::IsValid4AlignedAddress(DRAW_NATIVE) && Memory::ReadUnchecked_U32(DRAW_NATIVE) != 0;
++}
++
++uint32_t NativeAddress() { return NATIVE_FRAMEBUFFER; }
++
++// BMP de 24 bits de 960x544 desde la imagen nativa (565)
++bool SaveNative(const Path &bmp) {
++	if (!Memory::IsValidRange(NATIVE_FRAMEBUFFER, NATIVE_W * NATIVE_H * 2))
++		return false;
++	FILE *f = File::OpenCFile(bmp, "wb");
++	if (!f)
++		return false;
++	const u32 row = NATIVE_W * 3, data = row * NATIVE_H;
++	u8 hdr[54] = {'B', 'M'};
++	auto put32 = [&](int at, u32 v) { for (int i = 0; i < 4; i++) hdr[at + i] = (u8)(v >> (i * 8)); };
++	put32(2, 54 + data); put32(10, 54); put32(14, 40); put32(18, NATIVE_W); put32(22, NATIVE_H);
++	hdr[26] = 1; hdr[28] = 24; put32(34, data);
++	fwrite(hdr, 1, sizeof(hdr), f);
++	std::vector<u8> line(row);
++	const u16_le *src = (const u16_le *)Memory::GetPointerUnchecked(NATIVE_FRAMEBUFFER);
++	for (int y = NATIVE_H - 1; y >= 0; y--) {
++		for (int x = 0; x < NATIVE_W; x++) {
++			u16 c = src[y * NATIVE_W + x];
++			u8 r = c & 31, g = (c >> 5) & 63, b = c >> 11;
++			line[x * 3] = (b << 3) | (b >> 2);
++			line[x * 3 + 1] = (g << 2) | (g >> 4);
++			line[x * 3 + 2] = (r << 3) | (r >> 2);
++		}
++		fwrite(line.data(), 1, row, f);
++	}
++	fclose(f);
++	return true;
++}
++
++void Warn(const char *what) {
++	if (!Enabled() || !warned.insert(what).second)
++		return;
++	ERROR_LOG(Log::HLE, "Adrenaline: %s (en la Vita esto congela o cierra Adrenaline) pc=%08x ra=%08x", what, currentMIPS->pc, currentMIPS->r[MIPS_REG_RA]);
++	if (Mode() == 2)
++		Core_Stop();
++}
++
++}  // namespace Adrenaline
+diff --git a/Core/HLE/Adrenaline.h b/Core/HLE/Adrenaline.h
+new file mode 100644
+index 0000000..a57430c
+--- /dev/null
++++ b/Core/HLE/Adrenaline.h
+@@ -0,0 +1,49 @@
++// Modelo de Adrenaline (PSP dentro de la PS Vita) para probar plugins como GePatch tal cual,
++// cargados desde su .prx. Se activa con la variable de entorno PPSSPP_ADRENALINE=1. Lo que imita:
++//  - plugins de ms0:/seplugins/game.txt ("ruta 1" por linea), cargados con el juego
++//  - 64 MB de RAM con la particion de usuario de 32 MB (0x0A000000+ libre para el plugin)
++//  - SystemCtrlForKernel: sctrlHENFindFunction tambien encuentra funciones del sistema (HLE) y
++//    sctrlHENPatchSyscall redirige las llamadas de los modulos de usuario a otra funcion
++//  - VRAM de 2 MB: sceGeEdramSetSize(4 MB) falla
++//  - la imagen nativa de 960x544 (565) que Adrenaline muestra desde 0x0A400000 mientras el
++//    plugin deja algo distinto de 0 en 0xABCDEF00 (DRAW_NATIVE)
++//  - avisos de lo que en la Vita cae o congela Adrenaline (ver Warn)
++#pragma once
++
++#include <string>
++#include <vector>
++#include <cstdint>
++
++class Path;
++
++namespace Adrenaline {
++
++bool Enabled();
++void Reset();  // al arrancar cada juego
++
++// Rutas ms0:/... de los plugins activos en seplugins/game.txt
++std::vector<std::string> GamePlugins();
++
++// sctrlHENFindFunction de una funcion HLE: stub "jr ra; syscall" propio (0 si no existe)
++uint32_t HleStub(const char *library, uint32_t nid);
++// Si addr es uno de esos stubs, su biblioteca y NID
++bool StubOf(uint32_t addr, std::string *library, uint32_t *nid);
++// sctrlHENPatchSyscall: las importaciones de esa funcion (en cualquier biblioteca que la
++// exporte, como sceGe_user y sceGe_driver) saltan a target
++void AddOverride(const char *library, uint32_t nid, uint32_t target);
++uint32_t ImportOverride(const char *library, uint32_t nid);
++
++// sceKernelInitFileName: el ejecutable con que arranco el juego
++void SetInitFileName(const std::string &filename);
++uint32_t InitFileNameAddr();
++
++// Imagen nativa (DRAW_NATIVE != 0)
++bool NativeActive();
++uint32_t NativeAddress();
++bool SaveNative(const Path &bmp);
++
++// Algo que en la Vita congela o cierra Adrenaline: se registra (una vez por motivo) y, con
++// PPSSPP_ADRENALINE=estricto, se detiene la emulacion
++void Warn(const char *what);
++
++}  // namespace Adrenaline
+diff --git a/Core/HLE/Plugins.cpp b/Core/HLE/Plugins.cpp
+index 5e403fc..b58b01d 100644
+--- a/Core/HLE/Plugins.cpp
++++ b/Core/HLE/Plugins.cpp
+@@ -31,6 +31,7 @@
+ #include "Core/ELF/ParamSFO.h"
+ #include "Core/HLE/Plugins.h"
+ #include "Core/HLE/sceKernelModule.h"
++#include "Core/HLE/Adrenaline.h"
+ 
+ namespace HLEPlugins {
+ 
+@@ -162,11 +163,23 @@ std::vector<PluginInfo> FindPlugins(const std::string &gameID, const std::string
+ }
+ 
+ void Init() {
+-	if (!g_Config.bLoadPlugins) {
++	Adrenaline::Reset();
++	if (!g_Config.bLoadPlugins && !Adrenaline::Enabled()) {
+ 		return;
+ 	}
+ 
+ 	std::vector<PluginInfo> plugins = FindPlugins(g_paramSFO.GetDiscID(), g_Config.sLanguageIni);
++	// Adrenaline: los plugins de ms0:/seplugins/game.txt, como los carga su systemctrl
++	if (Adrenaline::Enabled()) {
++		for (const std::string &path : Adrenaline::GamePlugins()) {
++			PluginInfo info{};
++			info.type = PluginType::PRX;
++			info.name = path;
++			info.filename = path;
++			info.version = 1;
++			plugins.push_back(info);
++		}
++	}
+ 	prxPlugins.clear();
+ 	for (auto &plugin : plugins) {
+ 		if (plugin.memory << 20 > Memory::g_MemorySize) {
+@@ -187,7 +200,7 @@ bool Load(PSPModule *pluginWaitingModule, SceUID threadID) {
+ 	auto sy = GetI18NCategory(I18NCat::SYSTEM);
+ 
+ 	for (const PluginInfo &plugin : prxPlugins) {
+-		if (!g_Config.bEnablePlugins) {
++		if (!g_Config.bEnablePlugins && !Adrenaline::Enabled()) {
+ 			WARN_LOG(Log::System, "Plugins are disabled, ignoring enabled plugin '%s'", plugin.filename.c_str());
+ 			continue;
+ 		}
+diff --git a/Core/HLE/sceGe.cpp b/Core/HLE/sceGe.cpp
+index e58fdf8..17b21d1 100644
+--- a/Core/HLE/sceGe.cpp
++++ b/Core/HLE/sceGe.cpp
+@@ -40,6 +40,7 @@
+ #include "Core/HLE/KernelWaitHelpers.h"
+ #include "GPU/GPUState.h"
+ #include "GPU/GPUCommon.h"
++#include "Core/HLE/Adrenaline.h"
+ 
+ static const int LIST_ID_MAGIC = 0x35000000;
+ 
+@@ -400,11 +401,37 @@ static int sceGeEdramSetSize(u32 size) {
+ 	return hleLogDebug(Log::sceGe, 0);
+ }
+ 
++// Adrenaline: una lista con contexto encolada desde un plugin (kernel) congela la Vita (c1-2858-3)
++static void AdrenalineCheckList(MIPSState *mips, u32 optParamAddr) {
++	auto args = PSPPointer<PspGeListArgs>::Create(optParamAddr);
++	if (Adrenaline::Enabled() && args.IsValid() && args->size >= 8 && args->context.ptr != 0 && Memory::IsKernelCodeAddress(mips->r[MIPS_REG_RA]))
++		Adrenaline::Warn("lista del GE con contexto encolada desde un plugin");
++}
++
++// Datos de una lista como los guarda el kernel (SceGeDisplayList): +0x08 estado, +0x14 lista,
++// +0x18 stall. GePatch lee el stall anterior en sceGeListUpdateStallAddr
++static int sceGeGetList(u32 listID, u32 infoAddr, u32 flagAddr) {
++	int id = LIST_ID_MAGIC ^ listID;
++	if (!gpu || !gpu->IsValidListId(id))
++		return hleLogWarning(Log::sceGe, SCE_KERNEL_ERROR_INVALID_ID, "bad list id");
++	const DisplayList *dl = gpu->getList(id);
++	if (Memory::IsValidRange(infoAddr, 0x40)) {
++		Memory::Memset(infoAddr, 0, 0x40);
++		Memory::WriteUnchecked_U16((u16)dl->state, infoAddr + 0x08);
++		Memory::WriteUnchecked_U32(dl->startpc, infoAddr + 0x14);
++		Memory::WriteUnchecked_U32(dl->stall, infoAddr + 0x18);
++	}
++	if (Memory::IsValid4AlignedAddress(flagAddr))
++		Memory::WriteUnchecked_U32(0, flagAddr);
++	return hleLogDebug(Log::sceGe, 0);
++}
++
+ static int __GeSubIntrBase(int callbackId) {
+ 	return callbackId * 2;
+ }
+ 
+ u32 sceGeListEnQueue(MIPSState *mips, u32 listAddress, u32 stallAddress, int callbackId, u32 optParamAddr) {
++	AdrenalineCheckList(mips, optParamAddr);
+ 	auto optParam = PSPPointer<PspGeListArgs>::Create(optParamAddr);
+ 
+ 	bool runList;
+@@ -427,6 +454,7 @@ u32 sceGeListEnQueue(MIPSState *mips, u32 listAddress, u32 stallAddress, int cal
+ }
+ 
+ u32 sceGeListEnQueueHead(MIPSState *mips, u32 listAddress, u32 stallAddress, int callbackId, u32 optParamAddr) {
++	AdrenalineCheckList(mips, optParamAddr);
+ 	DEBUG_LOG(Log::sceGe,
+ 		"sceGeListEnQueueHead(addr=%08x, stall=%08x, cbid=%08x, param=%08x) ticks=%lld",
+ 		listAddress, stallAddress, callbackId, optParamAddr, (long long)CoreTiming::GetTicks(mips));
+@@ -708,6 +736,9 @@ const HLEFunction sceGe_user[] = {
+ 	// Driver only.
+ 	{0X547EC5F0, &WrapU_V<sceGeEdramGetHwSize>,          "sceGeEdramGetHwSize",          'x', ""    },
+ 	{0XD8633888, &WrapI_U<sceGeEdramSetSize>,            "sceGeEdramSetSize",            'i', "x"   },
++	// NIDs de 6.60 que usan los plugins de Adrenaline
++	{0X5BAA5439, &WrapI_U<sceGeEdramSetSize>,            "sceGeEdramSetSize",            'i', "x"   },
++	{0X67B01D8E, &WrapI_UUU<sceGeGetList>,               "sceGeGetList",                 'i', "xxx" },
+ };
+ 
+ void Register_sceGe_user() {
+diff --git a/Core/HLE/sceKernel.cpp b/Core/HLE/sceKernel.cpp
+index edfe17b..cd4a00c 100644
+--- a/Core/HLE/sceKernel.cpp
++++ b/Core/HLE/sceKernel.cpp
+@@ -23,6 +23,7 @@
+ #include "Core/Config.h"
+ #include "Core/CwCheat.h"
+ #include "Core/MemMapHelpers.h"
++#include "Core/HLE/Adrenaline.h"
+ #include "Core/HLE/HLE.h"
+ #include "Core/HLE/FunctionWrappers.h"
+ #include "Core/HLE/ErrorCodes.h"
+@@ -1813,6 +1814,11 @@ static int sceKernelGetChunk(int chunkId) {
+ 	return hleLogWarning(Log::sceKernel, -1, "UNIMPL chunk %d", chunkId);
+ }
+ 
++// El ejecutable con que arranco el juego ("disc0:/PSP_GAME/SYSDIR/EBOOT.BIN", "ms0:/PSP/GAME/.../EBOOT.PBP")
++static u32 sceKernelInitFileName() {
++	return hleLogInfo(Log::sceKernel, Adrenaline::InitFileNameAddr());
++}
++
+ static int InitForKernel_9D33A110() {
+ 	return hleLogWarning(Log::sceKernel, 0, "UNIMPL");
+ }
+@@ -1821,6 +1827,7 @@ const HLEFunction InitForKernel[] = {
+ 	{0x27932388, &WrapU_V<sceKernelBootFrom>,                        "sceKernelBootFrom",                         'x', "",       HLE_KERNEL_SYSCALL },
+ 	{0x7233B5BC, &WrapU_V<sceKernelApplicationType>,                 "sceKernelApplicationType",                  'x', "",       HLE_KERNEL_SYSCALL },
+ 	{0x2C6E9FE9, &WrapI_I<sceKernelGetChunk>,                        "sceKernelGetChunk",                         'i', "i",      HLE_KERNEL_SYSCALL },
++	{0xA6E71B93, &WrapU_V<sceKernelInitFileName>,                    "sceKernelInitFileName",                     'x', "",       HLE_KERNEL_SYSCALL },
+ 	{0x9D33A110, &WrapI_V<InitForKernel_9D33A110>,                   "InitForKernel_9D33A110",                    'i', "",       HLE_KERNEL_SYSCALL },
+ };
+ 
+diff --git a/Core/HLE/sceKernelInterrupt.cpp b/Core/HLE/sceKernelInterrupt.cpp
+index 95db135..52ab4bf 100644
+--- a/Core/HLE/sceKernelInterrupt.cpp
++++ b/Core/HLE/sceKernelInterrupt.cpp
+@@ -934,7 +934,8 @@ static u32 sysclib_memset(u32 destAddr, int data, int size) {
+ 		memset(Memory::GetPointerWriteUnchecked(destAddr), data, size);
+ 	}
+ 	NotifyMemInfo(MemBlockFlags::WRITE, destAddr, size, "KernelMemset");
+-	return hleLogVerbose(Log::sceKernel, 0);
++	// Como memset de C: devuelve el destino (GCC lo usa para la llamada siguiente)
++	return hleLogVerbose(Log::sceKernel, destAddr);
+ }
+ 
+ static int sysclib_strstr(u32 s1, u32 s2) {
+@@ -969,7 +970,7 @@ static u32 sysclib_memmove(MIPSState *mips, u32 dst, u32 src, u32 size) {
+ 	if (MemBlockInfoDetailed(size)) {
+ 		NotifyMemInfoCopy(dst, src, size, "KernelMemmove/");
+ 	}
+-	return hleLogVerbose(Log::sceKernel, 0);
++	return hleLogVerbose(Log::sceKernel, dst);
+ }
+ 
+ static u32 sysclib_strncpy(u32 dest, u32 src, u32 size) {
+diff --git a/Core/HLE/sceKernelModule.cpp b/Core/HLE/sceKernelModule.cpp
+index a75b572..b875ee8 100644
+--- a/Core/HLE/sceKernelModule.cpp
++++ b/Core/HLE/sceKernelModule.cpp
+@@ -47,6 +47,7 @@
+ #include "Core/MIPS/MIPS.h"
+ #include "Core/MIPS/MIPSAnalyst.h"
+ #include "Core/MIPS/MIPSCodeUtils.h"
++#include "Core/HLE/Adrenaline.h"
+ #include "Core/ELF/ElfReader.h"
+ #include "Core/ELF/PBPReader.h"
+ #include "Core/ELF/PrxDecrypter.h"
+@@ -1096,6 +1097,21 @@ void PSPModule::Cleanup() {
+ 	}
+ }
+ 
++// Adrenaline: una importacion de un modulo de usuario de una funcion parchada con
++// sctrlHENPatchSyscall salta a la funcion nueva (el CFW cambia la entrada de la tabla de
++// syscalls; los modulos de kernel no pasan por ella)
++static bool AdrenalineRedirect(PSPModule *module, const FuncSymbolImport &func) {
++	if ((module->nm.attribute & 0x1000) != 0)
++		return false;
++	u32 target = Adrenaline::ImportOverride(func.moduleName, func.nid);
++	if (!target)
++		return false;
++	Memory::WriteUnchecked_U32(MIPS_MAKE_J(target & 0x0FFFFFFF), func.stubAddr);
++	Memory::WriteUnchecked_U32(MIPS_MAKE_NOP(), func.stubAddr + 4);
++	currentMIPS->InvalidateICacheRangeDeferred(func.stubAddr, 8);
++	return true;
++}
++
+ static bool KernelImportModuleFuncs(PSPModule *module, u32 *firstImportStubAddr, bool reimporting) {
+ 	// Can't run - we didn't keep track of the libstub entry.
+ 	if (module->libstub == 0) {
+@@ -1167,6 +1183,7 @@ static bool KernelImportModuleFuncs(PSPModule *module, u32 *firstImportStubAddr,
+ 				// This is the address to write the j and delay slot to.
+ 				func.stubAddr = entry->firstSymAddr + i * 8;
+ 				module->ImportFunc(func, reimporting);
++				AdrenalineRedirect(module, func);
+ 			}
+ 
+ 			if (firstImportStubAddr && (!*firstImportStubAddr || *firstImportStubAddr > (u32)entry->firstSymAddr))
+@@ -2476,6 +2493,7 @@ void __KernelLoadReset() {
+ // past the point where we have the executable's bytes in hand.
+ static bool __KernelLoadExecFromPtr(MIPSState * mips, const u8 *data, size_t size, const char *filename, u32 paramPtr, std::string *error_string, const std::vector<u8> *hostArgs = nullptr) {
+ 	SceKernelLoadExecParam param{};
++	Adrenaline::SetInitFileName(filename);
+ 
+ 	auto paramData = PSPPointer<SceKernelLoadExecParam>::Create(paramPtr);
+ 	if (paramData.IsValid()) {
+@@ -3063,9 +3081,35 @@ static u32 sctrlHENFindFunction(const char *moduleName, const char *libraryName,
+ 			}
+ 		}
+ 	}
++	// Adrenaline: tambien las del sistema, que aqui son HLE
++	if (Adrenaline::Enabled()) {
++		if (u32 stub = Adrenaline::HleStub(libraryName, nid))
++			return hleLogInfo(Log::sceModule, stub, "HLE %s", GetHLEFuncName(libraryName, nid));
++	}
+ 	return hleLogWarning(Log::sceModule, 0, "not found");
+ }
+ 
++// Cambia la funcion a la que llegan las syscalls de la funcion en addr (sctrlHENFindFunction).
++// Aqui: las importaciones de los modulos de usuario cargados, y las de los que se carguen despues
++static u32 sctrlHENPatchSyscall(u32 addr, u32 newAddr) {
++	std::string lib;
++	u32 nid;
++	if (!Adrenaline::StubOf(addr, &lib, &nid))
++		return hleLogError(Log::sceModule, SCE_KERNEL_ERROR_ERROR, "%08x no es una funcion del sistema", addr);
++	Adrenaline::AddOverride(lib.c_str(), nid, newAddr);
++	int n = 0;
++	u32 error;
++	for (SceUID moduleId : loadedModules) {
++		PSPModule *module = kernelObjects.Get<PSPModule>(moduleId, error);
++		if (!module)
++			continue;
++		for (const FuncSymbolImport &func : module->importedFuncs)
++			if (Adrenaline::ImportOverride(func.moduleName, func.nid) == newAddr)
++				n += AdrenalineRedirect(module, func);
++	}
++	return hleLogInfo(Log::sceModule, 0, "%s -> %08x (%d importaciones)", GetHLEFuncName(lib, nid), newAddr, n);
++}
++
+ int __KernelStartModule(SceUID moduleId, u32 argsize, u32 argAddr, u32 returnValueAddr, SceKernelSMOption *smoption, bool *needsWait) {
+ 	if (needsWait) {
+ 		*needsWait = false;
+@@ -3880,6 +3924,7 @@ static const HLEFunction SystemCtrlForKernel[] = {
+ 	{0x1C90BECB, &WrapU_U<sctrlHENSetStartModuleHandler>, "sctrlHENSetStartModuleHandler", 'x', "x", HLE_KERNEL_SYSCALL},
+ 	{0x78E46415, &WrapU_C<sctrlHENFindDriver>,            "sctrlHENFindDriver",              'x', "s", HLE_KERNEL_SYSCALL},
+ 	{0x159AF5CC, &WrapU_CCU<sctrlHENFindFunction>,        "sctrlHENFindFunction",            'x', "ssx", HLE_KERNEL_SYSCALL},
++	{0xF988C1DC, &WrapU_UU<sctrlHENPatchSyscall>,         "sctrlHENPatchSyscall",            'x', "xx", HLE_KERNEL_SYSCALL},
+ };
+ 
+ static const HLEFunction SystemCtrlForUser[] = {
+diff --git a/Core/HLE/scePower.cpp b/Core/HLE/scePower.cpp
+index 93943e7..1f7b9bc 100644
+--- a/Core/HLE/scePower.cpp
++++ b/Core/HLE/scePower.cpp
+@@ -20,6 +20,7 @@
+ 
+ #include "Common/Serialize/Serializer.h"
+ #include "Common/Serialize/SerializeFuncs.h"
++#include "Core/HLE/Adrenaline.h"
+ #include "Core/HLE/HLE.h"
+ #include "Core/HLE/FunctionWrappers.h"
+ #include "Core/HLE/ErrorCodes.h"
+@@ -151,9 +152,11 @@ void __PowerInit() {
+ 
+ 	volatileWaitingThreads.clear();
+ 
+-	RealpllFreq = PowerPllMhzToHz(222);
+-	RealbusFreq = PowerBusMhzToHz(111);
+-	RealcpuFreq = PowerCpuMhzToHz(222, RealpllFreq);
++	// Adrenaline arranca los juegos a 333 MHz (bus 166)
++	const int mhz = Adrenaline::Enabled() ? 333 : 222;
++	RealpllFreq = PowerPllMhzToHz(mhz);
++	RealbusFreq = PowerBusMhzToHz(mhz / 2);
++	RealcpuFreq = PowerCpuMhzToHz(mhz, RealpllFreq);
+ 	PowerApplyClocks();
+ }
+ 
+diff --git a/Core/MemMap.cpp b/Core/MemMap.cpp
+index 2bc1df8..e6c4136 100644
+--- a/Core/MemMap.cpp
++++ b/Core/MemMap.cpp
+@@ -111,6 +111,7 @@ u32 DepthMirroredSlow(u32 address) {
+ // Used to store the PSP model on game startup.
+ u32 g_PSPModel;
+ u32 g_UserPartitionSize;
++bool g_vramMirrorSwizzle;
+ 
+ static MemMapSetupFlags g_setupFlags;
+ 
+diff --git a/Core/MemMap.h b/Core/MemMap.h
+index a32b7ae..511eb15 100644
+--- a/Core/MemMap.h
++++ b/Core/MemMap.h
+@@ -223,7 +223,18 @@ inline const u8* GetPointerUnchecked(const u32 address) {
+ #endif
+ }
+ 
+-inline u64 ReadUnchecked_U64(const u32 address) {
++// Modelo de Adrenaline: como en la PSP y la Vita, los reflejos de la VRAM 0x04200000 y 0x04600000
++// permutan todos los accesos de la CPU, no solo los de 16 bits (pspautotests gpu/ge/edramswizzle)
++extern bool g_vramMirrorSwizzle;
++u32 DepthMirroredSlow(u32 address);
++inline u32 DepthMirroredAny(u32 address) {
++	if (g_vramMirrorSwizzle && (address & 0xBFA00000) == 0x04200000)
++		return DepthMirroredSlow(address);
++	return address;
++}
++
++inline u64 ReadUnchecked_U64(u32 address) {
++	address = DepthMirroredAny(address);
+ #ifdef MASKED_PSP_MEMORY
+ 	return *(u64_le *)(base + (address & MEMVIEW32_MASK));
+ #else
+@@ -231,7 +242,8 @@ inline u64 ReadUnchecked_U64(const u32 address) {
+ #endif
+ }
+ 
+-inline u32 ReadUnchecked_U32(const u32 address) {
++inline u32 ReadUnchecked_U32(u32 address) {
++	address = DepthMirroredAny(address);
+ #ifdef MASKED_PSP_MEMORY
+ 	return *(u32_le *)(base + (address & MEMVIEW32_MASK));
+ #else
+@@ -239,7 +251,8 @@ inline u32 ReadUnchecked_U32(const u32 address) {
+ #endif
+ }
+ 
+-inline float ReadUnchecked_Float(const u32 address) {
++inline float ReadUnchecked_Float(u32 address) {
++	address = DepthMirroredAny(address);
+ #ifdef MASKED_PSP_MEMORY
+ 	return *(float_le *)(base + (address & MEMVIEW32_MASK));
+ #else
+@@ -273,7 +286,8 @@ inline u16 ReadUnchecked_U16(u32 address) {
+ #endif
+ }
+ 
+-inline u8 ReadUnchecked_U8(const u32 address) {
++inline u8 ReadUnchecked_U8(u32 address) {
++	address = DepthMirroredAny(address);
+ #ifdef MASKED_PSP_MEMORY
+ 	return (*(u8 *)(base + (address & MEMVIEW32_MASK)));
+ #else
+@@ -282,6 +296,7 @@ inline u8 ReadUnchecked_U8(const u32 address) {
+ }
+ 
+ inline void WriteUnchecked_U64(u64 data, u32 address) {
++	address = DepthMirroredAny(address);
+ #ifdef MASKED_PSP_MEMORY
+ 	*(u64_le *)(base + (address & MEMVIEW32_MASK)) = data;
+ #else
+@@ -290,6 +305,7 @@ inline void WriteUnchecked_U64(u64 data, u32 address) {
+ }
+ 
+ inline void WriteUnchecked_U32(u32 data, u32 address) {
++	address = DepthMirroredAny(address);
+ #ifdef MASKED_PSP_MEMORY
+ 	*(u32_le *)(base + (address & MEMVIEW32_MASK)) = data;
+ #else
+@@ -298,6 +314,7 @@ inline void WriteUnchecked_U32(u32 data, u32 address) {
+ }
+ 
+ inline void WriteUnchecked_Float(float data, u32 address) {
++	address = DepthMirroredAny(address);
+ #ifdef MASKED_PSP_MEMORY
+ 	*(float_le *)(base + (address & MEMVIEW32_MASK)) = data;
+ #else
+@@ -315,6 +332,7 @@ inline void WriteUnchecked_U16(u16 data, u32 address) {
+ }
+ 
+ inline void WriteUnchecked_U8(u8 data, u32 address) {
++	address = DepthMirroredAny(address);
+ #ifdef MASKED_PSP_MEMORY
+ 	(*(u8 *)(base + (address & MEMVIEW32_MASK))) = data;
+ #else
+@@ -347,19 +365,20 @@ struct AddressSpace {
+ #endif
+ 	}
+ 
+-	u8 ReadUnchecked_U8(u32 address) const { return *GetPointerUnchecked(address); }
++	u8 ReadUnchecked_U8(u32 address) const { return *GetPointerUnchecked(MirroredAny(address)); }
+ 	u16 ReadUnchecked_U16(u32 address) const { return *(u16_le *)GetPointerUnchecked(Mirrored16(address)); }
+-	u32 ReadUnchecked_U32(u32 address) const { return *(u32_le *)GetPointerUnchecked(address); }
+-	u64 ReadUnchecked_U64(u32 address) const { return *(u64_le *)GetPointerUnchecked(address); }
+-	float ReadUnchecked_Float(u32 address) const { return *(float_le *)GetPointerUnchecked(address); }
+-	void WriteUnchecked_U8(u8 data, u32 address) const { *GetPointerUnchecked(address) = data; }
++	u32 ReadUnchecked_U32(u32 address) const { return *(u32_le *)GetPointerUnchecked(MirroredAny(address)); }
++	u64 ReadUnchecked_U64(u32 address) const { return *(u64_le *)GetPointerUnchecked(MirroredAny(address)); }
++	float ReadUnchecked_Float(u32 address) const { return *(float_le *)GetPointerUnchecked(MirroredAny(address)); }
++	void WriteUnchecked_U8(u8 data, u32 address) const { *GetPointerUnchecked(MirroredAny(address)) = data; }
+ 	void WriteUnchecked_U16(u16 data, u32 address) const { *(u16_le *)GetPointerUnchecked(Mirrored16(address)) = data; }
+-	void WriteUnchecked_U32(u32 data, u32 address) const { *(u32_le *)GetPointerUnchecked(address) = data; }
+-	void WriteUnchecked_U64(u64 data, u32 address) const { *(u64_le *)GetPointerUnchecked(address) = data; }
+-	void WriteUnchecked_Float(float data, u32 address) const { *(float_le *)GetPointerUnchecked(address) = data; }
++	void WriteUnchecked_U32(u32 data, u32 address) const { *(u32_le *)GetPointerUnchecked(MirroredAny(address)) = data; }
++	void WriteUnchecked_U64(u64 data, u32 address) const { *(u64_le *)GetPointerUnchecked(MirroredAny(address)) = data; }
++	void WriteUnchecked_Float(float data, u32 address) const { *(float_le *)GetPointerUnchecked(MirroredAny(address)) = data; }
+ 
+ 	// VRAM's depth mirrors. The Media Engine has its own memory at those addresses, plain.
+ 	u32 Mirrored16(u32 address) const { return IsMediaEngine() ? address : DepthMirrored16(address); }
++	u32 MirroredAny(u32 address) const { return IsMediaEngine() ? address : DepthMirroredAny(address); }
+ 
+ 	u32 *GetBlockShadowEntry(u32 address) const {
+ 		return (u32 *)(blockShadow + (address & BLOCK_SHADOW_ENTRY_MASK));
+@@ -409,6 +428,7 @@ const T* GetTypedPointerRange(const u32 address, const u32 size) {
+ 
+ bool IsRAMAddress(const u32 address);
+ 
++
+ // Note that VRAM is not mirrored up into kernel space. So we use BF800000 instead of 3F800000 to check for VRAM addresses.
+ inline bool IsVRAMAddress(const u32 address) {
+ 	return ((address & 0xBF800000) == 0x04000000);
+diff --git a/Core/MemMapFunctions.cpp b/Core/MemMapFunctions.cpp
+index c7e07db..1efbbea 100644
+--- a/Core/MemMapFunctions.cpp
++++ b/Core/MemMapFunctions.cpp
+@@ -127,7 +127,7 @@ bool IsScratchpadAddress(const u32 address) {
+ 
+ u8 ReadOrException_U8(const u32 address) {
+ 	u8 value = 0;
+-	ReadMemoryOrException<u8>(value, address);
++	ReadMemoryOrException<u8>(value, DepthMirroredAny(address));
+ 	return (u8)value;
+ }
+ 
+@@ -139,18 +139,18 @@ u16 ReadOrException_U16(const u32 address) {
+ 
+ u32 ReadOrException_U32(const u32 address) {
+ 	u32_le value = 0;
+-	ReadMemoryOrException<u32_le>(value, address);
++	ReadMemoryOrException<u32_le>(value, DepthMirroredAny(address));
+ 	return value;
+ }
+ 
+ u64 ReadOrException_U64(const u32 address) {
+ 	u64_le value = 0;
+-	ReadMemoryOrException<u64_le>(value, address);
++	ReadMemoryOrException<u64_le>(value, DepthMirroredAny(address));
+ 	return value;
+ }
+ 
+ void WriteOrException_U8(const u8 _Data, const u32 address) {
+-	WriteMemoryOrException<u8>(address, _Data);
++	WriteMemoryOrException<u8>(DepthMirroredAny(address), _Data);
+ }
+ 
+ void WriteOrException_U16(const u16 _Data, const u32 address) {
+@@ -158,11 +158,11 @@ void WriteOrException_U16(const u16 _Data, const u32 address) {
+ }
+ 
+ void WriteOrException_U32(const u32 _Data, const u32 address) {
+-	WriteMemoryOrException<u32_le>(address, _Data);
++	WriteMemoryOrException<u32_le>(DepthMirroredAny(address), _Data);
+ }
+ 
+ void WriteOrException_U64(const u64 _Data, const u32 address) {
+-	WriteMemoryOrException<u64_le>(address, _Data);
++	WriteMemoryOrException<u64_le>(DepthMirroredAny(address), _Data);
+ }
+ 
+ }	// namespace Memory
+diff --git a/Core/System.cpp b/Core/System.cpp
+index 5f23bc1..25f7147 100644
+--- a/Core/System.cpp
++++ b/Core/System.cpp
+@@ -54,6 +54,7 @@
+ #include "Core/Debugger/LineInfo.h"
+ #include "Core/Debugger/SymbolMap.h"
+ #include "Core/System.h"
++#include "Core/HLE/Adrenaline.h"
+ #include "Core/HLE/HLE.h"
+ #include "Core/HLE/Plugins.h"
+ #include "Core/HLE/ReplaceTables.h"
+@@ -486,6 +487,21 @@ static bool CPU_Init(FileLoader *fileLoader, IdentifiedFileType type, std::strin
+ 	}
+ 	}
+ 
++	// Adrenaline: PSP-2000 o posterior, 64 MB con la particion de usuario de 32 MB (salvo MEMSIZE=1).
++	// Los plugins usan la memoria de arriba (GePatch: 0x0A000000-0x0C000000)
++	if (Adrenaline::Enabled() && (Memory::g_MemorySize == Memory::RAM_NORMAL_SIZE || type == IdentifiedFileType::PSP_ELF)) {
++		if (Memory::g_PSPModel == PSP_MODEL_FAT)
++			Memory::g_PSPModel = PSP_MODEL_SLIM;
++		Memory::g_MemorySize = Memory::RAM_DOUBLE_SIZE;
++		Memory::g_UserPartitionSize = Memory::RAM_NORMAL_SIZE;
++	}
++	Memory::g_vramMirrorSwizzle = Adrenaline::Enabled();
++	// El JIT accede directo a la memoria y se salta esos reflejos permutados: el interprete IR no
++	if (Adrenaline::Enabled() && (g_CoreParameter.cpuCore == CPUCore::JIT || g_CoreParameter.cpuCore == CPUCore::JIT_IR)) {
++		INFO_LOG(Log::Loader, "Adrenaline: interprete IR en vez del JIT");
++		g_CoreParameter.cpuCore = CPUCore::IR_INTERPRETER;
++	}
++
+ 	// OK, pretty confident we have a PSP game.
+ 	if (g_paramSFO.IsValid()) {
+ 		gameTitle = SanitizeString(g_paramSFO.GetValueString("TITLE"), StringRestriction::NoLineBreaksOrSpecials);
+diff --git a/GPU/Software/SoftGpu.cpp b/GPU/Software/SoftGpu.cpp
+index aa26ae3..82bfbde 100644
+--- a/GPU/Software/SoftGpu.cpp
++++ b/GPU/Software/SoftGpu.cpp
+@@ -27,6 +27,7 @@
+ #include "Common/Data/Convert/ColorConv.h"
+ #include "Common/GPU/GraphicsContext.h"
+ #include "Common/LogReporting.h"
++#include "Core/HLE/Adrenaline.h"
+ #include "Core/Config.h"
+ #include "Core/ConfigValues.h"
+ #include "Core/Core.h"
+@@ -700,6 +701,17 @@ void SoftGPU::CopyToCurrentFboFromDisplayRam(const DisplayLayoutConfig &config,
+ 
+ void SoftGPU::PrepareCopyDisplayToOutput(const DisplayLayoutConfig &config) {
+ 	drawEngine_->transformUnit.Flush(this, "output");
++	// Adrenaline: con la imagen nativa activa, la Vita muestra los 960x544 (565) del plugin
++	if (Adrenaline::NativeActive()) {
++		const u32 fb = displayFramebuf_, stride = displayStride_;
++		const GEBufferFormat fmt = displayFormat_;
++		displayFramebuf_ = Adrenaline::NativeAddress();
++		displayStride_ = 960;
++		displayFormat_ = GE_FORMAT_565;
++		CopyToCurrentFboFromDisplayRam(config, 960, 544);
++		displayFramebuf_ = fb; displayStride_ = stride; displayFormat_ = fmt;
++		return;
++	}
+ 	// The display always shows 480x272.
+ 	CopyToCurrentFboFromDisplayRam(config, FB_WIDTH, FB_HEIGHT);
+ }
+diff --git a/headless/Headless.cpp b/headless/Headless.cpp
+index f8336af..64bcad1 100644
+--- a/headless/Headless.cpp
++++ b/headless/Headless.cpp
+@@ -52,6 +52,7 @@
+ #if PPSSPP_API(METAL)
+ #include "Common/GPU/Metal/MetalGraphicsContext.h"
+ #endif
++#include "Core/HLE/Adrenaline.h"
+ #include "Core/CmdLine.h"
+ #include "Common/Net/HTTPRequest.h"
+ #include "Core/Config.h"
+@@ -297,6 +298,12 @@ static bool SaveDisplayScreenshot(const Path &path, const std::vector<u32> &pixe
+ 	if (saved) {
+ 		SendAndCollectOutput("Screenshot saved to: " + path.ToVisualString() + "\n");
+ 	}
++	// Adrenaline: lo que muestra la Vita cuando el plugin dibuja la imagen nativa de 960x544
++	if (Adrenaline::NativeActive()) {
++		Path native = Path(path.WithReplacedExtension("").ToString() + "_nativo.bmp");
++		if (Adrenaline::SaveNative(native))
++			SendAndCollectOutput("Native screenshot saved to: " + native.ToVisualString() + "\n");
++	}
+ 	return saved;
+ }
+ 

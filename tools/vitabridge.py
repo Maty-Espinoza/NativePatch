@@ -8,7 +8,9 @@ En la Vita: vitacompanion (FTP en 1337 y comandos en 1338: launch, press, wait, 
 Claude escribe en CARPETA y el relevo hace el resto:
   enviar/ux0/pspemu/seplugins/ge_patch.prx  -> se sube a ux0:/pspemu/seplugins/ge_patch.prx
   cmd_*.txt   -> cada linea va al puerto 1338; la respuesta queda en respuestas/cmd_*.txt
-  bajar_*.txt -> cada linea es una ruta de la Vita (ux0:/...) que se baja a recibidos/
+  bajar_*.txt -> cada linea es una ruta de la Vita (ux0:/...) que se baja a recibidos/, o
+                 "ruta -> destino" para dejarla en otra carpeta del Mac (p. ej. ~/Documents/...)
+  listar_*.txt -> cada linea es una carpeta de la Vita; el listado queda en respuestas/
   Ademas baja solo lo nuevo de ux0:/pspemu: ge_patch*.log, *.gpd y gepatch_*.png
   estado.txt  -> latido (hora) para saber que el relevo esta vivo
 Solo usa la biblioteca estandar. Ctrl+C para terminar.
@@ -67,10 +69,17 @@ def listing(f, d):
 def download(f, remote, local):
     os.makedirs(os.path.dirname(local), exist_ok=True)
     tmp = local + '.parcial'
+    got = [0, time.time()]
     with open(tmp, 'wb') as out:
-        f.retrbinary('RETR ' + vpath(remote), out.write)
+        def chunk(d):
+            out.write(d)
+            got[0] += len(d)
+            if time.time() - got[1] > 10:  # archivos grandes (ISO): avance cada 10 s
+                got[1] = time.time()
+                log('bajando', remote, '%d MB' % (got[0] >> 20))
+        f.retrbinary('RETR ' + vpath(remote), chunk, blocksize=1 << 16)
     os.replace(tmp, local)
-    log('bajado', remote, '->', os.path.relpath(local, BASE))
+    log('bajado', remote, '->', local)
 
 def step(f):
     # Subidas
@@ -104,15 +113,30 @@ def step(f):
             open(os.path.join(BASE, 'respuestas', name), 'w').write('\n'.join(res))
             os.remove(path)
         elif fnmatch.fnmatch(name, 'bajar_*.txt'):
+            lines = [l for l in open(path).read().splitlines() if l.strip()]
+            os.remove(path)  # antes de bajar: si se corta, un archivo grande no se vuelve a pedir solo
+            for line in lines:
+                remote, _, dest = line.partition('->')
+                remote = remote.strip()
+                dest = os.path.expanduser(dest.strip()) if dest.strip() else os.path.join(BASE, 'recibidos', remote.split('/')[-1])
+                try:  # un archivo que no existe no debe trabar el relevo
+                    download(f, remote, dest)
+                except ftplib.error_perm as e:
+                    log('no se pudo bajar', remote, ':', e)
+                    if os.path.exists(dest + '.parcial'):
+                        os.remove(dest + '.parcial')
+        elif fnmatch.fnmatch(name, 'listar_*.txt'):
+            res = []
             for line in open(path).read().splitlines():
                 if line.strip():
-                    try:  # un archivo que no existe no debe trabar el relevo
-                        download(f, line.strip(), os.path.join(BASE, 'recibidos', line.strip().split('/')[-1]))
+                    rows = []
+                    try:
+                        f.retrlines('LIST ' + vpath(line.strip()), rows.append)
                     except ftplib.error_perm as e:
-                        log('no se pudo bajar', line.strip(), ':', e)
-                        part = os.path.join(BASE, 'recibidos', line.strip().split('/')[-1]) + '.parcial'
-                        if os.path.exists(part):
-                            os.remove(part)
+                        rows.append('error: %s' % e)
+                    res.append('> ' + line.strip() + '\n' + '\n'.join(rows))
+            os.makedirs(os.path.join(BASE, 'respuestas'), exist_ok=True)
+            open(os.path.join(BASE, 'respuestas', name), 'w').write('\n'.join(res) + '\n')
             os.remove(path)
     # Lo nuevo de ux0:/pspemu (logs, volcados, capturas)
     for name, size in listing(f, WATCH_DIR).items():
