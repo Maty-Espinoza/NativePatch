@@ -14,6 +14,9 @@ Las pruebas que pueden colgar el GE o Adrenaline van al final.
 import os, shutil, sys
 
 RIESGO = ('gpu/ge/', 'gpu/signals/', 'gpu/callbacks/', 'gpu/timing/')  # al final
+# Al final de todo: escribe mas alla de la VRAM (0x04800000); en la Vita eso es memoria de
+# Adrenaline y lo cerro (c1-2858-3) en un solo proceso
+ULTIMAS = ('gpu/transfer/invalid',)
 
 def main(src, out):
     here = os.path.dirname(os.path.abspath(__file__))
@@ -24,7 +27,7 @@ def main(src, out):
         for f in files:
             if f.endswith('.prx') and os.path.exists(os.path.join(root, f[:-4] + '.expected')):
                 tests.append(os.path.relpath(os.path.join(root, f[:-4]), os.path.join(src, 'tests')))
-    tests.sort(key=lambda t: (t.startswith(RIESGO), t))
+    tests.sort(key=lambda t: (t in ULTIMAS, t.startswith(RIESGO), t))
     game = os.path.join(out, 'PSP', 'GAME', 'GEPTEST')
     os.makedirs(os.path.join(game, 'm'), exist_ok=True)
     os.makedirs(os.path.join(out, 'geptest'), exist_ok=True)

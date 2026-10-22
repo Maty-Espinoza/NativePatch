@@ -7,13 +7,11 @@
 //  estado.txt / corriendo.txt: para seguir donde quedo si Adrenaline se cae
 #include <pspkernel.h>
 #include <pspdisplay.h>
-#include <pspdebug.h>
 #include <pspge.h>
 #include <pspctrl.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
-#include "../../../font.h"
 
 PSP_MODULE_INFO("GEPTEST", 0, 1, 0);
 PSP_MAIN_THREAD_ATTR(PSP_THREAD_ATTR_USER | PSP_THREAD_ATTR_VFPU);
@@ -23,7 +21,6 @@ PSP_HEAP_SIZE_KB(1024);
 #define WAIT_US (60 * 1000000)
 static char lista[16384], cur_id[64];
 static int total, cur = -1;
-static volatile int busy;
 static int xlat; // traduccion de direcciones de la VRAM al empezar (las pruebas exact/* la cambian)
 int sceGeEdramSetAddrTranslation(int value);
 static PspGeContext ge0; // estado del GE al empezar: cada prueba lo encuentra como en un proceso nuevo
@@ -86,36 +83,6 @@ static void shot(const char *id) {
   sceIoClose(fd);
 }
 
-// Barra de estado abajo (16 px) con la prueba y un indicador que gira. No se dibuja mientras
-// se toma la captura; el comparador ignora esas filas.
-static void barText(u32 base, int bw, int fmt, const char *s) {
-  int x;
-  for (x = 0; *s && x < 480 - 8; s++, x += 8) {
-    const unsigned char *g = font8x16[(*s >= 32 && *s < 127 ? *s : '?') - 32];
-    int r, c;
-    for (r = 0; r < 16; r++)
-      for (c = 0; c < 8; c++) {
-        int on = g[r] & (0x80 >> c), o = (256 + r) * bw + x + c;
-        if (fmt == 3) ((u32 *)base)[o] = on ? 0xffffffff : 0xff000000;
-        else ((u16 *)base)[o] = on ? 0xffff : (fmt == 1 ? 0x8000 : fmt == 2 ? 0xf000 : 0);
-      }
-  }
-}
-static int bar(SceSize args, void *argp) {
-  static const char spin[] = "|/-\\";
-  char s[96];
-  int k;
-  for (k = 0;; k++) {
-    void *top; int bw, fmt;
-    if (!busy && sceDisplayGetFrameBuf(&top, &bw, &fmt, PSP_DISPLAY_SETBUF_IMMEDIATE) >= 0 && top && bw >= 480) {
-      sprintf(s, "GEPTEST %03d/%d %s %c", cur + 1, total, cur_id, spin[k & 3]);
-      barText(((u32)top & 0x0fffffff) | 0x40000000, bw, fmt, s);
-    }
-    sceKernelDelayThread(150000);
-  }
-  return 0;
-}
-
 static int threads(SceUID *ids, int max) {
   int n = 0;
   sceKernelGetThreadmanIdList(SCE_KERNEL_TMID_Thread, ids, max, &n);
@@ -138,10 +105,7 @@ static void runOne(int i) {
   int nb = threads(before, 256), k;
   SceUID fd0 = sceIoOpen(DIR "/lista.txt", PSP_O_RDONLY, 0); // primer descriptor libre
   if (fd0 >= 0) sceIoClose(fd0);
-  // Como en un proceso nuevo: la VRAM en cero (las pruebas leen lo que dibujan, y algunas
-  // dependen de lo que habia; la anterior y la barra dejaban restos) y sin la barra encima
-  busy = 1;
-  sceKernelDelayThread(20000);
+  // Como en un proceso nuevo: la VRAM en cero (las pruebas leen lo que dibujan)
   memset((void *)0x44000000, 0, 0x200000);
   sceKernelDcacheWritebackInvalidateAll();
   sceGeRestoreContext(&ge0); // registros del GE (dither, region, recorte...) como al arrancar
@@ -188,22 +152,18 @@ static void runOne(int i) {
   sprintf(res + strlen(res) - 1, " fd=%d\n", probe);
   if (probe >= 0) sceIoClose(probe);
   put(path, res);
-  busy = 0; // entre pruebas: la barra vuelve
   sprintf(s, "%d\n", i + 1);
   put(DIR "/estado.txt", s);
 }
 
 int main(void) {
   char s[16], path[128], id[64];
-  pspDebugScreenInit();
-  pspDebugScreenPrintf("GEPTEST: bateria de pruebas del GE (un solo proceso)\n");
   sceIoMkdir(DIR "/out", 0777);
   sceGeSaveContext(&ge0);
   xlat = sceGeEdramSetAddrTranslation(0);
   sceGeEdramSetAddrTranslation(xlat);
   if (get(DIR "/lista.txt", lista, sizeof(lista)) <= 0) {
-    pspDebugScreenPrintf("Falta " DIR "/lista.txt\n");
-    sceKernelSleepThread();
+    sceKernelExitGame();
   }
   while (entry(total, path, id)) total++;
   int n = get(DIR "/estado.txt", s, sizeof(s)) > 0 ? atoi(s) : 0;
@@ -216,8 +176,6 @@ int main(void) {
       n = c + 1;
     }
   }
-  SceUID th = sceKernelCreateThread("geptest_barra", bar, 0x18, 0x4000, 0, NULL);
-  if (th >= 0) sceKernelStartThread(th, 0, NULL);
   for (; n < total; n++)
     runOne(n);
   sceIoRemove(DIR "/corriendo.txt");
