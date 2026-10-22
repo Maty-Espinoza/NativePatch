@@ -80,6 +80,11 @@ def step(f):
             local = os.path.join(root, name)
             rel = os.path.relpath(local, send).split(os.sep)
             remote = rel[0] + ':/' + '/'.join(rel[1:])
+            for k in range(2, len(rel)):  # crea las carpetas que falten (ya existentes: error que se ignora)
+                try:
+                    f.mkd(vpath(rel[0] + ':/' + '/'.join(rel[1:k])))
+                except ftplib.error_perm:
+                    pass
             with open(local, 'rb') as src:
                 f.storbinary('STOR ' + vpath(remote), src)
             log('subido', remote, '(%d bytes)' % os.path.getsize(local))
@@ -101,7 +106,13 @@ def step(f):
         elif fnmatch.fnmatch(name, 'bajar_*.txt'):
             for line in open(path).read().splitlines():
                 if line.strip():
-                    download(f, line.strip(), os.path.join(BASE, 'recibidos', line.strip().split('/')[-1]))
+                    try:  # un archivo que no existe no debe trabar el relevo
+                        download(f, line.strip(), os.path.join(BASE, 'recibidos', line.strip().split('/')[-1]))
+                    except ftplib.error_perm as e:
+                        log('no se pudo bajar', line.strip(), ':', e)
+                        part = os.path.join(BASE, 'recibidos', line.strip().split('/')[-1]) + '.parcial'
+                        if os.path.exists(part):
+                            os.remove(part)
             os.remove(path)
     # Lo nuevo de ux0:/pspemu (logs, volcados, capturas)
     for name, size in listing(f, WATCH_DIR).items():

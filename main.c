@@ -1,6 +1,7 @@
 #include <pspsdk.h>
 #include <pspkernel.h>
 #include <pspctrl.h>
+#include <pspinit.h>
 #include <pspge.h>
 #include <pspgu.h>
 
@@ -1957,6 +1958,14 @@ void patchGeList(u32 *list, u32 *stall) {
           disp_tex_w = state.ge_cmd[GE_CMD_TEXBUFWIDTH0] & 0x7ff;
           disp_tex_fmt = state.ge_cmd[GE_CMD_TEXFORMAT] & 3;
         }
+        // Un fb que se lleno con una copia y ahora es destino de draws (render target o ignorado):
+        // su contenido ya no es la copia (Ridge Racer: un fb copiado en el menu y despues usado
+        // como pasada de desenfoque seguia dibujandose como imagen vieja encima de la carrera)
+        if ((state.ignore_framebuf || state.cur_rt) && state.cur_fb >= 0 && state.fb_tx[state.cur_fb]) {
+          state.fb_tx[state.cur_fb] = 0;
+          rt_gen++;
+          LOG("fb %08lx: se dibuja en el (no es la copia de antes) -> como textura vuelve a omitirse\n", state.framebuf);
+        }
         int texmode = state.ignore_framebuf ? 0 : texCheck();
         int omit = state.ignore_framebuf || texmode == 1;
         if (capturing)
@@ -2981,6 +2990,11 @@ static void dumpSetup(void) {
 
 int module_start(SceSize args, void *argp) {
   SceCtrlData pad;
+  // Bateria de pruebas del GE (tools/geptest): sin parches, el GE tal cual
+  const char *fn = sceKernelInitFileName(), *q;
+  for (q = fn; q && *q; q++)
+    if (!memcmp(q, "/GEPTEST/", 9))
+      return 1;
   dumpSetup();
   sceCtrlPeekBufferPositive(&pad, 1);
   // L al iniciar: modo pasivo (antes desactivaba el plugin del todo y no habia log)
