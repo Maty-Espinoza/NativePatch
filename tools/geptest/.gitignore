@@ -7,3 +7,8 @@ lanzador/*.elf
 lanzador/*.o
 lanzador/PARAM.SFO
 lanzador/*.prx
+corredor/EBOOT.PBP
+corredor/*.elf
+corredor/*.o
+corredor/PARAM.SFO
+corredor/*.prx

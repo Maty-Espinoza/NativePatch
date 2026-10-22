@@ -1,0 +1,226 @@
+--- a/common/common.c	2026-10-21 20:50:45.864011080 -0300
++++ b/common/common.c	2026-10-22 12:30:26.935112821 -0300
+@@ -73,8 +73,23 @@
+ #define SCHEDF_BUFFER_SIZE 65536
+ // 21 MB to give space for thread stacks and etc. Weak, so a test can pick its own with
+ // PSP_HEAP_SIZE_KB().
++#ifdef GEPTEST_INPROC
++// GEPTEST: todas las pruebas en un solo proceso (tools/geptest/correr.c): heap mas chico,
++// por si una prueba que se cuelga no lo libera
++unsigned int sce_newlib_heap_kb_size __attribute__((weak)) = 8192;
++#else
+ unsigned int sce_newlib_heap_kb_size __attribute__((weak)) = 21504;
+ #endif
++#endif
++#ifdef GEPTEST_INPROC
++static const char *geptest_base = "ms0:/geptest/out/sin_nombre";
++extern void __libcglue_deinit(void);
++static void geptestPath(char *out, const char *ext) { sprintf(out, "%s.%s", geptest_base, ext); }
++// Salida por archivo propio (sceIo): con freopen + fclose libcglue no cerraba el archivo y
++// en un solo proceso se agotaban los descriptores tras ~30 pruebas
++static SceUID geptest_fd = -1, geptest_efd = -1;
++static FILE stderr_back;
++#endif
+ 
+ extern int test_main(int argc, char *argv[]);
+ 
+@@ -216,6 +231,9 @@
+ 
+ static int writeStdoutHook(struct _reent *ptr, void *cookie, const char *buf, int buf_len) {
+ 	char temp[1024 + 1];
++#ifdef GEPTEST_INPROC
++	if (geptest_fd >= 0) sceIoWrite(geptest_fd, buf, buf_len);
++#endif
+ 
+ 	//if (KprintfFd > 0) sceIoWrite(KprintfFd, buf, buf_len);
+ 	if (RUNNING_ON_EMULATOR) {
+@@ -298,6 +316,13 @@
+ }
+ #endif
+ 
++#ifdef GEPTEST_INPROC
++static int writeStderrHook(struct _reent *ptr, void *cookie, const char *buf, int buf_len) {
++	if (geptest_efd >= 0) sceIoWrite(geptest_efd, buf, buf_len);
++	return stderr_back._write ? stderr_back._write(ptr, cookie, buf, buf_len) : buf_len;
++}
++#endif
++
+ void test_begin() {
+ #ifndef COMMON_KERNEL
+ 	if (HAS_DISPLAY) {
+@@ -308,7 +333,11 @@
+ #ifdef COMMON_KERNEL
+ 	kernelOutputFd = sceIoOpen("host0:/__testoutput.txt", PSP_O_CREAT | PSP_O_WRONLY | PSP_O_TRUNC, 0777);
+ #else
++#ifdef GEPTEST_INPROC
++	if (0) { // GEPTEST: siempre a archivo, tambien en el emulador (para comparar igual)
++#else
+ 	if (RUNNING_ON_EMULATOR && !HAS_DISPLAY) {
++#endif
+ 		fclose(stdout);
+ 		stdout = fmemopen(alloca(4), 4, "wb");
+ 		stdout_back._write = NULL;
+@@ -316,9 +345,15 @@
+ 		//stderr = stdout;
+ 		setbuf(stdout, NULL);
+ 	} else {
++#ifdef GEPTEST_INPROC
++		char gp[160]; // los archivos que libcglue no cierra los cierra el corredor
++		geptestPath(gp, "txt"); freopen(gp, "wb", stdout);
++		geptestPath(gp, "err"); freopen(gp, "wb", stderr);
++#else
+     // Send the output to the host.
+ 		freopen("host0:/__testoutput.txt", "wb", stdout);
+ 		freopen("host0:/__testerror.txt", "wb", stderr);
++#endif
+ 		stdout_back._write = stdout->_write;
+ 	}
+ 	stdout->_write = writeStdoutHook;
+@@ -347,6 +382,22 @@
+ 			sceIoClose(finish);
+ 		}
+ 	}
++#elif defined(GEPTEST_INPROC)
++	// Sin salir del juego: el proceso es del corredor. Se cierra la salida, se libera el heap
++	// y termina el hilo; el corredor descarga el modulo.
++	fflush(stdout);
++	fflush(stderr);
++	fclose(stdout);
++	fclose(stderr);
++	{
++		char gp[160];
++		geptestPath(gp, "fin");
++		SceUID fd = sceIoOpen(gp, PSP_O_CREAT | PSP_O_WRONLY | PSP_O_TRUNC, 0777);
++		if (fd >= 0) { sceIoWrite(fd, "1", 1); sceIoClose(fd); }
++	}
++	sceKernelTerminateDeleteThread(reschedThread);
++	__libcglue_deinit();
++	sceKernelExitThread(0);
+ #else
+ 	fflush(stdout);
+ 	fflush(stderr);
+@@ -614,6 +665,11 @@
+ 	#ifdef GRAPHIC_TEST
+ 		HAS_DISPLAY = 0;
+ 	#endif
++#ifdef GEPTEST_INPROC
++	HAS_DISPLAY = 0; // sin texto encima de lo que dibuja la prueba
++	if (argc > 0 && argv[0] && argv[0][0])
++		geptest_base = argv[0];
++#endif
+ 
+ 	//if (strncmp(argv[0], START_WITH, strlen(START_WITH)) == 0) RUNNING_ON_EMULATOR = 1;
+ 
+@@ -621,11 +677,13 @@
+ 	// Both of these are about being a game: the exit callback and sceKernelExitGame come from
+ 	// LoadExec, which a kernel module shouldn't be importing (and doesn't need - it just
+ 	// returns from module_start).
++#ifndef GEPTEST_INPROC
+ 	if (!RUNNING_ON_EMULATOR) {
+ 		test_psp_setup_callbacks();
+ 	}
+ 	atexit(sceKernelExitGame);
+ #endif
++#endif
+ 
+ 	test_begin();
+ 	{
+--- a/common/Makefile	2026-10-21 20:50:45.864011080 -0300
++++ b/common/Makefile	2026-10-22 12:18:41.662924506 -0300
+@@ -4,7 +4,7 @@
+ KERNEL_OBJS = common_kernel.o kernelglue.o vram.o sysmem-imports.o
+ 
+ INCDIR = 
+-CFLAGS = -O0 -G 0 -g -Wall
++CFLAGS = -O0 -G 0 -g -Wall -DGEPTEST_INPROC
+ CXXFLAGS = $(CFLAGS) -fno-exceptions -fno-rtti
+ ASFLAGS = $(CFLAGS)
+ 
+--- a/tests/gpu/signals/continue.cpp	2026-10-21 20:50:46.775613309 -0300
++++ b/tests/gpu/signals/continue.cpp	2026-10-22 12:29:04.212072218 -0300
+@@ -32,6 +32,7 @@
+ 		sceGeGetCmd(GE_CMD_AMBIENTCOLOR);
+ 	}
+ 	checkpoint("  * ge_signal: %d at %x, listsync: %08x, drawsync: %08x", value, sceGeGetCmd(GE_CMD_AMBIENTCOLOR), sceGeListSync(listid, 1), sceGeDrawSync(1));
++	return 0; // GEPTEST: GCC 14 pone una trampa (break) al final si falta el return
+ }
+ 
+ int ge_signal2(int value, void *arg, u32 *listpc) {
+@@ -41,10 +42,12 @@
+ 	}
+ 	checkpoint("  * ge_signal: %d at %x, listsync: %08x, drawsync: %08x", value, sceGeGetCmd(GE_CMD_AMBIENTCOLOR), sceGeListSync(listid, 1), sceGeDrawSync(1));
+ 	checkpoint("  * Continue: %08x", sceGeContinue());
++	return 0; // GEPTEST: GCC 14 pone una trampa (break) al final si falta el return
+ }
+ 
+ int ge_finish(int value, void *arg, u32 *listpc) {
+ 	checkpoint("  * ge_finish: %d at %x, listsync: %08x, drawsync: %08x", value, sceGeGetCmd(GE_CMD_AMBIENTCOLOR), sceGeListSync(listid, 1), sceGeDrawSync(1));
++	return 0; // GEPTEST: GCC 14 pone una trampa (break) al final si falta el return
+ }
+ 
+ void testSdkVersion(u32 ver) {
+--- a/tests/gpu/signals/pause.cpp	2026-10-21 20:50:46.775613309 -0300
++++ b/tests/gpu/signals/pause.cpp	2026-10-22 12:29:04.212650161 -0300
+@@ -28,15 +28,18 @@
+ 
+ int ge_signal(int value, void *arg, u32 *listpc) {
+ 	checkpoint("  * ge_signal: %d at %x, listsync: %08x, drawsync: %08x", value, sceGeGetCmd(GE_CMD_AMBIENTCOLOR), sceGeListSync(listid, 1), sceGeDrawSync(1));
++	return 0; // GEPTEST: GCC 14 pone una trampa (break) al final si falta el return
+ }
+ 
+ int ge_signal2(int value, void *arg, u32 *listpc) {
+ 	checkpoint("  * ge_signal: %d at %x, listsync: %08x, drawsync: %08x", value, sceGeGetCmd(GE_CMD_AMBIENTCOLOR), sceGeListSync(listid, 1), sceGeDrawSync(1));
+ 	checkpoint("  * Continue: %08x", sceGeContinue());
++	return 0; // GEPTEST: GCC 14 pone una trampa (break) al final si falta el return
+ }
+ 
+ int ge_finish(int value, void *arg, u32 *listpc) {
+ 	checkpoint("  * ge_finish: %d at %x, listsync: %08x, drawsync: %08x", value, sceGeGetCmd(GE_CMD_AMBIENTCOLOR), sceGeListSync(listid, 1), sceGeDrawSync(1));
++	return 0; // GEPTEST: GCC 14 pone una trampa (break) al final si falta el return
+ }
+ 
+ void testSdkVersion(u32 ver) {
+--- a/tests/gpu/signals/suspend.cpp	2026-10-21 20:50:46.783459213 -0300
++++ b/tests/gpu/signals/suspend.cpp	2026-10-22 12:29:04.213002501 -0300
+@@ -28,6 +28,7 @@
+ 
+ int ge_signal(int value, void *arg, u32 *listpc) {
+ 	checkpoint("  * ge_signal: %d at %x, listsync: %08x, drawsync: %08x", value, sceGeGetCmd(GE_CMD_AMBIENTCOLOR), sceGeListSync(listid, 1), sceGeDrawSync(1));
++	return 0; // GEPTEST: GCC 14 pone una trampa (break) al final si falta el return
+ }
+ 
+ int ge_signal2(int value, void *arg, u32 *listpc) {
+@@ -37,10 +38,12 @@
+ 	if (listpc != 0) {
+ 		checkpoint("  * Continue: %08x", sceGeContinue());
+ 	}
++	return 0; // GEPTEST: GCC 14 pone una trampa (break) al final si falta el return
+ }
+ 
+ int ge_finish(int value, void *arg, u32 *listpc) {
+ 	checkpoint("  * ge_finish: %d at %x, listsync: %08x, drawsync: %08x", value, sceGeGetCmd(GE_CMD_AMBIENTCOLOR), sceGeListSync(listid, 1), sceGeDrawSync(1));
++	return 0; // GEPTEST: GCC 14 pone una trampa (break) al final si falta el return
+ }
+ 
+ void testSdkVersion(u32 ver) {
+--- a/tests/gpu/signals/sync.cpp	2026-10-21 20:50:46.783459213 -0300
++++ b/tests/gpu/signals/sync.cpp	2026-10-22 12:29:04.213337745 -0300
+@@ -28,15 +28,18 @@
+ 
+ int ge_signal(int value, void *arg, u32 *listpc) {
+ 	checkpoint("  * ge_signal: %d at %x, listsync: %08x, drawsync: %08x", value, sceGeGetCmd(GE_CMD_AMBIENTCOLOR), sceGeListSync(listid, 1), sceGeDrawSync(1));
++	return 0; // GEPTEST: GCC 14 pone una trampa (break) al final si falta el return
+ }
+ 
+ int ge_signal2(int value, void *arg, u32 *listpc) {
+ 	checkpoint("  * ge_signal: %d at %x, listsync: %08x, drawsync: %08x", value, sceGeGetCmd(GE_CMD_AMBIENTCOLOR), sceGeListSync(listid, 1), sceGeDrawSync(1));
+ 	checkpoint("  * Continue: %08x", sceGeContinue());
++	return 0; // GEPTEST: GCC 14 pone una trampa (break) al final si falta el return
+ }
+ 
+ int ge_finish(int value, void *arg, u32 *listpc) {
+ 	checkpoint("  * ge_finish: %d at %x, listsync: %08x, drawsync: %08x", value, sceGeGetCmd(GE_CMD_AMBIENTCOLOR), sceGeListSync(listid, 1), sceGeDrawSync(1));
++	return 0; // GEPTEST: GCC 14 pone una trampa (break) al final si falta el return
+ }
+ 
+ void testSdkVersion(u32 ver) {
