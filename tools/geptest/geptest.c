@@ -219,20 +219,18 @@ static void next(const char *what) {
   queue(idx + 1);
 }
 
-// host0:/__testoutput.txt -> ms0:/geptest/out/<id>.txt
+// host0:/__testoutput.txt -> ms0:/geptest/out/<id>.txt. Se abre con el k1 de la prueba y la
+// ruta en memoria de usuario (upath): abierto con k1 0 el archivo quedaba del kernel y la
+// prueba no podia escribir en el (la primera ejecucion dejo todos los .txt vacios).
+static char *upath;
 static SceUID ioOpenHook(const char *file, int flags, SceMode mode) {
-  int k1 = pspSdkSetK1(0);
-  SceUID r;
-  if (file && !strncmp(file, "host0:", 6)) {
-    char p[128];
-    const char *ext = strstr(file, "output") ? "txt" : strstr(file, "error") ? "err" : strstr(file, "finish") ? "fin" : "otro";
-    sprintf(p, DIR "/out/%s.%s", id, ext);
-    r = ioOpen(p, flags, mode);
-    tr("host0 -> %ld (1 txt 2 err 3 fin): %08lx", ext[0] == 't' ? 1 : ext[0] == 'e' ? 2 : 3, r);
-  } else {
-    pspSdkSetK1(k1);
+  if (!file || strncmp(file, "host0:", 6) || !upath)
     return ioOpen(file, flags, mode);
-  }
+  const char *ext = strstr(file, "output") ? "txt" : strstr(file, "error") ? "err" : strstr(file, "finish") ? "fin" : "otro";
+  sprintf(upath, DIR "/out/%s.%s", id, ext);
+  SceUID r = ioOpen(upath, flags, mode);
+  int k1 = pspSdkSetK1(0);
+  tr("host0 -> %ld (1 txt 2 err 3 fin): %08lx", ext[0] == 't' ? 1 : ext[0] == 'e' ? 2 : 3, r);
   pspSdkSetK1(k1);
   return r;
 }
@@ -299,6 +297,8 @@ int module_start(SceSize args, void *argp) {
     u32 ex = sctrlHENFindFunction("sceLoadExec", "LoadExecForUser", 0x05572A5F);
     if (ioOpen)
       sctrlHENPatchSyscall((u32)ioOpen, ioOpenHook);
+    SceUID blk = sceKernelAllocPartitionMemory(2, "geptest_ruta", PSP_SMEM_High, 256, NULL);
+    upath = blk >= 0 ? sceKernelGetBlockHeadAddr(blk) : NULL;
     exitGame = (void *)ex;
     if (ex)
       sctrlHENPatchSyscall(ex, exitHook);
