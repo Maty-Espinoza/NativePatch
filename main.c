@@ -712,7 +712,8 @@ static int rtPatchTex(RenderTarget *r) {
 // Decide que hacer con la textura del draw: 0 normal, 1 omitir el draw,
 // 2 textura redirigida a un render target (en 2D hay que duplicar sus coordenadas),
 // 3 textura de la VRAM real llevada a la falsa, 4 el fb actual, 5 la pantalla leida desde
-// un render target (txDrawFromScreen)
+// un render target (txDrawFromScreen), 6 mezcla del pase por intercambio (swapComposite),
+// 7 rt a escala 1 que lee la pantalla (rt1FromBig), 8 rt a escala 1 que se lee a si mismo (rt1SelfDraw)
 static struct { u32 on, addr, bw, fb, gen; void *cur; int res; } tcache;
 
 static int texCheckCalc(void);
