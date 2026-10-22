@@ -2,6 +2,7 @@
 // interno. Cada test arma una display list en la memoria simulada de la PSP, la pasa
 // por patchGeList como lo haria el GE y revisa como quedaron los comandos y vertices.
 // Muchos tests corresponden a un bug que ya se arreglo: si alguno falla, volvio.
+#include <stdlib.h>
 #include "../main.c"
 
 extern char test_log[];
@@ -29,8 +30,9 @@ static void reset(void) {
   memset(&state, 0, sizeof(state));
   memset(memo, 0, MEMO_SIZE * sizeof(MemoEntry));
   memset(vmemo, 0, VMEMO_SIZE * sizeof(VMemo));
+  vram_swz = 0; depth_vram = 0x04100000;
   memset(rt, 0, sizeof(rt));
-  rt_count = 0; rt_next = RT_BASE; rt_enabled = 0;
+  rt_count = 0; rt_next = RT_BASE; rt_hi_next = RT_HI_BASE; rt_enabled = 0;
   tex_patched_any = 0; rt_gen++; memset(&tcache, 0, sizeof(tcache)); tcache.res = 2; // sin cache valida
   game_offx = 2048 - 240; game_offy = 2048 - 136;
   memset((void *)LIST, 0, 0x100000);
@@ -784,6 +786,14 @@ static void test_copia_formulario(void) {
   run();
   CHECK(st.tx_screen == 1 && (*start >> 24) == GE_CMD_CALL && (*reg >> 24) == GE_CMD_BASE, "la copia del formulario no se reemplazo (%lu)", st.tx_screen);
   CHECK(logHas("copia desde la pantalla 256x256 (0,0) -> 097f6960"), "no se registro la copia del formulario");
+  // La reduccion escribe el alfa (stencil REPLACE 0xff) y luego lo deja como estaba
+  u32 *l = (u32 *)(0x0A000000 | (*start & 0xffffff)), on = 0, rep = 0, back = 0;
+  for (; (*l >> 24) != GE_CMD_RET; l++) {
+    on |= *l == ((GE_CMD_STENCILTESTENABLE << 24) | 1);
+    rep |= *l == ((GE_CMD_STENCILOP << 24) | 0x020202);
+    back |= rep && (*l >> 24) == GE_CMD_STENCILOP && *l != ((GE_CMD_STENCILOP << 24) | 0x020202);
+  }
+  CHECK(on && rep && back, "la reduccion no escribe el alfa o no restaura el stencil (%lu %lu %lu)", on, rep, back);
 }
 
 // Gran Turismo alterna dos fb: las sublistas guardadas sirven en ambos
@@ -831,6 +841,7 @@ static u32 *formFrame(u32 **fmt, u32 **fbp, u32 **start, int copy) {
 static void test_formulario_escala1(void) {
   reset();
   rt_enabled = 1;
+  opt.csrc = 1; // opcion (apagada por defecto desde dev29)
   short *v = (short *)VERTS, *e = (short *)(VERTS + 0x100);
   v[0] = v[1] = v[2] = 0; v[3] = 200; v[4] = 100; v[5] = 0; // x, y, z
   e[0] = e[1] = e[2] = 0; e[3] = 480; e[4] = 272; e[5] = 0;
@@ -876,11 +887,12 @@ static void test_formulario_escala1(void) {
 // se omitia y el render target quedaba incompleto (spinner y puerta sin dibujar)
 static void test_rt_lee_pantalla(void) {
   reset();
+  memset(&st, 0, sizeof(st));
   rt_enabled = 1;
   opt.layers = 1;
   _sceGeListEnQueue = fakeEnqueue;
   _sceDisplaySetFrameBuf = fakeSetFrameBuf;
-  u32 *prim = NULL, *prev = NULL, *use = NULL;
+  u32 *prim = NULL, *prev = NULL, *use = NULL, *comp = NULL;
   int frame;
   for (frame = 0; frame < 4; frame++) {
     begin();
@@ -898,12 +910,14 @@ static void test_rt_lee_pantalla(void) {
     use = cmd(GE_CMD_PRIM, (GE_PRIM_TRIANGLES << 16) | 3);
     setFb(0x0d4000, 1024);
     cmd(GE_CMD_TEXADDR0, 0x04c000); cmd(GE_CMD_TEXBUFWIDTH0, (0x04 << 16) | 512);
-    cmd(GE_CMD_PRIM, (GE_PRIM_TRIANGLES << 16) | 3);
+    comp = cmd(GE_CMD_PRIM, (GE_PRIM_TRIANGLES << 16) | 3);
     end();
     run();
     sceDisplaySetFrameBufPatched((void *)0x0A0D43C0, 1024, 0, 0);
   }
   CHECK(logHas("fb 0a170000: intermedio"), "el fb del spinner no se detecto como intermedio");
+  CHECK((*comp >> 24) != GE_CMD_CALL, "la copia al fb mostrado (1024) tambien reducia la pantalla: trabajo de mas cada frame");
+  CHECK(st.cpu_overlays > 0, "no se pego lo que dibuja la CPU en el fb mostrado (spinner)");
   CHECK((*prim >> 24) == GE_CMD_CALL && (*prev >> 24) == GE_CMD_BASE, "el draw que lee la pantalla no se reemplazo: %08lx", *prim);
   CHECK(*use != NOP_OMIT, "el spinner (render target) no se uso en la pantalla");
   u32 *sub = (u32 *)(0x0A000000 | (*prim & 0xffffff));
@@ -922,6 +936,106 @@ static void test_rt_lee_pantalla(void) {
   run();
   CHECK(*prev == ((GE_CMD_TEXBUFWIDTH0 << 24) | (0x0a << 16) | 512), "la palabra de antes no se restauro: %08lx", *prev);
   capturing = 0;
+}
+
+// Volcado binario: una lista como la de Silent Hill (formulario, copia, escena) queda en un
+// .gpd con su cabecera, comandos, draws con datos, flip, memoria y fin (lo lee tools/gpd.py)
+static void test_volcado(void) {
+  reset();
+  rt_enabled = 1;
+  _sceGeListEnQueue = fakeEnqueue;
+  _sceDisplaySetFrameBuf = fakeSetFrameBuf;
+  dumpSetup();
+  short *v = (short *)VERTS, *e = (short *)(VERTS + 0x100);
+  v[0] = v[1] = v[2] = 0; v[3] = 200; v[4] = 100; v[5] = 0;
+  e[0] = e[1] = e[2] = 0; e[3] = 480; e[4] = 272; e[5] = 0;
+  u32 *fmt, *fbp, *start;
+  formFrame(&fmt, &fbp, &start, 1);
+  dumpRequest();
+  sceGeListEnQueuePatched((void *)LIST, NULL, 0, NULL);
+  CHECK(dumping, "no empezo el volcado");
+  sceDisplaySetFrameBufPatched((void *)0x0A0D43C0, 1024, 0, 0);
+  sceGeListEnQueuePatched((void *)LIST, NULL, 0, NULL); // lista nueva tras el flip: termina
+  CHECK(!dumping && logHas("volcado listo"), "el volcado no termino");
+  FILE *f = fopen(getenv("GPD_OUT") ? getenv("GPD_OUT") : "volcado_test.gpd", "rb");
+  CHECK(f != NULL, "no se escribio el archivo");
+  if (!f)
+    return;
+  static u8 data[16 << 20];
+  int n = fread(data, 1, sizeof(data), f), pos = 0, count[16] = { 0 }, ncmd = 0, blobs = 0;
+  fclose(f);
+  while (pos + 8 <= n) {
+    u32 type = *(u32 *)(data + pos), size = *(u32 *)(data + pos + 4);
+    if (type < 16)
+      count[type]++;
+    if (type == GPD_CMDS)
+      ncmd += size / 12;
+    if (type == GPD_BLOB)
+      blobs++;
+    pos += 8 + ((size + 3) & ~3);
+  }
+  CHECK(pos == n, "registros mal formados: %d de %d bytes", pos, n);
+  CHECK(count[GPD_HEADER] == 1 && !memcmp(data + 8, "GPD1", 4), "cabecera");
+  CHECK(count[GPD_REGS] == 2 && count[GPD_MEM] >= 4 && count[GPD_END] == 1, "registros=%d memoria=%d fin=%d",
+        count[GPD_REGS], count[GPD_MEM], count[GPD_END]);
+  CHECK(count[GPD_DRAW] == 2 && blobs >= 4 && ncmd >= 20, "draws=%d datos=%d comandos=%d", count[GPD_DRAW], blobs, ncmd);
+  CHECK(count[GPD_FLIP] == 1 && count[GPD_FB] >= 1 && count[GPD_TXLIST] == 1 && count[GPD_EVENT] >= 1,
+        "flip=%d fb=%d lista del plugin=%d eventos=%d", count[GPD_FLIP], count[GPD_FB], count[GPD_TXLIST], count[GPD_EVENT]);
+  CHECK(count[GPD_SNAP] == 2, "instantaneas=%d (antes de la copia y reducida)", count[GPD_SNAP]);
+  rename(getenv("GPD_OUT") ? getenv("GPD_OUT") : "volcado_test.gpd", "volcado_activo.gpd");
+  capturing = 0;
+}
+
+// Volcado en modo pasivo: un frame simple (limpia en azul, rectangulo rojo) para probar la
+// conversion a PPSSPP con tools/gpd.py (queda en volcado_pasivo.gpd)
+static void test_volcado_pasivo(void) {
+  reset();
+  passive = 1;
+  _sceGeListEnQueue = fakeEnqueue;
+  _sceDisplaySetFrameBuf = fakeSetFrameBuf;
+  dumpSetup();
+  struct { u32 c; short x, y, z, pad; } *v = (void *)VERTS; // color 8888 + posicion 16 bits
+  v[0].c = 0xffff0000; v[0].x = 0; v[0].y = 0; v[1].c = 0xffff0000; v[1].x = 480; v[1].y = 272;      // azul
+  v[2].c = 0xff0000ff; v[2].x = 100; v[2].y = 60; v[3].c = 0xff0000ff; v[3].x = 300; v[3].y = 200;   // rojo
+  begin();
+  cmd(GE_CMD_FRAMEBUFPIXFORMAT, 0); cmd(GE_CMD_FRAMEBUFPTR, 0); cmd(GE_CMD_FRAMEBUFWIDTH, 512);
+  cmd(GE_CMD_SCISSOR1, 0); cmd(GE_CMD_SCISSOR2, (271 << 10) | 479);
+  cmd(GE_CMD_REGION1, 0); cmd(GE_CMD_REGION2, (271 << 10) | 479);
+  cmd(GE_CMD_OFFSETX, 2048 << 4); cmd(GE_CMD_OFFSETY, 2048 << 4);
+  cmd(GE_CMD_TEXTUREMAPENABLE, 0); cmd(GE_CMD_ALPHABLENDENABLE, 0); cmd(GE_CMD_ZTESTENABLE, 0);
+  cmd(GE_CMD_BASE, 0x080000);
+  cmd(GE_CMD_VERTEXTYPE, GE_VTYPE_THROUGH | (7 << 2) | GE_VTYPE_POS_16BIT);
+  cmd(GE_CMD_VADDR, VERTS & 0xffffff);
+  cmd(GE_CMD_CLEARMODE, (1 << 8) | 1);
+  cmd(GE_CMD_PRIM, (GE_PRIM_RECTANGLES << 16) | 2);
+  cmd(GE_CMD_CLEARMODE, 0);
+  cmd(GE_CMD_PRIM, (GE_PRIM_RECTANGLES << 16) | 2);
+  end();
+  dumpRequest();
+  sceGeListEnQueuePatched((void *)LIST, NULL, 0, NULL);
+  sceDisplaySetFrameBufPatched((void *)0x04000000, 512, 0, 0);
+  sceGeListEnQueuePatched((void *)LIST, NULL, 0, NULL);
+  CHECK(!dumping && logHas("volcado listo"), "el volcado pasivo no termino");
+  rename(getenv("GPD_OUT") ? getenv("GPD_OUT") : "volcado_test.gpd", "volcado_pasivo.gpd");
+  passive = 0;
+}
+
+// La VRAM real de la Vita es de 2 MB (dev31): sin render targets; el buffer temporal comparte
+// la VRAM del z-buffer, y el z-buffer queda donde estaba
+static void test_vram_2mb(void) {
+  reset();
+  vram_swz = 1; rt_enabled = 0;
+  begin();
+  u32 *z = cmd(GE_CMD_ZBUFPTR, 0x088000);
+  setFb(0x0d4000, 1024);
+  cmd(GE_CMD_VERTEXTYPE, GE_VTYPE_POS_16BIT);
+  cmd(GE_CMD_TEXTUREMAPENABLE, 0);
+  u32 *p = cmd(GE_CMD_PRIM, (GE_PRIM_TRIANGLES << 16) | 3);
+  end();
+  run();
+  CHECK((*z & 0xffffff) == 0x100000, "z-buffer: %06lx", *z & 0xffffff);
+  CHECK(!rtFindTex(0x0a0d4000) && *p == NOP_OMIT, "con 2 MB no deberia haber render targets");
+  CHECK(copyVram() && copy_vram == 0x04100000, "buffer temporal en %08lx (deberia compartir el z-buffer)", copy_vram);
 }
 
 // Menu: abrir con L+R+START, cambiar una opcion, cerrar, y que el juego no vea botones mientras
@@ -954,7 +1068,7 @@ int main(void) {
     test_viewport_scissor_x2, test_viewport_zona, test_memo_lista_grande, test_vertices_2d,
     test_vaddr_avanza_tras_3d, test_bjump_no_salta, test_estado_entre_listas, test_textura_fb_al_dibujar,
     test_render_target, test_textura_dentro_de_rt, test_rt_incompleto, test_rt_escala_1, test_pitch_0,
-    test_robustez, test_copia_listas_alternas, test_fps, test_doble_buffer_alternado, test_nop_no_revive, test_lista_estatica_fb, test_pasivo_no_escribe, test_pasivo_normaliza, test_desplazamiento_y_1024, test_vertices_2d_muchos_buffers, test_pasivo_muestreo, test_silent_hill_video, test_copia_escalada_con_ge, test_copia_reducida, test_sublistas_sin_cambios, test_sublistas_anidadas, test_sublistas_doble_buffer, test_vram_real, test_copia_formulario, test_fb_intermedio, test_opciones_juego, test_formulario_escala1, test_rt_lee_pantalla, test_menu,
+    test_robustez, test_copia_listas_alternas, test_fps, test_doble_buffer_alternado, test_nop_no_revive, test_lista_estatica_fb, test_pasivo_no_escribe, test_pasivo_normaliza, test_desplazamiento_y_1024, test_vertices_2d_muchos_buffers, test_pasivo_muestreo, test_silent_hill_video, test_copia_escalada_con_ge, test_copia_reducida, test_sublistas_sin_cambios, test_sublistas_anidadas, test_sublistas_doble_buffer, test_vram_real, test_copia_formulario, test_fb_intermedio, test_opciones_juego, test_formulario_escala1, test_rt_lee_pantalla, test_volcado, test_volcado_pasivo, test_vram_2mb, test_menu,
   };
   int i;
   for (i = 0; i < (int)(sizeof(tests) / sizeof(tests[0])); i++)

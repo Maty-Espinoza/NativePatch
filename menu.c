@@ -10,16 +10,18 @@
 
 #include "log.h"
 #include "menu.h"
+#include "dump.h"
 #include "font.h"
 
 // Valores originales (por defecto). El menu marca los que se cambiaron para probar.
 const Options opt_default = { .rt_on = 1, .rt_scale = 1, .omit_fbtex = 1, .fallback = 0, .nop_mark = 1, .walk_new = 1,
-                              .v2d = 1, .tx_ge = 1, .walk_cache = 1, .layers = 0, .vram_fix = 1, .autocap = 1 };
+                              .v2d = 1, .tx_ge = 1, .walk_cache = 1, .layers = 0, .vram_fix = 1, .autocap = 1,
+                              .cpu_draw = 1, .csrc = 0 };
 Options opt = opt_default;
 u32 opt_gen;
 
 // --- Elementos del menu -----------------------------------------------------
-enum { ACT_NONE, ACT_CAPTURE, ACT_SNAPSHOT, ACT_FLUSH, ACT_RESTORE, ACT_SAVE, ACT_CLOSE };
+enum { ACT_NONE, ACT_CAPTURE, ACT_DUMP, ACT_SNAPSHOT, ACT_FLUSH, ACT_RESTORE, ACT_SAVE, ACT_CLOSE };
 typedef struct {
   const char *key; // nombre en el archivo de opciones del juego
   const char *name;
@@ -53,7 +55,10 @@ static const Item items[] = {
   { "dx", "Desplazamiento X (px del juego)", &opt.dx, -512, 512, 16, NULL },
   { "dy", "Desplazamiento Y (px del juego)", &opt.dy, -272, 272, 8, NULL },
   { "autocap", "Capturas automaticas (max 5)", &opt.autocap, 0, 1, 1, no_si },
+  { "cpu", "Dibujos de la CPU en pantalla", &opt.cpu_draw, 0, 1, 1, no_si },
+  { "copia_esc1", "Fb de copia a escala 1", &opt.csrc, 0, 1, 1, no_si },
   { NULL, "Capturar el proximo frame al log", NULL, 0, 0, 0, NULL, ACT_CAPTURE },
+  { NULL, "Volcar el proximo frame (.gpd)", NULL, 0, 0, 0, NULL, ACT_DUMP },
   { NULL, "Memoria y CPU al log", NULL, 0, 0, 0, NULL, ACT_SNAPSHOT },
   { NULL, "Restaurar valores originales", NULL, 0, 0, 0, NULL, ACT_RESTORE },
   { NULL, "Guardar opciones para este juego", NULL, 0, 0, 0, NULL, ACT_SAVE },
@@ -177,7 +182,6 @@ static void optPath(char *p, int n, const char *id) { snprintf(p, n, "ms0:/gepat
 
 // Opciones conocidas por juego (se aplican antes del archivo, que manda)
 static const struct { const char *id, *opts; } known[] = {
-  { "ULUS-10450", "intermedios=1\n" }, // Silent Hill Shattered Memories: spinner y puerta
   { "UCUS-98632", "comprobar=1\n" },   // Gran Turismo: sublistas cada 2 frames, sin glitches
 };
 
@@ -323,6 +327,7 @@ int menuFrame(void) {
     if (pressed & PSP_CTRL_CROSS) {
       const Item *it = &items[sel];
       if (it->action == ACT_CAPTURE) menuRequestCapture();
+      if (it->action == ACT_DUMP) dumpRequest();
       else if (it->action == ACT_SNAPSHOT) memSnapshot("menu");
       else if (it->action == ACT_RESTORE) {
         opt = opt_default;

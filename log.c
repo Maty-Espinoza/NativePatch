@@ -17,7 +17,10 @@ static int cur, len, dropped, written, sync_mode, eager;
 static int flushing; // un solo volcado a la vez (el hilo del log y el modo captura podian chocar)
 static u32 seen[256];     // keys ya vistas por logOnce
 
+void (*log_tap)(const char *s, int n);
 void logWrite(const char *s, int n) {
+  if (log_tap)
+    log_tap(s, n);
   int intr = sceKernelCpuSuspendIntr();
   if (len + n <= (int)sizeof(buf[0])) {
     memcpy(buf[cur] + len, s, n);

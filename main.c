@@ -12,6 +12,7 @@
 #include "ge_constants.h"
 #include "log.h"
 #include "menu.h"
+#include "dump.h"
 
 PSP_MODULE_INFO("GePatch", 0x1007, 1, 0);
 
@@ -31,7 +32,8 @@ PSP_MODULE_INFO("GePatch", 0x1007, 1, 0);
 // carrera: el emulador probablemente exige framebuffers alineados. La ambiguedad del
 // doble buffer se resuelve en patchGeList mirando el FBWIDTH vecino.)
 #define VRAM_DRAW_BUFFER_OFFSET 0x04000000
-#define VRAM_DEPTH_BUFFER_OFFSET 0x04100000
+#define VRAM_DEPTH_BUFFER_OFFSET depth_vram // 0x04100000, o 0x04200000 si la VRAM alta desordena lo dibujado
+static u32 depth_vram = 0x04100000;
 #define VRAM_1KB 0x041ff000
 
 #ifndef BUILD_OPT
@@ -47,7 +49,7 @@ static struct {
   // Rendimiento (microsegundos)
   u32 frames, frame_us, frame_max, slow60, slow30; // tiempo entre flips
   u32 patch_us, patch_max, cmds;                   // costo del plugin por frame
-  u32 upscale_us, fb_copies;                       // escalado por CPU (videos), copias del frame al fb del juego
+  u32 upscale_us, fb_copies, cpu_overlays;         // escalado por CPU (videos), copias del frame al fb del juego, dibujos de la CPU pegados
   u32 walked, calls, lookups, v2d, v2d_skip, vevict, call_cmds, tx_ge, tx_screen, vram_fix;
   u32 wc_hits, wc_miss, wc_cmds, wc_summed;                   // sublistas sin cambios que no se recorrieron
   u32 wc_why[8];                                   // por que no se guardaron (ver W_*) // recorrido: frames medidos, CALLs, busquedas en memo, vertices 2D
@@ -109,6 +111,7 @@ static u32 origOp(u32 *p) {
 }
 
 static u32 n_setops; // cuantos parches se hicieron (para saber si una sublista se modifica)
+static u32 *dump_cur; // comando que se esta recorriendo (para el volcado)
 static void setOp(u32 *p, u32 orig, u32 op) {
   n_setops++;
   if (passive)
@@ -118,6 +121,8 @@ static void setOp(u32 *p, u32 orig, u32 op) {
   memo[i].orig = orig;
   memo[i].patched = op;
   *p = op;
+  if (dumping && p != dump_cur) // parche de un comando anterior: va al volcado con el bit 0
+    dumpCmd((u32 *)((u32)p | 1), orig);
 }
 
 // Solo estos comandos pueden haber sido parcheados por el plugin (y NOP = draw anulado).
@@ -523,8 +528,17 @@ static inline int wideScreen(u32 pitch) { return pitch == 1024 && opt.wide1024; 
 // en Adrenaline aunque el sistema diga que hay 2 MB (ver probeVram). Si la prueba de
 // VRAM falla, o no hay espacio, se vuelve al comportamiento anterior: se omiten.
 // ---------------------------------------------------------------------------
-#define RT_BASE 0x04200000
-#define RT_END  0x04400000
+// En la Vita (dev30, formulario de SH): lo que el GE DIBUJA en los 2 MB altos queda con las
+// direcciones permutadas (bloques de 16 px y bandas de 16 filas) al leerlo despues con una
+// copia o como textura; las copias y la CPU si los ven en orden. Si probeVram lo detecta
+// (vram_swz), arriba va solo el z-buffer (el GE lo escribe y lo lee por el mismo camino) y
+// abajo, despues del buffer grande, el buffer temporal y los render targets que se leen.
+// Los fb de 1024 (pantallas que se muestran, nunca se leen bien) van arriba como antes.
+static int vram_swz;
+#define RT_BASE (vram_swz ? 0x04100000 : 0x04200000)
+#define RT_END  (vram_swz ? 0x04200000 : 0x04400000)
+#define RT_HI_BASE 0x042FF000 // (con vram_swz) despues del z-buffer arriba
+static u32 rt_hi_next = RT_HI_BASE;
 #define RT_MAX  8
 // Los render targets se dibujan por defecto a escala 1 (tamano original). A escala 2 el
 // limite de 4096 px del GE descarta la geometria cercana a la camara, y el mapa de
@@ -539,12 +553,13 @@ typedef struct RenderTarget {
   u32 frame;         // ultimo frame en que se uso como destino
   u32 draws, reads;  // en el periodo de estadisticas: draws hacia el y draws que lo leen
   u32 sc, fmt;       // escala (RT_SCALE al reservarlo; 1 en el fb de copia) y formato de pixel
+  u32 hi;            // en la VRAM alta con vram_swz: no sirve como textura
 } RenderTarget;
 
 static RenderTarget rt[RT_MAX];
 #define SCALE() (state.cur_rt ? (int)state.cur_rt->sc : 2) // escala del destino actual
 static int rt_count, rt_enabled;
-static u32 rt_next = RT_BASE;
+static u32 rt_next = 0x04200000; // RT_BASE sin vram_swz (probeVram lo ajusta)
 
 // Fb del que el juego copia una parte a una textura (Silent Hill dibuja el formulario en
 // el fb de la pantalla, lo copia a la RAM y despues dibuja la escena en el mismo fb). En
@@ -578,6 +593,7 @@ void rtReset(void) {
   memset(rt, 0, sizeof(rt));
   rt_count = 0;
   rt_next = RT_BASE;
+  rt_hi_next = RT_HI_BASE;
   rt_gen++;
   copy_vram = 0; // estaba en la misma zona
   LOG("rt: se liberaron los render targets\n");
@@ -592,6 +608,16 @@ static RenderTarget *rtGet(u32 addr, u32 pitch) {
 
   // Alto desconocido: los de 256 o mas se asumen de pantalla (272), los chicos cuadrados
   u32 w = pitch * RT_SCALE, h = (pitch >= 256 ? 272 : pitch) * RT_SCALE, size = (w * h * 2 + 0x1fff) & ~0x1fff;
+  if (vram_swz && pitch >= 1024 && rt_count < RT_MAX && rt_hi_next + size <= 0x04400000) { // pantalla de 1024: arriba
+    RenderTarget *r = &rt[rt_count++];
+    memset(r, 0, sizeof(*r));
+    r->addr = addr; r->pitch = pitch; r->vram = rt_hi_next; r->w = w; r->h = h;
+    r->sc = RT_SCALE; r->fmt = PIXELFORMAT; r->hi = 1;
+    rt_hi_next += size;
+    rt_gen++;
+    LOG("rt %d: fb %08lx pitch=%lu -> vram alta %08lx %lux%lu (no se puede leer como textura)\n", rt_count - 1, addr, pitch, r->vram, w, h);
+    return r;
+  }
   if (rt_count >= RT_MAX || rt_next + size > RT_END) {
     st.rt_fail++;
     LOG_ONCE_CAP(addr ^ 0xC1000000, "rt: SIN ESPACIO para fb %08lx pitch=%lu (%lu KB, libres %lu KB, %d/%d usados) -> se omite\n",
@@ -600,7 +626,7 @@ static RenderTarget *rtGet(u32 addr, u32 pitch) {
   }
   RenderTarget *r = &rt[rt_count++];
   r->addr = addr; r->pitch = pitch; r->vram = rt_next; r->w = w; r->h = h;
-  r->incomplete = 0; r->sc = RT_SCALE; r->fmt = PIXELFORMAT;
+  r->incomplete = 0; r->sc = RT_SCALE; r->fmt = PIXELFORMAT; r->hi = 0;
   rt_next += size;
   rt_gen++;
   LOG("rt %d: fb %08lx pitch=%lu -> vram %08lx %lux%lu (%lu KB), libres %lu KB\n",
@@ -685,8 +711,8 @@ static int texCheckCalc(void) {
 
   RenderTarget *r = rt_enabled && opt.rt_on ? rtFindTex(tex) : NULL;
   int lf = findFramebuf(tex);
-  if (r && lf >= 0 && (r->pitch == 512 || r->pitch == 480) && !state.fb_layer[lf])
-    r = NULL; // fb de pantalla que fue intermedio: su render target ya no se usa
+  if (r && lf >= 0 && (r->pitch == 512 || r->pitch == 480) && !(opt.layers && state.fb_layer[lf]))
+    r = NULL; // fb de pantalla que fue intermedio (o la opcion se apago): su render target ya no se usa
   if (r) {
     // Un fb que se creyo intermedio y se pega en el fb mostrado (el de 1024 de Silent Hill)
     // es la pantalla: vuelve al buffer grande
@@ -700,7 +726,10 @@ static int texCheckCalc(void) {
     }
     if (r == state.cur_rt) // se lee a si mismo (efectos de acumulacion): igual que en la PSP
       LOG_ONCE(tex ^ 0xC8000000, "rt: el rt %08lx se lee a si mismo -> se permite\n", tex);
-    else if (r->incomplete) {
+    else if (r->hi) {
+      LOG_ONCE_CAP(tex ^ 0xC9100000, "rt: %08lx esta en la VRAM alta (se leeria desordenado) -> se omite el draw\n", tex);
+      return 1;
+    } else if (r->incomplete) {
       st.rt_incomplete++;
       LOG_ONCE_CAP(tex ^ 0xC9000000, "rt: %08lx quedo incompleto (se omitieron draws al dibujarlo) -> no se usa como textura\n", tex);
       return 1;
@@ -750,8 +779,10 @@ static int texCheckCalc(void) {
     LOG("fb %08lx: intermedio (nunca se muestra y se usa como textura) -> render target desde ahora\n", tex);
     autoCapture();
   }
-  // Un render target que lee la pantalla (en el buffer grande): se reduce en la lista
+  // Un render target que lee la pantalla (en el buffer grande): se reduce en la lista. No si
+  // el destino es el fb mostrado (el de 1024 de Silent Hill: la pantalla sale del buffer grande)
   if (state.cur_rt && state.cur_rt != &csrc_rt && opt.omit_fbtex == 1 && !passive && f + 1 == state.big_fb &&
+      !(cf >= 0 && state.fb_shown[cf]) &&
       (state.ge_cmd[GE_CMD_TEXFORMAT] & 0xf) <= 3) {
     LOG_ONCE_CAP(tex ^ 0x7E100000, "rt %08lx lee la pantalla %08lx como textura -> se reduce el buffer grande antes del draw\n",
                  state.cur_rt->addr, tex);
@@ -843,11 +874,27 @@ static u32 scPatch(u32 cmd, u32 data) {
 }
 
 // Escribe en l una lista que reduce el buffer grande (960x544) a 480x272 en el buffer
-// temporal (formato fmt), con 4 sprites de filtro lineal. Vertices en va. Devuelve el final.
-static u32 *emitDownscale(u32 *l, u32 va, int fmt) {
-  short *v = (short *)(va | 0x40000000);
-  int i;
+// temporal (formato fmt), con filtro lineal. Devuelve el final.
+// En el hardware, 4 sprites de 240 px de ancho (480 texeles) salian con el texto corrido
+// y letras cambiadas de lugar (formulario de Silent Hill); en PPSSPP la misma lista dibuja
+// bien. Como en txUpscale: franjas de 32 px (64 texeles) y TEXSYNC antes de leer lo que se
+// acaba de dibujar. Los vertices son siempre los mismos: se arman una vez (DOWN_VERTS).
+#define DOWN_VERTS (RENDER_LIST + 0x5000) // 4 cuartos x 8 franjas x 2 vertices x 10 bytes
+static u32 *emitDownscale(u32 *l, int fmt) {
+  static int ready;
+  short *v = (short *)(DOWN_VERTS | 0x40000000);
+  int i, x;
+  if (!ready) {
+    for (i = 0; i < 4; i++)
+      for (x = 0; x < 240; x += 32, v += 10) {
+        int tx = (i & 1) * 240, ty = (i >> 1) * 136, x2 = x + 32 < 240 ? x + 32 : 240;
+        short q[10] = { x * 2, 0, tx + x, ty, 0, x2 * 2, 272, tx + x2, ty + 136, 0 };
+        memcpy(v, q, sizeof(q));
+      }
+    ready = 1;
+  }
   #define C(c, d) (*l++ = ((c) << 24) | ((d) & 0xffffff))
+  C(GE_CMD_TEXSYNC, 0); // lo dibujado antes en el buffer grande ya esta en la VRAM
   C(GE_CMD_FRAMEBUFPIXFORMAT, fmt);
   C(GE_CMD_FRAMEBUFPTR, copy_vram); C(GE_CMD_FRAMEBUFWIDTH, ((copy_vram >> 24) << 16) | 512);
   C(GE_CMD_SCISSOR1, 0); C(GE_CMD_SCISSOR2, (271 << 10) | 479);
@@ -858,22 +905,25 @@ static u32 *emitDownscale(u32 *l, u32 va, int fmt) {
   for (i = 0; i < (int)sizeof(off); i++)
     C(off[i], 0);
   C(GE_CMD_ZWRITEDISABLE, 1);
+  // El alfa del destino solo se escribe con el stencil (sin el queda lo que habia: en
+  // dev32 eran restos del z-buffer y el formulario de SH salia semitransparente). El
+  // buffer grande es 565, sin alfa: se deja opaco, como lo dibuja el juego.
+  C(GE_CMD_STENCILTESTENABLE, 1);
+  C(GE_CMD_STENCILTEST, (0xff << 16) | (0xff << 8) | GE_COMP_ALWAYS);
+  C(GE_CMD_STENCILOP, (GE_STENCILOP_REPLACE << 16) | (GE_STENCILOP_REPLACE << 8) | GE_STENCILOP_REPLACE);
   C(GE_CMD_TEXTUREMAPENABLE, 1);
   C(GE_CMD_TEXSIZE0, (9 << 8) | 9);                 // 512x512 (se usan 480x272)
   C(GE_CMD_TEXFILTER, (1 << 8) | 1);                // lineal: promedia los 4 pixeles
   C(GE_CMD_TEXWRAP, (1 << 8) | 1);
   C(GE_CMD_TEXFUNC, (1 << 8) | 3);                  // reemplazar, alfa de la textura (opaco)
   C(GE_CMD_VERTEXTYPE, GE_VTYPE_THROUGH | GE_VTYPE_TC_16BIT | GE_VTYPE_POS_16BIT);
-  C(GE_CMD_BASE, (va >> 8) & 0x0f0000); C(GE_CMD_OFFSETADDR, 0);
+  C(GE_CMD_BASE, (DOWN_VERTS >> 8) & 0x0f0000); C(GE_CMD_OFFSETADDR, 0); C(GE_CMD_VADDR, DOWN_VERTS);
   for (i = 0; i < 4; i++) { // 4 cuartos de 480x272: la textura del GE es de 512 como maximo
-    int tx = (i & 1) * 480, ty = (i >> 1) * 272;
-    u32 src = VRAM_DRAW_BUFFER_OFFSET + (ty * PITCH + tx) * 2;
-    short q[10] = { 0, 0, tx / 2, ty / 2, 0, 480, 272, tx / 2 + 240, ty / 2 + 136, 0 };
-    memcpy(v + i * 10, q, sizeof(q));
+    u32 src = VRAM_DRAW_BUFFER_OFFSET + ((i >> 1) * 272 * PITCH + (i & 1) * 480) * 2;
     C(GE_CMD_TEXADDR0, src); C(GE_CMD_TEXBUFWIDTH0, ((src >> 24) << 16) | PITCH);
     C(GE_CMD_TEXFLUSH, 0);
-    C(GE_CMD_VADDR, va + i * 20);
-    C(GE_CMD_PRIM, (GE_PRIM_RECTANGLES << 16) | 2);
+    for (x = 0; x < 240; x += 32)
+      C(GE_CMD_PRIM, (GE_PRIM_RECTANGLES << 16) | 2); // el VADDR avanza solo
   }
   #undef C
   return l;
@@ -894,6 +944,11 @@ static u32 *emitDownscale(u32 *l, u32 va, int fmt) {
 static int copyVram(void) {
   if (copy_vram)
     return 1;
+  if (vram_swz) { // VRAM de 2 MB: el unico lugar es la del z-buffer (se pisa mientras se usa)
+    copy_vram = 0x04100000;
+    LOG("buffer temporal en %08lx: comparte la VRAM del z-buffer (la VRAM real es de 2 MB)\n", copy_vram);
+    return 1;
+  }
   if (!rt_enabled || rt_next + 0x88000 > RT_END) {
     LOG_ONCE(0xC2000000, "buffer temporal: sin VRAM libre -> sin copia reducida ni copias escaladas con el GE\n");
     return 0;
@@ -908,7 +963,8 @@ static const u8 tx_seq[7] = { GE_CMD_TRANSFERSRC, GE_CMD_TRANSFERSRCW, GE_CMD_TR
 static const u8 tx_saved[] = { GE_CMD_TEXTUREMAPENABLE, GE_CMD_TEXMODE, GE_CMD_TEXFORMAT, GE_CMD_TEXADDR0,
   GE_CMD_TEXBUFWIDTH0, GE_CMD_TEXSIZE0, GE_CMD_TEXFILTER, GE_CMD_TEXWRAP, GE_CMD_TEXFUNC, GE_CMD_ALPHABLENDENABLE,
   GE_CMD_ALPHATESTENABLE, GE_CMD_ZTESTENABLE, GE_CMD_STENCILTESTENABLE, GE_CMD_LOGICOPENABLE, GE_CMD_COLORTESTENABLE,
-  GE_CMD_ZWRITEDISABLE, GE_CMD_MASKRGB, GE_CMD_MASKALPHA, GE_CMD_VERTEXTYPE, GE_CMD_CLEARMODE, GE_CMD_TEXMAPMODE };
+  GE_CMD_ZWRITEDISABLE, GE_CMD_MASKRGB, GE_CMD_MASKALPHA, GE_CMD_VERTEXTYPE, GE_CMD_CLEARMODE, GE_CMD_TEXMAPMODE,
+  GE_CMD_STENCILTEST, GE_CMD_STENCILOP };
 
 static int lg2(u32 v) { int n = 0; while ((1u << n) < v) n++; return n; }
 
@@ -975,6 +1031,7 @@ static void txCall(u32 *list, u32 *reg, u32 sl) {
   setOp(reg, origOp(reg), (GE_CMD_BASE << 24) | ((FAKE_VRAM >> 8) & 0x0f0000));
   setOp(list, origOp(list), (GE_CMD_CALL << 24) | ((sl - state.offset) & 0xffffff));
   tx_patched_any = 1;
+  dumpTxList(sl);
 }
 
 // Viewport escalado al destino actual (x2 en el buffer grande, la escala del render target)
@@ -1029,6 +1086,20 @@ static u32 *txRestore(u32 *l, int fb) {
 // Copia DESDE la pantalla (Silent Hill dibuja el formulario/la pantalla del celular en su fb
 // y lo copia a una textura): el juego lee su fb, que esta vacio porque se dibujo en el
 // buffer grande. Se reemplaza por: reducir el buffer grande al temporal y copiar de ahi.
+// Volcado: el GE copia un buffer de la VRAM a una instantanea en la RAM en este punto de la
+// lista (para ver lo que habia a mitad del frame; ver dumpSnap)
+static u32 *snapCopy(u32 *l, u32 src, u32 stride, u32 w, u32 h, int bpp, int fmt, const char *what) {
+  u32 d = dumping ? dumpSnap(w, h, bpp, fmt, what) : 0;
+  if (!d)
+    return l;
+  #define C(c, x) (*l++ = ((c) << 24) | ((x) & 0xffffff))
+  C(GE_CMD_TRANSFERSRC, src); C(GE_CMD_TRANSFERSRCW, ((src >> 24) << 16) | stride); C(GE_CMD_TRANSFERSRCPOS, 0);
+  C(GE_CMD_TRANSFERDST, d); C(GE_CMD_TRANSFERDSTW, ((d >> 24) << 16) | w); C(GE_CMD_TRANSFERDSTPOS, 0);
+  C(GE_CMD_TRANSFERSIZE, ((h - 1) << 10) | (w - 1)); C(GE_CMD_TRANSFERSTART, bpp == 4);
+  #undef C
+  return l;
+}
+
 static int txFromScreen(u32 *list, u32 src, u32 dst, u32 w, u32 h, int bpp) {
   int f = inFramebuf(src) - 1;
   u32 sw = state.ge_cmd[GE_CMD_TRANSFERSRCW] & 0x7ff, sl = 0, *reg = NULL;
@@ -1044,7 +1115,9 @@ static int txFromScreen(u32 *list, u32 src, u32 dst, u32 w, u32 h, int bpp) {
     return 0;
   }
   u32 *l = (u32 *)(sl | 0x40000000);
-  l = emitDownscale(l, sl + 640, bpp == 4 ? 3 : state.ge_cmd[GE_CMD_FRAMEBUFPIXFORMAT] & 3);
+  l = snapCopy(l, VRAM_DRAW_BUFFER_OFFSET, PITCH, WIDTH, HEIGHT, 2, 0, "pantalla antes de copia");
+  l = emitDownscale(l, bpp == 4 ? 3 : state.ge_cmd[GE_CMD_FRAMEBUFPIXFORMAT] & 3);
+  l = snapCopy(l, copy_vram, 512, 512, 272, bpp == 4 ? 4 : 2, bpp == 4 ? 3 : 0, "pantalla reducida");
   #define C(c, d) (*l++ = ((c) << 24) | ((d) & 0xffffff))
   C(GE_CMD_TRANSFERSRC, copy_vram); C(GE_CMD_TRANSFERSRCW, ((copy_vram >> 24) << 16) | 512);
   C(GE_CMD_TRANSFERSRCPOS, (y << 10) | x);
@@ -1057,6 +1130,7 @@ static int txFromScreen(u32 *list, u32 src, u32 dst, u32 w, u32 h, int bpp) {
   st.tx_screen++;
   LOG_ONCE_CAP(0xE8000000 ^ src ^ dst, "copia desde la pantalla %lux%lu (%lu,%lu) -> %08lx: se toma del buffer grande reducido\n",
                w, h, x, y, dst);
+  csrc_copied = 1; // lo que sigue en esta lista es la escena, no el formulario
   if (!state.fb_csrc[f] && state.fb_cfail[f] < 3) { // desde el proximo frame: a escala 1 (ver csrc_rt)
     state.fb_csrc[f] = 1;
     LOG("fb %08lx: el juego copia desde el -> hasta la copia se dibujara a escala 1 en su formato\n", state.framebuf_addr[f]);
@@ -1077,6 +1151,7 @@ static int txFromCsrc(u32 *list, u32 src, u32 dst, int bpp) {
     return 0;
   }
   u32 from = copy_vram + (src - csrc_rt.addr), *l = (u32 *)(sl | 0x40000000);
+  l = snapCopy(l, copy_vram, 512, 512, 272, csrc_rt.fmt == 3 ? 4 : 2, csrc_rt.fmt, "fb de copia (escala 1)");
   #define C(c, d) (*l++ = ((c) << 24) | ((d) & 0xffffff))
   C(GE_CMD_TRANSFERSRC, from); C(GE_CMD_TRANSFERSRCW, ((from >> 24) << 16) | (state.ge_cmd[GE_CMD_TRANSFERSRCW] & 0xffff));
   C(GE_CMD_TRANSFERSRCPOS, state.ge_cmd[GE_CMD_TRANSFERSRCPOS]);
@@ -1100,8 +1175,11 @@ static int txFromCsrc(u32 *list, u32 src, u32 dst, int bpp) {
 // antes) se reemplaza por BASE + CALL a una lista que reduce el buffer grande al temporal,
 // dibuja con esa textura y deja la textura del juego como estaba.
 static void primUnCall(u32 *list) {
-  if (validAddr((u32)(list - 1)) && (list[-1] >> 24) == GE_CMD_BASE && origOp(list - 1) != list[-1])
+  if (validAddr((u32)(list - 1)) && (list[-1] >> 24) == GE_CMD_BASE && origOp(list - 1) != list[-1]) {
     list[-1] = origOp(list - 1);
+    if (dumping)
+      dumpCmd((u32 *)((u32)(list - 1) | 1), list[-1]);
+  }
 }
 static int txDrawFromScreen(u32 *list, u32 op) {
   u32 *reg = list - 1, sl, fmt = state.ge_cmd[GE_CMD_TEXFORMAT] & 0xf;
@@ -1113,7 +1191,8 @@ static int txDrawFromScreen(u32 *list, u32 op) {
       c == GE_CMD_ORIGIN || !(sl = txSlot()))
     return 0;
   u32 prev = *reg, *l = (u32 *)(sl | 0x40000000); // con los parches que ya tenga
-  l = emitDownscale(l, sl + 640, fmt);
+  l = emitDownscale(l, fmt);
+  l = snapCopy(l, copy_vram, 512, 512, 272, fmt == 3 ? 4 : 2, fmt, "pantalla reducida (rt)");
   l = txRestoreState(l, 1);
   #define C(c, d) (*l++ = ((c) << 24) | ((d) & 0xffffff))
   C(GE_CMD_BASE, state.base >> 8);
@@ -1353,6 +1432,50 @@ static int wcSkip(u32 addr) {
   return 1;
 }
 
+// Volcado: el draw con la decision del plugin y sus datos tal como los dejo el juego
+static u32 dump_draws;
+static void dumpDraw(u32 *list, u32 op, u32 count, int texmode, int omit) {
+  u8 vs = 0, po = 0, to = 0;
+  vertexInfo(state.vertex_type, &vs, &po, &to);
+  u16 lower = 0, upper = count;
+  u32 isz = ((state.vertex_type & GE_VTYPE_IDX_MASK) >> GE_VTYPE_IDX_SHIFT), k;
+  isz = isz == 1 ? 1 : isz == 2 ? 2 : isz == 3 ? 4 : 0;
+  int ivalid = isz && validAddr(state.index_addr) && validAddr(state.index_addr + count * isz);
+  if (ivalid) {
+    GetIndexBounds((void *)state.index_addr, count, state.vertex_type, &lower, &upper);
+    upper++;
+  }
+  u32 flags = ((state.vertex_type & GE_VTYPE_THROUGH_MASK) == GE_VTYPE_THROUGH) | (state.ignore_framebuf ? 2 : 0) |
+              (state.cur_rt ? 4 : 0) | (state.cur_rt == &csrc_rt ? 8 : 0);
+  u32 d[20] = { dump_draws++, (u32)list, op, state.vertex_type, state.vertex_addr, state.index_addr, vs, lower, upper,
+                texmode, omit, flags, state.framebuf, state.cur_rt ? state.cur_rt->vram : state.ignore_framebuf ? 0 : VRAM_DRAW_BUFFER_OFFSET,
+                SCALE(), state.offx, state.offy,
+                ((state.ge_cmd[GE_CMD_TEXBUFWIDTH0] & 0x0f0000) << 8) | (state.ge_cmd[GE_CMD_TEXADDR0] & 0xffffff),
+                state.cur_fb, state.big_fb };
+  dumpRecord(GPD_DRAW, d, sizeof(d), NULL, 0);
+  if (ivalid) // despues del registro del draw (en dev28 iba antes y quedaba con el draw anterior)
+    dumpBlob(B_INDICES, state.index_addr, count * isz);
+  if (vs && validAddr(state.vertex_addr) && validAddr(state.vertex_addr + upper * vs))
+    dumpBlob(B_VERTS, state.vertex_addr, upper * vs);
+  // Texturas de cada nivel (formato, tamano y ancho de linea del juego)
+  if ((state.ge_cmd[GE_CMD_TEXTUREMAPENABLE] & 1) || (state.vertex_type & GE_VTYPE_TC_MASK)) {
+    static const u8 bits[16] = { 16, 16, 16, 32, 4, 8, 16, 32, 4, 8, 8 };
+    u32 fmt = state.ge_cmd[GE_CMD_TEXFORMAT] & 0xf, levels = ((state.ge_cmd[GE_CMD_TEXMODE] >> 16) & 7) + 1;
+    for (k = 0; k < levels && bits[fmt]; k++) {
+      u32 a = ((state.ge_cmd[GE_CMD_TEXBUFWIDTH0 + k] & 0x0f0000) << 8) | (state.ge_cmd[GE_CMD_TEXADDR0 + k] & 0xffffff);
+      u32 sz = state.ge_cmd[GE_CMD_TEXSIZE0 + k], w = 1 << (sz & 0xf), h = 1 << ((sz >> 8) & 0xf);
+      u32 bw = state.ge_cmd[GE_CMD_TEXBUFWIDTH0 + k] & 0x7ff;
+      u32 bytes = (bits[fmt] * (bw * h + (w > bw ? w - bw : 0))) / 8;
+      if ((a & 0x0f000000) == 0x04000000 && !passive)
+        a = toFake(a); // lo que el juego subio a la VRAM esta en la falsa (las copias del plugin aparte)
+      // Las de la VRAM (fb usados como textura) ya estan en la VRAM guardada al empezar
+      if (bytes && bytes <= 0x100000 && validAddr(a) && validAddr(a + bytes - 1) && (a & 0x0f000000) != 0x04000000 &&
+          !(a >= FAKE_VRAM && a < FAKE_VRAM + 0x400000))
+        dumpBlobOnce(B_TEX | (k << 8), a, bytes);
+    }
+  }
+}
+
 void patchGeList(u32 *list, u32 *stall) {
   union {
     float f;
@@ -1394,6 +1517,7 @@ void patchGeList(u32 *list, u32 *stall) {
     }
     u32 cmd = op >> 24;
     u32 data = op & 0xffffff;
+    u32 *cur = dump_cur = list; // el switch puede mover list (CALL, JUMP, RET)
 
     state.ge_cmd[cmd] = data;
     if (capturing)
@@ -1434,7 +1558,7 @@ void patchGeList(u32 *list, u32 *stall) {
       case GE_CMD_VIEWMATRIXDATA:
       case GE_CMD_PROJMATRIXDATA:
       case GE_CMD_TGENMATRIXDATA:
-        while (!compat_walk && list + 1 < lim && list + 1 != stall && (list[1] >> 24) == cmd && ncmds < MAX_CMDS) {
+        while (!compat_walk && !dumping && list + 1 < lim && list + 1 != stall && (list[1] >> 24) == cmd && ncmds < MAX_CMDS) {
           list++;
           ncmds++;
           if (capturing)
@@ -1483,7 +1607,7 @@ void patchGeList(u32 *list, u32 *stall) {
           break;
         }
         st.calls++;
-        if (!capturing && wcSkip(state.address))
+        if (!capturing && !dumping && wcSkip(state.address))
           break;
         stack_entry = &stack_entry_buf;
         stack_entry->list = list;
@@ -1491,7 +1615,7 @@ void patchGeList(u32 *list, u32 *stall) {
         stack_entry->offset = state.offset;
         stack_entry->ncmds = ncmds;
         if (push(stack_entry) == 0) {
-          if (!capturing)
+          if (!capturing && !dumping)
             wcRecord(state.address);
           else
             nrec = 0;
@@ -1581,6 +1705,8 @@ void patchGeList(u32 *list, u32 *stall) {
           }
 
           case GE_CMD_FINISH:
+            if (dumping)
+              dumpCmd(cur, op);
             goto finish;
 
           default:
@@ -1620,6 +1746,8 @@ void patchGeList(u32 *list, u32 *stall) {
         if (capturing)
           capDraw(cmd == GE_CMD_PRIM ? (data >> 16) & 7 : cmd, cmd == GE_CMD_PRIM ? data & 0xffff : (data & 0xff) * ((data >> 8) & 0xff),
                   omit | (texmode == 2 ? 4 : 0) | (state.cur_rt ? 8 : 0) | (state.cur_rt == &csrc_rt ? 32 : 0));
+        if (dumping)
+          dumpDraw(list, op, (data & 0xff) * ((data >> 8) & 0xff), texmode, omit);
         if (omit) {
           setOp(list, op, NOP_OMIT);
           st.skipped++;
@@ -1688,6 +1816,8 @@ void patchGeList(u32 *list, u32 *stall) {
           capDraw(cmd == GE_CMD_PRIM ? (data >> 16) & 7 : cmd, cmd == GE_CMD_PRIM ? data & 0xffff : (data & 0xff) * ((data >> 8) & 0xff),
                   omit | (texmode == 2 ? 4 : 0) | (state.cur_rt ? 8 : 0) | (texmode == 5 ? 16 : 0) |
                   (state.cur_rt == &csrc_rt ? 32 : 0));
+        if (dumping)
+          dumpDraw(list, op, data & 0xffff, texmode, omit);
         if (omit || texmode) {
           DIRTY(W_OMIT); // draw omitido o con textura de render target: hay que verlo cada vez
         }
@@ -1825,6 +1955,8 @@ void patchGeList(u32 *list, u32 *stall) {
           vertsRemember(start, n, vertsHash(start, n, vertex_size, pos_off, pos_size), 0);
 
 exit_loop:
+          if (dumping && !passive && validAddr(state.vertex_addr + upper * vertex_size)) // como quedaron (duplicados o no)
+            dumpBlob(B_VERTS_FINAL, state.vertex_addr, upper * vertex_size);
           AdvanceVerts(count, vertex_size);
         }
 
@@ -1876,7 +2008,7 @@ exit_loop:
           int fi = findFramebuf(state.framebuf), layer = opt.layers && fi >= 0 && state.fb_layer[fi];
           u32 gfmt = state.ge_cmd[GE_CMD_FRAMEBUFPIXFORMAT] & 3; // formato que pidio el juego
           int fmt_ok = gfmt == PIXELFORMAT || (state.fmt_new && canRepatch(state.fmt_p, state.fmt_o));
-          if (fi >= 0 && state.fb_csrc[fi] && state.fb_cfail[fi] < 3 && !csrc_copied && (pitch == 512 || pitch == 480) &&
+          if (opt.csrc && fi >= 0 && state.fb_csrc[fi] && state.fb_cfail[fi] < 3 && !csrc_copied && (pitch == 512 || pitch == 480) &&
               fmt_ok && !passive && copyVram() && canRepatch(state.framebufptr_addr, state.framebufptr) &&
               canRepatch(state.framebufwidth_addr, state.framebufwidth)) {
             // fb del que el juego copia: a escala 1 y en su formato en el buffer temporal,
@@ -1925,6 +2057,12 @@ exit_loop:
             LOG_ONCE(state.framebuf ^ (pitch << 20) ^ 7, "fb %08lx pitch=%lu%s\n", state.framebuf, pitch,
                      state.cur_rt ? " -> render target" : state.ignore_framebuf ? " -> ignorado (no se dibuja)" : "");
           state.cur_fb = insertFramebuf(state.framebuf);
+          if (dumping) {
+            u32 d[8] = { state.framebuf, pitch, gfmt, state.cur_rt == &csrc_rt ? 2 : state.cur_rt ? 1 : state.ignore_framebuf ? 3 : 0,
+                         state.cur_rt ? state.cur_rt->vram : VRAM_DRAW_BUFFER_OFFSET, state.cur_rt ? state.cur_rt->w : PITCH,
+                         SCALE(), (u32)state.framebufptr_addr };
+            dumpRecord(GPD_FB, d, sizeof(d), NULL, 0);
+          }
           // El formato del juego (8888) que se dejo para el fb de copia sigue puesto en el GE
           // si este fb no trae su FRAMEBUFPIXFORMAT: ya no se puede corregir
           if (state.fmt_live != PIXELFORMAT && state.cur_rt != &csrc_rt) {
@@ -1967,6 +2105,17 @@ exit_loop:
         break;
       }
 
+      case GE_CMD_LOADCLUT: // volcado: la paleta que se carga
+        if (dumping) {
+          u32 a = ((state.ge_cmd[GE_CMD_CLUTADDRUPPER] & 0x0f0000) << 8) | (state.ge_cmd[GE_CMD_CLUTADDR] & 0xffffff);
+          u32 n = ((data & 0x7f) == 0x40 ? 0x40 : (data & 0x3f)) * 32;
+          if ((a & 0x0f000000) == 0x04000000 && !passive)
+            a = toFake(a);
+          if (n && validAddr(a) && validAddr(a + n - 1))
+            dumpBlobOnce(B_CLUT, a, n);
+        }
+        break;
+
       // Copias de bloque (sceGuCopyImage). No pasan por los vertices, asi que no se
       // ven en el buffer de alta resolucion. Videos y logos suelen dibujarse asi.
       case GE_CMD_TRANSFERSTART:
@@ -1983,6 +2132,16 @@ exit_loop:
           capFlush();
           LOG("  copia %08lx (ancho %lu) -> %08lx (ancho %lu) %lux%lu %lu bpp\n", rsrc, state.ge_cmd[GE_CMD_TRANSFERSRCW] & 0x7ff,
               rdst, pitch, w, h, bpp * 8);
+        }
+        if (dumping) { // origen (si esta en la RAM) y destino (se guarda al terminar)
+          u32 sp = state.ge_cmd[GE_CMD_TRANSFERSRCPOS], dp = state.ge_cmd[GE_CMD_TRANSFERDSTPOS];
+          u32 sw = state.ge_cmd[GE_CMD_TRANSFERSRCW] & 0x7ff;
+          u32 sb = ((((sp >> 10) & 0x3ff) + h - 1) * sw + (sp & 0x3ff) + w) * bpp;
+          u32 db = ((((dp >> 10) & 0x3ff) + h - 1) * pitch + (dp & 0x3ff) + w) * bpp;
+          if ((src & 0x0f000000) != 0x04000000 && validAddr(src) && validAddr(src + sb - 1))
+            dumpBlob(B_XFER_SRC, src, sb);
+          if (validAddr(dst) && validAddr(dst + db - 1))
+            dumpCopyDst(dst, db);
         }
         if (!passive && opt.vram_fix) {
           if (txFromCsrc(list, src, dst, bpp) || txFromScreen(list, src, dst, w, h, bpp))
@@ -2057,6 +2216,8 @@ exit_loop:
       else
         LOG("  %s %06lx\n", capName(cmd), data);
     }
+    if (dumping)
+      dumpCmd(cur, op);
   }
 
 finish:
@@ -2116,7 +2277,8 @@ int sceGeListUpdateStallAddrPatched(int qid, void *stall) {
       void *list = *(void **)(info + 0x18); // previous stall
       if (!list)
         list = *(void **)(info + 0x14); // list
-      if (walk_now && ((u32)list & 0x0fffffff) < ((u32)stall & 0x0fffffff)) {
+      dumpOnList((u32)list, (u32)stall, 2);
+      if ((walk_now || dumping) && ((u32)list & 0x0fffffff) < ((u32)stall & 0x0fffffff)) {
         patchGeList((u32 *)((u32)list & 0x0fffffff), (u32 *)((u32)stall & 0x0fffffff));
       }
     }
@@ -2141,7 +2303,7 @@ int sceGeListEnQueuePatched(const void *list, void *stall, int cbid, PspGeListAr
   }
   u32 t0 = sceKernelGetSystemTimeLow();
   resetGeState();
-  if (walk_now)
+  if (dumpOnList((u32)list, (u32)stall, 0) || walk_now)
     patchGeList((u32 *)((u32)list & 0x0fffffff), (u32 *)((u32)stall & 0x0fffffff));
   patch_us_frame += sceKernelGetSystemTimeLow() - t0;
   return _sceGeListEnQueue(list, stall, cbid, arg);
@@ -2151,7 +2313,7 @@ int sceGeListEnQueueHeadPatched(const void *list, void *stall, int cbid, PspGeLi
   st.heads++;
   u32 t0 = sceKernelGetSystemTimeLow();
   resetGeState();
-  if (walk_now)
+  if (dumpOnList((u32)list, (u32)stall, 1) || walk_now)
     patchGeList((u32 *)((u32)list & 0x0fffffff), (u32 *)((u32)stall & 0x0fffffff));
   patch_us_frame += sceKernelGetSystemTimeLow() - t0;
   return _sceGeListEnQueueHead(list, stall, cbid, arg);
@@ -2168,7 +2330,7 @@ static void fbCopyDown(u32 dst, int width, int fmt) {
   if (!copyVram())
     return;
   u32 rl = RENDER_LIST + 0x2000 + (which ^= 1) * 0x1000, *l = (u32 *)(rl | 0x40000000); // sin cache
-  l = emitDownscale(l, rl + 0x800, fmt);
+  l = emitDownscale(l, fmt);
   #define C(c, d) (*l++ = ((c) << 24) | ((d) & 0xffffff))
   C(GE_CMD_TRANSFERSRC, copy_vram); C(GE_CMD_TRANSFERSRCW, ((copy_vram >> 24) << 16) | 512);
   C(GE_CMD_TRANSFERDST, dst); C(GE_CMD_TRANSFERDSTW, ((dst >> 24) << 16) | width);
@@ -2180,6 +2342,51 @@ static void fbCopyDown(u32 dst, int width, int fmt) {
   PspGeListArgs args = { 8, &ctx };
   _sceGeListEnQueue((void *)rl, NULL, -1, &args);
   st.fb_copies++;
+}
+
+// Lo que la CPU del juego dibuja directo en el fb mostrado (el spinner de carga de Silent Hill)
+// queda en la VRAM falsa, y la pantalla sale del buffer grande: no se veia. Si el fb mostrado
+// es un render target (lo del GE no esta ahi), se pega al doble encima del buffer grande sin
+// el negro (color test). Despues se borra con una copia de ceros, como lo haria el juego al
+// pegar el frame siguiente: si no, un spinner que ya no se dibuja quedaria para siempre.
+#define ZERO_BUF 0x0AF00000 // 256 KB en cero (Adrenaline borra esta zona al arrancar)
+static void cpuOverlay(u32 src, int width, int fmt) {
+  static PspGeContext ctx;
+  static int which;
+  int bpp = fmt == 3 ? 4 : 2;
+  u32 rl = RENDER_LIST + 0x4000 + (which ^= 1) * 0x400, va = rl + 0x300, *l = (u32 *)(rl | 0x40000000);
+  short q[10] = { 0, 0, 0, 0, 0, 480, 272, WIDTH, HEIGHT, 0 }, i;
+  memcpy((void *)(va | 0x40000000), q, sizeof(q));
+  sceKernelDcacheWritebackRange((void *)src, width * 272 * bpp);
+  #define C(c, d) (*l++ = ((c) << 24) | ((d) & 0xffffff))
+  C(GE_CMD_FRAMEBUFPIXFORMAT, PIXELFORMAT);
+  C(GE_CMD_FRAMEBUFPTR, VRAM_DRAW_BUFFER_OFFSET); C(GE_CMD_FRAMEBUFWIDTH, ((VRAM_DRAW_BUFFER_OFFSET >> 24) << 16) | PITCH);
+  C(GE_CMD_SCISSOR1, 0); C(GE_CMD_SCISSOR2, ((HEIGHT - 1) << 10) | (WIDTH - 1));
+  C(GE_CMD_REGION1, 0); C(GE_CMD_REGION2, ((HEIGHT - 1) << 10) | (WIDTH - 1));
+  static const u8 off[] = { GE_CMD_ALPHATESTENABLE, GE_CMD_ZTESTENABLE, GE_CMD_ALPHABLENDENABLE, GE_CMD_STENCILTESTENABLE,
+    GE_CMD_LOGICOPENABLE, GE_CMD_DITHERENABLE, GE_CMD_MASKRGB, GE_CMD_MASKALPHA, GE_CMD_TEXMAPMODE, GE_CMD_TEXMODE,
+    GE_CMD_CLEARMODE, GE_CMD_TEXFILTER };
+  for (i = 0; i < (int)sizeof(off); i++)
+    C(off[i], 0);
+  C(GE_CMD_ZWRITEDISABLE, 1);
+  C(GE_CMD_TEXTUREMAPENABLE, 1); C(GE_CMD_TEXFORMAT, fmt & 3);
+  C(GE_CMD_TEXADDR0, src); C(GE_CMD_TEXBUFWIDTH0, ((src >> 24) << 16) | width);
+  C(GE_CMD_TEXSIZE0, (9 << 8) | 9); C(GE_CMD_TEXWRAP, (1 << 8) | 1); C(GE_CMD_TEXFUNC, (1 << 8) | 3);
+  C(GE_CMD_TEXFLUSH, 0);
+  C(GE_CMD_COLORTESTENABLE, 1); C(GE_CMD_COLORTEST, 3); C(GE_CMD_COLORREF, 0); C(GE_CMD_COLORTESTMASK, 0xffffff);
+  C(GE_CMD_VERTEXTYPE, GE_VTYPE_THROUGH | GE_VTYPE_TC_16BIT | GE_VTYPE_POS_16BIT);
+  C(GE_CMD_BASE, (va >> 8) & 0x0f0000); C(GE_CMD_OFFSETADDR, 0); C(GE_CMD_VADDR, va);
+  C(GE_CMD_PRIM, (GE_PRIM_RECTANGLES << 16) | 2);
+  C(GE_CMD_COLORTESTENABLE, 0);
+  // Borrar lo que se pego (480x272 del fb mostrado) con ceros
+  C(GE_CMD_TRANSFERSRC, ZERO_BUF); C(GE_CMD_TRANSFERSRCW, ((ZERO_BUF >> 24) << 16) | 480); C(GE_CMD_TRANSFERSRCPOS, 0);
+  C(GE_CMD_TRANSFERDST, src); C(GE_CMD_TRANSFERDSTW, ((src >> 24) << 16) | width); C(GE_CMD_TRANSFERDSTPOS, 0);
+  C(GE_CMD_TRANSFERSIZE, (271 << 10) | 479); C(GE_CMD_TRANSFERSTART, bpp == 4);
+  C(GE_CMD_FINISH, 0); C(GE_CMD_END, 0);
+  #undef C
+  PspGeListArgs args = { 8, &ctx };
+  _sceGeListEnQueue((void *)rl, NULL, -1, &args);
+  st.cpu_overlays++;
 }
 
 // Memoria y CPU en este momento (al iniciar, en cada estadistica y desde el menu)
@@ -2284,6 +2491,10 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
   pspSdkSetK1(k1);
   u32 combo_mask = PSP_CTRL_LTRIGGER | PSP_CTRL_RTRIGGER | PSP_CTRL_SELECT;
   int combo = (pad.Buttons & combo_mask) == combo_mask;
+  if (combo && !prev_combo) // con los botones (no las capturas automaticas): tambien el volcado binario
+    dumpRequest();
+  dumpOnFlip((u32)topaddr, bufferwidth, pixelformat);
+  dump_info.fake_vram_used = vram_hi ? ((vram_hi - FAKE_VRAM) | 0xffff) + 1 : 0;
   if (cap_request) { // desde el menu: como si se hubiera presionado la combinacion
     cap_request = 0;
     combo = 1;
@@ -2382,6 +2593,12 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
           bufferwidth >= 480 && bufferwidth <= 512)
         fbCopyDown(disp, bufferwidth, pixelformat);
     }
+    // El fb mostrado es un render target: lo que tiene en la VRAM falsa lo dibujo la CPU
+    if (opt.cpu_draw && draw != (u16 *)DISPLAY_BUFFER && dfb >= 0 && bufferwidth == 1024 && !opt.wide1024 &&
+        (disp & 15) == 0 && bufferwidth <= 1024) {
+      LOG_ONCE(0xB2000000 ^ disp, "fb mostrado %08lx de 1024 (el GE no dibuja ahi): se pega encima lo que dibuje la CPU (spinner)\n", disp);
+      cpuOverlay(disp, bufferwidth, pixelformat);
+    }
     int menu = menu_shown = menuFrame();
     if (menu && draw == (u16 *)DISPLAY_BUFFER) { // imagen escalada por CPU: el menu se pone igual
       int y;
@@ -2406,8 +2623,8 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
   if (log_frame % STATS_EVERY == 0) {
     LOG("stats listas=%lu head=%lu stall=%lu draws=%lu omitidos=%lu frames_sin_draws=%lu fbs=%lu\n",
         st.lists, st.heads, st.stalls, st.draws, st.skipped, st.idle_frames, state.framebuf_count);
-    LOG("stats transfers=%lu a_fb=%lu escalados=%lu copias_en_lista=%lu copias_al_fb_juego=%lu pila_llena=%lu\n",
-        st.transfers, st.fb_transfers, st.fallback, st.enq_copies, st.fb_copies, st.stack_full);
+    LOG("stats transfers=%lu a_fb=%lu escalados=%lu copias_en_lista=%lu copias_al_fb_juego=%lu pila_llena=%lu dibujos_cpu=%lu\n",
+        st.transfers, st.fb_transfers, st.fallback, st.enq_copies, st.fb_copies, st.stack_full, st.cpu_overlays);
     memSnapshot("stats");
     if (st.frames) {
       u32 fps10 = st.frames * 100000 / (st.frame_us / 100 + 1); // fps x10, sin division de 64 bits
@@ -2500,12 +2717,65 @@ static void probeVram(void) {
     }
   }
   rt_enabled = ge_ok && !bad;
+  // GE DIBUJANDO arriba: un sprite de 512x64 desde la parte baja a 3 MB. La prueba anterior
+  // usa una copia, que si llega en orden; lo dibujado puede quedar permutado (ver vram_swz)
+  if (rt_enabled) {
+    volatile u16 *src = (u16 *)0x44000000, *dst = (u16 *)0x44300000;
+    u32 *l = (u32 *)(RENDER_LIST | 0x40000000), va = RENDER_LIST + 0x800, i, wrong = 0, xored = 0;
+    short q[10] = { 0, 0, 0, 0, 0, 512, 64, 512, 64, 0 };
+    memcpy((void *)(va | 0x40000000), q, sizeof(q));
+    for (i = 0; i < 512 * 64; i++) {
+      src[i] = (u16)(i * 2654435761u >> 16) | 1; // sin negro: distinto de lo que habia
+      dst[i] = 0;
+    }
+    #define C(c, d) (*l++ = ((c) << 24) | ((d) & 0xffffff))
+    C(GE_CMD_FRAMEBUFPIXFORMAT, 0); C(GE_CMD_FRAMEBUFPTR, 0x300000); C(GE_CMD_FRAMEBUFWIDTH, (0x04 << 16) | 512);
+    C(GE_CMD_SCISSOR1, 0); C(GE_CMD_SCISSOR2, (63 << 10) | 511); C(GE_CMD_REGION1, 0); C(GE_CMD_REGION2, (63 << 10) | 511);
+    static const u8 off[] = { GE_CMD_ALPHATESTENABLE, GE_CMD_ZTESTENABLE, GE_CMD_ALPHABLENDENABLE, GE_CMD_STENCILTESTENABLE,
+      GE_CMD_LOGICOPENABLE, GE_CMD_COLORTESTENABLE, GE_CMD_DITHERENABLE, GE_CMD_MASKRGB, GE_CMD_MASKALPHA, GE_CMD_CLEARMODE,
+      GE_CMD_TEXMAPMODE, GE_CMD_TEXMODE, GE_CMD_TEXFORMAT, GE_CMD_TEXFILTER };
+    for (i = 0; i < sizeof(off); i++)
+      C(off[i], 0);
+    C(GE_CMD_ZWRITEDISABLE, 1); C(GE_CMD_TEXTUREMAPENABLE, 1);
+    C(GE_CMD_TEXADDR0, 0); C(GE_CMD_TEXBUFWIDTH0, (0x04 << 16) | 512); C(GE_CMD_TEXSIZE0, (6 << 8) | 9);
+    C(GE_CMD_TEXWRAP, (1 << 8) | 1); C(GE_CMD_TEXFUNC, (1 << 8) | 3); C(GE_CMD_TEXFLUSH, 0);
+    C(GE_CMD_VERTEXTYPE, GE_VTYPE_THROUGH | GE_VTYPE_TC_16BIT | GE_VTYPE_POS_16BIT);
+    C(GE_CMD_BASE, (va >> 8) & 0x0f0000); C(GE_CMD_VADDR, va);
+    C(GE_CMD_PRIM, (GE_PRIM_RECTANGLES << 16) | 2);
+    C(GE_CMD_FINISH, 0); C(GE_CMD_END, 0);
+    #undef C
+    _sceGeListEnQueue((void *)RENDER_LIST, NULL, -1, NULL);
+    drawSync(0);
+    for (i = 0; i < 512 * 64; i++) {
+      wrong += dst[i] != src[i];
+      xored += dst[((i * 2) ^ 0x8040) / 2] == src[i];
+    }
+    // dev31 lo confirmo: la VRAM real es de 2 MB. Lo que el GE dibuja en 0x04200000+ cae en
+    // los 2 MB bajos (0x042... sobre el buffer grande, 0x043... sobre el z-buffer), y la CPU
+    // y las copias ven esa zona como un reflejo desordenado. No hay lugar para render targets.
+    vram_swz = wrong > 0;
+    LOG("vram: GE dibujando en 3 MB: %s (%lu de %d pixeles distintos)\n",
+        vram_swz ? "NO (la VRAM es de 2 MB: arriba es un reflejo) -> sin render targets" : "en orden", wrong, 512 * 64);
+    if (vram_swz)
+      rt_enabled = 0;
+  }
   LOG("vram: render targets %s\n", rt_enabled ? "ACTIVADOS en 2-4 MB" : "desactivados (se omiten como antes)");
   logFlush();
 }
 
+// Estado del plugin para los registros del volcado
+static void dumpState(u32 o[8]) {
+  o[0] = state.base; o[1] = state.offset; o[2] = state.vertex_addr; o[3] = state.index_addr;
+  o[4] = state.framebuf; o[5] = state.cur_rt ? state.cur_rt->vram : 0; o[6] = state.offx; o[7] = state.offy;
+}
+static void dumpSetup(void) {
+  dump_info.opt = &opt; dump_info.opt_size = sizeof(opt);
+  dump_info.shadow = state.ge_cmd; dump_info.passive = &passive; dump_info.state = dumpState;
+}
+
 int module_start(SceSize args, void *argp) {
   SceCtrlData pad;
+  dumpSetup();
   sceCtrlPeekBufferPositive(&pad, 1);
   // L al iniciar: modo pasivo (antes desactivaba el plugin del todo y no habia log)
   passive = !!(pad.Buttons & PSP_CTRL_LTRIGGER);

@@ -31,6 +31,7 @@ typedef struct { unsigned int size; PspGeContext *context; } PspGeListArgs;
 
 int pspSdkSetK1(int k1);
 unsigned int sceKernelCpuSuspendIntr(void);
+int sceKernelGetThreadId(void);
 void sceKernelCpuResumeIntr(unsigned int flags);
 SceUID sceIoOpen(const char *file, int flags, int mode);
 int sceIoClose(SceUID fd);

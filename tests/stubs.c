@@ -14,11 +14,22 @@ int test_log_len;
 
 int pspSdkSetK1(int k1) { return 0; }
 unsigned int sceKernelCpuSuspendIntr(void) { return 0; }
+int sceKernelGetThreadId(void) { return 1; }
 void sceKernelCpuResumeIntr(unsigned int f) {}
-SceUID sceIoOpen(const char *file, int flags, int mode) { return strstr(file, "ge_patch") ? 3 : -1; }
-int sceIoClose(SceUID fd) { return 0; }
+// Los volcados (.gpd) van a un archivo del PC: tests/volcado_test.gpd (para probar tools/gpd.py)
+static FILE *dump_fp;
+SceUID sceIoOpen(const char *file, int flags, int mode) {
+  if (strstr(file, ".gpd")) {
+    dump_fp = fopen(getenv("GPD_OUT") ? getenv("GPD_OUT") : "volcado_test.gpd", "wb");
+    return dump_fp ? 4 : -1;
+  }
+  return strstr(file, "ge_patch") ? 3 : -1;
+}
+int sceIoClose(SceUID fd) { if (fd == 4 && dump_fp) { fclose(dump_fp); dump_fp = NULL; } return 0; }
 int sceIoRead(SceUID fd, void *d, SceSize s) { return -1; }
 int sceIoWrite(SceUID fd, const void *d, SceSize s) {
+  if (fd == 4)
+    return dump_fp ? (int)fwrite(d, 1, s, dump_fp) : -1;
   if (test_log_len + s < sizeof(test_log)) {
     memcpy(test_log + test_log_len, d, s);
     test_log_len += s;
@@ -47,12 +58,12 @@ int sceGuFinish(void) { return 0; }
 void sceGuCopyImage(int psm, int sx, int sy, int w, int h, int sw, void *s, int dx, int dy, int dw, void *d) {}
 void guStart(int cid, void *list) {}
 
-// VRAM real (0x04000000, 4 MB) y RAM (0x08000000-0x0AA00000: juego, VRAM falsa,
+// VRAM real (0x04000000, 4 MB) y RAM (0x08000000-0x0B000000: juego, VRAM falsa,
 // buffer de pantalla, memorias del plugin, sus listas e imagen del menu). Como en la PSP,
 // la misma memoria se ve sin cache en +0x40000000 (el plugin lee/escribe por ahi).
 void mapPspMemory(void) {
   // + la pagina de la bandera DRAW_NATIVE de Adrenaline (0xABCDEF00)
-  struct { unsigned long addr, size; int alias; } r[] = { { 0x04000000, 0x400000, 1 }, { 0x08000000, 0x2A00000, 1 }, { 0xABCDE000, 0x2000, 0 } };
+  struct { unsigned long addr, size; int alias; } r[] = { { 0x04000000, 0x400000, 1 }, { 0x08000000, 0x3000000, 1 }, { 0xABCDE000, 0x2000, 0 } };
   int i, k;
   for (i = 0; i < 3; i++) {
     int fd = memfd_create("psp", 0);
