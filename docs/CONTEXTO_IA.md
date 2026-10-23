@@ -110,6 +110,8 @@ En la consola:
 ## 6. Herramientas
 
 - **`tools/gpd.py`** (solo biblioteca estándar): `resumen`, `informe` (todos los comandos juego → plugin, con draws y eventos), `imagenes` (PNG de fbs, buffer grande, rts, copias, texturas), `ppsspp` (a .ppdmp) y `comparar` (pasivo contra activo).
+  - `original VOLCADO CARPETA [--ppsspp=PPSSPPHeadless]`: el mismo frame **sin GePatch**, rearmado desde un volcado activo (comandos originales + VRAM falsa) y dibujado por PPSSPPHeadless. Deja `comparacion.png` (sin GePatch | con GePatch reducido | diferencias). Es fiel en lo que se dibuja dentro del frame (Ridge Racer sale limpio). Avisa de los fb que GePatch no deja en la VRAM falsa (pases ignorados o por intercambio): su contenido previo es ruido. Le pasa a la linterna de Silent Hill.
+  - Mejora posible: repetir la reproducción usando como contenido previo el resultado de la primera.
 - **`tools/vitabridge.py`** (relevo; lo corre el usuario en la Terminal del Mac, carpeta `~/Downloads/vitabridge`, Vita en 192.168.0.15 con vitacompanion: FTP 1337, comandos 1338):
   - `enviar/ux0/...` → se sube a la Vita.
   - `cmd_*.txt` → comandos (`launch`, `press`, `wait`…).

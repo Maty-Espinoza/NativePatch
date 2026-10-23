@@ -9,6 +9,9 @@
   gpd.py ppsspp   VOLCADO SALIDA.ppdmp [--plugin] [--hasta=N] [--mostrar=ADDR,ANCHO,FMT]
                                           volcado de PPSSPP: de uno PASIVO dibuja el frame original;
                                           con --plugin, lo que ejecuto el GE con los parches
+  gpd.py original VOLCADO CARPETA [--ppsspp=RUTA]
+                                          el mismo frame SIN GePatch (de un volcado ACTIVO): lo
+                                          dibuja PPSSPPHeadless y lo compara con el buffer grande
   gpd.py comparar PASIVO ACTIVO CARPETA   alinea los draws de ambos y compara las imagenes
                                           (lo que el juego quiere vs lo que sale con el plugin)
 
@@ -21,7 +24,7 @@ B_VERTS, B_VERTS_FINAL, B_INDICES, B_TEX, B_CLUT, B_XFER_SRC = range(1, 7)
 MEM_KIND = {0: 'vram_real_ini', 1: 'vram_falsa_ini', 2: 'vram_real_fin', 3: 'vram_falsa_fin', 4: 'copia_fin'}
 FB_DEC = {0: 'buffer grande', 1: 'render target', 2: 'fb de copia (escala 1)', 3: 'ignorado'}
 TEXMODE = {0: 'normal', 1: 'OMITIR', 2: 'textura render target', 3: 'VRAM real -> falsa', 4: 'fb actual',
-           5: 'pantalla reducida', 6: 'mezcla por intercambio'}
+           5: 'pantalla reducida', 6: 'mezcla por intercambio', 7: 'rt1 lee la pantalla', 8: 'rt1 se lee a si mismo'}
 PRIMS = ['puntos', 'lineas', 'tira_lineas', 'triangulos', 'tira_tri', 'abanico_tri', 'rectangulos', '?']
 OPT_NAMES = ['rt_on', 'rt_scale', 'omit_fbtex', 'fallback', 'nop_mark', 'walk_new', 'wide1024', 'dx', 'dy', 'v2d',
              'tx_ge', 'walk_cache', 'wc_check', 'layers', 'vram_fix', 'autocap', 'cpu_draw', 'csrc', 'swap']  # orden de Options en menu.h
@@ -510,7 +513,8 @@ def ppsspp(dump, out, plugin=False, upto=None, show=None):
     def unfake(c, op):
         return (op & ~0x0f0000) | 0x040000 if fake and c in HI and (op & 0x0f0000) == 0x0a0000 else op
     r = dump.regs(0)
-    ge = list(r['ge']) if r and any(r['ge']) else [(i << 24) | v for i, v in enumerate(r['shadow'] if r else [0] * 256)]
+    # Sin el plugin: los registros como los dejo el juego (copia del plugin), no los del GE ya parchados
+    ge = list(r['ge']) if r and any(r['ge']) and not (fake and any(r['shadow'])) else [(i << 24) | v for i, v in enumerate(r['shadow'] if r else [0] * 256)]
     ge = [(i << 24) | (v & 0xffffff) for i, v in enumerate(ge)]
     ctx = [0] * 512
     st = r['state'] if r else [0] * 8
@@ -595,7 +599,7 @@ def ppsspp(dump, out, plugin=False, upto=None, show=None):
                 emit(3, ib, 4)
             if vb:
                 emit(2, vb, 4)
-            regs_pend.append(prim[2] if prim else dr['op'])
+            regs_pend.append((prim[2] if plugin else prim[1]) if prim else dr['op'])  # sin plugin: el PRIM original, no su CALL
         elif e[0] == 'flip' and not show:
             emit(9, struct.pack('<3I', (e[1] & 0x1fffff) | 0x04000000 if fake else e[1], e[2], e[3]))
     if show:
@@ -610,6 +614,96 @@ def ppsspp(dump, out, plugin=False, upto=None, show=None):
             z = zstd_raw(blk)
             f.write(struct.pack('<I', len(z)) + z)
     print('%s: %d comandos, %d KB de datos. Abrirlo en PPSSPP como si fuera un juego.' % (out, len(cmds), len(buf) // 1024))
+
+# --- El mismo frame sin GePatch ------------------------------------------------------------
+def read_bmp(path):
+    """BMP de 24/32 bits de PPSSPP a (ancho, alto, RGBA)."""
+    d = open(path, 'rb').read()
+    off, w, h, bpp = struct.unpack_from('<I', d, 10)[0], *struct.unpack_from('<iiH', d, 18)[:2], struct.unpack_from('<H', d, 28)[0]
+    bp, row = bpp // 8, (w * bpp // 8 + 3) & ~3
+    out = bytearray(w * abs(h) * 4)
+    for y in range(abs(h)):
+        r = off + (abs(h) - 1 - y if h > 0 else y) * row
+        for x in range(w):
+            b, g, rr = d[r + x * bp:r + x * bp + 3]
+            out[(y * w + x) * 4:(y * w + x) * 4 + 4] = bytes((rr, g, b, 255))
+    return w, abs(h), out
+
+def crop(rgba, w, x0, y0, cw, ch):
+    return b''.join(bytes(rgba[((y0 + y) * w + x0) * 4:((y0 + y) * w + x0 + cw) * 4]) for y in range(ch))
+
+def original(dump, outdir, pp):
+    """Rearma el frame con los comandos y datos originales del juego (VRAM falsa como VRAM) y
+    lo compara con lo que dibujo el plugin. Lo dibujado en frames anteriores viene de la VRAM
+    al empezar, que ya paso por el plugin: los fb omitidos o ignorados alli pueden venir mal."""
+    import subprocess
+    if dump.passive:
+        print('el volcado es PASIVO: ya es el frame sin GePatch (usar ppsspp o imagenes)'); return 1
+    os.makedirs(outdir, exist_ok=True)
+    # El volcado sigue hasta la primera lista despues del flip. Si casi todo se dibujo antes del
+    # flip (Ridge Racer), lo de despues ya es el frame siguiente y se corta en el flip; si el
+    # juego hace el flip al empezar (Silent Hill), el frame es lo de despues
+    fbs, big, drawn, texfb, last, upto, seg, stale = {}, {}, set(), {}, None, None, [0, 0], set()
+    for e in walk(dump):
+        if e[0] == 'flip' and upto is None:
+            upto = last
+        elif e[0] == 'draw':
+            last = e[1]['idx']
+            seg[upto is not None] += not e[1]['flags'] & 14
+    cut = upto if seg[0] >= seg[1] else None
+    print('draws a la pantalla: %d antes del flip, %d despues -> se usa %s' % (seg[0], seg[1], 'hasta el flip' if cut is not None else 'todo el volcado'))
+    for e in walk(dump):
+        if e[0] == 'draw' and cut is not None and e[1]['idx'] > cut:
+            break
+        if e[0] == 'fb':
+            fbs[e[1]] = (e[2], e[3])
+        elif e[0] == 'draw':
+            dr = e[1]
+            drawn.add(dr['fb'])
+            if dr['flags'] & 2:
+                stale.add(dr['fb'])
+            if dr['texmode'] == 6:  # el pase del intercambio se dibujo en el buffer grande, no en su fb
+                stale.add(0x0A000000 | (dr['tex'] & 0x1fffff))
+            if not dr['flags'] & 14 and dr['fb'] in fbs:  # la pantalla: el fb del ultimo draw al buffer grande
+                screen = (dr['fb'],) + fbs[dr['fb']]
+                big[dr['fb']] = big.get(dr['fb'], 0) + 1
+            if dr['tex']:
+                texfb[dr['tex']] = texfb.get(dr['tex'], 0) + 1
+    if not big:
+        print('no hay draws al buffer grande en el volcado'); return 1
+    fb, pitch, fmt = screen
+    print('pantalla del frame: fb %08x ancho %d formato %d (%d draws al buffer grande)' % (fb, pitch, fmt, big[fb]))
+    for t in sorted(stale - {fb}):
+        print('aviso: el fb %08x se dibuja en este frame, pero GePatch no lo deja en la VRAM falsa: lo que no se borre viene de frames viejos (ruido)' % t)
+    old = sorted(t for t in texfb if t in fbs and t not in drawn)
+    for t in old:
+        print('aviso: %d draws leen el fb %08x, que no se dibujo en este frame: viene de la VRAM al empezar (ya con GePatch)' % (texfb[t], t))
+    dmp, bmp = os.path.join(outdir, 'sin_gepatch.ppdmp'), os.path.join(outdir, 'sin_gepatch.bmp')
+    ppsspp(dump, dmp, upto=cut, show=(0x04000000 | (fb & 0x1fffff), pitch, fmt))
+    r = subprocess.run([pp, '--graphics=software', '--timeout=30', '--screenshot-save=' + bmp, dmp], capture_output=True, text=True)
+    if not os.path.exists(bmp):
+        print('PPSSPPHeadless no dejo la captura:', (r.stdout + r.stderr)[-400:]); return 1
+    w, h, img = read_bmp(bmp)
+    orig = crop(img, w, 0, 0, 480, 272)
+    write_png(os.path.join(outdir, 'sin_gepatch.png'), 480, 272, orig)
+    m = dump.mem_at(2, 0x04000000, 960 * 544 * 2)
+    if not m:
+        print('el volcado no tiene la VRAM real al final'); return 0
+    full = to_rgba(m, 0, 960, 544, 960)
+    write_png(os.path.join(outdir, 'con_gepatch.png'), 960, 544, full)
+    red = downscale(full, 960, 544)
+    dif = bytearray(480 * 272 * 4); bad = 0
+    for i in range(480 * 272):
+        d = max(abs(orig[4 * i + c] - red[4 * i + c]) for c in range(3))
+        if d > 24: bad += 1
+        g = (orig[4 * i] + orig[4 * i + 1] + orig[4 * i + 2]) // 12
+        dif[4 * i:4 * i + 4] = bytes((255, 0, 0, 255) if d > 24 else (g, g, g, 255))
+    write_png(os.path.join(outdir, 'diferencias.png'), 480, 272, dif)
+    side = b''.join(bytes(orig[y * 1920:(y + 1) * 1920]) + bytes(red[y * 1920:(y + 1) * 1920]) + bytes(dif[y * 1920:(y + 1) * 1920]) for y in range(272))
+    write_png(os.path.join(outdir, 'comparacion.png'), 1440, 272, side)
+    print('sin GePatch | con GePatch (reducido) | diferencias: %s (%.1f%% de pixeles distintos)' % (
+        os.path.join(outdir, 'comparacion.png'), 100.0 * bad / (480 * 272)))
+    return 0
 
 # --- Comparacion pasivo / activo ----------------------------------------------------------
 def signatures(dump):
@@ -671,7 +765,7 @@ def comparar(pas, act, outdir):
                 print('pantalla (ultimo flip) original vs plugin reducido: diferencia %.1f' % diff(orig, big))
 
 def main(a):
-    if len(a) < 2 or a[0] not in ('resumen', 'informe', 'imagenes', 'ppsspp', 'comparar'):
+    if len(a) < 2 or a[0] not in ('resumen', 'informe', 'imagenes', 'ppsspp', 'comparar', 'original'):
         print(__doc__); return 1
     if a[0] == 'resumen': resumen(Dump(a[1]))
     elif a[0] == 'informe': informe(Dump(a[1]))
@@ -681,6 +775,9 @@ def main(a):
         show = tuple(int(v, 16) if i == 0 else int(v) for i, v in enumerate(opt['--mostrar'].split(','))) if '--mostrar' in opt else None
         ppsspp(Dump(a[1]), a[2], '--plugin' in a, int(opt['--hasta']) if '--hasta' in opt else None, show)
     elif a[0] == 'comparar': comparar(Dump(a[1]), Dump(a[2]), a[3])
+    elif a[0] == 'original':
+        opt = dict(x.split('=', 1) for x in a[3:] if '=' in x)
+        return original(Dump(a[1]), a[2], opt.get('--ppsspp', os.environ.get('PPSSPP_HEADLESS', 'PPSSPPHeadless')))
     return 0
 
 if __name__ == '__main__':
