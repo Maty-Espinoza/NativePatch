@@ -1227,13 +1227,39 @@ static void test_rt_escala1_z(void) {
         "rt que se lee a si mismo: draw en el z=%lu despues la VRAM falsa=%lu, textura del juego %08lx %08lx", self, after, *ta, *tw);
 }
 
+// Silent Hill: el pase de luz (en el buffer grande por el intercambio) se lee a si mismo con
+// sprites de posicion float. Antes leia la VRAM real del juego (0x04170000, el z-buffer):
+// cuadrados morados. Ahora se lee el buffer grande por cuartos, con los vertices ya al doble
+static void test_pantalla_se_lee(void) {
+  reset();
+  struct { u16 u, v; float x, y, z; } *v = (void *)VERTS;
+  v[0].u = 0; v[0].v = 0; v[0].x = 0; v[0].y = 0; v[0].z = 0;
+  v[1].u = 480; v[1].v = 272; v[1].x = 240; v[1].y = 136; v[1].z = 0;
+  begin();
+  setFb(0x04c000, 512);
+  cmd(GE_CMD_TEXTUREMAPENABLE, 1); cmd(GE_CMD_TEXFORMAT, 3); cmd(GE_CMD_TEXSIZE0, 0x0909);
+  cmd(GE_CMD_TEXADDR0, 0x04c000); u32 *tw = cmd(GE_CMD_TEXBUFWIDTH0, (0x04 << 16) | 512);
+  cmd(GE_CMD_BASE, 0x080000);
+  cmd(GE_CMD_VERTEXTYPE, GE_VTYPE_THROUGH | GE_VTYPE_TC_16BIT | GE_VTYPE_POS_FLOAT);
+  cmd(GE_CMD_VADDR, VERTS & 0xffffff);
+  u32 *pr = cmd(GE_CMD_PRIM, (GE_PRIM_RECTANGLES << 16) | 2);
+  end();
+  run();
+  u32 q = 0, k, *l;
+  if ((*pr >> 24) == GE_CMD_CALL)
+    for (l = (u32 *)(0x0A000000 | (*pr & 0xffffff)), k = 0; k < 60 && (l[k] >> 24) != GE_CMD_RET; k++)
+      q += (l[k] >> 24) == GE_CMD_TEXBUFWIDTH0 && (l[k] & 0xffff) == 960 && ((l[k] >> 16) & 0xff) == 0x04;
+  CHECK(q == 4 && ((*tw >> 16) & 0xff) == 0x04, "pantalla que se lee a si misma: %lu cuartos del buffer grande (draw %08lx)", q, *pr);
+  CHECK(v[1].x == 480 && v[1].y == 272, "los vertices del juego quedaron en %g,%g (esperaba el doble: 480,272)", v[1].x, v[1].y);
+}
+
 int main(void) {
   mapPspMemory();
   void (*tests[])(void) = {
     test_viewport_scissor_x2, test_viewport_zona, test_memo_lista_grande, test_vertices_2d,
     test_vaddr_avanza_tras_3d, test_bjump_no_salta, test_estado_entre_listas, test_textura_fb_al_dibujar,
     test_render_target, test_textura_dentro_de_rt, test_rt_incompleto, test_rt_escala_1, test_pitch_0,
-    test_robustez, test_copia_listas_alternas, test_fps, test_doble_buffer_alternado, test_nop_no_revive, test_lista_estatica_fb, test_pasivo_no_escribe, test_pasivo_normaliza, test_desplazamiento_y_1024, test_vertices_2d_muchos_buffers, test_pasivo_muestreo, test_silent_hill_video, test_copia_escalada_con_ge, test_copia_reducida, test_sublistas_sin_cambios, test_sublistas_anidadas, test_sublistas_doble_buffer, test_vram_real, test_copia_formulario, test_fb_intermedio, test_opciones_juego, test_formulario_escala1, test_rt_lee_pantalla, test_volcado, test_volcado_pasivo, test_vram_2mb, test_pase_intercambio, test_rt_escala1_z, test_menu,
+    test_robustez, test_copia_listas_alternas, test_fps, test_doble_buffer_alternado, test_nop_no_revive, test_lista_estatica_fb, test_pasivo_no_escribe, test_pasivo_normaliza, test_desplazamiento_y_1024, test_vertices_2d_muchos_buffers, test_pasivo_muestreo, test_silent_hill_video, test_copia_escalada_con_ge, test_copia_reducida, test_sublistas_sin_cambios, test_sublistas_anidadas, test_sublistas_doble_buffer, test_vram_real, test_copia_formulario, test_fb_intermedio, test_opciones_juego, test_formulario_escala1, test_rt_lee_pantalla, test_volcado, test_volcado_pasivo, test_vram_2mb, test_pase_intercambio, test_rt_escala1_z, test_pantalla_se_lee, test_menu,
   };
   int i;
   for (i = 0; i < (int)(sizeof(tests) / sizeof(tests[0])); i++)

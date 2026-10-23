@@ -713,7 +713,8 @@ static int rtPatchTex(RenderTarget *r) {
 // 2 textura redirigida a un render target (en 2D hay que duplicar sus coordenadas),
 // 3 textura de la VRAM real llevada a la falsa, 4 el fb actual, 5 la pantalla leida desde
 // un render target (txDrawFromScreen), 6 mezcla del pase por intercambio (swapComposite),
-// 7 rt a escala 1 que lee la pantalla (rt1FromBig), 8 rt a escala 1 que se lee a si mismo (rt1SelfDraw)
+// 7 rt a escala 1 que lee la pantalla (rt1FromBig), 8 rt a escala 1 que se lee a si mismo (rt1SelfDraw),
+// 9 la pantalla (buffer grande) que se lee a si misma (rt1FromBig con los vertices ya duplicados)
 static struct { u32 on, addr, bw, fb, gen; void *cur; int res; } tcache;
 
 static int texCheckCalc(void);
@@ -785,6 +786,14 @@ static int texCheckCalc(void) {
   int f = findFramebuf(tex);
   if (tex == state.framebuf && state.cur_rt == &rt1 && !passive)
     return rt1SelfTex(tex);
+  // La pantalla se lee a si misma (pases de luz de Silent Hill en el buffer grande por el
+  // intercambio, desenfoques): la textura es el buffer grande al doble, no la VRAM real del
+  // juego (0x04170000 cae en el z-buffer: cuadrados morados). Se dibuja por cuartos al final
+  // del draw, ya con los vertices duplicados (ver exit_loop)
+  if (tex == state.framebuf && !state.cur_rt && !passive && opt.omit_fbtex == 1 && (state.ge_cmd[GE_CMD_TEXFORMAT] & 0xf) <= 3) {
+    LOG_ONCE(tex ^ 0x7D700000, "fb %08lx en el buffer grande se lee a si mismo -> se lee del buffer grande al doble\n", tex);
+    return 9;
+  }
   if (tex == state.framebuf)
     return 4; // el fb actual: se dibuja igual, pero depende del fb (las sublistas no se guardan)
   if (f < 0) {
@@ -1599,58 +1608,64 @@ static int rt1SelfDraw(u32 *list, u32 op) {
 // y la palabra anterior pasan a BASE + CALL a una lista que dibuja los mismos sprites leyendo el
 // buffer grande por cuartos de 480x272 (una textura del GE es de 512 como maximo).
 static int rt1FromBig(u32 *list, u32 op, u32 count) {
-  u32 vt = state.vertex_type, *reg = list - 1, sl, c, k, q;
+  u32 vt = state.vertex_type, *reg = list - 1, sl, vsl, c, k, q, pf = (vt & GE_VTYPE_POS_MASK) == GE_VTYPE_POS_FLOAT;
+  u32 tf = (vt & GE_VTYPE_TC_MASK) == GE_VTYPE_TC_FLOAT;
   u8 vs = 0, po = 0, to = 0;
-  if (((op >> 16) & 7) != GE_PRIM_RECTANGLES || count < 2 || count > 8 || (count & 1) ||
-      (vt & (GE_VTYPE_THROUGH_MASK | GE_VTYPE_IDX_MASK | GE_VTYPE_TC_MASK | GE_VTYPE_POS_MASK | GE_VTYPE_WEIGHT_MASK |
-             GE_VTYPE_MORPHCOUNT_MASK)) != (GE_VTYPE_THROUGH | GE_VTYPE_TC_16BIT | GE_VTYPE_POS_16BIT))
+  if (((op >> 16) & 7) != GE_PRIM_RECTANGLES || count < 2 || (count & 1) ||
+      (vt & (GE_VTYPE_THROUGH_MASK | GE_VTYPE_IDX_MASK | GE_VTYPE_WEIGHT_MASK | GE_VTYPE_MORPHCOUNT_MASK)) != GE_VTYPE_THROUGH ||
+      !((vt & GE_VTYPE_TC_MASK) == GE_VTYPE_TC_16BIT || tf) || !((vt & GE_VTYPE_POS_MASK) == GE_VTYPE_POS_16BIT || pf))
     return 0;
   vertexInfo(vt, &vs, &po, &to);
-  if (!vs || !validAddr((u32)reg) || !validAddr(state.vertex_addr) || !validAddr(state.vertex_addr + count * vs))
+  if (!vs || 4 * count * vs > 1024 || !validAddr((u32)reg) || !validAddr(state.vertex_addr) || !validAddr(state.vertex_addr + count * vs))
     return 0;
   c = origOp(reg) >> 24;
   if (c == GE_CMD_CALL || c == GE_CMD_JUMP || c == GE_CMD_BJUMP || c == GE_CMD_RET || c == GE_CMD_END || c == GE_CMD_FINISH ||
       c == GE_CMD_SIGNAL || c == GE_CMD_PRIM || c == GE_CMD_BEZIER || c == GE_CMD_SPLINE || c == GE_CMD_TRANSFERSTART ||
-      c == GE_CMD_ORIGIN || !(sl = txSlot()))
+      c == GE_CMD_ORIGIN || !(sl = txSlot()) || !(vsl = txSlot()))
     return 0;
-  u32 prev = *reg, *l = (u32 *)(sl | 0x40000000), va = sl + 512;
-  u8 *vo = (u8 *)(va | 0x40000000);
+  u32 prev = *reg, *l = (u32 *)(sl | 0x40000000), va = vsl; // comandos en un slot, vertices en otro
   #define C(c, d) (*l++ = ((c) << 24) | ((d) & 0xffffff))
+  // Coordenadas: posicion en 16 bits o float, textura en 16 bits o float (Silent Hill usa float)
+  #define GP(v, i) (pf ? ((float *)((v) + po))[i] : (float)((short *)((v) + po))[i])
+  #define SP(v, i, x) do { if (pf) ((float *)((v) + po))[i] = (x); else ((short *)((v) + po))[i] = (short)(x); } while (0)
+  #define GT(v, i) (2 * (tf ? ((float *)((v) + to))[i] : (float)((u16 *)((v) + to))[i]))
+  #define ST(v, i, x) do { if (tf) ((float *)((v) + to))[i] = (x); else ((u16 *)((v) + to))[i] = (u16)(x); } while (0)
   C(GE_CMD_BASE, state.base >> 8);
   *l++ = prev;
   C(GE_CMD_TEXSYNC, 0);
   C(GE_CMD_TEXMODE, 0); C(GE_CMD_TEXFORMAT, 0); C(GE_CMD_TEXSIZE0, (9 << 8) | 9); // 565, como el buffer grande
   for (q = 0; q < 4; q++) {
-    int qx = (q & 1) * 480, qy = (q >> 1) * 272, n = 0;
-    u32 start = va;
+    float qx = (q & 1) * 480, qy = (q >> 1) * 272;
+    u32 n = 0, start = va;
     for (k = 0; k < count; k += 2) {
       u8 *a = (u8 *)(state.vertex_addr + k * vs), *b = a + vs;
-      int ua = 2 * *(u16 *)(a + to), va0 = 2 * *(u16 *)(a + to + 2), ub = 2 * *(u16 *)(b + to), vb = 2 * *(u16 *)(b + to + 2);
-      int xa = *(short *)(a + po), ya = *(short *)(a + po + 2), xb = *(short *)(b + po), yb = *(short *)(b + po + 2);
-      int u0 = ua < ub ? ua : ub, u1 = ua < ub ? ub : ua, v0 = va0 < vb ? va0 : vb, v1 = va0 < vb ? vb : va0;
+      float ua = GT(a, 0), va0 = GT(a, 1), ub = GT(b, 0), vb = GT(b, 1);
+      float xa = GP(a, 0), ya = GP(a, 1), xb = GP(b, 0), yb = GP(b, 1);
+      float u0 = ua < ub ? ua : ub, u1 = ua < ub ? ub : ua, v0 = va0 < vb ? va0 : vb, v1 = va0 < vb ? vb : va0;
       if (u1 <= qx || u0 >= qx + 480 || v1 <= qy || v0 >= qy + 272 || ua == ub || va0 == vb)
         continue;
-      int cu0 = u0 < qx ? qx : u0, cu1 = u1 > qx + 480 ? qx + 480 : u1, cv0 = v0 < qy ? qy : v0, cv1 = v1 > qy + 272 ? qy + 272 : v1;
-      // Extremos del trozo: misma proporcion en la pantalla del render target
-      int ea[2] = { ua < ub ? cu0 : cu1, va0 < vb ? cv0 : cv1 }, eb[2] = { ua < ub ? cu1 : cu0, va0 < vb ? cv1 : cv0 };
-      u8 *d = vo + (va - (sl + 512)), *e = d + vs;
+      float cu0 = u0 < qx ? qx : u0, cu1 = u1 > qx + 480 ? qx + 480 : u1, cv0 = v0 < qy ? qy : v0, cv1 = v1 > qy + 272 ? qy + 272 : v1;
+      // Extremos del trozo: misma proporcion en el destino
+      float ea[2] = { ua < ub ? cu0 : cu1, va0 < vb ? cv0 : cv1 }, eb[2] = { ua < ub ? cu1 : cu0, va0 < vb ? cv1 : cv0 };
+      u8 *d = (u8 *)(va | 0x40000000), *e = d + vs;
       memcpy(d, a, vs); memcpy(e, b, vs);
-      *(u16 *)(d + to) = ea[0] - qx; *(u16 *)(d + to + 2) = ea[1] - qy;
-      *(u16 *)(e + to) = eb[0] - qx; *(u16 *)(e + to + 2) = eb[1] - qy;
-      *(short *)(d + po) = xa + (ea[0] - ua) * (xb - xa) / (ub - ua);
-      *(short *)(d + po + 2) = ya + (ea[1] - va0) * (yb - ya) / (vb - va0);
-      *(short *)(e + po) = xa + (eb[0] - ua) * (xb - xa) / (ub - ua);
-      *(short *)(e + po + 2) = ya + (eb[1] - va0) * (yb - ya) / (vb - va0);
+      ST(d, 0, ea[0] - qx); ST(d, 1, ea[1] - qy); ST(e, 0, eb[0] - qx); ST(e, 1, eb[1] - qy);
+      SP(d, 0, xa + (ea[0] - ua) * (xb - xa) / (ub - ua)); SP(d, 1, ya + (ea[1] - va0) * (yb - ya) / (vb - va0));
+      SP(e, 0, xa + (eb[0] - ua) * (xb - xa) / (ub - ua)); SP(e, 1, ya + (eb[1] - va0) * (yb - ya) / (vb - va0));
       va += 2 * vs;
       n += 2;
     }
     if (!n)
       continue;
-    u32 src = VRAM_DRAW_BUFFER_OFFSET + (qy * PITCH + qx) * 2;
+    u32 src = VRAM_DRAW_BUFFER_OFFSET + ((u32)qy * PITCH + (u32)qx) * 2;
     C(GE_CMD_TEXADDR0, src); C(GE_CMD_TEXBUFWIDTH0, ((src >> 24) << 16) | PITCH); C(GE_CMD_TEXFLUSH, 0);
     C(GE_CMD_BASE, (start >> 8) & 0x0f0000); C(GE_CMD_VADDR, start);
     C(GE_CMD_PRIM, (GE_PRIM_RECTANGLES << 16) | n);
   }
+  #undef GP
+  #undef SP
+  #undef GT
+  #undef ST
   static const u8 back[] = { GE_CMD_TEXMODE, GE_CMD_TEXFORMAT, GE_CMD_TEXSIZE0, GE_CMD_TEXADDR0, GE_CMD_TEXBUFWIDTH0 };
   for (k = 0; k < sizeof(back); k++)
     C(back[k], state.ge_cmd[back[k]]);
@@ -2199,6 +2214,8 @@ void patchGeList(u32 *list, u32 *stall) {
         draws_since_flip++;
 
         int texmode = state.ignore_framebuf ? 0 : texCheck();
+        if (texmode == 9)
+          texmode = 4; // curvas que leen la pantalla: como antes
         if (texmode == 5 || texmode == 6 || texmode == 7 || texmode == 8)
           texmode = 1; // curvas con la pantalla como textura (en un rt o la mezcla de un pase): no se reemplazan
         int omit = state.ignore_framebuf || texmode == 1;
@@ -2459,6 +2476,10 @@ void patchGeList(u32 *list, u32 *stall) {
           vertsRemember(start, n, vertsHash(start, n, vertex_size, pos_off, pos_size), 0);
 
 exit_loop:
+          // Pantalla que se lee a si misma: con los vertices ya al doble, rt1FromBig la dibuja
+          // leyendo el buffer grande por cuartos (las texturas del GE llegan a 512)
+          if (texmode == 9 && opt.v2d && !passive && !indexed && !rt1FromBig(list, op, count))
+            LOG_ONCE(0x7D710000 ^ state.framebuf, "fb %08lx se lee a si mismo con un draw que no es de sprites 2D -> se lee la VRAM tal cual\n", state.framebuf);
           if (dumping && !passive && validAddr(state.vertex_addr + upper * vertex_size)) // como quedaron (duplicados o no)
             dumpBlob(B_VERTS_FINAL, state.vertex_addr, upper * vertex_size);
           AdvanceVerts(count, vertex_size);

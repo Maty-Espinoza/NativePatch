@@ -24,7 +24,7 @@ B_VERTS, B_VERTS_FINAL, B_INDICES, B_TEX, B_CLUT, B_XFER_SRC = range(1, 7)
 MEM_KIND = {0: 'vram_real_ini', 1: 'vram_falsa_ini', 2: 'vram_real_fin', 3: 'vram_falsa_fin', 4: 'copia_fin'}
 FB_DEC = {0: 'buffer grande', 1: 'render target', 2: 'fb de copia (escala 1)', 3: 'ignorado'}
 TEXMODE = {0: 'normal', 1: 'OMITIR', 2: 'textura render target', 3: 'VRAM real -> falsa', 4: 'fb actual',
-           5: 'pantalla reducida', 6: 'mezcla por intercambio', 7: 'rt1 lee la pantalla', 8: 'rt1 se lee a si mismo'}
+           5: 'pantalla reducida', 6: 'mezcla por intercambio', 7: 'rt1 lee la pantalla', 8: 'rt1 se lee a si mismo', 9: 'pantalla se lee a si misma'}
 PRIMS = ['puntos', 'lineas', 'tira_lineas', 'triangulos', 'tira_tri', 'abanico_tri', 'rectangulos', '?']
 OPT_NAMES = ['rt_on', 'rt_scale', 'omit_fbtex', 'fallback', 'nop_mark', 'walk_new', 'wide1024', 'dx', 'dy', 'v2d',
              'tx_ge', 'walk_cache', 'wc_check', 'layers', 'vram_fix', 'autocap', 'cpu_draw', 'csrc', 'swap']  # orden de Options en menu.h
