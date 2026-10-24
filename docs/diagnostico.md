@@ -104,6 +104,29 @@ Quedó como opción apagada: los frames que no copian perdían draws.
 ### Abierto
 - Cuadrados morados de SH: no aparecen en los volcados. El spinner que pega la CPU (440,232) se ve bien en el fb 0a0d4000. Hace falta una captura.
 
+## dev46–dev48 (2026-10-23)
+### Silent Hill: cuadrados morados (dev46, confirmado en el laboratorio)
+- **Captura:** volcado 10518 del laboratorio, con los rectángulos en (0,0)–(240,136) y (256,16)–(376,84).
+- **Causa:** el pase de luz se dibuja por intercambio en el buffer grande. Dos draws (#403 y #404) leen el propio pase como textura, en la dirección del juego 0x04170000; en la Vita esa dirección es el z-buffer.
+- **Arreglo:** texmode 9. La pantalla que se lee a sí misma toma la textura del buffer grande al doble, por cuartos (`rt1FromBig`, ahora con posiciones y texturas float y hasta 12 vértices).
+
+### Ridge Racer: camino que no se dibuja (dev47–dev48)
+- **Causa (confirmada en el modelo):** el GE descarta un triángulo entero si un vértice cae fuera de 0..4096. Al doble, el margen fuera de pantalla baja de ~1800 a ~780 px del juego. Al reproducir el frame original con solo el viewport x2 en PPSSPPHeadless sale la misma cuña de agua.
+- **dev47:** subdivisión en 4. No alcanzaba: el pedazo con el vértice que sale nunca entra en el rango. Además, el asfalto se extiende detrás de la cámara; a 1x el GE lo recorta en el plano cercano, pero al doble los puntos de corte caen fuera.
+- **dev48:** recorte exacto (Sutherland–Hodgman) contra el plano cercano (`z >= -w`, con el recorte de profundidad del juego), `w > 0` y el rango seguro 128..3968. En el borde exacto el GE también descartaba, porque calcula con floats de 24 bits. Se probó primero con una simulación en Python sobre el volcado 3624, y el camino vuelve.
+- **Pendiente:** el retrovisor (cámara en tercera persona) quedó vacío con dev48. No resolver todavía.
+
+## dev49 (2026-10-24): herramientas y limpieza
+- Volcado de 3 frames y `gpd.py linaje / diff / vram` (ver `estrategia_diagnostico.md`).
+- **Código quitado** (nunca se activaba en la Vita, o estaba reemplazado):
+  - render targets al doble en la VRAM alta;
+  - fb intermedios como render target;
+  - fb de copia a escala 1 (csrc);
+  - copia reducida al fb mostrado (`tex_fb` = 2);
+  - recorrido de listas antiguo y NOP 0;
+  - prueba de VRAM de 4 MB.
+- El `.prx` bajó de 142 KB a 117 KB y la escena de prueba da lo mismo en el modelo.
+
 ## Viabilidad
 - **Solo con el addon sigue siendo viable.** El GE es hardware real; el límite real es la VRAM de 2 MB, que obliga a usar la RAM para todo lo que no sea el buffer grande y el z-buffer.
 - **Camino recomendado:**

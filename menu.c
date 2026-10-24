@@ -14,9 +14,8 @@
 #include "font.h"
 
 // Valores originales (por defecto). El menu marca los que se cambiaron para probar.
-const Options opt_default = { .rt_on = 1, .rt_scale = 1, .omit_fbtex = 1, .fallback = 0, .nop_mark = 1, .walk_new = 1,
-                              .v2d = 1, .tx_ge = 1, .walk_cache = 1, .layers = 0, .vram_fix = 1, .autocap = 1,
-                              .cpu_draw = 1, .csrc = 0, .swap = 1, .rt1 = 1 };
+const Options opt_default = { .omit_fbtex = 1, .fallback = 0, .v2d = 1, .tx_ge = 1, .walk_cache = 1, .vram_fix = 1,
+                              .autocap = 1, .cpu_draw = 1, .swap = 1, .rt1 = 1, .sub = 1 };
 Options opt = opt_default;
 u32 opt_gen;
 
@@ -33,34 +32,27 @@ typedef struct {
 
 static const char *const no_si[] = { "no", "si" };
 static const char *const fb_modes[] = { "auto", "siempre", "nunca" };
-static const char *const nop_modes[] = { "0 (antiguo)", "marca" };
-static const char *const fbtex_modes[] = { "leer memoria", "omitir", "copia reducida" };
+static const char *const fbtex_modes[] = { "leer memoria", "omitir" };
 static const char *const every_modes[] = { "1 frame", "2 frames", "4 frames", "8 frames" };
-static const char *const walk_modes[] = { "antiguo", "nuevo" };
 
 static const Item items[] = {
-  { "rt", "Render targets en VRAM alta", &opt.rt_on, 0, 1, 1, no_si },
-  { "rt_escala", "Escala de render targets", &opt.rt_scale, 1, 2, 1, NULL },
-  { "tex_fb", "Texturas desde framebuffer", &opt.omit_fbtex, 0, 2, 1, fbtex_modes },
+  { "tex_fb", "Texturas desde framebuffer", &opt.omit_fbtex, 0, 1, 1, fbtex_modes },
   { "copias_ge", "Videos: escalar copias con el GE", &opt.tx_ge, 0, 1, 1, no_si },
   { "original", "Imagen original escalada (videos)", &opt.fallback, 0, 2, 1, fb_modes },
-  { "nop", "NOP de draws omitidos", &opt.nop_mark, 0, 1, 1, nop_modes },
-  { "recorrido", "Recorrido de listas", &opt.walk_new, 0, 1, 1, walk_modes },
   { "sublistas", "Saltar sublistas sin cambios", &opt.walk_cache, 0, 1, 1, no_si },
   { "comprobar", "Comprobar sublistas cada", &opt.wc_check, 0, 3, 1, every_modes },
   { "v2d", "Duplicar vertices 2D (HUD, sprites)", &opt.v2d, 0, 1, 1, no_si },
   { "fb1024", "Framebuffer de 1024 como pantalla", &opt.wide1024, 0, 1, 1, no_si },
   { "vram_real", "VRAM real del juego -> VRAM falsa", &opt.vram_fix, 0, 1, 1, no_si },
-  { "intermedios", "Fb intermedios como render target", &opt.layers, 0, 1, 1, no_si },
   { "dx", "Desplazamiento X (px del juego)", &opt.dx, -512, 512, 16, NULL },
   { "dy", "Desplazamiento Y (px del juego)", &opt.dy, -272, 272, 8, NULL },
   { "autocap", "Capturas automaticas (max 5)", &opt.autocap, 0, 1, 1, no_si },
   { "cpu", "Dibujos de la CPU en pantalla", &opt.cpu_draw, 0, 1, 1, no_si },
-  { "copia_esc1", "Fb de copia a escala 1", &opt.csrc, 0, 1, 1, no_si },
   { "intercambio", "Fb intermedios por intercambio", &opt.swap, 0, 1, 1, no_si },
   { "rt_esc1", "Render targets a escala 1 (VRAM del z)", &opt.rt1, 0, 1, 1, no_si },
+  { "recorte3d", "Recortar triangulos 3D grandes", &opt.sub, 0, 1, 1, no_si },
   { NULL, "Capturar el proximo frame al log", NULL, 0, 0, 0, NULL, ACT_CAPTURE },
-  { NULL, "Volcar el proximo frame (.gpd)", NULL, 0, 0, 0, NULL, ACT_DUMP },
+  { NULL, "Volcar los proximos 3 frames (.gpd)", NULL, 0, 0, 0, NULL, ACT_DUMP },
   { NULL, "Memoria y CPU al log", NULL, 0, 0, 0, NULL, ACT_SNAPSHOT },
   { NULL, "Restaurar valores originales", NULL, 0, 0, 0, NULL, ACT_RESTORE },
   { NULL, "Guardar opciones para este juego", NULL, 0, 0, 0, NULL, ACT_SAVE },
@@ -149,7 +141,7 @@ static void drawMenu(u16 *buf) {
 
 // --- Opciones por juego: ms0:/gepatch_<ID>.txt, una linea clave=valor ---------
 static void applyChanged(void) {
-  rtReset(); // por si cambiaron los render targets
+  optChanged();
   logResetOnce();
   opt_gen++;
 }
@@ -294,8 +286,7 @@ static void change(const Item *it, int dir) {
     return;
   *it->val = v;
   opt_gen++;
-  if (it->val == &opt.rt_scale || it->val == &opt.rt_on)
-    rtReset(); // los render targets se reservan segun la escala
+  optChanged();
   logResetOnce(); // los eventos vuelven a registrarse, para ver en el log el efecto del cambio
   if (it->labels)
     LOG("menu: %s = %s\n", it->name, it->labels[v - it->min]);

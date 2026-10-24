@@ -28,12 +28,11 @@ static int logHas(const char *s) { logFlush(); return strstr(test_log, s) != NUL
 // Estado limpio entre tests (como al iniciar un juego)
 static void reset(void) {
   memset(&state, 0, sizeof(state));
+  memset(&mtx, 0, sizeof(mtx)); sub_out = 0;
   memset(memo, 0, MEMO_SIZE * sizeof(MemoEntry));
   memset(vmemo, 0, VMEMO_SIZE * sizeof(VMemo));
-  vram_swz = 0; depth_vram = 0x04100000; rt1_pending = z_used = tx_small = 0; ge_fbs = 0;
-  memset(rt, 0, sizeof(rt));
-  rt_count = 0; rt_next = RT_BASE; rt_hi_next = RT_HI_BASE; rt_enabled = 0;
-  tex_patched_any = 0; rt_gen++; memset(&tcache, 0, sizeof(tcache)); tcache.res = 2; // sin cache valida
+  depth_vram = 0x04100000; rt1_pending = z_used = tx_small = 0; ge_fbs = 0;
+  tex_patched_any = 0; rt_gen++; memset(&tcache, 0, sizeof(tcache)); tcache.res = 3; // sin cache valida
   game_offx = 2048 - 240; game_offy = 2048 - 136;
   memset((void *)LIST, 0, 0x100000);
   memset((void *)VERTS, 0, 0x10000);
@@ -42,7 +41,7 @@ static void reset(void) {
   opt = opt_default;
   opt.autocap = 0; cap_request = 0; capturing = 0; // las capturas automaticas cambian el recorrido
   passive = 0; walk_now = 1;
-  big_transfer = 0; fbtex_seen = 0; vram_hi = 0; copy_vram = 0; tx_patched_any = 0;
+  big_transfer = 0; vram_hi = 0; copy_vram = 0; tx_patched_any = 0;
   memset(wc, 0, WC_SIZE * sizeof(WalkCache)); memset(recs, 0, sizeof(recs)); nrec = 0;
   swap_fb = -1; swap_on = swap_done = swap_flips = 0;
 }
@@ -188,102 +187,18 @@ static void test_textura_fb_al_dibujar(void) {
   CHECK(*prim == NOP_OMIT, "el draw que lee otro framebuffer no se omitio");
 }
 
-// Render target: se dibuja en la VRAM alta y la textura se redirige
-static void test_render_target(void) {
-  reset();
-  rt_enabled = 1;
-  begin();
-  u32 *fp = cmd(GE_CMD_FRAMEBUFPTR, 0x1fe000), *fw = cmd(GE_CMD_FRAMEBUFWIDTH, (0x0a << 16) | 64);
-  cmd(GE_CMD_TEXTUREMAPENABLE, 0); // los registros persisten entre listas: el juego fija su textura
-  cmd(GE_CMD_VERTEXTYPE, GE_VTYPE_POS_16BIT);
-  cmd(GE_CMD_PRIM, (GE_PRIM_TRIANGLES << 16) | 3);
-  setFb(0x000000, 512);
-  cmd(GE_CMD_TEXTUREMAPENABLE, 1);
-  u32 *ta = cmd(GE_CMD_TEXADDR0, 0x1fe000), *tw = cmd(GE_CMD_TEXBUFWIDTH0, (0x0a << 16) | 64);
-  cmd(GE_CMD_TEXSIZE0, 0x0606); cmd(GE_CMD_TEXFORMAT, 0);
-  u32 *prim = cmd(GE_CMD_PRIM, (GE_PRIM_TRIANGLES << 16) | 3);
-  end();
-  run();
-  CHECK(rt_count == 1, "rt_count=%d", rt_count);
-  CHECK((*fp & 0xffffff) == (RT_BASE & 0xffffff) && (*fw & 0xffff) == 64 * RT_SCALE, "fb no redirigido: %06lx %06lx", *fp & 0xffffff, *fw & 0xffffff);
-  CHECK(*prim != NOP_OMIT, "el draw que usa el render target se omitio");
-  CHECK((*ta & 0xffffff) == (RT_BASE & 0xffffff) && ((*tw >> 16) & 0xff) == 0x04, "textura no redirigida: %06lx %06lx", *ta & 0xffffff, *tw & 0xffffff);
-  run(); // reejecutar la lista da el mismo resultado
-  CHECK((*ta & 0xffffff) == (RT_BASE & 0xffffff) && *prim != NOP_OMIT, "segunda pasada distinta");
-}
 
-// Regresion dev8: una textura normal que cae dentro del rango de un render target no se omite
-static void test_textura_dentro_de_rt(void) {
-  reset();
-  rt_enabled = 1;
-  begin();
-  setFb(0x195140, 256); // render target de Ridge Racer que comparte zona con texturas
-  setFb(0x000000, 512);
-  cmd(GE_CMD_TEXTUREMAPENABLE, 1);
-  u32 *ta = cmd(GE_CMD_TEXADDR0, 0x19a040);
-  cmd(GE_CMD_TEXBUFWIDTH0, (0x0a << 16) | 256); cmd(GE_CMD_TEXSIZE0, 0x0808);
-  cmd(GE_CMD_VERTEXTYPE, GE_VTYPE_POS_16BIT);
-  u32 *prim = cmd(GE_CMD_PRIM, (GE_PRIM_TRIANGLES << 16) | 3);
-  end();
-  run();
-  CHECK(*prim != NOP_OMIT, "textura de la pista omitida por caer dentro de un render target");
-  CHECK((*ta & 0xffffff) == 0x19a040, "textura normal redirigida: %06lx", *ta & 0xffffff);
-}
 
-// Un render target al que se le omitio un draw no se usa como textura (contenido a medias)
-static void test_rt_incompleto(void) {
-  reset();
-  rt_enabled = 1;
-  begin();
-  setFb(0x000000, 512);
-  setFb(0x088000, 256);
-  cmd(GE_CMD_TEXTUREMAPENABLE, 1);
-  cmd(GE_CMD_TEXADDR0, 0x044000); cmd(GE_CMD_TEXBUFWIDTH0, (0x0a << 16) | 512); // lee la pantalla anterior
-  setFb(0x044000, 512); setFb(0x088000, 256); // (registra 0a044000 como framebuffer)
-  cmd(GE_CMD_VERTEXTYPE, GE_VTYPE_POS_16BIT);
-  cmd(GE_CMD_PRIM, (GE_PRIM_TRIANGLES << 16) | 3); // se omite -> rt incompleto
-  setFb(0x000000, 512);
-  cmd(GE_CMD_TEXADDR0, 0x088000); cmd(GE_CMD_TEXBUFWIDTH0, (0x0a << 16) | 256); cmd(GE_CMD_TEXSIZE0, 0x0808);
-  u32 *prim = cmd(GE_CMD_PRIM, (GE_PRIM_RECTANGLES << 16) | 2);
-  end();
-  run();
-  CHECK(*prim == NOP_OMIT, "se uso un render target incompleto");
-}
 
-// Dentro de un render target a escala 1 no se escalan viewport, scissor ni vertices 2D
-static void test_rt_escala_1(void) {
-  reset();
-  rt_enabled = 1;
-  short *v = (short *)VERTS;
-  v[0] = 0; v[3] = 64;
-  begin();
-  cmd(GE_CMD_OFFSETX, (2048 - 240) << 4); cmd(GE_CMD_OFFSETY, (2048 - 136) << 4);
-  setFb(0x1fe000, 64);
-  u32 *xs = cmd(GE_CMD_VIEWPORTXSCALE, f24(32)), *xc = cmd(GE_CMD_VIEWPORTXCENTER, f24(2048 - 240 + 32));
-  u32 *s2 = cmd(GE_CMD_SCISSOR2, (63 << 10) | 63);
-  cmd(GE_CMD_BASE, 0x080000);
-  cmd(GE_CMD_VERTEXTYPE, GE_VTYPE_THROUGH | GE_VTYPE_POS_16BIT);
-  cmd(GE_CMD_VADDR, VERTS & 0xffffff);
-  cmd(GE_CMD_PRIM, (GE_PRIM_RECTANGLES << 16) | 2);
-  end();
-  run();
-  if (RT_SCALE == 1) {
-    CHECK(fcmd(xs) == 32, "escala en rt %f", fcmd(xs));
-    CHECK(fcmd(xc) == 2048 - 480 + 32, "centro en rt %f (debe quedar a 32 px del offset fijo)", fcmd(xc));
-    CHECK((*s2 & 0x3ff) == 63, "scissor en rt %ld", *s2 & 0x3ff);
-    CHECK(v[3] == 64, "vertice 2D en rt duplicado: %d", v[3]);
-  }
-}
 
 // Un framebuffer con pitch 0 (al iniciar) no es un render target
 static void test_pitch_0(void) {
   reset();
-  rt_enabled = 1;
   begin();
   setFb(0x000000, 0);
   end();
   run();
-  CHECK(rt_count == 0 && state.ignore_framebuf, "pitch 0 tratado como render target");
+  CHECK(state.ignore_framebuf, "pitch 0 no se ignoro");
 }
 
 // Direcciones invalidas y listas en bucle no deben colgar ni leer fuera de memoria
@@ -447,7 +362,7 @@ static void test_desplazamiento_y_1024(void) {
   cmd(GE_CMD_PRIM, (GE_PRIM_RECTANGLES << 16) | 2);
   end();
   run();
-  CHECK(rt_count == 0 && !state.ignore_framebuf && (*fw & 0xffff) == 960, "fb de 1024 no tratado como pantalla");
+  CHECK(!state.ignore_framebuf && (*fw & 0xffff) == 960, "fb de 1024 no tratado como pantalla");
   CHECK(fcmd(xc) == 2048, "centro del viewport con desplazamiento: %f", fcmd(xc));
   CHECK((*s1 & 0x3ff) == 0, "scissor con desplazamiento: %ld", *s1 & 0x3ff);
   CHECK(v[0] == 0 && v[3] == 960, "vertices 2D con desplazamiento: %d %d", v[0], v[3]);
@@ -498,46 +413,11 @@ static void test_pasivo_muestreo(void) {
   CHECK(st.draws >= 3 && st.draws <= 5, "en pasivo se recorrieron %lu de %d frames", st.draws, PASSIVE_SAMPLE * 4);
 }
 
-// Silent Hill: el 3D se dibuja en un fb de 512 (8888) y cada frame se pasa con un sprite
-// (textura con la direccion de la VRAM real, 0x0404c000) a una mitad de un fb de 1024 que
-// se muestra alternando x=0 y x=480. El video se copia (TRANSFER) al fb de 512.
-// dev16 trataba el de 1024 como pantalla: el sprite leia el buffer grande y lo dibujaba
-// encima de si mismo (glitches); el video seguia en blanco porque se escalaba lo mostrado.
-static void test_silent_hill_video(void) {
-  reset();
-  rt_enabled = 1;
-  _sceGeListEnQueue = fakeEnqueue;
-  _sceDisplaySetFrameBuf = fakeSetFrameBuf;
-  u32 *video = (u32 *)0x0A04C000; // el video ya copiado por el GE (8888, ancho 512)
-  int i;
-  for (i = 0; i < 512 * 272; i++) video[i] = 0x00ff0000; // azul
-  begin();
-  setFb(0x04c000, 512);
-  cmd(GE_CMD_TRANSFERDST, 0x04c000); cmd(GE_CMD_TRANSFERDSTW, (0x0a << 16) | 512);
-  cmd(GE_CMD_TRANSFERSIZE, (271 << 10) | 479); cmd(GE_CMD_TRANSFERSTART, 1);
-  u32 *fw = (setFb(0x0d4000, 1024), lp - 1);
-  cmd(GE_CMD_TEXTUREMAPENABLE, 1);
-  cmd(GE_CMD_TEXADDR0, 0x04c000); cmd(GE_CMD_TEXBUFWIDTH0, (0x04 << 16) | 512); // VRAM real
-  cmd(GE_CMD_VERTEXTYPE, GE_VTYPE_THROUGH | GE_VTYPE_POS_16BIT);
-  u32 *prim = cmd(GE_CMD_PRIM, (GE_PRIM_RECTANGLES << 16) | 2);
-  end();
-  memset(&st, 0, sizeof(st));
-  run();
-  CHECK(rt_count == 1 && (*fw & 0xffff) != 960, "el fb de 1024 deberia ser render target (rts %d)", rt_count);
-  CHECK(logHas("textura desde fb 0a04c000"), "la textura 0x0404c000 no se reconocio como el fb 0a04c000");
-  (void)prim;
-  sceDisplaySetFrameBufPatched((void *)0x0A0D43C0, 1024, 0, 0);
-  CHECK(st.fallback == 1, "no se uso la imagen original escalada");
-  CHECK(logHas("imagen original escalada desde 0a04c000 ancho=512 fmt=3"), "se escalo otra cosa que el video copiado");
-  u16 px = ((u16 *)DISPLAY_BUFFER)[100 * 960 + 100];
-  CHECK(px == to565(0x00ff0000, 3) && px, "pixel del video en pantalla: %04x", px);
-}
 
 // Copia grande a la pantalla (video de Silent Hill + "PRESS START" dibujado encima): la
 // copia se reemplaza por un CALL a una lista que la hace y la dibuja al doble en su lugar
 static void test_copia_escalada_con_ge(void) {
   reset();
-  rt_enabled = 1;
   u32 *v = (u32 *)0x09000000;
   begin();
   cmd(GE_CMD_BASE, 0x090000);
@@ -574,35 +454,6 @@ static void test_copia_escalada_con_ge(void) {
   }
 }
 
-// Copia reducida del frame al fb del juego (Gran Turismo lee el frame anterior como textura)
-static void test_copia_reducida(void) {
-  reset();
-  rt_enabled = 1;
-  _sceGeListEnQueue = fakeEnqueue;
-  _sceDisplaySetFrameBuf = fakeSetFrameBuf;
-  opt.omit_fbtex = 2;
-  begin();
-  setFb(0x000000, 512); // doble buffer: dibuja en 0x044000 leyendo el frame anterior
-  setFb(0x044000, 512);
-  cmd(GE_CMD_TEXTUREMAPENABLE, 1);
-  cmd(GE_CMD_TEXADDR0, 0x000000); cmd(GE_CMD_TEXBUFWIDTH0, (0x0a << 16) | 512);
-  cmd(GE_CMD_VERTEXTYPE, GE_VTYPE_POS_16BIT);
-  u32 *prim = cmd(GE_CMD_PRIM, (GE_PRIM_TRIANGLES << 16) | 3);
-  end();
-  memset(&st, 0, sizeof(st));
-  run();
-  CHECK((*prim >> 24) == GE_CMD_PRIM, "con 'copia reducida' el draw no deberia omitirse");
-  n_enqueued = 0;
-  sceDisplaySetFrameBufPatched((void *)0x0A044000, 512, 3, 0);
-  CHECK(st.fb_copies == 1 && copy_vram >= RT_BASE, "no se hizo la copia reducida (%lu)", st.fb_copies);
-  u32 *l = (u32 *)last_enqueued[0];
-  int k, ok = 0;
-  for (k = 0; k < 100 && (l[k] >> 24) != GE_CMD_FINISH; k++)
-    ok |= l[k] == ((GE_CMD_TRANSFERDST << 24) | 0x044000);
-  CHECK(ok, "la lista de copia no escribe en el fb mostrado 0a044000");
-  memSnapshot("test");
-  CHECK(logHas("memoria (test): vram del juego usada hasta"), "no se registro la memoria");
-}
 
 // Sublistas sin cambios: la segunda vez no se recorren y el estado queda igual que al recorrerlas
 static u32 *sub(u32 at, int through, u32 tex) {
@@ -660,55 +511,13 @@ static void test_sublistas_sin_cambios(void) {
   CHECK(st.wc_hits == 0 && st.skipped == 6, "sublista con textura desde fb: hits=%lu omitidos=%lu", st.wc_hits, st.skipped);
 }
 
-// Silent Hill: formulario dibujado en un fb de 512 que nunca se muestra (0x170000) y que
-// luego se pega en la pantalla (0x04c000, que a su vez se copia al fb mostrado de 1024).
-// Ambos iban al mismo buffer grande y el formulario quedaba vacio.
-static void test_fb_intermedio(void) {
-  reset();
-  rt_enabled = 1;
-  opt.layers = 1;
-  opt.autocap = 1; // de paso: la deteccion pide una captura automatica
-  _sceGeListEnQueue = fakeEnqueue;
-  _sceDisplaySetFrameBuf = fakeSetFrameBuf;
-  int frame;
-  u32 *w170 = NULL, *w4c = NULL;
-  for (frame = 0; frame < 3; frame++) {
-    begin();
-    cmd(GE_CMD_VERTEXTYPE, GE_VTYPE_POS_16BIT);
-    w170 = (setFb(0x170000, 512), lp - 1);               // formulario
-    cmd(GE_CMD_TEXTUREMAPENABLE, 0);
-    cmd(GE_CMD_PRIM, (GE_PRIM_TRIANGLES << 16) | 3);
-    w4c = (setFb(0x04c000, 512), lp - 1);                // pantalla: pega el formulario
-    cmd(GE_CMD_TEXTUREMAPENABLE, 1);
-    cmd(GE_CMD_TEXADDR0, 0x170000); cmd(GE_CMD_TEXBUFWIDTH0, (0x0a << 16) | 512);
-    cmd(GE_CMD_PRIM, (GE_PRIM_TRIANGLES << 16) | 3);
-    setFb(0x0d4000, 1024);                               // copia al fb mostrado
-    cmd(GE_CMD_TEXADDR0, 0x04c000); cmd(GE_CMD_TEXBUFWIDTH0, (0x04 << 16) | 512);
-    cmd(GE_CMD_PRIM, (GE_PRIM_TRIANGLES << 16) | 3);
-    end();
-    run();
-    u16 *sp = (u16 *)0x0A0D43C0; // spinner de la CPU: 20x20 en (440,233) de la mitad mostrada
-    int yy, xx;
-    for (yy = 233; yy < 253; yy++)
-      for (xx = 440; xx < 460; xx++)
-        sp[yy * 1024 + xx] = 0xffff;
-    sceDisplaySetFrameBufPatched((void *)0x0A0D43C0, 1024, 0, 0);
-    CHECK(sp[240 * 1024 + 450] == 0, "frame %d: el dibujo de la CPU no se borro del fb mostrado", frame);
-  }
-  CHECK(logHas("fb 0a170000: intermedio"), "el fb del formulario no se detecto como intermedio");
-  CHECK(!logHas("fb 0a04c000: intermedio"), "la pantalla se tomo como intermedia");
-  CHECK((*w170 & 0xff0000) == 0x040000 && (*w170 & 0xffff) == 512, "el formulario no va a un render target: %08lx", *w170);
-  CHECK((*w4c & 0xffff) == 960, "la pantalla dejo de ir al buffer grande: %08lx", *w4c);
-  CHECK(logHas("captura automatica 1/5") && logHas("== captura frame"), "no hubo captura automatica");
-  capturing = 0;
-}
 
 // Opciones por juego: archivo clave=valor; valores fuera de rango o claves raras se ignoran
 static void test_opciones_juego(void) {
   reset();
-  int n = menuParse("tex_fb=2\nsublistas=0\r\ndx=480\nrt_escala=9\nnada=1\n");
-  CHECK(n == 3 && opt.omit_fbtex == 2 && opt.walk_cache == 0 && opt.dx == 480 && opt.rt_scale == 1,
-        "menuParse: n=%d tex_fb=%d sublistas=%d dx=%d rt_escala=%d", n, opt.omit_fbtex, opt.walk_cache, opt.dx, opt.rt_scale);
+  int n = menuParse("tex_fb=0\nsublistas=0\r\ndx=480\nrecorte3d=9\nnada=1\n");
+  CHECK(n == 3 && opt.omit_fbtex == 0 && opt.walk_cache == 0 && opt.dx == 480 && opt.sub == 1,
+        "menuParse: n=%d tex_fb=%d sublistas=%d dx=%d recorte3d=%d", n, opt.omit_fbtex, opt.walk_cache, opt.dx, opt.sub);
   opt = opt_default;
 }
 
@@ -743,7 +552,6 @@ static void test_sublistas_anidadas(void) {
 // grande reducido, porque su fb en la VRAM falsa esta vacio.
 static void test_vram_real(void) {
   reset();
-  rt_enabled = 1;
   begin();
   setFb(0x04c000, 512);
   cmd(GE_CMD_TEXTUREMAPENABLE, 1);
@@ -779,7 +587,6 @@ static void test_vram_real(void) {
 // registros en otro orden que sceGuCopyImage (antes no se reconocia la copia)
 static void test_copia_formulario(void) {
   reset();
-  rt_enabled = 1;
   begin();
   setFb(0x000000, 480); // otro fb justo antes: la copia es del de 0x04c000, no de este
   setFb(0x04c000, 512);
@@ -821,9 +628,10 @@ static void test_sublistas_doble_buffer(void) {
   CHECK(st.wc_hits == 1, "con el fb alternado no se salto la sublista (%lu)", st.wc_hits);
 }
 
-// Silent Hill (dev26): el formulario se dibujaba en el buffer grande (565, sin alfa) y la
-// copia salia sin transparencia y con texto cortado. Desde el segundo frame ese tramo va a
-// escala 1 y en el formato del juego al buffer temporal, y la copia se toma de ahi.
+
+
+// Una lista como la de Silent Hill: formulario en el fb de la pantalla, copia a una textura
+// (opcional) y luego la escena
 static u32 *formFrame(u32 **fmt, u32 **fbp, u32 **start, int copy) {
   begin();
   *fmt = cmd(GE_CMD_FRAMEBUFPIXFORMAT, 3);
@@ -845,123 +653,11 @@ static u32 *formFrame(u32 **fmt, u32 **fbp, u32 **start, int copy) {
   end();
   return sc;
 }
-static void test_formulario_escala1(void) {
-  reset();
-  rt_enabled = 1;
-  opt.csrc = 1; // opcion (apagada por defecto desde dev29)
-  short *v = (short *)VERTS, *e = (short *)(VERTS + 0x100);
-  v[0] = v[1] = v[2] = 0; v[3] = 200; v[4] = 100; v[5] = 0; // x, y, z
-  e[0] = e[1] = e[2] = 0; e[3] = 480; e[4] = 272; e[5] = 0;
-  u32 *fmt, *fbp, *start, *sc;
-  formFrame(&fmt, &fbp, &start, 1);
-  memset(&st, 0, sizeof(st));
-  run(); // frame 1: se reduce el buffer grande (como antes) y se anota el fb
-  CHECK(st.tx_screen == 1 && v[3] == 400, "frame 1: copia=%lu formulario x=%d", st.tx_screen, v[3]);
-  CHECK(logHas("el juego copia desde el"), "no se anoto el fb de copia");
-  int f;
-  for (f = 0; f < 2; f++) {
-    sc = formFrame(&fmt, &fbp, &start, 1);
-    run();
-    CHECK(*fbp == ((GE_CMD_FRAMEBUFPTR << 24) | (copy_vram & 0xffffff)) && (fbp[1] & 0xffff) == 512,
-          "frame %d: el formulario no va al buffer temporal: %08lx %08lx", f + 2, *fbp, fbp[1]);
-    CHECK((*fmt & 0xffffff) == 3, "frame %d: formato %06lx (debe quedar el del juego)", f + 2, *fmt & 0xffffff);
-    CHECK(v[3] == 200 && v[4] == 100, "frame %d: vertices del formulario %d,%d (escala 1)", f + 2, v[3], v[4]);
-    CHECK(e[3] == 960 && e[4] == 544, "frame %d: escena %d,%d (x2)", f + 2, e[3], e[4]);
-    CHECK((*sc & 0x3ff) == 959, "frame %d: scissor de la escena %06lx", f + 2, *sc & 0xffffff);
-    CHECK((*start >> 24) == GE_CMD_CALL, "frame %d: la copia no se reemplazo", f + 2);
-    u32 *sub = (u32 *)(0x0A000000 | (*start & 0xffffff));
-    int k, from = 0, big = 0, f565 = 0, ret = 0;
-    for (k = 0; k < 200 && !ret; k++) {
-      from |= sub[k] == ((GE_CMD_TRANSFERSRC << 24) | (copy_vram & 0xffffff));
-      big |= sub[k] == ((GE_CMD_FRAMEBUFPTR << 24) | (VRAM_DRAW_BUFFER_OFFSET & 0xffffff));
-      f565 |= sub[k] == ((GE_CMD_FRAMEBUFPIXFORMAT << 24) | PIXELFORMAT);
-      ret |= (sub[k] >> 24) == GE_CMD_RET;
-    }
-    CHECK(from && big && f565 && ret, "frame %d: lista de la copia: desde temporal=%d vuelve al buffer grande=%d 565=%d RET=%d",
-          f + 2, from, big, f565, ret);
-  }
-  CHECK(logHas("se toma del buffer temporal (escala 1)"), "no se registro la copia desde el buffer temporal");
-  // El juego deja de copiar: tras 3 listas con draws perdidos se vuelve a la pantalla
-  for (f = 0; f < 4; f++) {
-    formFrame(&fmt, &fbp, &start, 0);
-    run();
-  }
-  CHECK(logHas("no hubo copia") && *fbp == (GE_CMD_FRAMEBUFPTR << 24) && (*fmt & 0xffffff) == PIXELFORMAT,
-        "sin copia no se volvio al buffer grande: %08lx fmt %06lx", *fbp, *fmt & 0xffffff);
-}
-
-// Silent Hill: un fb intermedio (render target) que lee la pantalla recien dibujada. Antes
-// se omitia y el render target quedaba incompleto (spinner y puerta sin dibujar)
-static void test_rt_lee_pantalla(void) {
-  reset();
-  opt.cpu_draw = 1; // apagado por defecto desde dev38
-  memset(&st, 0, sizeof(st));
-  rt_enabled = 1;
-  opt.layers = 1;
-  _sceGeListEnQueue = fakeEnqueue;
-  _sceDisplaySetFrameBuf = fakeSetFrameBuf;
-  u32 *prim = NULL, *prev = NULL, *use = NULL, *comp = NULL;
-  int frame;
-  for (frame = 0; frame < 4; frame++) {
-    begin();
-    setFb(0x04c000, 512);                                 // escena
-    cmd(GE_CMD_TEXTUREMAPENABLE, 0);
-    cmd(GE_CMD_VERTEXTYPE, GE_VTYPE_POS_16BIT);
-    cmd(GE_CMD_PRIM, (GE_PRIM_TRIANGLES << 16) | 3);
-    setFb(0x170000, 512);                                 // fb del spinner: lee la escena
-    cmd(GE_CMD_TEXTUREMAPENABLE, 1);
-    cmd(GE_CMD_TEXFORMAT, 3);
-    cmd(GE_CMD_TEXADDR0, 0x04c000); prev = cmd(GE_CMD_TEXBUFWIDTH0, (0x0a << 16) | 512);
-    prim = cmd(GE_CMD_PRIM, (GE_PRIM_TRIANGLES << 16) | 3);
-    setFb(0x04c000, 512);                                 // la pantalla usa el spinner
-    cmd(GE_CMD_TEXADDR0, 0x170000); cmd(GE_CMD_TEXBUFWIDTH0, (0x0a << 16) | 512); cmd(GE_CMD_TEXSIZE0, 0x0909);
-    use = cmd(GE_CMD_PRIM, (GE_PRIM_TRIANGLES << 16) | 3);
-    setFb(0x0d4000, 1024);
-    cmd(GE_CMD_TEXADDR0, 0x04c000); cmd(GE_CMD_TEXBUFWIDTH0, (0x04 << 16) | 512);
-    comp = cmd(GE_CMD_PRIM, (GE_PRIM_TRIANGLES << 16) | 3);
-    end();
-    run();
-    u16 *sp = (u16 *)0x0A0D43C0; // spinner de la CPU: 20x20 en (440,233) de la mitad mostrada
-    int yy, xx;
-    for (yy = 233; yy < 253; yy++)
-      for (xx = 440; xx < 460; xx++)
-        sp[yy * 1024 + xx] = 0xffff;
-    sceDisplaySetFrameBufPatched((void *)0x0A0D43C0, 1024, 0, 0);
-    CHECK(sp[240 * 1024 + 450] == 0, "frame %d: el dibujo de la CPU no se borro del fb mostrado", frame);
-  }
-  CHECK(logHas("fb 0a170000: intermedio"), "el fb del spinner no se detecto como intermedio");
-  CHECK((*comp >> 24) != GE_CMD_CALL, "la copia al fb mostrado (1024) tambien reducia la pantalla: trabajo de mas cada frame");
-  CHECK(st.cpu_overlays > 0, "no se pego lo que dibuja la CPU en el fb mostrado (spinner)");
-  u16 *o = (u16 *)OVL_BUF;
-  int q, white = 0;
-  for (q = 0; q < 2 * OVL_MAX * 2 * OVL_MAX; q++)
-    white += o[q] == 0xffff;
-  CHECK(white == 20 * 20 * 4, "el spinner no quedo al doble en OVL_BUF (%d pixeles)", white);
-  CHECK((*prim >> 24) == GE_CMD_CALL && (*prev >> 24) == GE_CMD_BASE, "el draw que lee la pantalla no se reemplazo: %08lx", *prim);
-  CHECK(*use != NOP_OMIT, "el spinner (render target) no se uso en la pantalla");
-  u32 *sub = (u32 *)(0x0A000000 | (*prim & 0xffffff));
-  int k, tex = 0, draw = 0, orig = 0, ret = 0;
-  for (k = 0; k < 200 && !ret; k++) {
-    tex |= sub[k] == ((GE_CMD_TEXADDR0 << 24) | (copy_vram & 0xffffff));
-    draw |= sub[k] == ((GE_CMD_PRIM << 24) | (GE_PRIM_TRIANGLES << 16) | 3);
-    orig |= sub[k] == ((GE_CMD_TEXBUFWIDTH0 << 24) | (0x0a << 16) | 512);
-    ret |= (sub[k] >> 24) == GE_CMD_RET;
-  }
-  CHECK(tex && draw && orig && ret, "lista del draw: textura temporal=%d draw=%d palabra original=%d RET=%d", tex, draw, orig, ret);
-  // Con la opcion apagada, el draw y la palabra de antes vuelven a ser los del juego
-  opt.layers = 0; opt_gen++; rt_gen++;
-  memset(&tcache, 0, sizeof(tcache)); tcache.res = 2;
-  state.fb_layer[findFramebuf(0x0a170000)] = 0;
-  run();
-  CHECK(*prev == ((GE_CMD_TEXBUFWIDTH0 << 24) | (0x0a << 16) | 512), "la palabra de antes no se restauro: %08lx", *prev);
-  capturing = 0;
-}
 
 // Volcado binario: una lista como la de Silent Hill (formulario, copia, escena) queda en un
 // .gpd con su cabecera, comandos, draws con datos, flip, memoria y fin (lo lee tools/gpd.py)
 static void test_volcado(void) {
   reset();
-  rt_enabled = 1;
   _sceGeListEnQueue = fakeEnqueue;
   _sceDisplaySetFrameBuf = fakeSetFrameBuf;
   dumpSetup();
@@ -973,14 +669,17 @@ static void test_volcado(void) {
   dumpRequest();
   sceGeListEnQueuePatched((void *)LIST, NULL, 0, NULL);
   CHECK(dumping, "no empezo el volcado");
-  sceDisplaySetFrameBufPatched((void *)0x0A0D43C0, 1024, 0, 0);
-  sceGeListEnQueuePatched((void *)LIST, NULL, 0, NULL); // lista nueva tras el flip: termina
+  int k;
+  for (k = 0; k < 3; k++) { // 3 frames por volcado (dev49): termina con la lista nueva tras el 3er flip
+    sceDisplaySetFrameBufPatched((void *)0x0A0D43C0, 1024, 0, 0);
+    sceGeListEnQueuePatched((void *)LIST, NULL, 0, NULL);
+  }
   CHECK(!dumping && logHas("volcado listo"), "el volcado no termino");
   FILE *f = fopen(getenv("GPD_OUT") ? getenv("GPD_OUT") : "volcado_test.gpd", "rb");
   CHECK(f != NULL, "no se escribio el archivo");
   if (!f)
     return;
-  static u8 data[16 << 20];
+  static u8 data[64 << 20];
   int n = fread(data, 1, sizeof(data), f), pos = 0, count[16] = { 0 }, ncmd = 0, blobs = 0;
   fclose(f);
   while (pos + 8 <= n) {
@@ -997,10 +696,10 @@ static void test_volcado(void) {
   CHECK(count[GPD_HEADER] == 1 && !memcmp(data + 8, "GPD1", 4), "cabecera");
   CHECK(count[GPD_REGS] == 2 && count[GPD_MEM] >= 4 && count[GPD_END] == 1, "registros=%d memoria=%d fin=%d",
         count[GPD_REGS], count[GPD_MEM], count[GPD_END]);
-  CHECK(count[GPD_DRAW] == 2 && blobs >= 4 && ncmd >= 20, "draws=%d datos=%d comandos=%d", count[GPD_DRAW], blobs, ncmd);
-  CHECK(count[GPD_FLIP] == 1 && count[GPD_FB] >= 1 && count[GPD_TXLIST] == 1 && count[GPD_EVENT] >= 1,
+  CHECK(count[GPD_DRAW] == 6 && blobs >= 4 && ncmd >= 20, "draws=%d datos=%d comandos=%d", count[GPD_DRAW], blobs, ncmd);
+  CHECK(count[GPD_FLIP] == 3 && count[GPD_FB] >= 1 && count[GPD_TXLIST] == 3 && count[GPD_EVENT] >= 1,
         "flip=%d fb=%d lista del plugin=%d eventos=%d", count[GPD_FLIP], count[GPD_FB], count[GPD_TXLIST], count[GPD_EVENT]);
-  CHECK(count[GPD_SNAP] == 2, "instantaneas=%d (antes de la copia y reducida)", count[GPD_SNAP]);
+  CHECK(count[GPD_SNAP] >= 4, "instantaneas=%d (antes de la copia y reducida, por frame; 4 MB de espacio)", count[GPD_SNAP]);
   rename(getenv("GPD_OUT") ? getenv("GPD_OUT") : "volcado_test.gpd", "volcado_activo.gpd");
   capturing = 0;
 }
@@ -1032,8 +731,11 @@ static void test_volcado_pasivo(void) {
   end();
   dumpRequest();
   sceGeListEnQueuePatched((void *)LIST, NULL, 0, NULL);
-  sceDisplaySetFrameBufPatched((void *)0x04000000, 512, 0, 0);
-  sceGeListEnQueuePatched((void *)LIST, NULL, 0, NULL);
+  int k;
+  for (k = 0; k < 3; k++) {
+    sceDisplaySetFrameBufPatched((void *)0x04000000, 512, 0, 0);
+    sceGeListEnQueuePatched((void *)LIST, NULL, 0, NULL);
+  }
   CHECK(!dumping && logHas("volcado listo"), "el volcado pasivo no termino");
   rename(getenv("GPD_OUT") ? getenv("GPD_OUT") : "volcado_test.gpd", "volcado_pasivo.gpd");
   passive = 0;
@@ -1071,7 +773,6 @@ static u32 *paseFrame(u32 **enter, u32 **mix) {
 }
 static void test_pase_intercambio(void) {
   reset();
-  vram_swz = 1; // VRAM de 2 MB: sin render targets
   u32 *enter, *mix;
   paseFrame(&enter, &mix);
   run();
@@ -1103,7 +804,6 @@ static void test_pase_intercambio(void) {
 
 static void test_vram_2mb(void) {
   reset();
-  vram_swz = 1; rt_enabled = 0;
   begin();
   u32 *z = cmd(GE_CMD_ZBUFPTR, 0x088000);
   setFb(0x0d4000, 1024);
@@ -1113,7 +813,7 @@ static void test_vram_2mb(void) {
   end();
   run();
   CHECK((*z & 0xffffff) == 0x100000, "z-buffer: %06lx", *z & 0xffffff);
-  CHECK(!rtFindTex(0x0a0d4000) && *p == NOP_OMIT, "con 2 MB no deberia haber render targets");
+  CHECK(*p == NOP_OMIT, "con 2 MB no deberia haber render targets");
   CHECK(copyVram() && copy_vram == 0x04100000, "buffer temporal en %08lx (deberia compartir el z-buffer)", copy_vram);
 }
 
@@ -1125,13 +825,12 @@ static void test_menu(void) {
   menuFrame();
   CHECK(menuOpen(), "el menu no se abrio");
   test_buttons = 0; menuFrame();
-  test_buttons = PSP_CTRL_RIGHT; menuFrame(); // primera opcion: render targets si -> no
-  CHECK(opt.rt_on == 0 && logHas("menu: Render targets en VRAM alta = no"), "no se cambio la opcion (rt_on=%d)", opt.rt_on);
-  CHECK(logHas("rt: se liberaron"), "cambiar render targets no los libero");
+  test_buttons = PSP_CTRL_RIGHT; menuFrame(); // primera opcion: texturas desde fb omitir -> leer memoria (da la vuelta)
+  CHECK(opt.omit_fbtex == 0 && logHas("menu: Texturas desde framebuffer = leer memoria"), "no se cambio la opcion (tex_fb=%d)", opt.omit_fbtex);
   test_buttons = 0; menuFrame();
   test_buttons = PSP_CTRL_DOWN; menuFrame(); test_buttons = 0; menuFrame();
   test_buttons = PSP_CTRL_RIGHT; menuFrame();
-  CHECK(opt.rt_scale == 2, "escala de render targets: %d", opt.rt_scale);
+  CHECK(opt.tx_ge == 0, "copias con el GE: %d", opt.tx_ge);
   int dibujado = 0, i;
   for (i = 0; i < MENU_W * MENU_H; i++) dibujado += ((u16 *)MENU_BUF)[i] != 0;
   CHECK(dibujado > 1000, "el menu no se dibujo (%d pixeles)", dibujado);
@@ -1145,7 +844,7 @@ static void test_menu(void) {
 // salir (en las palabras del fb siguiente), y la textura que lo lee va a la VRAM falsa (GEPVM)
 static void test_rt_escala1_z(void) {
   reset();
-  vram_swz = 1; rt_enabled = 0; z_used = 0;
+  z_used = 0;
   begin();
   cmd(GE_CMD_FRAMEBUFPIXFORMAT, 3);
   u32 *rp = lp; cmd(GE_CMD_FRAMEBUFPTR, 0x154000); cmd(GE_CMD_FRAMEBUFWIDTH, (0x04 << 16) | 128);
@@ -1184,7 +883,7 @@ static void test_rt_escala1_z(void) {
   CHECK(*p2 != NOP_OMIT && ((*tw >> 16) & 0xff) == 0x0a, "textura del rt: draw %08lx, ancho %08lx (deberia leer la VRAM falsa)", *p2, *tw);
   // Con profundidad ya usada en el buffer grande (Ridge Racer): se guarda la VRAM del z antes
   reset();
-  vram_swz = 1; rt_enabled = 0; z_used = 1;
+  z_used = 1;
   begin();
   rp = lp; setFb(0x154000, 256);
   cmd(GE_CMD_VERTEXTYPE, GE_VTYPE_THROUGH | GE_VTYPE_POS_16BIT);
@@ -1205,7 +904,7 @@ static void test_rt_escala1_z(void) {
   // El rt se lee a si mismo (Ridge Racer): solo ese draw lee la VRAM del z; las palabras de
   // textura del juego quedan como estaban (dev44 las dejaba en el z: franjas moradas despues)
   reset();
-  vram_swz = 1; rt_enabled = 0; z_used = 0;
+  z_used = 0;
   begin();
   setFb(0x154000, 128);
   cmd(GE_CMD_VERTEXTYPE, GE_VTYPE_THROUGH | GE_VTYPE_POS_16BIT);
@@ -1253,13 +952,62 @@ static void test_pantalla_se_lee(void) {
   CHECK(v[1].x == 480 && v[1].y == 272, "los vertices del juego quedaron en %g,%g (esperaba el doble: 480,272)", v[1].x, v[1].y);
 }
 
+// Ridge Racer: un triangulo 3D que a 480x272 cabe en el rango del GE (0..4096) pero al doble
+// no (el GE lo descartaria entero: el camino bajo el auto desaparecia). Se subdivide y todos
+// los vertices nuevos quedan dentro del rango al doble
+static void test_recorte(void) {
+  reset();
+  struct { float x, y, z; } *v = (void *)VERTS;
+  v[0].x = -6; v[0].y = -0.5f; v[0].z = 0;   // x a 1x: 2048 - 6*240 = 608 (dentro); al doble: -832 (fuera)
+  v[1].x = 0.5f; v[1].y = 0.5f; v[1].z = 0;
+  v[2].x = 0.5f; v[2].y = -0.5f; v[2].z = 0;
+  v[3] = v[1]; v[4] = v[2]; v[5].x = 0.4f; v[5].y = 0.4f; v[5].z = 0; // otro chico: no hace falta
+  begin();
+  setFb(0, 512);
+  cmd(GE_CMD_OFFSETX, 1808 << 4); cmd(GE_CMD_OFFSETY, 1912 << 4);
+  cmd(GE_CMD_VIEWPORTXSCALE, f24(240)); cmd(GE_CMD_VIEWPORTYSCALE, f24(-136));
+  cmd(GE_CMD_VIEWPORTXCENTER, f24(2048)); cmd(GE_CMD_VIEWPORTYCENTER, f24(2048));
+  static const float id43[12] = { 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0 }, id44[16] = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };
+  int k;
+  cmd(GE_CMD_WORLDMATRIXNUMBER, 0); for (k = 0; k < 12; k++) cmd(GE_CMD_WORLDMATRIXDATA, f24(id43[k]));
+  cmd(GE_CMD_VIEWMATRIXNUMBER, 0); for (k = 0; k < 12; k++) cmd(GE_CMD_VIEWMATRIXDATA, f24(id43[k]));
+  cmd(GE_CMD_PROJMATRIXNUMBER, 0); for (k = 0; k < 16; k++) cmd(GE_CMD_PROJMATRIXDATA, f24(id44[k]));
+  cmd(GE_CMD_BASE, 0x080000);
+  cmd(GE_CMD_VERTEXTYPE, GE_VTYPE_POS_FLOAT);
+  cmd(GE_CMD_VADDR, VERTS & 0xffffff);
+  u32 *pr = cmd(GE_CMD_PRIM, (GE_PRIM_TRIANGLES << 16) | 6);
+  u32 *after = cmd(GE_CMD_PRIM, (GE_PRIM_TRIANGLES << 16) | 3); // sigue con los vertices de despues
+  end();
+  run();
+  u32 n = 0, bad = 0, vaddr = 0, *l;
+  if ((*pr >> 24) == GE_CMD_CALL)
+    for (l = (u32 *)(0x0A000000 | (*pr & 0xffffff)), k = 0; k < 40 && (l[k] >> 24) != GE_CMD_RET; k++) {
+      if ((l[k] >> 24) == GE_CMD_VADDR) vaddr = 0x08000000 | (l[k] & 0xffffff) | (vaddr & 0x0f000000 ? 0 : 0);
+      if ((l[k] >> 24) == GE_CMD_PRIM) {
+        float *o = (float *)(0x0A000000 | (l[k - 1] & 0xffffff));
+        u32 m = l[k] & 0xffff, i;
+        n += m;
+        for (i = 0; i < m; i++) {
+          float x2 = o[3 * i] * 480 + 2048;
+          bad += x2 < 0 || x2 >= 4096;
+          if (i % 3 == 2) { // mismo sentido de giro que el original (area con signo)
+            float *a = o + 3 * (i - 2), *b = a + 3, *c = b + 3;
+            bad += ((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])) > 0;
+          }
+        }
+      }
+    }
+  CHECK((*pr >> 24) == GE_CMD_CALL && n > 3 && n % 3 == 0 && !bad, "recorte: draw %08lx, %lu vertices nuevos, %lu fuera del rango", *pr, n, bad);
+  CHECK(st.sub_draws == 1 && *after == ((GE_CMD_PRIM << 24) | (GE_PRIM_TRIANGLES << 16) | 3), "recorte: %lu draws recortados, el siguiente %08lx", st.sub_draws, *after);
+}
+
 int main(void) {
   mapPspMemory();
   void (*tests[])(void) = {
     test_viewport_scissor_x2, test_viewport_zona, test_memo_lista_grande, test_vertices_2d,
     test_vaddr_avanza_tras_3d, test_bjump_no_salta, test_estado_entre_listas, test_textura_fb_al_dibujar,
-    test_render_target, test_textura_dentro_de_rt, test_rt_incompleto, test_rt_escala_1, test_pitch_0,
-    test_robustez, test_copia_listas_alternas, test_fps, test_doble_buffer_alternado, test_nop_no_revive, test_lista_estatica_fb, test_pasivo_no_escribe, test_pasivo_normaliza, test_desplazamiento_y_1024, test_vertices_2d_muchos_buffers, test_pasivo_muestreo, test_silent_hill_video, test_copia_escalada_con_ge, test_copia_reducida, test_sublistas_sin_cambios, test_sublistas_anidadas, test_sublistas_doble_buffer, test_vram_real, test_copia_formulario, test_fb_intermedio, test_opciones_juego, test_formulario_escala1, test_rt_lee_pantalla, test_volcado, test_volcado_pasivo, test_vram_2mb, test_pase_intercambio, test_rt_escala1_z, test_pantalla_se_lee, test_menu,
+    test_pitch_0,
+    test_robustez, test_copia_listas_alternas, test_fps, test_doble_buffer_alternado, test_nop_no_revive, test_lista_estatica_fb, test_pasivo_no_escribe, test_pasivo_normaliza, test_desplazamiento_y_1024, test_vertices_2d_muchos_buffers, test_pasivo_muestreo, test_copia_escalada_con_ge, test_sublistas_sin_cambios, test_sublistas_anidadas, test_sublistas_doble_buffer, test_vram_real, test_copia_formulario, test_opciones_juego, test_volcado, test_volcado_pasivo, test_vram_2mb, test_pase_intercambio, test_rt_escala1_z, test_pantalla_se_lee, test_recorte, test_menu,
   };
   int i;
   for (i = 0; i < (int)(sizeof(tests) / sizeof(tests[0])); i++)

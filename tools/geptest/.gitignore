@@ -2,11 +2,6 @@
 *.elf
 *.prx
 *.SFO
-lanzador/EBOOT.PBP
-lanzador/*.elf
-lanzador/*.o
-lanzador/PARAM.SFO
-lanzador/*.prx
 corredor/EBOOT.PBP
 corredor/*.elf
 corredor/*.o

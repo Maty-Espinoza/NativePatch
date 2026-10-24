@@ -38,6 +38,7 @@ El parche Adrenaline está en `Core/`, así que también aplica a la versión co
 
 ## Estado (2026-10-22)
 - Scripts en el Mac: `~/Documents/gepatch-lab/compilar.sh` (instala dependencias con brew, clona PPSSPP en 1adf3c5, aplica `adrenaline.patch`, `./b.sh --release` → `ppsspp/build/PPSSPPSDL.app`) y `jugar.sh` (`PPSSPP_ADRENALINE=1`, memstick propio con `seplugins/game.txt` y `ge_patch.prx`, renderer por software).
-- El primer intento falló por `SDL3_ttf not found`: el script pedía SDL2. Ya corregido (sdl3 + sdl3_ttf). Falta que el usuario lo corra de nuevo.
-- Pendiente: bajar las ISO de Silent Hill y Ridge Racer a `~/Documents/gepatch-lab/iso` con el relevo (`bajar_*.txt` con "ruta -> destino"). Antes hay que reiniciar el relevo con `~/Downloads/vitabridge_nuevo.py`, que procesa `listar_iso.txt`.
+- Compilado y funcionando (2026-10-23): Silent Hill y Ridge Racer corren igual que en la Vita, salvo algo de rendimiento. El primer intento había fallado por `SDL3_ttf not found` (el script pedía SDL2).
+- `jugar.sh` abre con `--debugger=45678` (API WebSocket de PPSSPP).
+- Los volcados (L+R+SELECT) y el log quedan en `memstick/`.
 - Mandos externos: PPSSPP SDL ya los soporta; el replay graba los botones del PSP, no el mando.

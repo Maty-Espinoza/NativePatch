@@ -16,5 +16,9 @@ proceso, para compararlas con la PSP real (`.expected`) y con PPSSPPHeadless.
 El mismo `SALIDA` corre en PPSSPPHeadless: `PPSSPPHeadless --graphics=software
 --memstick=SALIDA SALIDA/PSP/GAME/GEPTEST/EBOOT.PBP` (las 112 en ~7 s).
 
-`geptest.c` y `lanzador/` son la version anterior (un EBOOT por prueba, el plugin salta por
-el menu): mas lenta (~25 s por prueba) pero cada prueba en un proceso nuevo.
+Hubo una version anterior (un EBOOT por prueba, ~25 s cada una); se quito en dev49. Esta en
+el historial de git (`tools/geptest/geptest.c`, `lanzador/`) si alguna prueba necesita un
+proceso nuevo.
+
+`escena/` es GEPVM: la escena determinista para comparar la Vita con el modelo de PPSSPP
+(ver `docs/modelo_adrenaline.md`).

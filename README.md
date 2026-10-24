@@ -1,4 +1,21 @@
-# GE Patch Plugin
+# GE Patch Plugin (NativePatch)
+
+Plugin para [Adrenaline](https://github.com/TheOfficialFloW/Adrenaline) que muestra los juegos de PSP
+en la PS Vita a resolución nativa (960x544). Este fork revive el GePatch original de TheFlow
+(abandonado en v0.2) y corrige sus errores. Versión actual: 0.2-dev49 (rama `dev`).
+
+- **Compilar:** `make ADRENALINE=<ruta a Adrenaline/cef>` (toolchain pspdev). Tests en el PC: `make -C tests`.
+- **Instalar:** `ux0:/pspemu/seplugins/ge_patch.prx` y en `game.txt`: `ms0:/seplugins/ge_patch.prx 1`.
+- **En el juego:** L al arrancar = modo pasivo (sin cambios, como referencia); L+R+START = menú de opciones;
+  L+R+SELECT = captura en el log y volcado `.gpd` de 3 frames. El log queda en `ms0:/ge_patch.log`.
+- **Documentación:** [`docs/CONTEXTO_IA.md`](docs/CONTEXTO_IA.md) (arquitectura, memoria, estado, cómo
+  continuar) y los demás documentos de `docs/`. Herramientas en `tools/` (`gpd.py` para los volcados,
+  modelo de Adrenaline en PPSSPP, pruebas del GE, laboratorio en el Mac, relevo con la Vita).
+
+---
+
+Historial del GePatch original (TheFlow):
+
 
 This is an experimental plugin for [Adrenaline](https://github.com/TheOfficialFloW/Adrenaline) that allows you to play a few games in native resolution.
 

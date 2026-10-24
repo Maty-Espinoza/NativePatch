@@ -12,6 +12,12 @@
   gpd.py original VOLCADO CARPETA [--ppsspp=RUTA]
                                           el mismo frame SIN GePatch (de un volcado ACTIVO): lo
                                           dibuja PPSSPPHeadless y lo compara con el buffer grande
+  gpd.py linaje   VOLCADO                 quien escribe cada fb y quien lo lee (tambien del frame
+                                          anterior); viewports con una escala que no es la de su destino
+  gpd.py diff     ACTIVO [PASIVO]         registros criticos que cambio el plugin, por tramos de
+                                          draws (20-50 lineas); con PASIVO, donde el juego mando otra cosa
+  gpd.py vram     VOLCADO                 mapa de la VRAM falsa (fb, texturas, choques) y guardado
+                                          o restauracion del z-buffer (rt1) respecto de los draws
   gpd.py comparar PASIVO ACTIVO CARPETA   alinea los draws de ambos y compara las imagenes
                                           (lo que el juego quiere vs lo que sale con el plugin)
 
@@ -26,8 +32,10 @@ FB_DEC = {0: 'buffer grande', 1: 'render target', 2: 'fb de copia (escala 1)', 3
 TEXMODE = {0: 'normal', 1: 'OMITIR', 2: 'textura render target', 3: 'VRAM real -> falsa', 4: 'fb actual',
            5: 'pantalla reducida', 6: 'mezcla por intercambio', 7: 'rt1 lee la pantalla', 8: 'rt1 se lee a si mismo', 9: 'pantalla se lee a si misma'}
 PRIMS = ['puntos', 'lineas', 'tira_lineas', 'triangulos', 'tira_tri', 'abanico_tri', 'rectangulos', '?']
-OPT_NAMES = ['rt_on', 'rt_scale', 'omit_fbtex', 'fallback', 'nop_mark', 'walk_new', 'wide1024', 'dx', 'dy', 'v2d',
-             'tx_ge', 'walk_cache', 'wc_check', 'layers', 'vram_fix', 'autocap', 'cpu_draw', 'csrc', 'swap']  # orden de Options en menu.h
+OPT_NAMES = ['omit_fbtex', 'fallback', 'wide1024', 'dx', 'dy', 'v2d', 'tx_ge', 'walk_cache', 'wc_check', 'vram_fix',
+             'autocap', 'cpu_draw', 'swap', 'rt1', 'sub']  # orden de Options en menu.h (desde dev49)
+OPT_NAMES_OLD = ['rt_on', 'rt_scale', 'omit_fbtex', 'fallback', 'nop_mark', 'walk_new', 'wide1024', 'dx', 'dy', 'v2d',
+                 'tx_ge', 'walk_cache', 'wc_check', 'layers', 'vram_fix', 'autocap', 'cpu_draw', 'csrc', 'swap', 'rt1', 'sub']
 
 def cmd_names():
     names = {}
@@ -303,7 +311,8 @@ def resumen(dump):
     print('%s: %s, GePatch %s, frame %d, %s, GE %s al empezar%s' % (os.path.basename(dump.path), dump.game, dump.plugin,
           dump.frame, 'PASIVO (referencia)' if dump.passive else 'ACTIVO', 'libre' if dump.idle else 'OCUPADO',
           ', ARCHIVO DANADO (%d KB perdidos)' % (dump.lost // 1024) if dump.truncated else ''))
-    print('opciones:', ' '.join('%s=%d' % kv for kv in zip(OPT_NAMES, dump.opt)))
+    names = OPT_NAMES if len(dump.opt) <= len(OPT_NAMES) else OPT_NAMES_OLD
+    print('opciones:', ' '.join('%s=%d' % kv for kv in zip(names, dump.opt)))
     if dump.end:
         idle, skipped, ncmds, flips = u32s(dump.end, 4)
         print('fin: %s; %d comandos, %d flips, %d datos sin guardar por tamano' % (
@@ -640,17 +649,20 @@ def original(dump, outdir, pp):
     if dump.passive:
         print('el volcado es PASIVO: ya es el frame sin GePatch (usar ppsspp o imagenes)'); return 1
     os.makedirs(outdir, exist_ok=True)
-    # El volcado sigue hasta la primera lista despues del flip. Si casi todo se dibujo antes del
-    # flip (Ridge Racer), lo de despues ya es el frame siguiente y se corta en el flip; si el
-    # juego hace el flip al empezar (Silent Hill), el frame es lo de despues
-    fbs, big, drawn, texfb, last, upto, seg, stale = {}, {}, set(), {}, None, None, [0, 0], set()
+    # El volcado sigue hasta la primera lista despues del ultimo flip (desde dev49 son 3 frames).
+    # Si el tramo antes del ultimo flip tiene mas draws a la pantalla que lo de despues (Ridge
+    # Racer), se corta en ese flip: lo de despues ya es el frame siguiente. Si el juego hace el
+    # flip al empezar (Silent Hill), el frame es lo de despues del ultimo flip.
+    fbs, big, drawn, texfb, last, stale = {}, {}, set(), {}, None, set()
+    segs = [[0, None]]  # draws a la pantalla por tramo entre flips, y ultimo draw del tramo
     for e in walk(dump):
-        if e[0] == 'flip' and upto is None:
-            upto = last
+        if e[0] == 'flip':
+            segs[-1][1] = last; segs.append([0, None])
         elif e[0] == 'draw':
             last = e[1]['idx']
-            seg[upto is not None] += not e[1]['flags'] & 14
-    cut = upto if seg[0] >= seg[1] else None
+            segs[-1][0] += not e[1]['flags'] & 14
+    seg = [segs[-2][0] if len(segs) > 1 else 0, segs[-1][0]]
+    cut = segs[-2][1] if len(segs) > 1 and seg[0] >= seg[1] else None
     print('draws a la pantalla: %d antes del flip, %d despues -> se usa %s' % (seg[0], seg[1], 'hasta el flip' if cut is not None else 'todo el volcado'))
     for e in walk(dump):
         if e[0] == 'draw' and cut is not None and e[1]['idx'] > cut:
@@ -764,8 +776,223 @@ def comparar(pas, act, outdir):
                 write_png(os.path.join(outdir, 'pantalla_original.png'), 480, 272, orig)
                 print('pantalla (ultimo flip) original vs plugin reducido: diferencia %.1f' % diff(orig, big))
 
+# --- Varios frames, linaje, diff de registros y mapa de la VRAM ------------------------------
+CODE = {}  # nombre -> numero de comando
+def C(name):
+    if not CODE:
+        CODE.update({v: k for k, v in NAMES.items()})
+    return CODE[name]
+
+def frames(dump):
+    """Eventos con el numero de frame dentro del volcado (sube con cada flip)."""
+    fi = 0
+    for e in walk(dump):
+        yield fi, e
+        if e[0] == 'flip':
+            fi += 1
+
+def dest(dr):
+    f = dr['flags']
+    return 'ignorado' if f & 2 else 'escala 1' if f & 8 else 'rt x%d' % dr['scale'] if f & 4 else 'buffer grande'
+
+def fbf(x):
+    return struct.unpack('<f', struct.pack('<I', (x & 0xffffff) << 8))[0]
+
+class Regs:
+    """Estado del GE durante el recorrido: valor del juego y el que quedo (con parches posteriores)."""
+    def __init__(self):
+        self.orig, self.fin, self.at = {}, {}, {}
+    def cmd(self, e):
+        a, o, f, late = e[1], e[2], e[3], e[4]
+        c = o >> 24
+        if late:  # parche posterior: cuenta si es la ultima palabra de ese registro
+            for k, at in self.at.items():
+                if at == a:
+                    self.fin[k] = f & 0xffffff if f >> 24 == k else ('call', f)
+            return
+        self.orig[c], self.fin[c], self.at[c] = o & 0xffffff, f & 0xffffff if f >> 24 == c else ('call', f), a
+
+def runs(items):
+    """[(clave, frame, draw)] -> tramos seguidos con la misma clave: (clave, (f0, d0), (f1, d1), n)."""
+    out = []
+    for k, f, d in items:
+        if out and out[-1][0] == k:
+            out[-1][2], out[-1][3] = (f, d), out[-1][3] + 1
+        else:
+            out.append([k, (f, d), (f, d), 1])
+    return out
+
+def rng(a, b):
+    return 'f%d #%d' % a if a == b else 'f%d #%d - f%d #%d' % (a + b) if a[0] != b[0] else 'f%d #%d-%d' % (a[0], a[1], b[1])
+
+def linaje(dump):
+    """Quien escribe cada fb y quien lo lee como textura (tambien de un frame anterior), y
+    viewports/scissors que no tienen la escala que corresponde a su destino."""
+    fbs, writes, reads, bad, r = {}, {}, [], {}, Regs()
+    def owner(tex):
+        t = 0x0A000000 | (tex & 0x3fffff) if (tex & 0x0f000000) in (0x04000000, 0x0A000000) else tex
+        for a, (p, fmt) in fbs.items():
+            if a <= t < a + p * (4 if fmt == 3 else 2) * 272:
+                return a
+        return None
+    for fi, e in frames(dump):
+        if e[0] == 'cmd':
+            r.cmd(e)
+        elif e[0] == 'fb':
+            fbs.setdefault(e[1], (e[2], e[3]))
+        elif e[0] == 'draw':
+            dr = e[1]
+            writes.setdefault(dr['fb'], []).append((fi, dr['idx'], dest(dr)))
+            if dr['tex'] and owner(dr['tex']) is not None:
+                reads.append((fi, dr, owner(dr['tex'])))
+            if dr['flags'] & 3 or dr['omit']:
+                continue  # 2D (viewport no se usa), ignorado u omitido
+            want = 2 if not dr['flags'] & 12 else 1 if dr['flags'] & 8 else dr['scale']
+            for c in ('VIEWPORTXSCALE', 'VIEWPORTYSCALE'):
+                o, f = r.orig.get(C(c)), r.fin.get(C(c))
+                if o is None or isinstance(f, tuple) or not fbf(o):
+                    continue
+                k = fbf(f) / fbf(o)
+                if abs(k - want) > 0.01:
+                    bad.setdefault((dr['fb'], dest(dr), c, round(k, 2), want), []).append((fi, dr['idx']))
+    nf = max([w[0] for v in writes.values() for w in v] + [0]) + 1
+    print('%s: %d frame(s)' % (os.path.basename(dump.path), nf))
+    print('fb escritos (destino: tramos de draws):')
+    for a, w in sorted(writes.items()):
+        segs = runs([(d, f, i) for f, i, d in w])
+        print('  %08x: %s' % (a, '; '.join('%s %s' % (k, rng(x, y)) for k, x, y, n in segs[:6]) + (' ...' if len(segs) > 6 else '')))
+    print('texturas que son fb (quien lee <- quien lo escribio antes):')
+    items = []
+    for fi, dr, src in reads:
+        prev = [w for w in writes.get(src, []) if (w[0], w[1]) < (fi, dr['idx'])]
+        last = '%s en f%d #%d' % (prev[-1][2], prev[-1][0], prev[-1][1]) if prev else 'no se escribe antes en el volcado (viene de otro frame)'
+        items.append(((dr['fb'], dest(dr), src, TEXMODE.get(dr['texmode'], dr['texmode']), dr['omit'] != 0, last.split(' en ')[0]), fi, dr['idx'], last))
+    for (fb, d, src, tm, om, _), a, b, n in runs([(k, f, i) for k, f, i, l in items]):
+        last = next(l for k, f, i, l in items if (f, i) == b)
+        print('  %s fb %08x (%s) lee fb %08x [%s%s] x%d <- ultimo: %s' % (rng(a, b), fb, d, src, tm, ', omitido' if om else '', n, last))
+    if bad:
+        print('VIEWPORT CON ESCALA INESPERADA (draws 3D):')
+        for (fb, d, c, k, want), l in sorted(bad.items()):
+            print('  fb %08x (%s) %s x%g (esperado x%d): %d draws, p.ej. f%d #%d' % (fb, d, c, k, want, len(l), l[0][0], l[0][1]))
+    else:
+        print('viewports: todos con la escala de su destino')
+
+DIFF_REGS = ['VIEWPORTXSCALE', 'VIEWPORTYSCALE', 'VIEWPORTXCENTER', 'VIEWPORTYCENTER', 'OFFSETX', 'OFFSETY',
+             'SCISSOR1', 'SCISSOR2', 'REGION1', 'REGION2', 'FRAMEBUFPTR', 'FRAMEBUFWIDTH', 'FRAMEBUFPIXFORMAT',
+             'ZBUFPTR', 'ZBUFWIDTH', 'TEXADDR0', 'TEXBUFWIDTH0', 'TEXSIZE0', 'TEXFORMAT', 'VERTEXTYPE']
+
+def fmtreg(c, v):
+    if isinstance(v, tuple):
+        return 'CALL %06x' % (v[1] & 0xffffff)
+    if c.startswith('VIEWPORT'):
+        return '%g' % fbf(v)
+    return '%06x' % v
+
+def regdiff(dump, pas=None):
+    """Por cada tramo de draws: los registros criticos que el plugin cambio (juego -> GE). Con un
+    volcado pasivo del mismo punto, ademas los draws donde el juego mismo mando otra cosa."""
+    r, items, cut = Regs(), [], set()
+    for fi, e in frames(dump):
+        if e[0] == 'cmd':
+            r.cmd(e)
+        elif e[0] == 'draw':
+            dr = e[1]
+            ch = tuple((c, fmtreg(c, r.orig[C(c)]), fmtreg(c, r.fin[C(c)])) for c in DIFF_REGS
+                       if C(c) in r.orig and r.orig[C(c)] != r.fin[C(c)])
+            prim = e[3]
+            call = prim and prim[2] >> 24 == 0x0A
+            rep = ('draw -> CALL (recorte de triangulos 3D)' if call and dr['texmode'] in (0, 2, 3, 4) and not dr['flags'] & 1 else
+                   'draw -> CALL (%s)' % TEXMODE.get(dr['texmode'], dr['texmode']) if call else 'draw omitido' if dr['omit'] else '')
+            if rep.startswith('draw -> CALL (recorte'):
+                cut.add((fi, dr['idx'])); rep = ''
+            items.append(((dr['fb'], dest(dr), ch, rep), fi, dr['idx']))
+    print('%s: registros que el plugin cambio (juego -> GE), por tramos de draws' % os.path.basename(dump.path))
+    print('(cada linea muestra solo lo que cambia respecto de la anterior; = igual que antes)')
+    prev = {}
+    for (fb, d, ch, rep), a, b, n in runs(items):
+        cur = {c: (x, y) for c, x, y in ch}
+        delta = ['%s %s->%s' % (c, x, y) for c, (x, y) in cur.items() if prev.get(c) != (x, y)]
+        delta += ['%s sin parche' % c for c in prev if c not in cur]
+        prev = cur
+        nc = sum(1 for k in cut if a <= k <= b)
+        rep = rep or ('%d con recorte de triangulos 3D' % nc if nc else '')
+        print('  %s fb %08x (%s) x%d: %s%s' % (rng(a, b), fb, d, n, ', '.join(delta) or '=', ' | ' + rep if rep else ''))
+    if pas is None:
+        return
+    def state(dm):
+        rr, out = Regs(), []
+        for e in walk(dm):
+            if e[0] == 'cmd':
+                rr.cmd(e)
+            elif e[0] == 'draw':
+                out.append(tuple(rr.orig.get(C(c)) for c in DIFF_REGS))
+        return out
+    a, b = signatures(pas), signatures(dump)
+    sa, sb = state(pas), state(dump)
+    sm = difflib.SequenceMatcher(None, [x[0] for x in a], [x[0] for x in b], autojunk=False)
+    diffs = []
+    for op, i1, i2, j1, j2 in sm.get_opcodes():
+        if op == 'equal':
+            for k in range(i2 - i1):
+                d = tuple(c for c, x, y in zip(DIFF_REGS, sa[i1 + k], sb[j1 + k]) if x is not None and y is not None and
+                          (x & 0x3fffff if c in ('TEXADDR0', 'FRAMEBUFPTR', 'ZBUFPTR') else x) != (y & 0x3fffff if c in ('TEXADDR0', 'FRAMEBUFPTR', 'ZBUFPTR') else y)
+                          and c not in ('TEXBUFWIDTH0',))
+                if d:
+                    diffs.append((d, 0, b[j1 + k][1]['idx']))
+    print('juego pasivo vs activo (mismos draws, el juego mando otros valores): %s' % ('ninguno' if not diffs else ''))
+    for d, x, y, n in runs(diffs)[:40]:
+        print('  activo #%d-#%d x%d: %s' % (x[1], y[1], n, ', '.join(d)))
+
+Z_SAVE = 0x0AF60000
+def vram(dump):
+    """Mapa de la VRAM falsa (fb, texturas, copias) con choques, y cuando el plugin guardo o
+    restauro la VRAM del z-buffer (rt1) respecto de los draws que usan profundidad."""
+    fbs, tex, dst, zev, ztest, r = {}, {}, set(), [], [], Regs()
+    for fi, e in frames(dump):
+        if e[0] == 'cmd':
+            r.cmd(e)
+        elif e[0] == 'fb':
+            fbs.setdefault(e[1], (e[2], e[3]))
+        elif e[0] == 'draw':
+            dr = e[1]
+            last = (fi, dr['idx'])
+            if dr['tex'] and (dr['tex'] & 0x0f000000) in (0x04000000, 0x0A000000):
+                sz = r.orig.get(C('TEXSIZE0'), 0); fmt = r.orig.get(C('TEXFORMAT'), 0) & 0xf
+                bw = r.orig.get(C('TEXBUFWIDTH0'), 0) & 0x7ff
+                bpp = {0: 2, 1: 2, 2: 2, 3: 4, 4: .5, 5: 1, 6: 2, 7: 4}.get(fmt, 2)
+                t = 0x0A000000 | (dr['tex'] & 0x3fffff)
+                tex.setdefault(t, int(max(bw, 1) * (1 << ((sz >> 8) & 0xf)) * bpp))
+            if not dr['flags'] & 14 and not dr['omit'] and (r.orig.get(C('ZTESTENABLE'), 0) & 1):
+                ztest.append(last)
+        elif e[0] == 'txlist':
+            w = e[2]
+            for k in range(len(w) - 1):
+                if w[k] >> 24 == C('TRANSFERDST') and (w[k] & 0xffffff) == Z_SAVE & 0xffffff:
+                    zev.append(('guarda el z', fi, last if 'last' in dir() else (fi, 0)))
+                if w[k] >> 24 == C('TRANSFERSRC') and (w[k] & 0xffffff) == Z_SAVE & 0xffffff:
+                    zev.append(('restaura el z', fi, last if 'last' in dir() else (fi, 0)))
+    for c in copies(dump):
+        dst.add(c['dst'])
+    print('%s: mapa de la VRAM falsa (0x0A000000)' % os.path.basename(dump.path))
+    areas = [(a, a + p * (4 if f == 3 else 2) * 272, 'fb ancho %d fmt %d' % (p, f)) for a, (p, f) in fbs.items()]
+    areas += [(a, a + n, 'textura') for a, n in tex.items()]
+    areas.sort()
+    for a, b, k in areas:
+        hit = [x for x in areas if x[2].startswith('fb') and k == 'textura' and x[0] < b and a < x[1] and x[0] != a]
+        if k.startswith('fb') or hit:
+            print('  %08x-%08x %-22s%s' % (a, b, k, ' CHOCA con ' + ', '.join('%s %08x' % (x[2], x[0]) for x in hit) if hit else ''))
+    print('  (%d texturas en la VRAM falsa%s)' % (len(tex), ', %d destinos de copias' % len(dst) if dst else ''))
+    if not zev:
+        print('z-buffer: el plugin no guardo ni restauro la VRAM del z en este volcado')
+        return
+    print('z-buffer (rt1): guardado/restauracion de la VRAM del z, despues del draw indicado')
+    for what, fi, at in zev:
+        print('  %-14s despues de f%d #%d' % (what, at[0], at[1]))
+    print('draws al buffer grande con prueba de profundidad: %d (%s)' % (len(ztest), rng(ztest[0], ztest[-1]) if ztest else '-'))
+
+
 def main(a):
-    if len(a) < 2 or a[0] not in ('resumen', 'informe', 'imagenes', 'ppsspp', 'comparar', 'original'):
+    if len(a) < 2 or a[0] not in ('resumen', 'informe', 'imagenes', 'ppsspp', 'comparar', 'original', 'linaje', 'diff', 'vram'):
         print(__doc__); return 1
     if a[0] == 'resumen': resumen(Dump(a[1]))
     elif a[0] == 'informe': informe(Dump(a[1]))
@@ -775,6 +1002,9 @@ def main(a):
         show = tuple(int(v, 16) if i == 0 else int(v) for i, v in enumerate(opt['--mostrar'].split(','))) if '--mostrar' in opt else None
         ppsspp(Dump(a[1]), a[2], '--plugin' in a, int(opt['--hasta']) if '--hasta' in opt else None, show)
     elif a[0] == 'comparar': comparar(Dump(a[1]), Dump(a[2]), a[3])
+    elif a[0] == 'linaje': linaje(Dump(a[1]))
+    elif a[0] == 'diff': regdiff(Dump(a[1]), Dump(a[2]) if len(a) > 2 else None)
+    elif a[0] == 'vram': vram(Dump(a[1]))
     elif a[0] == 'original':
         opt = dict(x.split('=', 1) for x in a[3:] if '=' in x)
         return original(Dump(a[1]), a[2], opt.get('--ppsspp', os.environ.get('PPSSPP_HEADLESS', 'PPSSPPHeadless')))
