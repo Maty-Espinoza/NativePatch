@@ -52,7 +52,6 @@ static struct {
   u32 patch_us, patch_max, cmds;                   // costo del plugin por frame
   u32 upscale_us, fb_copies, cpu_overlays;         // escalado por CPU (videos), copias del frame al fb del juego, dibujos de la CPU pegados
   u32 walked, calls, lookups, v2d, v2d_skip, vevict, call_cmds, tx_ge, tx_screen, vram_fix;
-  u32 sub_draws, sub_tris, sub_near;               // triangulos 3D subdivididos (sub.h)
   u32 wc_hits, wc_miss, wc_cmds, wc_summed;                   // sublistas sin cambios que no se recorrieron
   u32 wc_why[8];                                   // por que no se guardaron (ver W_*) // recorrido: frames medidos, CALLs, busquedas en memo, vertices 2D
   u32 long_frame_logged;
@@ -817,7 +816,10 @@ static u32 *emitDownscale(u32 *l, int fmt) {
 // original (la VRAM falsa queda igual) y ademas dibuja la imagen al doble en el buffer
 // grande, en el mismo lugar de la lista. Luego deja el estado del GE como estaba.
 // Las 8 palabras de la copia (sceGuCopyImage) se reescriben como BASE + CALL + NOPs.
-#define TX_RING (RENDER_LIST + 0x8000) // 64 listas de 1 KB
+// 512 listas de 1 KB (hasta 0x0A888000). El GE va hasta un par de frames detras del recorrido: con
+// 64 y el recorte 3D (~40 listas por frame) se reusaba una lista que el GE aun no ejecutaba (cielo negro)
+#define TX_N 512
+#define TX_RING (RENDER_LIST + 0x8000)
 #define TX_SLOT 1024
 
 // Buffer temporal de 512x272 a 32 bpp para la copia reducida del frame, las copias escaladas y
@@ -854,7 +856,7 @@ static int txIsReg(u32 op) {
 // (direcciones, saltos), porque se ejecutara con el BASE del plugin. Devuelve la palabra.
 static u32 *txIsCopy(u32 *list, int temp) {
   int k;
-  if (passive || ((u32)list >= TX_RING && (u32)list < TX_RING + 64 * TX_SLOT) || (temp && (!copyVram() || state.cur_rt == &rt1)))
+  if (passive || ((u32)list >= TX_RING && (u32)list < TX_RING + TX_N * TX_SLOT) || (temp && (!copyVram() || state.cur_rt == &rt1)))
     return NULL;
   for (k = 1; k <= 8 && validAddr((u32)(list - k)); k++) {
     u32 c = origOp(list - k) >> 24;
@@ -901,7 +903,7 @@ static u32 *txEmitOrig(u32 *l, u32 start) {
 // Una lista del ring alcanzable con CALL desde la lista del juego (con su OFFSETADDR), o 0
 static u32 txSlot(void) {
   static int slot;
-  u32 sl = TX_RING + (slot++ & 63) * TX_SLOT;
+  u32 sl = TX_RING + (slot++ % TX_N) * TX_SLOT;
   return (FAKE_VRAM | ((sl - state.offset) & 0xffffff)) + state.offset == sl ? sl : 0;
 }
 
@@ -1409,7 +1411,6 @@ static int rt1FromBig(u32 *list, u32 op, u32 count) {
   return 1;
 }
 
-#include "sub.h"
 
 static int txUpscale(u32 *list, u32 dst, u32 w, u32 h, int bpp) {
   u32 k, *reg;
@@ -1729,23 +1730,16 @@ void patchGeList(u32 *list, u32 *stall) {
       cap_hist[cmd]++;
 
     switch (cmd) {
-      // Datos de matriz (12-16 seguidos por objeto 3D): se guardan para el recorte de
-      // triangulos (sub.h) y se saltan los comandos iguales seguidos sin pasar por todo el ciclo
-      case GE_CMD_WORLDMATRIXNUMBER:
-      case GE_CMD_VIEWMATRIXNUMBER:
-      case GE_CMD_PROJMATRIXNUMBER:
-        mtxCmd(cmd, data); // matrices para la subdivision de triangulos (sub.h)
-        break;
+      // Datos de matriz (12-16 seguidos por objeto 3D): el plugin no los toca, se saltan
+      // los iguales seguidos sin pasar por todo el ciclo
       case GE_CMD_BONEMATRIXDATA:
       case GE_CMD_WORLDMATRIXDATA:
       case GE_CMD_VIEWMATRIXDATA:
       case GE_CMD_PROJMATRIXDATA:
       case GE_CMD_TGENMATRIXDATA:
-        mtxCmd(cmd, data);
         while (!dumping && list + 1 < lim && list + 1 != stall && (list[1] >> 24) == cmd && ncmds < MAX_CMDS) {
           list++;
           ncmds++;
-          mtxCmd(cmd, *list & 0xffffff); // datos distintos del mismo comando
           if (capturing)
             cap_hist[cmd]++;
         }
@@ -1780,7 +1774,7 @@ void patchGeList(u32 *list, u32 *stall) {
       // TODO: need to save other states, too?
       case GE_CMD_CALL:
         state.address = ((state.base | data) + state.offset) & 0x0ffffffc;
-        if (state.address >= TX_RING && state.address < TX_RING + 64 * TX_SLOT)
+        if (state.address >= TX_RING && state.address < TX_RING + TX_N * TX_SLOT)
           break; // lista del plugin (copia escalada): no se recorre
         if (!validAddr(state.address) || !validAddr(state.address + 12 * 4)) {
           LOG_ONCE_CAP((state.address >> 12) ^ 0xD1000000, "CALL a direccion invalida %08lx, se ignora\n", state.address);
@@ -1851,8 +1845,9 @@ void patchGeList(u32 *list, u32 *stall) {
             u32 target;
 
             switch (behaviour) {
-              case PSP_GE_SIGNAL_SYNC:
-                list += 2;
+              case PSP_GE_SIGNAL_SYNC: // tras la sincronizacion el GE sigue: el FINISH+END que viene no termina la lista
+                if ((list[1] >> 24) == GE_CMD_FINISH && (list[2] >> 24) == GE_CMD_END)
+                  list += 2; // v0.2 saltaba 2 palabras siempre, aunque fueran comandos del juego
                 break;
 
               case PSP_GE_SIGNAL_JUMP:
@@ -2101,15 +2096,6 @@ void patchGeList(u32 *list, u32 *stall) {
         int indexed = (state.vertex_type & GE_VTYPE_IDX_MASK) != GE_VTYPE_IDX_NONE;
         if ((state.vertex_type & GE_VTYPE_THROUGH_MASK) != GE_VTYPE_THROUGH ||
             !validAddr(state.vertex_addr) || (indexed && !validAddr(state.index_addr))) {
-          // 3D en el buffer grande: triangulos que al doble se salen del rango del GE
-          if (opt.sub && !passive && !state.cur_rt && cmd == GE_CMD_PRIM && texmode <= 4 &&
-              (state.vertex_type & GE_VTYPE_THROUGH_MASK) != GE_VTYPE_THROUGH) {
-            int r = subDraw(list, op, count);
-            if (r) {
-              DIRTY(W_OMIT); // depende de la camara: hay que verlo cada frame
-              st.sub_near++;
-            }
-          }
           AdvanceVerts(count, vertex_size);
           break;
         }
@@ -2917,8 +2903,6 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
           st.walked, st.frames, st.calls / w, st.call_cmds / w, st.lookups / w);
       LOG("stats 2d: vert2d=%lu ya2d=%lu choques2d=%lu | copias escaladas con GE=%lu desde_pantalla=%lu vram_real_corregida=%lu\n",
           st.v2d, st.v2d_skip, st.vevict, st.tx_ge, st.tx_screen, st.vram_fix);
-      LOG("stats 3d: draws_cerca_del_borde/frame=%lu subdivididos/frame=%lu triangulos_nuevos/frame=%lu\n",
-          st.sub_near / w, st.sub_draws / w, st.sub_tris / w);
       LOG("stats sublistas sin cambios: saltadas/frame=%lu cambiadas/frame=%lu comandos_no_recorridos/frame=%lu sumados/frame=%lu\n",
           st.wc_hits / w, st.wc_miss / w, st.wc_cmds / w, st.wc_summed / w);
       LOG("stats sublistas no guardadas/frame: parches=%lu 2d=%lu omitidos_o_rt=%lu saltos=%lu anidadas=%lu copias=%lu offset=%lu\n",

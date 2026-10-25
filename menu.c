@@ -15,7 +15,7 @@
 
 // Valores originales (por defecto). El menu marca los que se cambiaron para probar.
 const Options opt_default = { .omit_fbtex = 1, .fallback = 0, .v2d = 1, .tx_ge = 1, .walk_cache = 1, .vram_fix = 1,
-                              .autocap = 1, .cpu_draw = 1, .swap = 1, .rt1 = 1, .sub = 1 };
+                              .autocap = 1, .cpu_draw = 1, .swap = 1, .rt1 = 1 };
 Options opt = opt_default;
 u32 opt_gen;
 
@@ -50,9 +50,8 @@ static const Item items[] = {
   { "cpu", "Dibujos de la CPU en pantalla", &opt.cpu_draw, 0, 1, 1, no_si },
   { "intercambio", "Fb intermedios por intercambio", &opt.swap, 0, 1, 1, no_si },
   { "rt_esc1", "Render targets a escala 1 (VRAM del z)", &opt.rt1, 0, 1, 1, no_si },
-  { "recorte3d", "Recortar triangulos 3D grandes", &opt.sub, 0, 1, 1, no_si },
   { NULL, "Capturar el proximo frame al log", NULL, 0, 0, 0, NULL, ACT_CAPTURE },
-  { NULL, "Volcar los proximos 3 frames (.gpd)", NULL, 0, 0, 0, NULL, ACT_DUMP },
+  { NULL, "Volcar el proximo frame (.gpd)", NULL, 0, 0, 0, NULL, ACT_DUMP },
   { NULL, "Memoria y CPU al log", NULL, 0, 0, 0, NULL, ACT_SNAPSHOT },
   { NULL, "Restaurar valores originales", NULL, 0, 0, 0, NULL, ACT_RESTORE },
   { NULL, "Guardar opciones para este juego", NULL, 0, 0, 0, NULL, ACT_SAVE },

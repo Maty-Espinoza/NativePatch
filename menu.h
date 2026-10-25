@@ -19,7 +19,6 @@ typedef struct {
   int cpu_draw;   // lo que la CPU dibuja directo en el fb mostrado (spinner de SH) se pega encima
   int swap;       // pase que se mezcla con la pantalla: se dibuja en el buffer grande guardando la escena en la RAM
   int rt1;        // render targets a escala 1 en la VRAM del z-buffer, copiados a la VRAM falsa al terminar
-  int sub;        // triangulos 3D que al doble se salen del rango del GE (0..4096): se recortan (sub.h)
 } Options;
 
 extern Options opt;

@@ -5,7 +5,7 @@ CFLAGS = -m32 -fPIE -pie -O1 -g -Wall -Wno-unused-function -Wno-unused-variable 
 test: test_main
 	./test_main
 
-test_main: test_main.c stubs.c ../sub.h ../main.c ../log.c ../log.h ../ge_constants.h ../menu.c ../menu.h ../dump.c ../dump.h
+test_main: test_main.c stubs.c ../main.c ../log.c ../log.h ../ge_constants.h ../menu.c ../menu.h ../dump.c ../dump.h
 	$(CC) $(CFLAGS) -o $@ test_main.c stubs.c ../log.c ../menu.c ../dump.c
 
 # Benchmark: tiempo de patchGeList con una lista tipo Gran Turismo (para comparar versiones)

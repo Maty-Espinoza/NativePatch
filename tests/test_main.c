@@ -28,7 +28,6 @@ static int logHas(const char *s) { logFlush(); return strstr(test_log, s) != NUL
 // Estado limpio entre tests (como al iniciar un juego)
 static void reset(void) {
   memset(&state, 0, sizeof(state));
-  memset(&mtx, 0, sizeof(mtx)); sub_out = 0;
   memset(memo, 0, MEMO_SIZE * sizeof(MemoEntry));
   memset(vmemo, 0, VMEMO_SIZE * sizeof(VMemo));
   depth_vram = 0x04100000; rt1_pending = z_used = tx_small = 0; ge_fbs = 0;
@@ -515,9 +514,9 @@ static void test_sublistas_sin_cambios(void) {
 // Opciones por juego: archivo clave=valor; valores fuera de rango o claves raras se ignoran
 static void test_opciones_juego(void) {
   reset();
-  int n = menuParse("tex_fb=0\nsublistas=0\r\ndx=480\nrecorte3d=9\nnada=1\n");
-  CHECK(n == 3 && opt.omit_fbtex == 0 && opt.walk_cache == 0 && opt.dx == 480 && opt.sub == 1,
-        "menuParse: n=%d tex_fb=%d sublistas=%d dx=%d recorte3d=%d", n, opt.omit_fbtex, opt.walk_cache, opt.dx, opt.sub);
+  int n = menuParse("tex_fb=0\nsublistas=0\r\ndx=480\ndy=999\nnada=1\n");
+  CHECK(n == 3 && opt.omit_fbtex == 0 && opt.walk_cache == 0 && opt.dx == 480 && opt.dy == 0,
+        "menuParse: n=%d tex_fb=%d sublistas=%d dx=%d dy=%d", n, opt.omit_fbtex, opt.walk_cache, opt.dx, opt.dy);
   opt = opt_default;
 }
 
@@ -670,7 +669,7 @@ static void test_volcado(void) {
   sceGeListEnQueuePatched((void *)LIST, NULL, 0, NULL);
   CHECK(dumping, "no empezo el volcado");
   int k;
-  for (k = 0; k < 3; k++) { // 3 frames por volcado (dev49): termina con la lista nueva tras el 3er flip
+  for (k = 0; k < 1; k++) { // un frame por volcado: termina con la lista nueva tras el flip
     sceDisplaySetFrameBufPatched((void *)0x0A0D43C0, 1024, 0, 0);
     sceGeListEnQueuePatched((void *)LIST, NULL, 0, NULL);
   }
@@ -696,10 +695,10 @@ static void test_volcado(void) {
   CHECK(count[GPD_HEADER] == 1 && !memcmp(data + 8, "GPD1", 4), "cabecera");
   CHECK(count[GPD_REGS] == 2 && count[GPD_MEM] >= 4 && count[GPD_END] == 1, "registros=%d memoria=%d fin=%d",
         count[GPD_REGS], count[GPD_MEM], count[GPD_END]);
-  CHECK(count[GPD_DRAW] == 6 && blobs >= 4 && ncmd >= 20, "draws=%d datos=%d comandos=%d", count[GPD_DRAW], blobs, ncmd);
-  CHECK(count[GPD_FLIP] == 3 && count[GPD_FB] >= 1 && count[GPD_TXLIST] == 3 && count[GPD_EVENT] >= 1,
+  CHECK(count[GPD_DRAW] == 2 && blobs >= 4 && ncmd >= 20, "draws=%d datos=%d comandos=%d", count[GPD_DRAW], blobs, ncmd);
+  CHECK(count[GPD_FLIP] == 1 && count[GPD_FB] >= 1 && count[GPD_TXLIST] == 1 && count[GPD_EVENT] >= 1,
         "flip=%d fb=%d lista del plugin=%d eventos=%d", count[GPD_FLIP], count[GPD_FB], count[GPD_TXLIST], count[GPD_EVENT]);
-  CHECK(count[GPD_SNAP] >= 4, "instantaneas=%d (antes de la copia y reducida, por frame; 4 MB de espacio)", count[GPD_SNAP]);
+  CHECK(count[GPD_SNAP] == 2, "instantaneas=%d (antes de la copia y reducida)", count[GPD_SNAP]);
   rename(getenv("GPD_OUT") ? getenv("GPD_OUT") : "volcado_test.gpd", "volcado_activo.gpd");
   capturing = 0;
 }
@@ -732,7 +731,7 @@ static void test_volcado_pasivo(void) {
   dumpRequest();
   sceGeListEnQueuePatched((void *)LIST, NULL, 0, NULL);
   int k;
-  for (k = 0; k < 3; k++) {
+  for (k = 0; k < 1; k++) {
     sceDisplaySetFrameBufPatched((void *)0x04000000, 512, 0, 0);
     sceGeListEnQueuePatched((void *)LIST, NULL, 0, NULL);
   }
@@ -952,62 +951,13 @@ static void test_pantalla_se_lee(void) {
   CHECK(v[1].x == 480 && v[1].y == 272, "los vertices del juego quedaron en %g,%g (esperaba el doble: 480,272)", v[1].x, v[1].y);
 }
 
-// Ridge Racer: un triangulo 3D que a 480x272 cabe en el rango del GE (0..4096) pero al doble
-// no (el GE lo descartaria entero: el camino bajo el auto desaparecia). Se subdivide y todos
-// los vertices nuevos quedan dentro del rango al doble
-static void test_recorte(void) {
-  reset();
-  struct { float x, y, z; } *v = (void *)VERTS;
-  v[0].x = -6; v[0].y = -0.5f; v[0].z = 0;   // x a 1x: 2048 - 6*240 = 608 (dentro); al doble: -832 (fuera)
-  v[1].x = 0.5f; v[1].y = 0.5f; v[1].z = 0;
-  v[2].x = 0.5f; v[2].y = -0.5f; v[2].z = 0;
-  v[3] = v[1]; v[4] = v[2]; v[5].x = 0.4f; v[5].y = 0.4f; v[5].z = 0; // otro chico: no hace falta
-  begin();
-  setFb(0, 512);
-  cmd(GE_CMD_OFFSETX, 1808 << 4); cmd(GE_CMD_OFFSETY, 1912 << 4);
-  cmd(GE_CMD_VIEWPORTXSCALE, f24(240)); cmd(GE_CMD_VIEWPORTYSCALE, f24(-136));
-  cmd(GE_CMD_VIEWPORTXCENTER, f24(2048)); cmd(GE_CMD_VIEWPORTYCENTER, f24(2048));
-  static const float id43[12] = { 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0 }, id44[16] = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };
-  int k;
-  cmd(GE_CMD_WORLDMATRIXNUMBER, 0); for (k = 0; k < 12; k++) cmd(GE_CMD_WORLDMATRIXDATA, f24(id43[k]));
-  cmd(GE_CMD_VIEWMATRIXNUMBER, 0); for (k = 0; k < 12; k++) cmd(GE_CMD_VIEWMATRIXDATA, f24(id43[k]));
-  cmd(GE_CMD_PROJMATRIXNUMBER, 0); for (k = 0; k < 16; k++) cmd(GE_CMD_PROJMATRIXDATA, f24(id44[k]));
-  cmd(GE_CMD_BASE, 0x080000);
-  cmd(GE_CMD_VERTEXTYPE, GE_VTYPE_POS_FLOAT);
-  cmd(GE_CMD_VADDR, VERTS & 0xffffff);
-  u32 *pr = cmd(GE_CMD_PRIM, (GE_PRIM_TRIANGLES << 16) | 6);
-  u32 *after = cmd(GE_CMD_PRIM, (GE_PRIM_TRIANGLES << 16) | 3); // sigue con los vertices de despues
-  end();
-  run();
-  u32 n = 0, bad = 0, vaddr = 0, *l;
-  if ((*pr >> 24) == GE_CMD_CALL)
-    for (l = (u32 *)(0x0A000000 | (*pr & 0xffffff)), k = 0; k < 40 && (l[k] >> 24) != GE_CMD_RET; k++) {
-      if ((l[k] >> 24) == GE_CMD_VADDR) vaddr = 0x08000000 | (l[k] & 0xffffff) | (vaddr & 0x0f000000 ? 0 : 0);
-      if ((l[k] >> 24) == GE_CMD_PRIM) {
-        float *o = (float *)(0x0A000000 | (l[k - 1] & 0xffffff));
-        u32 m = l[k] & 0xffff, i;
-        n += m;
-        for (i = 0; i < m; i++) {
-          float x2 = o[3 * i] * 480 + 2048;
-          bad += x2 < 0 || x2 >= 4096;
-          if (i % 3 == 2) { // mismo sentido de giro que el original (area con signo)
-            float *a = o + 3 * (i - 2), *b = a + 3, *c = b + 3;
-            bad += ((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])) > 0;
-          }
-        }
-      }
-    }
-  CHECK((*pr >> 24) == GE_CMD_CALL && n > 3 && n % 3 == 0 && !bad, "recorte: draw %08lx, %lu vertices nuevos, %lu fuera del rango", *pr, n, bad);
-  CHECK(st.sub_draws == 1 && *after == ((GE_CMD_PRIM << 24) | (GE_PRIM_TRIANGLES << 16) | 3), "recorte: %lu draws recortados, el siguiente %08lx", st.sub_draws, *after);
-}
-
 int main(void) {
   mapPspMemory();
   void (*tests[])(void) = {
     test_viewport_scissor_x2, test_viewport_zona, test_memo_lista_grande, test_vertices_2d,
     test_vaddr_avanza_tras_3d, test_bjump_no_salta, test_estado_entre_listas, test_textura_fb_al_dibujar,
     test_pitch_0,
-    test_robustez, test_copia_listas_alternas, test_fps, test_doble_buffer_alternado, test_nop_no_revive, test_lista_estatica_fb, test_pasivo_no_escribe, test_pasivo_normaliza, test_desplazamiento_y_1024, test_vertices_2d_muchos_buffers, test_pasivo_muestreo, test_copia_escalada_con_ge, test_sublistas_sin_cambios, test_sublistas_anidadas, test_sublistas_doble_buffer, test_vram_real, test_copia_formulario, test_opciones_juego, test_volcado, test_volcado_pasivo, test_vram_2mb, test_pase_intercambio, test_rt_escala1_z, test_pantalla_se_lee, test_recorte, test_menu,
+    test_robustez, test_copia_listas_alternas, test_fps, test_doble_buffer_alternado, test_nop_no_revive, test_lista_estatica_fb, test_pasivo_no_escribe, test_pasivo_normaliza, test_desplazamiento_y_1024, test_vertices_2d_muchos_buffers, test_pasivo_muestreo, test_copia_escalada_con_ge, test_sublistas_sin_cambios, test_sublistas_anidadas, test_sublistas_doble_buffer, test_vram_real, test_copia_formulario, test_opciones_juego, test_volcado, test_volcado_pasivo, test_vram_2mb, test_pase_intercambio, test_rt_escala1_z, test_pantalla_se_lee, test_menu,
   };
   int i;
   for (i = 0; i < (int)(sizeof(tests) / sizeof(tests[0])); i++)

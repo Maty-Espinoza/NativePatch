@@ -1,4 +1,4 @@
-// Volcado binario de 3 frames seguidos (ver dump.h). Se arma en un buffer en la RAM libre del plugin
+// Volcado binario de un frame (ver dump.h). Se arma en un buffer en la RAM libre del plugin
 // y se escribe a la tarjeta cuando se llena: durante el volcado el juego va lento (es puntual).
 #include <pspkernel.h>
 #include <pspsdk.h>
@@ -11,9 +11,8 @@
 #define DUMP_BUF  0x0A980000 // 512 KB libres despues de la imagen del menu
 #define DUMP_SIZE 0x80000
 #define DUMP_MAX  (80 << 20) // con mas que esto ya no se guardan datos de draws (solo comandos)
-// Frames seguidos por volcado: lo que un frame dibuja en un render target (retrovisor, sombras,
-// mapas de entorno) muchas veces se usa recien en el siguiente; con uno solo no se veia de donde venia
-#define DUMP_FRAMES 3
+// Frames por volcado (dev49 grababa 3; se volvio a 1: menos memoria y tiempo con el juego detenido)
+#define DUMP_FRAMES 1
 
 int dumping;
 DumpInfo dump_info;
@@ -22,7 +21,7 @@ static u8 *buf = (u8 *)(DUMP_BUF | 0x40000000);
 static u32 len, total, ncmds, cmds_at = ~0u; // cmds_at: registro CMDS abierto en buf (o ~0)
 static u32 dst[32][2], ndst, tex[512][3], ntex;
 #define SNAP_BASE 0x0AA00000 // 5 MB libres
-#define SNAP_END  0x0AE00000 // (despues: subdivision de triangulos, sub.h)
+#define SNAP_END  0x0AF00000 // (despues: ceros para cpuOverlay en main.c)
 static struct { u32 addr, w, h, bpp, fmt, frame; char what[24]; } snap[16];
 static u32 nsnap, snap_next;
 static char path[48];

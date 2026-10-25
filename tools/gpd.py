@@ -556,6 +556,9 @@ def ppsspp(dump, out, plugin=False, upto=None, show=None):
     vram = dump.mem_at(1, 0x0A000000, 0x200000) if fake else dump.mem_at(0, 0x04000000, 0x200000)
     if vram:  # VRAM al empezar (lo que ya estaba dibujado): MEMCPYDEST + MEMCPYDATA
         emit(7, struct.pack('<I', 0x04000000)); emit(8, vram, 1)
+    fv = dump.mem_at(1, 0x0A000000, 0x200000) if plugin else None
+    if fv:  # con el plugin las texturas del juego siguen en la VRAM falsa (RAM)
+        emit(7, struct.pack('<I', 0x0A000000)); emit(8, fv, 1)
     regs, texdata, clut_cache, clut_sent = {}, {}, {}, False
     for e in walk(dump):
         if e[0] == 'cmd' and not e[4]:
