@@ -7,6 +7,7 @@
 #include <sys/mman.h>
 #include <unistd.h>
 #include "psp_stub.h"
+#include "pspsysmem_kernel.h"
 
 // --- Log: lo que el plugin escribe a ms0:/ge_patch.log queda aqui para revisarlo
 char test_log[1 << 20];
@@ -79,3 +80,7 @@ void mapPspMemory(void) {
     }
   }
 }
+// Particiones (zoneCheck) y TEXSYNC de las listas propias
+int sceKernelQueryMemoryPartitionInfo(int pid, PspSysmemPartitionInfo *info) { info->startaddr = 0x08800000; info->memsize = 24 << 20; return 0; }
+int sceKernelAllocPartitionMemory(int pid, const char *name, int type, unsigned int size, void *addr) { return 0x1234; }
+void sceGuTexSync(void) {}

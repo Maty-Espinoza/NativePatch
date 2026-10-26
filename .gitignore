@@ -10,3 +10,7 @@ EBOOT.PBP
 __pycache__/
 *.o_stub
 tools/geptest/escena/kcap/kcap.S
+*.velf
+*.suprx
+tools/gepresent/o/
+tools/vprobe/vita/o/

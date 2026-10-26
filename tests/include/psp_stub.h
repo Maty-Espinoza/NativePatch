@@ -53,5 +53,6 @@ int sceCtrlPeekBufferPositive(SceCtrlData *pad, int count);
 unsigned int FindProc(const char *mod, const char *lib, unsigned int nid);
 void sctrlHENPatchSyscall(unsigned int addr, void *newaddr);
 int sceGuFinish(void);
+void sceGuTexSync(void);
 void sceGuCopyImage(int psm, int sx, int sy, int width, int height, int srcw, void *src, int dx, int dy, int destw, void *dest);
 #endif

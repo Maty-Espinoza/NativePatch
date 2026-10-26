@@ -951,13 +951,34 @@ static void test_pantalla_se_lee(void) {
   CHECK(v[1].x == 480 && v[1].y == 272, "los vertices del juego quedaron en %g,%g (esperaba el doble: 480,272)", v[1].x, v[1].y);
 }
 
+// Presentacion (gepresent): sin respuesta, siempre la imagen unica; con respuesta, se alterna entre las dos y
+// cada lista de copia publica la suya en el descriptor. Un video con gepresent se publica tal cual (sin CPU).
+static void test_presentacion(void) {
+  reset();
+  _sceGeListEnQueue = fakeEnqueue;
+  _sceDisplaySetFrameBuf = fakeSetFrameBuf;
+  volatile u32 *blk = (u32 *)(PRES_BLK | 0x40000000);
+  pres[1] = 0; pres_ack = 0; pres_on = 0; pres_fail = 0; pres_copies = 0; log_frame = 1000;
+  presCheck(); copyFrameBuffer(0); copyFrameBuffer(0);
+  CHECK(blk[0] == DISPLAY_BUFFER && blk[16] == DISPLAY_BUFFER, "sin gepresent: %08x %08x", blk[0], blk[16]);
+  pres[1] = 0x4B000001; presCheck();
+  CHECK(pres_on && logHas("gepresent responde"), "no detecto la respuesta");
+  copyFrameBuffer(0); copyFrameBuffer(0);
+  CHECK(blk[0] != blk[16] && (blk[0] == DISPLAY_BUFFER2 || blk[16] == DISPLAY_BUFFER2) && blk[1] == WIDTH && blk[2] == HEIGHT,
+        "doble buffer: %08x %08x", blk[0], blk[16]);
+  presSource(0x0A088000, 480, 272, 512, 3);
+  CHECK(blk[32] == 0x0A088000 && blk[35] == (512 | (3 << 16)), "video: %08x %08x", blk[32], blk[35]);
+  log_frame += 200; presCheck(); // gepresent dejo de responder
+  CHECK(!pres_on, "sigue en doble buffer sin respuesta");
+}
+
 int main(void) {
   mapPspMemory();
   void (*tests[])(void) = {
     test_viewport_scissor_x2, test_viewport_zona, test_memo_lista_grande, test_vertices_2d,
     test_vaddr_avanza_tras_3d, test_bjump_no_salta, test_estado_entre_listas, test_textura_fb_al_dibujar,
     test_pitch_0,
-    test_robustez, test_copia_listas_alternas, test_fps, test_doble_buffer_alternado, test_nop_no_revive, test_lista_estatica_fb, test_pasivo_no_escribe, test_pasivo_normaliza, test_desplazamiento_y_1024, test_vertices_2d_muchos_buffers, test_pasivo_muestreo, test_copia_escalada_con_ge, test_sublistas_sin_cambios, test_sublistas_anidadas, test_sublistas_doble_buffer, test_vram_real, test_copia_formulario, test_opciones_juego, test_volcado, test_volcado_pasivo, test_vram_2mb, test_pase_intercambio, test_rt_escala1_z, test_pantalla_se_lee, test_menu,
+    test_robustez, test_copia_listas_alternas, test_fps, test_doble_buffer_alternado, test_nop_no_revive, test_lista_estatica_fb, test_pasivo_no_escribe, test_pasivo_normaliza, test_desplazamiento_y_1024, test_vertices_2d_muchos_buffers, test_pasivo_muestreo, test_copia_escalada_con_ge, test_sublistas_sin_cambios, test_sublistas_anidadas, test_sublistas_doble_buffer, test_vram_real, test_copia_formulario, test_opciones_juego, test_volcado, test_volcado_pasivo, test_vram_2mb, test_pase_intercambio, test_rt_escala1_z, test_pantalla_se_lee, test_menu, test_presentacion,
   };
   int i;
   for (i = 0; i < (int)(sizeof(tests) / sizeof(tests[0])); i++)

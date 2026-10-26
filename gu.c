@@ -24,6 +24,11 @@ void sceGuCopyImage(int psm, int sx, int sy, int width, int height, int srcw, vo
   sendCommandi(234,(psm ^ 0x03) ? 0 : 1);
 }
 
+void sceGuTexSync(void)
+{
+  sendCommandi(204,0);
+}
+
 int sceGuFinish(void)
 {
   sendCommandi(15,0);

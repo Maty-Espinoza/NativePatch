@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include <pspsysmem_kernel.h>
 #include <systemctrl.h>
 
 #include "ge_constants.h"
@@ -26,7 +27,18 @@ PSP_MODULE_INFO("GePatch", 0x1007, 1, 0);
 
 #define FAKE_VRAM 0x0A000000
 #define DISPLAY_BUFFER 0x0A400000
+#define DISPLAY_BUFFER2 0x0AE00000 // segunda imagen nativa (doble buffer con gepresent)
 #define RENDER_LIST 0x0A800000
+
+// Presentacion con gepresent.suprx (plugin de la Vita, tools/gepresent): Adrenaline dibuja la imagen nativa
+// como textura de la GPU de la Vita; gepresent cambia esa textura por la que dice este descriptor, la escala a la
+// pantalla y responde. Sin gepresent Adrenaline sigue leyendo DISPLAY_BUFFER a 960x544, como siempre.
+//   +0x00 "GPV1" (GePatch)   +0x04 'K' + contador (gepresent, en cada frame que dibuja la imagen nativa)
+//   +0x10 imagen a mostrar: direccion, ancho, alto, ancho de linea | formato << 16. La escribe el GE con una
+//         copia de 16 bytes al final de cada lista de copia: queda publicada cuando la imagen ya esta completa.
+#define PRES_DESC 0x0A7FF000
+#define PRES_BLK (RENDER_LIST + 0x4000) // bloques que el GE copia al descriptor (64 bytes por lista)
+#define PRES_LIST (RENDER_LIST + 0x2000) // lista que solo publica un fb del juego (videos, ver presSource)
 
 // El buffer grande va en 0x000000, igual que el primer buffer de casi todos los juegos.
 // (En dev12 se movio a 0x40 para distinguirlo y Gran Turismo dio pantalla negra en
@@ -64,7 +76,8 @@ static u32 patch_us_frame; // costo del plugin en el frame en curso
 #define NOP_MARK ((GE_CMD_NOP << 24) | 0x0D1E07)
 #define NOP_OMIT NOP_MARK
 
-// Modo pasivo (L al iniciar): el mismo recorrido de listas y los mismos logs, pero sin
+// Modo pasivo (SELECT al iniciar, o el juego ocupa la zona del plugin; en Adrenaline 8 L desactiva todos los
+// plugins): el mismo recorrido de listas y los mismos logs, pero sin
 // escribir nada; el juego corre como en una PSP normal. Sirve de referencia para comparar.
 static int passive;
 
@@ -2487,9 +2500,45 @@ void guStart(int cid, void *list); // gu.c
 #define OVL_MAX 96
 static struct { int x, y, w, h; } ovl;
 
+static volatile u32 *pres = (u32 *)(PRES_DESC | 0x40000000);
+static int pres_on;              // gepresent responde: doble buffer y la Vita escala la imagen
+static u32 pres_ack, pres_ack_frame, pres_copies, pres_fail;
+static void presCheck(void) {
+  // Adrenaline 8 limpia la zona 0x0A000000 al cargar el juego, despues de cargar los plugins: la marca escrita en
+  // module_start se perdia y gepresent nunca veia un descriptor valido (dev54.1). Se repone en cada flip.
+  if (pres[0] != 0x31565047)
+    pres[0] = 0x31565047;
+  u32 a = pres[1];
+  if ((a >> 24) == 'K' && a != pres_ack) {
+    pres_ack = a;
+    pres_ack_frame = log_frame;
+  }
+  // Si el GE nunca llega a publicar la segunda imagen (la copia de 16 bytes al descriptor no funciona), la Vita
+  // mostraria solo una de cada dos: se vuelve a la imagen unica
+  if (pres_on && !pres_fail && pres[4] != DISPLAY_BUFFER2 && ++pres_copies > 120) {
+    pres_fail = 1;
+    LOG("presentacion: el GE no publica la segunda imagen en el descriptor (%08lx) -> imagen unica\n", pres[4]);
+  }
+  if (pres[4] == DISPLAY_BUFFER2)
+    pres_copies = 0;
+  int on = pres_ack && log_frame - pres_ack_frame < 120 && !pres_fail;
+  if (on != pres_on) {
+    pres_on = on;
+    LOG("presentacion: %s\n", on ? "gepresent responde -> doble buffer, la Vita escala la imagen" : "sin gepresent -> imagen unica en 0x0A400000");
+  }
+}
+// Al final de la lista: espera la copia anterior y publica la imagen en el descriptor (ver PRES_DESC)
+static void presEmit(int slot, u32 addr, u32 w, u32 h, u32 stride, u32 fmt) {
+  u32 b = PRES_BLK + slot * 64, *v = (u32 *)(b | 0x40000000);
+  v[0] = addr & 0x0fffffff; v[1] = w; v[2] = h; v[3] = stride | (fmt << 16);
+  sceGuTexSync();
+  sceGuCopyImage(GE_FORMAT_8888, 0, 0, 4, 1, 64, (void *)b, 0, 0, 64, (void *)(PRES_DESC + 0x10));
+}
+
 void copyFrameBuffer(int menu) {
   static int which;
-  u32 rl = RENDER_LIST + (which ^= 1) * 0x1000;
+  which ^= 1;
+  u32 rl = RENDER_LIST + which * 0x1000, dst = pres_on && which ? DISPLAY_BUFFER2 : DISPLAY_BUFFER;
   *(u32 *)DRAW_NATIVE = 1;
 
   guStart(0, (void *)(rl | 0xA0000000));
@@ -2497,15 +2546,24 @@ void copyFrameBuffer(int menu) {
   // despues, Adrenaline a veces mostraba la imagen entre las dos copias (menu parpadeando)
   if (menu)
     sceGuCopyImage(PIXELFORMAT, 0, 0, MENU_W, MENU_H, MENU_W, (void *)MENU_BUF, MENU_X, MENU_Y, PITCH, (void *)VRAM_DRAW_BUFFER_OFFSET);
-  sceGuCopyImage(PIXELFORMAT, 0, 0, WIDTH, HEIGHT, PITCH,
-                 (void *)VRAM_DRAW_BUFFER_OFFSET,
-                 0, 0, PITCH, (void *)DISPLAY_BUFFER);
+  sceGuCopyImage(PIXELFORMAT, 0, 0, WIDTH, HEIGHT, PITCH, (void *)VRAM_DRAW_BUFFER_OFFSET, 0, 0, PITCH, (void *)dst);
   if (ovl.w) { // lo que dibujo la CPU (ver cpuOverlay), encima de la imagen final
-    sceGuCopyImage(PIXELFORMAT, 0, 0, ovl.w * 2, ovl.h * 2, ovl.w * 2, (void *)OVL_BUF, ovl.x * 2, ovl.y * 2, PITCH, (void *)DISPLAY_BUFFER);
+    sceGuCopyImage(PIXELFORMAT, 0, 0, ovl.w * 2, ovl.h * 2, ovl.w * 2, (void *)OVL_BUF, ovl.x * 2, ovl.y * 2, PITCH, (void *)dst);
     ovl.w = 0;
   }
+  presEmit(which, dst, WIDTH, HEIGHT, PITCH, PIXELFORMAT);
   sceGuFinish();
   _sceGeListEnQueue((void *)rl, NULL, -1, NULL);
+}
+
+// Frame que no paso por el GE (video, imagen de la CPU) con gepresent: se muestra el fb del juego tal cual y
+// la Vita lo escala. Reemplaza al escalado por CPU (upscaleGameBuffer, ~10 ms por frame).
+static void presSource(u32 src, u32 w, u32 h, int stride, int fmt) {
+  *(u32 *)DRAW_NATIVE = 1;
+  guStart(0, (void *)(PRES_LIST | 0xA0000000));
+  presEmit(2, src, w, h, stride, fmt);
+  sceGuFinish();
+  _sceGeListEnQueue((void *)PRES_LIST, NULL, -1, NULL);
 }
 
 int sceGeListUpdateStallAddrPatched(int qid, void *stall) {
@@ -2843,12 +2901,23 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
     int stale = want && opt.fallback != 1 && !big_transfer && fbStale(src);
     if (stale)
       LOG_ONCE_CAP(0xE5100000 ^ src, "frame sin la pantalla en el GE: %08lx en la VRAM falsa es de un frame anterior -> se repite la imagen\n", src);
+    presCheck();
+    int menu = menu_shown = menuFrame(), shown = 0;
     if (want && !stale && hasContent(src, sw, sf)) {
-      LOG_ONCE(0xE5000000 ^ src, "imagen original escalada desde %08lx ancho=%d fmt=%d (video/imagen fuera del GE)\n", src, sw, sf);
-      u32 t0 = sceKernelGetSystemTimeLow();
-      upscaleGameBuffer(src, sw, sf);
-      st.upscale_us += sceKernelGetSystemTimeLow() - t0;
+      LOG_ONCE(0xE5000000 ^ src, "imagen original escalada desde %08lx ancho=%d fmt=%d (video/imagen fuera del GE)%s\n", src, sw, sf,
+               pres_on && !menu && (src & 0x0fffffff) >= FAKE_VRAM && (src & 0x0fffffff) < DISPLAY_BUFFER ? " por la Vita" : "");
       st.fallback++;
+      u32 s0 = src & 0x0fffffff; // la GPU de la Vita solo lee la VRAM falsa (la que registra gepresent)
+      if (pres_on && !menu && s0 >= FAKE_VRAM && s0 + sw * 272 * (sf == 3 ? 4 : 2) <= DISPLAY_BUFFER) { // escalado por la Vita
+        presSource(src, 480, 272, sw, sf);
+        shown = 1;
+      } else {
+        u32 t0 = sceKernelGetSystemTimeLow();
+        upscaleGameBuffer(src, sw, sf);
+        st.upscale_us += sceKernelGetSystemTimeLow() - t0;
+        if (pres_on) // la imagen unica: el descriptor puede apuntar a la otra
+          presSource(DISPLAY_BUFFER, WIDTH, HEIGHT, PITCH, PIXELFORMAT);
+      }
       draw = (u16 *)DISPLAY_BUFFER;
     } else
       draw = (u16 *)VRAM_DRAW_BUFFER_OFFSET;
@@ -2860,8 +2929,7 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
       LOG_ONCE(0xB2000000 ^ disp, "fb mostrado %08lx de %d: se pega encima lo que dibuje la CPU (spinner)\n", disp, bufferwidth);
       cpuOverlay(disp, bufferwidth, pixelformat, dfb);
     }
-    int menu = menu_shown = menuFrame();
-    if (menu && draw == (u16 *)DISPLAY_BUFFER) { // imagen escalada por CPU: el menu se pone igual
+    if (menu && draw == (u16 *)DISPLAY_BUFFER && !shown) { // imagen escalada por CPU: el menu se pone igual
       int y;
       for (y = 0; y < MENU_H; y++)
         memcpy(draw + (MENU_Y + y) * PITCH + MENU_X, (u16 *)MENU_BUF + y * MENU_W, MENU_W * 2);
@@ -2936,6 +3004,23 @@ static void dumpSetup(void) {
   dump_info.shadow = state.ge_cmd; dump_info.passive = &passive; dump_info.state = dumpState;
 }
 
+// Adrenaline 8 da al juego (MEMSIZE en el SFO, memoria alta, homebrew de 40 MB) memoria que llega a la zona del
+// plugin, y crea ahi la particion 11, donde carga los plugins de usuario. Si el juego llega a 0x0A000000 el
+// plugin no puede funcionar (1). Si no, se reserva la zona en la particion 11 para que nadie mas la use.
+static int zoneCheck(void) {
+  PspSysmemPartitionInfo pi;
+  pi.size = sizeof(pi);
+  int r = sceKernelQueryMemoryPartitionInfo(2, &pi);
+  u32 fin = r < 0 ? 0 : (pi.startaddr & 0x0fffffff) + pi.memsize;
+  LOG("particion del juego: %08x-%08lx (%u KB) [%08x]\n", pi.startaddr, fin, r < 0 ? 0 : pi.memsize >> 10, r);
+  if (fin > FAKE_VRAM)
+    return 1;
+  SceUID id = sceKernelAllocPartitionMemory(11, "GePatch", PSP_SMEM_Addr, 0x01000000, (void *)FAKE_VRAM);
+  LOG("reserva de 0x0A000000-0x0B000000 en la particion 11: %08x%s\n", id,
+      id >= 0 ? "" : " (Adrenaline 7, o algo ya esta ahi: un plugin de usuario cargado en la particion 11)");
+  return 0;
+}
+
 int module_start(SceSize args, void *argp) {
   SceCtrlData pad;
   // Bateria de pruebas del GE (tools/geptest): sin parches, el GE tal cual
@@ -2945,13 +3030,17 @@ int module_start(SceSize args, void *argp) {
       return 1;
   dumpSetup();
   sceCtrlPeekBufferPositive(&pad, 1);
-  // L al iniciar: modo pasivo (antes desactivaba el plugin del todo y no habia log)
-  passive = !!(pad.Buttons & PSP_CTRL_LTRIGGER);
+  // SELECT al iniciar: modo pasivo. (Era L, pero en Adrenaline 8 mantener L desactiva todos los plugins.)
+  passive = !!(pad.Buttons & (PSP_CTRL_SELECT | PSP_CTRL_LTRIGGER));
 
   logInit(pad.Buttons & PSP_CTRL_RTRIGGER);
   LOG("compilado con %s\n", BUILD_OPT);
   if (passive)
-    LOG("modo PASIVO (L): el juego corre sin cambios; se mide y registra igual para comparar\n");
+    LOG("modo PASIVO (SELECT): el juego corre sin cambios; se mide y registra igual para comparar\n");
+  if (zoneCheck() && !passive) {
+    passive = 1;
+    LOG("AVISO: el juego usa la zona del plugin (0x0A000000-0x0B000000) -> modo PASIVO\n");
+  }
 
   _sceGeEdramGetAddr = (void *)FindProc("sceGE_Manager", "sceGe_driver", 0xE47E40E4);
   _sceGeEdramGetSize = (void *)FindProc("sceGE_Manager", "sceGe_driver", 0x1F6752AD);
@@ -2972,6 +3061,10 @@ int module_start(SceSize args, void *argp) {
   sctrlHENPatchSyscall((u32)_sceGeListEnQueue, sceGeListEnQueuePatched);
   sctrlHENPatchSyscall((u32)_sceGeListEnQueueHead, sceGeListEnQueueHeadPatched);
 
+  if (!passive) { // descriptor de la presentacion: la imagen unica hasta que gepresent responda
+    pres[0] = 0x31565047; pres[1] = 0; // "GPV1"
+    pres[4] = DISPLAY_BUFFER; pres[5] = WIDTH; pres[6] = HEIGHT; pres[7] = PITCH | (PIXELFORMAT << 16);
+  }
   memset(memo, 0, MEMO_SIZE * sizeof(MemoEntry));
   memset(vmemo, 0, VMEMO_SIZE * sizeof(VMemo));
   memset(wc, 0, WC_SIZE * sizeof(WalkCache));

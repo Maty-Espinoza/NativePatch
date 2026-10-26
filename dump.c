@@ -21,7 +21,7 @@ static u8 *buf = (u8 *)(DUMP_BUF | 0x40000000);
 static u32 len, total, ncmds, cmds_at = ~0u; // cmds_at: registro CMDS abierto en buf (o ~0)
 static u32 dst[32][2], ndst, tex[512][3], ntex;
 #define SNAP_BASE 0x0AA00000 // 5 MB libres
-#define SNAP_END  0x0AF00000 // (despues: ceros para cpuOverlay en main.c)
+#define SNAP_END  0x0AE00000 // (despues: segunda imagen nativa de la presentacion en main.c)
 static struct { u32 addr, w, h, bpp, fmt, frame; char what[24]; } snap[16];
 static u32 nsnap, snap_next;
 static char path[48];
