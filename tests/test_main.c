@@ -40,6 +40,7 @@ static void reset(void) {
   opt = opt_default;
   opt.autocap = 0; cap_request = 0; capturing = 0; // las capturas automaticas cambian el recorrido
   passive = 0; walk_now = 1;
+  bigSetup(2); scale_done = 1; vram_own = 0; vram_free = 0; // escala 2 salvo que el test la cambie
   big_transfer = 0; vram_hi = 0; copy_vram = 0; tx_patched_any = 0;
   memset(wc, 0, WC_SIZE * sizeof(WalkCache)); memset(recs, 0, sizeof(recs)); nrec = 0;
   swap_fb = -1; swap_on = swap_done = swap_flips = 0;
@@ -972,13 +973,52 @@ static void test_presentacion(void) {
   CHECK(!pres_on, "sigue en doble buffer sin respuesta");
 }
 
+// Etapa 2: buffer grande a 1,5x (720x408). Viewport, scissor y offsets a 1,5x, vertices 2D, z justo despues del
+// buffer grande, buffer temporal en VRAM propia y la imagen publicada para gepresent de 720x408.
+static void test_escala_15(void) {
+  reset();
+  bigSetup(1.5f);
+  CHECK(BW == 720 && BH == 408 && BP == 720 && VRAM_DEPTH_BUFFER_OFFSET == 0x04090000, "buffer %dx%d linea %d z %08x", BW, BH, BP, VRAM_DEPTH_BUFFER_OFFSET);
+  begin();
+  u32 *ox = cmd(GE_CMD_OFFSETX, (2048 - 240) << 4), *oy = cmd(GE_CMD_OFFSETY, (2048 - 136) << 4);
+  u32 *xs = cmd(GE_CMD_VIEWPORTXSCALE, f24(240)), *ys = cmd(GE_CMD_VIEWPORTYSCALE, f24(-136));
+  u32 *xc = cmd(GE_CMD_VIEWPORTXCENTER, f24(2048)), *yc = cmd(GE_CMD_VIEWPORTYCENTER, f24(2048));
+  u32 *s1 = cmd(GE_CMD_SCISSOR1, (10 << 10) | 11), *s2 = cmd(GE_CMD_SCISSOR2, (271 << 10) | 479);
+  short *v = (short *)VERTS;
+  v[0] = v[1] = v[2] = 0; v[3] = 64; v[4] = 33; v[5] = 0; v[6] = 480; v[7] = 272; v[8] = 0; v[9] = 0; v[10] = 0; v[11] = 0;
+  cmd(GE_CMD_BASE, 0x080000); cmd(GE_CMD_VERTEXTYPE, GE_VTYPE_THROUGH | GE_VTYPE_POS_16BIT);
+  cmd(GE_CMD_VADDR, VERTS & 0xffffff); cmd(GE_CMD_PRIM, (GE_PRIM_RECTANGLES << 16) | 4);
+  end();
+  run(); run();
+  CHECK(((*ox & 0xffff) >> 4) == 2048 - 360 && ((*oy & 0xffff) >> 4) == 2048 - 204, "offset %lu %lu", (*ox & 0xffff) >> 4, (*oy & 0xffff) >> 4);
+  CHECK(fcmd(xs) == 360 && fcmd(ys) == -204 && fcmd(xc) == 2048 && fcmd(yc) == 2048, "viewport %f %f %f %f", fcmd(xs), fcmd(ys), fcmd(xc), fcmd(yc));
+  CHECK((*s1 & 0x3ff) == 16 && ((*s1 >> 10) & 0x3ff) == 15, "scissor1 %06lx", *s1 & 0xffffff);
+  CHECK((*s2 & 0x3ff) == 719 && ((*s2 >> 10) & 0x3ff) == 407, "scissor2 %06lx", *s2 & 0xffffff);
+  CHECK(v[3] == 96 && v[4] == 50 && v[6] == 720 && v[7] == 408, "vertices 2D %d,%d %d,%d", v[3], v[4], v[6], v[7]);
+  // Una X de 408 (dentro de la pantalla) no es el borde inferior (408 = BH a 1,5x): va a 612
+  short *w = (short *)(VERTS + 0x200);
+  w[0] = 396; w[1] = 100; w[2] = 0; w[3] = 408; w[4] = 120; w[5] = 0;
+  begin(); cmd(GE_CMD_BASE, 0x080000); cmd(GE_CMD_VERTEXTYPE, GE_VTYPE_THROUGH | GE_VTYPE_POS_16BIT);
+  cmd(GE_CMD_VADDR, (VERTS + 0x200) & 0xffffff); cmd(GE_CMD_PRIM, (GE_PRIM_RECTANGLES << 16) | 2); end(); run();
+  CHECK(w[0] == 594 && w[3] == 612 && w[1] == 150 && w[4] == 180, "x = 408 a 1,5x: %d..%d, y %d..%d", w[0], w[3], w[1], w[4]);
+  copy_vram = 0; copyVram();
+  CHECK(vram_own && copy_vram == 0x04120000, "buffer temporal %08x (propio %d)", copy_vram, vram_own);
+  _sceGeListEnQueue = fakeEnqueue;
+  volatile u32 *blk = (u32 *)(PRES_BLK | 0x40000000);
+  pres_on = 1; pres_fail = 0; copyFrameBuffer(0);
+  int k = blk[1] == 720 ? 0 : 16;
+  CHECK(blk[k + 1] == 720 && blk[k + 2] == 408 && (blk[k + 3] & 0xffff) == 720, "imagen publicada %ux%u linea %u", blk[k + 1], blk[k + 2], blk[k + 3] & 0xffff);
+  pres_on = 0;
+  bigSetup(2);
+}
+
 int main(void) {
   mapPspMemory();
   void (*tests[])(void) = {
     test_viewport_scissor_x2, test_viewport_zona, test_memo_lista_grande, test_vertices_2d,
     test_vaddr_avanza_tras_3d, test_bjump_no_salta, test_estado_entre_listas, test_textura_fb_al_dibujar,
     test_pitch_0,
-    test_robustez, test_copia_listas_alternas, test_fps, test_doble_buffer_alternado, test_nop_no_revive, test_lista_estatica_fb, test_pasivo_no_escribe, test_pasivo_normaliza, test_desplazamiento_y_1024, test_vertices_2d_muchos_buffers, test_pasivo_muestreo, test_copia_escalada_con_ge, test_sublistas_sin_cambios, test_sublistas_anidadas, test_sublistas_doble_buffer, test_vram_real, test_copia_formulario, test_opciones_juego, test_volcado, test_volcado_pasivo, test_vram_2mb, test_pase_intercambio, test_rt_escala1_z, test_pantalla_se_lee, test_menu, test_presentacion,
+    test_robustez, test_copia_listas_alternas, test_fps, test_doble_buffer_alternado, test_nop_no_revive, test_lista_estatica_fb, test_pasivo_no_escribe, test_pasivo_normaliza, test_desplazamiento_y_1024, test_vertices_2d_muchos_buffers, test_pasivo_muestreo, test_copia_escalada_con_ge, test_sublistas_sin_cambios, test_sublistas_anidadas, test_sublistas_doble_buffer, test_vram_real, test_copia_formulario, test_opciones_juego, test_volcado, test_volcado_pasivo, test_vram_2mb, test_pase_intercambio, test_rt_escala1_z, test_pantalla_se_lee, test_menu, test_presentacion, test_escala_15,
   };
   int i;
   for (i = 0; i < (int)(sizeof(tests) / sizeof(tests[0])); i++)

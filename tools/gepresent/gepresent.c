@@ -19,12 +19,15 @@
 // (0x0A000000, 4 MB) y el segundo buffer (0x0AE00000, 1 MB) y no acepta imagenes fuera de esas zonas. Cambiar el
 // formato con SetFormat falla (0x805B0009): la textura se rehace con sceGxmTextureInitLinear.
 // Descriptor (RAM del PSP 0x0A7FF000, ver PRES_DESC en main.c):
-//   +0 "GPV1" (GePatch)  +4 'K' + contador (lo escribe este plugin)  +0x10 dir, ancho, alto, linea | formato << 16
+//   +0 "GPV1" (GePatch)  +4 'K' + contador (lo escribe este plugin)  +8 "PRES" (este plugin, en cuanto ve la
+//   marca: GePatch lo espera antes del primer recorrido para elegir una escala < 2)  +0x10 dir, ancho, alto,
+//   linea | formato << 16
 // Log: ux0:pspemu/ge_patch_gepresent.log
 #include <psp2/kernel/modulemgr.h>
 #include <psp2/kernel/threadmgr.h>
 #include <psp2/kernel/clib.h>
 #include <psp2/kernel/processmgr.h>
+#include <psp2/kernel/sysmem.h>
 #include <psp2/io/fcntl.h>
 #include <psp2/io/stat.h>
 #include <psp2/gxm.h>
@@ -132,12 +135,25 @@ static int hookThread(SceSize args, void *argp) {
     if (hk_w < 0 || hk_h < 0) sceKernelDelayThread(100000);
   }
   alog("ganchos (importaciones de AdrenalineUser) GetWidth %08x GetHeight %08x\n", r_w, r_h);
-  return sceKernelExitDeleteThread(0);
+  if (hk_w < 0 || hk_h < 0)
+    return sceKernelExitDeleteThread(0);
+  // La RAM del PSP se mapea en el proceso despues de cargar el plugin: leerla antes cierra Adrenaline
+  // (C2-12828-1 en v4). Se espera a que el bloque exista, como vpcdram.
+  for (;;) {  // solo escribe si GePatch dejo su marca (la zona es del XMB fuera de los juegos)
+    SceKernelMemBlockInfo in; in.size = sizeof in;
+    uint32_t a = (uint32_t)DESC;
+    if (sceKernelGetMemBlockInfoByAddr((void *)a, &in) < 0 || a < (uint32_t)in.mappedBase || a + 16 > (uint32_t)in.mappedBase + in.mappedSize) {
+      sceKernelDelayThread(100000);
+      continue;
+    }
+    if (DESC[0] == 0x31565047 && DESC[2] != 0x53455250) DESC[2] = 0x53455250;  // "PRES"
+    sceKernelDelayThread(2000);
+  }
 }
 
 void _start() __attribute__((weak, alias("module_start")));
 int module_start(SceSize args, void *argp) {
-  alog("gepresent v3 (memoria registrada para la GPU, InitLinear) compilado %s %s (dato %d)\n", __DATE__, __TIME__, dato);
+  alog("gepresent v5 (PRES esperando a que la RAM del PSP este mapeada) compilado %s %s (dato %d)\n", __DATE__, __TIME__, dato);
   SceUID th = sceKernelCreateThread("gepresent", hookThread, 0x60, 0x2000, 0, 0, NULL);
   if (th >= 0) sceKernelStartThread(th, 0, NULL);
   return SCE_KERNEL_START_SUCCESS;

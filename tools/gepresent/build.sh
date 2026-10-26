@@ -6,7 +6,7 @@
 set -e
 F="-mcpu=cortex-a9 -mthumb -mfloat-abi=hard -mfpu=neon -O2 -Wall -Wno-format -nostdlib -fno-builtin -ffreestanding"
 rm -rf o; mkdir -p o
-for f in SceLibKernel_SceLibKernel_sceIoOpen SceLibKernel_SceLibKernel_sceIoGetstat SceIofilemgr_SceIofilemgr_sceIoWrite SceIofilemgr_SceIofilemgr_sceIoClose \
+for f in SceLibKernel_SceLibKernel_sceIoOpen SceLibKernel_SceLibKernel_sceIoGetstat SceSysmem_SceSysmem_sceKernelGetMemBlockInfoByAddr SceIofilemgr_SceIofilemgr_sceIoWrite SceIofilemgr_SceIofilemgr_sceIoClose \
   SceLibKernel_SceLibKernel_sceClibSnprintf SceLibKernel_SceLibKernel_sceClibVsnprintf \
   SceLibKernel_SceLibKernel_sceKernelGetProcessTimeLow SceLibKernel_SceLibKernel_sceKernelCreateThread \
   SceLibKernel_SceLibKernel_sceKernelStartThread SceKernelThreadMgr_SceThreadmgr_sceKernelDelayThread \

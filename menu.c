@@ -34,6 +34,8 @@ static const char *const no_si[] = { "no", "si" };
 static const char *const fb_modes[] = { "auto", "siempre", "nunca" };
 static const char *const fbtex_modes[] = { "leer memoria", "omitir" };
 static const char *const every_modes[] = { "1 frame", "2 frames", "4 frames", "8 frames" };
+static const char *const escalas[] = { "2x (960x544)", "1,8x (864x490)", "1,6x (768x436)", "1,5x (720x408)", "1,4x (672x382)",
+                                       "1,2x (576x328)" };
 
 static const Item items[] = {
   { "tex_fb", "Texturas desde framebuffer", &opt.omit_fbtex, 0, 1, 1, fbtex_modes },
@@ -50,6 +52,7 @@ static const Item items[] = {
   { "cpu", "Dibujos de la CPU en pantalla", &opt.cpu_draw, 0, 1, 1, no_si },
   { "intercambio", "Fb intermedios por intercambio", &opt.swap, 0, 1, 1, no_si },
   { "rt_esc1", "Render targets a escala 1 (VRAM del z)", &opt.rt1, 0, 1, 1, no_si },
+  { "escala", "Escala (al abrir el juego; <2x: gepresent)", &opt.escala, 0, 5, 1, escalas },
   { NULL, "Capturar el proximo frame al log", NULL, 0, 0, 0, NULL, ACT_CAPTURE },
   { NULL, "Volcar el proximo frame (.gpd)", NULL, 0, 0, 0, NULL, ACT_DUMP },
   { NULL, "Memoria y CPU al log", NULL, 0, 0, 0, NULL, ACT_SNAPSHOT },
