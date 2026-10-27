@@ -87,5 +87,24 @@ int main(void) {
   double cached = timeRun(40);
   memset(&st, 0, sizeof(st)); run();
   printf(", saltando las que no cambian %.0f us (x%.1f; %lu de 1500 saltadas)\n", cached, best / cached, st.wc_hits);
+  // Tipo Silent Hill (dev56.3): lista plana con mucho estado (luces, materiales) entre draws
+  reset();
+  begin();
+  cmd(GE_CMD_BASE, 0x080000);
+  setFb(0x000000, 512);
+  for (i = 0; i < 950; i++) {
+    static const u8 st_cmds[] = { GE_CMD_LIGHTINGENABLE, GE_CMD_MATERIALAMBIENT, GE_CMD_AMBIENTCOLOR, GE_CMD_MATERIALEMISSIVE,
+      GE_CMD_AMBIENTALPHA, GE_CMD_LIGHTENABLE0, GE_CMD_LIGHTENABLE1, GE_CMD_LIGHTENABLE2, GE_CMD_LIGHTENABLE3, GE_CMD_MATERIALALPHA };
+    for (j = 0; j < (int)sizeof(st_cmds); j++) cmd(st_cmds[j], i & 1);
+    cmd(GE_CMD_BASE, 0x080000);
+    cmd(GE_CMD_VERTEXTYPE, GE_VTYPE_POS_16BIT | GE_VTYPE_TC_16BIT | GE_VTYPE_IDX_16BIT);
+    cmd(GE_CMD_VADDR, (VERTS + (i & 0x3ff) * 16) & 0xffffff);
+    cmd(GE_CMD_IADDR, (VERTS + 0x8000) & 0xffffff);
+    cmd(GE_CMD_PRIM, (GE_PRIM_TRIANGLES << 16) | 3);
+  }
+  end();
+  n = lp - (u32 *)LIST;
+  best = timeRun(40);
+  printf("tipo SH: %ld comandos, %.0f us por frame en este PC (%.1f ns por comando)\n", n, best, best * 1000 / n);
   return 0;
 }

@@ -22,7 +22,12 @@
 //   +0 "GPV1" (GePatch)  +4 'K' + contador (lo escribe este plugin)  +8 "PRES" (este plugin, en cuanto ve la
 //   marca: GePatch lo espera antes del primer recorrido para elegir una escala < 2)  +0x10 dir, ancho, alto,
 //   linea | formato << 16
+//   +0x20 "LOGV" (v6, este plugin): atiende los buzones del log y de los volcados (ver serveLog/serveDump)
 // Log: ux0:pspemu/ge_patch_gepresent.log
+//
+// v6 (plan A, paso 1): la Vita escribe el log de GePatch y sus volcados. GePatch deja el texto o un pedazo del
+// volcado en su RAM y un pedido en el descriptor; este plugin lo escribe en ux0:pspemu/ y lo marca hecho. El PSP no
+// espera cada escritura a la tarjeta (en un volcado eran ~30 escrituras de 512 KB con el juego detenido).
 #include <psp2/kernel/modulemgr.h>
 #include <psp2/kernel/threadmgr.h>
 #include <psp2/kernel/clib.h>
@@ -41,7 +46,7 @@
 
 static int nlog;
 static void alog(const char *fmt, ...) {
-  if (nlog++ > 200) return;
+  if (nlog++ > 1000) return;  // (las lineas "imagen" se cortan en 120)
   char b[256];
   va_list ap; va_start(ap, fmt);
   int n = sceClibSnprintf(b, 16, "%7u ", sceKernelGetProcessTimeLow() / 1000);
@@ -58,6 +63,141 @@ static SceGxmTextureFormat fmt0;             // como la creo Adrenaline, para vo
 static SceGxmTextureFilter min0, mag0;
 static uint32_t cur[4], out_w = 960, out_h = 544, ack;
 static volatile int dato __attribute__((aligned(64))) = 1;  // .data no vacia (segmento RW valido)
+
+// --- Buzones de GePatch (log.h): seq lo sube el PSP, done lo iguala este plugin al terminar ---
+#define LOGV 0x56474F4Cu
+#define VLOG 16
+#define VDUMP 24
+static SceUID dump_fd = -1;
+static uint32_t nlogs, ndumps;
+
+// v8: el volcado se copia a la RAM de la Vita (anillo de hasta 24 MB) y el pedido se marca hecho en seguida; otro hilo
+// lo escribe a la tarjeta despues (la tarjeta escribe ~4 MB/s: en v7 el PSP esperaba ~3,4 s por volcado). Si no hay
+// memoria se escribe como en v7 (directo desde la RAM del PSP); si el anillo se llena, el PSP espera a que se vacie.
+static uint8_t *ring;
+static uint32_t ring_cap;
+static volatile uint32_t wpos, rpos, wclose;  // bytes puestos y escritos (crecen siempre); cerrar al vaciar
+static uint32_t dump_bytes, dump_wait_us, dump_t0, dump_write_us;
+static void writeFrom(SceUID fd, uint32_t a, uint32_t n) {  // directo desde la RAM del PSP (v7)
+  if (n) sceIoWrite(fd, (void *)PSP(a), n);
+}
+void *sceDmacMemcpy(void *dst, const void *src, SceSize size);
+// v9: copia por DMA desde la vista sin cache de la RAM del PSP (KBENCH: 7 ms por MB contra 35 leyendo palabra a palabra)
+static void ringPut(uint32_t a, uint32_t n) {  // espera si no hay lugar en el anillo
+  while (n) {
+    while (wpos - rpos >= ring_cap) sceKernelDelayThread(1000);
+    uint32_t at = wpos % ring_cap, k = ring_cap - at, room = ring_cap - (wpos - rpos);
+    if (k > room) k = room;
+    if (k > n) k = n;
+    sceDmacMemcpy(ring + at, (void *)PSP(a), k);
+    a += k; wpos += k; n -= k;
+  }
+}
+// v9: el log tambien va a un anillo y lo escribe el hilo escritor. En v8 cada pedazo del log se escribia a la tarjeta
+// en el hilo que atiende los pedidos (abrir, escribir, cerrar: decenas de ms), y durante una captura el log se vacia
+// muy seguido: los pedidos del volcado esperaban detras (el PSP espero 2-3,7 s aunque copiar tomaba ~0,6 s).
+static char lring[0x40000];
+static volatile uint32_t lw, lr;
+static void logPut(uint32_t a, uint32_t n) {
+  while (n) {
+    while (lw - lr >= sizeof lring) sceKernelDelayThread(1000);
+    uint32_t at = lw % sizeof lring, k = sizeof lring - at, room = sizeof lring - (lw - lr);
+    if (k > room) k = room;
+    if (k > n) k = n;
+    sceDmacMemcpy(lring + at, (void *)PSP(a), k);
+    a += k; lw += k; n -= k;
+  }
+}
+static void logFlushOut(void) {  // en el hilo escritor
+  if (lr == lw) return;
+  SceUID fd = sceIoOpen("ux0:pspemu/ge_patch.log", SCE_O_WRONLY | SCE_O_CREAT | SCE_O_APPEND, 0666);
+  while (lr != lw) {
+    uint32_t at = lr % sizeof lring, k = lw - lr;
+    if (k > sizeof lring - at) k = sizeof lring - at;
+    if (fd >= 0) sceIoWrite(fd, lring + at, k);
+    lr += k;
+  }
+  if (fd >= 0) sceIoClose(fd);
+}
+static int writerThread(SceSize args, void *argp) {  // escribe el anillo a la tarjeta
+  for (;;) {
+    logFlushOut();
+    if (dump_fd >= 0 && rpos != wpos) {
+      uint32_t at = rpos % ring_cap, k = wpos - rpos;
+      if (k > ring_cap - at) k = ring_cap - at;
+      if (k > 0x40000) k = 0x40000;
+      uint32_t t = sceKernelGetProcessTimeLow();
+      sceIoWrite(dump_fd, ring + at, k);
+      dump_write_us += sceKernelGetProcessTimeLow() - t;
+      rpos += k;
+    } else if (wclose && dump_fd >= 0 && rpos == wpos) {
+      sceIoClose(dump_fd); dump_fd = -1; wclose = 0; ndumps++;
+      alog("volcado escrito: %u KB; el PSP espero %u ms (copia a la RAM de la Vita); a la tarjeta %u ms despues de %u ms\n",
+           dump_bytes >> 10, dump_wait_us / 1000, dump_write_us / 1000, (sceKernelGetProcessTimeLow() - dump_t0) / 1000);
+    } else {
+      sceKernelDelayThread(2000);
+    }
+  }
+  return 0;
+}
+static void ringInit(void) {
+  for (uint32_t mb = 24; mb >= 8 && !ring; mb -= 8) {
+    SceUID b = sceKernelAllocMemBlock("gepresent_volcado", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, mb << 20, NULL);
+    if (b >= 0 && sceKernelGetMemBlockBase(b, (void **)&ring) >= 0) ring_cap = mb << 20;
+    else ring = NULL;
+  }
+  SceUID th = ring ? sceKernelCreateThread("gepresent_escritor", writerThread, 0xA0, 0x2000, 0, 0, NULL) : -1;
+  if (th >= 0) sceKernelStartThread(th, 0, NULL);
+  else ring = NULL;
+  alog("volcados: %s (%u MB en la RAM de la Vita)\n", ring ? "anillo + hilo escritor" : "sin memoria: escritura directa", ring_cap >> 20);
+}
+
+static void serveLog(void) {
+  uint32_t seq = DESC[VLOG];
+  if (seq == DESC[VLOG + 1]) return;
+  __sync_synchronize();
+  uint32_t n = DESC[VLOG + 2];
+  if (n > 0x4000) n = 0x4000;
+  if (ring) logPut(0x0A7FA000u, n);  // con el hilo escritor
+  else {
+    SceUID fd = sceIoOpen("ux0:pspemu/ge_patch.log", SCE_O_WRONLY | SCE_O_CREAT | SCE_O_APPEND, 0666);
+    if (fd >= 0) { writeFrom(fd, 0x0A7FA000u, n); sceIoClose(fd); }
+  }
+  if (!nlogs++) alog("log de GePatch: lo escribe la Vita (primer pedazo %u bytes)\n", n);
+  DESC[VLOG + 1] = seq;
+}
+static void serveDump(void) {
+  uint32_t seq = DESC[VDUMP];
+  if (seq == DESC[VDUMP + 1]) return;
+  __sync_synchronize();
+  uint32_t a = DESC[VDUMP + 2], n = DESC[VDUMP + 3], f = DESC[VDUMP + 4], t = sceKernelGetProcessTimeLow();
+  if (f & 1) {
+    char name[48], path[64];
+    for (int i = 0; i < 12; i++) ((uint32_t *)name)[i] = DESC[32 + i];
+    name[47] = 0;
+    for (int i = 0; name[i]; i++) if (name[i] == '/' || name[i] == ':') name[i] = '_';  // solo un nombre
+    sceClibSnprintf(path, sizeof path, "ux0:pspemu/%s", name);
+    while (ring && (dump_fd >= 0 || wclose)) sceKernelDelayThread(2000);  // el anterior termina de escribirse
+    if (dump_fd >= 0) sceIoClose(dump_fd);
+    rpos = wpos = 0;
+    dump_bytes = dump_wait_us = dump_write_us = 0; dump_t0 = t;
+    dump_fd = sceIoOpen(path, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0666);
+    alog("volcado %s: %08x\n", path, dump_fd);
+  }
+  int ok = dump_fd >= 0 && n && a >= 0x08000000u && a + n <= 0x0C000000u;
+  if (ok && ring) ringPut(a, n);
+  else if (ok) writeFrom(dump_fd, a, n);
+  dump_bytes += n;
+  dump_wait_us += sceKernelGetProcessTimeLow() - t;
+  if ((f & 2) && dump_fd >= 0) {
+    if (ring) wclose = 1;  // lo cierra el hilo escritor al vaciar el anillo
+    else {
+      sceIoClose(dump_fd); dump_fd = -1; ndumps++;
+      alog("volcado escrito: %u KB en %u ms (directo)\n", dump_bytes >> 10, (sceKernelGetProcessTimeLow() - dump_t0) / 1000);
+    }
+  }
+  DESC[VDUMP + 1] = seq;
+}
 
 static const SceGxmTextureFormat fmts[4] = {   // formatos del PSP; sin alfa (el sombreador de vita2d mezcla)
   SCE_GXM_TEXTURE_FORMAT_U5U6U5_BGR, SCE_GXM_TEXTURE_FORMAT_X1U5U5U5_1BGR,
@@ -139,21 +279,31 @@ static int hookThread(SceSize args, void *argp) {
     return sceKernelExitDeleteThread(0);
   // La RAM del PSP se mapea en el proceso despues de cargar el plugin: leerla antes cierra Adrenaline
   // (C2-12828-1 en v4). Se espera a que el bloque exista, como vpcdram.
-  for (;;) {  // solo escribe si GePatch dejo su marca (la zona es del XMB fuera de los juegos)
+  for (int mapped = 0;;) {  // solo escribe si GePatch dejo su marca (la zona es del XMB fuera de los juegos)
     SceKernelMemBlockInfo in; in.size = sizeof in;
     uint32_t a = (uint32_t)DESC;
-    if (sceKernelGetMemBlockInfoByAddr((void *)a, &in) < 0 || a < (uint32_t)in.mappedBase || a + 16 > (uint32_t)in.mappedBase + in.mappedSize) {
+    if (!mapped && (sceKernelGetMemBlockInfoByAddr((void *)a, &in) < 0 || a < (uint32_t)in.mappedBase ||
+                    a + 16 > (uint32_t)in.mappedBase + in.mappedSize)) {
       sceKernelDelayThread(100000);
       continue;
     }
-    if (DESC[0] == 0x31565047 && DESC[2] != 0x53455250) DESC[2] = 0x53455250;  // "PRES"
-    sceKernelDelayThread(2000);
+    mapped = 1;  // (v9: se comprueba una vez; la RAM del PSP queda mapeada mientras viva el proceso)
+    int busy = 0;
+    if (DESC[0] == 0x31565047) {
+      if (DESC[2] != 0x53455250) DESC[2] = 0x53455250;  // "PRES"
+      if (DESC[8] != LOGV) DESC[8] = LOGV;               // v6: log y volcados
+      busy = DESC[VLOG] != DESC[VLOG + 1] || DESC[VDUMP] != DESC[VDUMP + 1];
+      serveLog();
+      serveDump();
+    }
+    sceKernelDelayThread(busy ? 200 : 2000);  // durante una captura los pedidos llegan seguidos
   }
 }
 
 void _start() __attribute__((weak, alias("module_start")));
 int module_start(SceSize args, void *argp) {
-  alog("gepresent v5 (PRES esperando a que la RAM del PSP este mapeada) compilado %s %s (dato %d)\n", __DATE__, __TIME__, dato);
+  alog("gepresent v9 (log y volcados de GePatch a la RAM de la Vita por DMA; la tarjeta en segundo plano) compilado %s %s (dato %d)\n", __DATE__, __TIME__, dato);
+  ringInit();
   SceUID th = sceKernelCreateThread("gepresent", hookThread, 0x60, 0x2000, 0, 0, NULL);
   if (th >= 0) sceKernelStartThread(th, 0, NULL);
   return SCE_KERNEL_START_SUCCESS;

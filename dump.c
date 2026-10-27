@@ -1,5 +1,7 @@
 // Volcado binario de un frame (ver dump.h). Se arma en un buffer en la RAM libre del plugin
 // y se escribe a la tarjeta cuando se llena: durante el volcado el juego va lento (es puntual).
+// Con gepresent v6 (dev56.5) el buffer va en dos mitades: la Vita escribe una a la tarjeta mientras el PSP llena la
+// otra, y el PSP solo espera si la Vita no termino la anterior (antes el juego esperaba cada sceIoWrite).
 #include <pspkernel.h>
 #include <pspsdk.h>
 #include <string.h>
@@ -9,7 +11,7 @@
 #include "log.h"
 
 #define DUMP_BUF  0x0A980000 // 512 KB libres despues de la imagen del menu
-#define DUMP_SIZE 0x80000
+#define DUMP_SIZE 0x40000 // la mitad: con la Vita se alternan las dos
 #define DUMP_MAX  (80 << 20) // con mas que esto ya no se guardan datos de draws (solo comandos)
 // Frames por volcado (dev49 grababa 3; se volvio a 1: menos memoria y tiempo con el juego detenido)
 #define DUMP_FRAMES 1
@@ -17,6 +19,8 @@
 int dumping;
 DumpInfo dump_info;
 static int requested, flips, skipped, fd = -1;
+static int vio, vio_first, half; // la Vita escribe el archivo; el primer pedido abre; mitad del buffer en uso
+static u32 t_start;
 static u8 *buf = (u8 *)(DUMP_BUF | 0x40000000);
 static u32 len, total, ncmds, cmds_at = ~0u; // cmds_at: registro CMDS abierto en buf (o ~0)
 static u32 dst[32][2], ndst, tex[512][3], ntex;
@@ -34,12 +38,33 @@ static void closeCmds(void) {
     cmds_at = ~0u;
   }
 }
+// Pedido a gepresent: escribir esta mitad (banderas 1 abrir, 2 cerrar) y pasar a la otra
+static void vitaChunk(u32 flags) {
+  if (!vio)
+    return;
+  if (!vitaWait(VDUMP)) { // no respondio: el resto del volcado se pierde (el archivo queda corto)
+    vio = 0;
+    skipped++;
+    return;
+  }
+  VDESC[VDUMP + 2] = DUMP_BUF + half * DUMP_SIZE;
+  VDESC[VDUMP + 3] = len;
+  VDESC[VDUMP + 4] = flags | (vio_first ? 1 : 0);
+  vio_first = 0;
+  vitaPost(VDUMP);
+  half ^= 1;
+  buf = (u8 *)((DUMP_BUF + half * DUMP_SIZE) | 0x40000000);
+}
+
 static void flush(void) {
   closeCmds();
-  if (len && fd >= 0) { // se escribio sin cache: por la direccion normal, sin lineas viejas en la cache
-    sceKernelDcacheWritebackInvalidateRange((void *)DUMP_BUF, len);
+  if (vio) {
+    if (len)
+      vitaChunk(0);
+  } else if (len && fd >= 0) { // se escribio sin cache: por la direccion normal, sin lineas viejas en la cache
+    sceKernelDcacheWritebackInvalidateRange((void *)((u32)buf & 0x0fffffff), len);
     int k1 = pspSdkSetK1(0);
-    sceIoWrite(fd, (void *)DUMP_BUF, len);
+    sceIoWrite(fd, (void *)((u32)buf & 0x0fffffff), len);
     pspSdkSetK1(k1);
   }
   total += len;
@@ -242,10 +267,25 @@ static void start(void) {
     geDrawSync = (void *)FindProc("sceGE_Manager", "sceGe_driver", 0xB287BD61);
   }
   snprintf(path, sizeof(path), "ms0:/gepatch_%s_%06lu.gpd", game_id[0] ? game_id : "juego", log_frame);
-  int k1 = pspSdkSetK1(0);
-  fd = sceIoOpen(path, PSP_O_WRONLY | PSP_O_CREAT | PSP_O_TRUNC, 0777);
-  pspSdkSetK1(k1);
-  if (fd < 0) {
+  t_start = sceKernelGetSystemTimeLow();
+  half = 0;
+  buf = (u8 *)(DUMP_BUF | 0x40000000);
+  vio = vitaIo() && vitaWait(VDUMP); // el volcado anterior ya termino de escribirse
+  vita_wait_us = 0;
+  if (vio) { // nombre sin "ms0:/" (gepresent lo escribe en ux0:pspemu/)
+    vio_first = 1;
+    u32 w[12];
+    memset(w, 0, sizeof(w));
+    strncpy((char *)w, path + 5, sizeof(w) - 1);
+    int i;
+    for (i = 0; i < 12; i++)
+      VDESC[32 + i] = w[i];
+  } else {
+    int k1 = pspSdkSetK1(0);
+    fd = sceIoOpen(path, PSP_O_WRONLY | PSP_O_CREAT | PSP_O_TRUNC, 0777);
+    pspSdkSetK1(k1);
+  }
+  if (!vio && fd < 0) {
     LOG("volcado: no se pudo crear %s\n", path);
     return;
   }
@@ -263,7 +303,8 @@ static void start(void) {
   h.frame = log_frame; h.passive = dump_info.passive && *dump_info.passive; h.idle = idle; h.opt_size = dump_info.opt_size;
   dumpRecord(GPD_HEADER, &h, sizeof(h), dump_info.opt, dump_info.opt_size);
   regs(0);
-  mem(0, 0x04000000, 0x400000);   // VRAM real (en pasivo: la del juego; activo: buffer grande y rt)
+  // VRAM real: 2 MB (0x04200000+ son reflejos de los mismos 2 MB; hasta dev56.6 se guardaban 4 MB: 4 MB de mas por volcado)
+  mem(0, 0x04000000, 0x200000);   // (en pasivo: la del juego; activo: buffer grande y rt)
   if (!h.passive)
     mem(1, 0x0A000000, dump_info.fake_vram_used ? dump_info.fake_vram_used : 0x200000); // VRAM falsa
   LOG("volcado: grabando %s (GE %s al empezar)\n", path, idle ? "libre" : "OCUPADO");
@@ -273,7 +314,7 @@ static void finish(const char *why) {
   lock();
   u32 i, idle = waitGe();
   regs(1);
-  mem(2, 0x04000000, 0x400000);
+  mem(2, 0x04000000, 0x200000);
   if (!*dump_info.passive)
     mem(3, 0x0A000000, dump_info.fake_vram_used ? dump_info.fake_vram_used : 0x200000);
   for (i = 0; i < ndst; i++)
@@ -285,16 +326,26 @@ static void finish(const char *why) {
   }
   u32 e[4] = { idle, skipped, ncmds, flips };
   dumpRecord(GPD_END, e, 16, why, strlen(why) + 1);
-  flush();
-  int k1 = pspSdkSetK1(0);
-  sceIoClose(fd);
-  pspSdkSetK1(k1);
+  int by_vita = vio;
+  if (vio) {
+    closeCmds();
+    total += len;
+    vitaChunk(2); // la ultima mitad (aunque este vacia) y cerrar
+    len = 0;
+  } else {
+    flush();
+    int k1 = pspSdkSetK1(0);
+    sceIoClose(fd);
+    pspSdkSetK1(k1);
+  }
   fd = -1;
   dumping = 0;
   log_tap = NULL;
   unlock();
-  LOG("volcado listo: %s (%lu KB, %lu comandos, %d datos sin guardar por tamano, fin: %s)\n",
-      path, total / 1024, ncmds, skipped, why);
+  // (dos lineas: el LOG corta a 160 caracteres y en dev56.5 se perdia el final)
+  LOG("volcado listo: %s (%lu KB, %lu comandos, %d sin guardar, fin: %s)\n", path + 5, total / 1024, ncmds, skipped, why);
+  LOG("volcado: %lu ms, lo escribio %s (el PSP espero a la Vita %lu ms)\n", (sceKernelGetSystemTimeLow() - t_start) / 1000,
+      by_vita ? "la Vita" : "el PSP", vita_wait_us / 1000);
 }
 
 void dumpRequest(void) {

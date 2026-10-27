@@ -44,7 +44,9 @@ int sceIoRename(const char *a, const char *b) { return 0; }
 char *sceKernelInitFileName(void) { return "test"; }
 SceUID sceKernelCreateThread(const char *n, int (*e)(SceSize, void *), int p, int s, unsigned int a, void *o) { return -1; }
 int sceKernelStartThread(SceUID t, SceSize l, void *a) { return 0; }
-int sceKernelDelayThread(SceUID d) { return 0; }
+extern unsigned int test_time;
+void (*test_delay_hook)(void); // lo que hace "la Vita" mientras el PSP espera (tests del canal con gepresent)
+int sceKernelDelayThread(SceUID d) { if (test_delay_hook) test_delay_hook(); test_time += d; return 0; }
 unsigned int test_time;
 unsigned int sceKernelGetSystemTimeLow(void) { return test_time; }
 void sceKernelDcacheWritebackInvalidateAll(void) {}

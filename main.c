@@ -85,10 +85,95 @@ static struct {
   u32 upscale_us, fb_copies, cpu_overlays;         // escalado por CPU (videos), copias del frame al fb del juego, dibujos de la CPU pegados
   u32 walked, calls, lookups, v2d, v2d_skip, vevict, call_cmds, tx_ge, tx_screen, vram_fix;
   u32 wc_hits, wc_miss, wc_cmds, wc_summed;                   // sublistas sin cambios que no se recorrieron
-  u32 wc_why[8];                                   // por que no se guardaron (ver W_*) // recorrido: frames medidos, CALLs, busquedas en memo, vertices 2D
+  u32 wc_why[8], wc_skipwhy[5];                                   // por que no se guardaron (ver W_*) // recorrido: frames medidos, CALLs, busquedas en memo, vertices 2D
   u32 long_frame_logged;
 } st;
 static u32 patch_us_frame; // costo del plugin en el frame en curso
+
+// Perfil del recorrido (opcion "perfil", etapa 4): en que se va la CPU que gasta GePatch. En 1 de cada 16 frames
+// se anota el tiempo de cada comando segun su tipo (ver profStep). Con perfil=2 se leen ademas los contadores de
+// hardware del Allegrex (ciclos, espera de memoria, fallos de cache) en todo el recorrido, si Adrenaline los tiene.
+static int capturing; // captura al log en curso (ver mas abajo)
+enum { P_CALL, P_3D, P_2D, P_COPY, P_OTHER, P_FAST, P_TEX, P_N };
+#define PR ((volatile u32 *)0xBC400000) // contadores del Allegrex (lo mismo que pspDebugProfilerEnable/GetRegs)
+static const u8 prof_reg[5] = { 2, 4, 14, 13, 9 }; // ciclos, espera de memoria, fallos dcache, fallos icache, lecturas sin cache
+static int prof_init, prof_hw, prof_on, prof_any, prof_k;
+static u32 prof_t, prof_cost100, prof_frames, prof_sec[P_N], prof_n[P_N], prof_hw0[5], prof_hwsum[5];
+static inline u32 profNow(void) { return prof_hw ? PR[2] : sceKernelGetSystemTimeLow(); } // ciclos o us
+#define PROF_IN u32 _pt = prof_on ? profNow() : 0
+#define PROF_OUT(k) do { if (prof_on) { prof_sec[k] += profNow() - _pt; prof_n[k]++; } } while (0)
+
+static void profInit(void) {
+  u32 i, a, t;
+  prof_init = 1;
+  if (opt.perfil == 2) { // si no avanzan, se usa el reloj del sistema
+    LOG("perfil: probando los contadores del Allegrex (si Adrenaline se cierra aqui, no los tiene: usar perfil=1)\n");
+    logFlush();
+    PR[0] = 1;
+#ifdef __mips__
+    asm volatile("sync");
+#endif
+    a = PR[2];
+    for (i = 0; i < 1000; i++)
+      asm volatile("");
+    prof_hw = PR[2] != a;
+  }
+  t = profNow();
+  for (i = 0; i < 64; i++)
+    profNow();
+  prof_cost100 = (profNow() - t) * 100 / 65; // lo que cuesta medir (x100), se descuenta en profLog
+  LOG("perfil: %s; cada medicion cuesta %lu.%02lu %s\n", prof_hw ? "contadores del Allegrex" : opt.perfil == 2 ?
+      "los contadores del Allegrex no responden, se usa el reloj" : "reloj del sistema", prof_cost100 / 100, prof_cost100 % 100,
+      prof_hw ? "ciclos" : "us");
+}
+
+static void profStart(void) {
+  int i;
+  prof_on = 0;
+  if (!opt.perfil)
+    return;
+  if (!prof_init)
+    profInit();
+  prof_on = !(log_frame & 15) && !dumping && !capturing;
+  prof_any |= prof_on;
+  for (i = 0; prof_hw && i < 5; i++)
+    prof_hw0[i] = PR[prof_reg[i]];
+  prof_k = P_N; // todavia no hay comando anterior
+  prof_t = profNow();
+}
+
+static void profEnd(void) {
+  int i;
+  if (prof_on && prof_k < P_N) {
+    prof_sec[prof_k] += profNow() - prof_t;
+    prof_n[prof_k]++;
+  }
+  for (i = 0; opt.perfil && prof_hw && i < 5; i++) { // ciclos y espera en us (en 10 s no caben en 32 bits)
+    u32 d = PR[prof_reg[i]] - prof_hw0[i];
+    prof_hwsum[i] += i < 2 ? d / 333 : d;
+  }
+  prof_on = 0;
+}
+
+// Cada linea de stats: tiempo y cantidad por tipo de comando (por frame medido), sin el costo de medir
+static void profLog(u32 frames_walked) {
+  static const char *const nm[P_N] = { "sublistas", "3d", "2d", "copias", "otros", "rapidos", "texturas" };
+  char b[150];
+  u32 i, n = 0, f = prof_frames ? prof_frames : 1, w = frames_walked ? frames_walked : 1;
+  for (i = 0; i < P_N; i++) {
+    u32 nf = prof_n[i] / f, tf = prof_sec[i] / f, c = nf / 10 * prof_cost100 / 10;
+    tf = (tf > c ? tf - c : 0) / (prof_hw ? 333 : 1);
+    n += snprintf(b + n, sizeof(b) - n, " %s=%lu/%lu", nm[i], tf, nf);
+  }
+  if (prof_frames)
+    LOG("stats perfil us/veces por frame:%s (n=%lu)\n", b, prof_frames);
+  if (prof_hw)
+    LOG("stats allegrex por frame: %lu us, espera de memoria %lu%%, fallos dcache=%lu icache=%lu lecturas sin cache=%lu\n",
+        prof_hwsum[0] / w, prof_hwsum[1] / (prof_hwsum[0] / 100 + 1), prof_hwsum[2] / w, prof_hwsum[3] / w, prof_hwsum[4] / w);
+  LOG("stats log: %lu ms escribiendo el log en el periodo (hilo propio; incluye esperar a la Vita)\n", log_us / 1000);
+  log_us = prof_frames = 0;
+  memset(prof_sec, 0, sizeof(prof_sec)); memset(prof_n, 0, sizeof(prof_n)); memset(prof_hwsum, 0, sizeof(prof_hwsum));
+}
 
 // Un draw anulado se reemplaza por un NOP con esta marca. Con NOP 0x00000000 (igual al
 // NOP del juego), un NOP real escrito luego en esa posicion "revivia" el draw anulado
@@ -168,10 +253,32 @@ static const u8 memo_cmd[256] = {
   [GE_CMD_ZBUFPTR] = 1, [GE_CMD_ZBUFWIDTH] = 1, [GE_CMD_VIEWPORTXSCALE] = 1, [GE_CMD_VIEWPORTYSCALE] = 1,
   [GE_CMD_VIEWPORTXCENTER] = 1, [GE_CMD_VIEWPORTYCENTER] = 1, [GE_CMD_OFFSETX] = 1, [GE_CMD_OFFSETY] = 1,
   [GE_CMD_REGION1] = 1, [GE_CMD_REGION2] = 1, [GE_CMD_SCISSOR1] = 1, [GE_CMD_SCISSOR2] = 1,
-  [GE_CMD_TEXADDR0] = 2, [GE_CMD_TEXBUFWIDTH0] = 2, [GE_CMD_TEXSIZE0] = 2, [GE_CMD_TEXFORMAT] = 2,
+  [GE_CMD_TEXBUFWIDTH0] = 2, // la unica de textura que se parchea (texCheckCalc); ver mayBePatch
   [GE_CMD_BASE] = 3, [GE_CMD_CALL] = 3, // 3 = solo si se reescribio alguna copia (ver txUpscale)
 };
 static int tx_patched_any; // alguna copia grande se reemplazo por un CALL a una lista del plugin
+
+// Comandos que el recorrido solo anota en state.ge_cmd (luces, materiales, matrices, estado de dibujo...): ~60 % de
+// los de GT y SH. Van por un camino corto, sin el switch (dev56.3: 0,4-0,7 us por comando medidos). Quedan fuera
+// todos los que tienen un caso en patchGeList (salvo los que no hacen nada) y los que pueden estar parcheados.
+static u8 fast_cmd[256];
+static void fastInit(void) {
+  static const u8 slow[] = {
+    GE_CMD_BASE, GE_CMD_BEZIER, GE_CMD_BOUNDINGBOX, GE_CMD_CALL, GE_CMD_END, GE_CMD_FRAMEBUFPIXFORMAT,
+    GE_CMD_FRAMEBUFPTR, GE_CMD_FRAMEBUFWIDTH, GE_CMD_IADDR, GE_CMD_JUMP, GE_CMD_LOADCLUT, GE_CMD_OFFSETADDR,
+    GE_CMD_OFFSETX, GE_CMD_OFFSETY, GE_CMD_ORIGIN, GE_CMD_PRIM, GE_CMD_REGION1, GE_CMD_REGION2, GE_CMD_RET,
+    GE_CMD_SCISSOR1, GE_CMD_SCISSOR2, GE_CMD_SPLINE, GE_CMD_TEXADDR0, GE_CMD_TEXBUFWIDTH0, GE_CMD_TEXFORMAT,
+    GE_CMD_TEXSIZE0, GE_CMD_TEXTUREMAPENABLE, GE_CMD_TRANSFERDST, GE_CMD_TRANSFERDSTPOS, GE_CMD_TRANSFERDSTW,
+    GE_CMD_TRANSFERSIZE, GE_CMD_TRANSFERSRC, GE_CMD_TRANSFERSRCPOS, GE_CMD_TRANSFERSRCW, GE_CMD_TRANSFERSTART,
+    GE_CMD_VADDR, GE_CMD_VERTEXTYPE, GE_CMD_VIEWPORTXCENTER, GE_CMD_VIEWPORTXSCALE, GE_CMD_VIEWPORTYCENTER,
+    GE_CMD_VIEWPORTYSCALE, GE_CMD_ZBUFPTR, GE_CMD_ZBUFWIDTH,
+  };
+  int i;
+  for (i = 0; i < 256; i++)
+    fast_cmd[i] = !memo_cmd[i];
+  for (i = 0; i < (int)sizeof(slow); i++)
+    fast_cmd[slow[i]] = 0;
+}
 static int tex_patched_any; // algun comando de textura se redirigio a un render target
 static u32 rt_gen;          // cambia cuando cambia algo que afecta a texCheck (rts, framebuffers)
 
@@ -606,7 +713,7 @@ static int canRepatch(u32 *p, u32 orig) {
 // 3 textura de la VRAM real llevada a la falsa, 4 el fb actual, 6 mezcla del pase por intercambio (swapComposite),
 // 7 rt a escala 1 que lee la pantalla (rt1FromBig), 8 rt a escala 1 que se lee a si mismo (rt1SelfDraw),
 // 9 la pantalla (buffer grande) que se lee a si misma (rt1FromBig con los vertices ya duplicados)
-static struct { u32 on, addr, bw, fb, gen; void *cur; int res; } tcache;
+static struct { u32 on, addr, bw, fmt, fb, gen; void *cur; int res; } tcache; // fmt: varias decisiones dependen del formato
 
 static int texCheckCalc(void);
 // fb en intercambio; pase en curso; ya hecho en esta lista; flips con el pase en curso; lista de la entrada
@@ -614,11 +721,15 @@ static int swap_fb = -1, swap_on, swap_done, swap_flips, swap_list;
 int texCheck(void) {
   u32 on = state.ge_cmd[GE_CMD_TEXTUREMAPENABLE] & 1;
   if (tcache.on == on && tcache.addr == state.ge_cmd[GE_CMD_TEXADDR0] && tcache.bw == state.ge_cmd[GE_CMD_TEXBUFWIDTH0] &&
-      tcache.fb == state.framebuf && tcache.cur == state.cur_rt && tcache.gen == rt_gen && tcache.res != 3 && tcache.res < 6)
+      tcache.fmt == state.ge_cmd[GE_CMD_TEXFORMAT] && tcache.fb == state.framebuf && tcache.cur == state.cur_rt &&
+      tcache.gen == rt_gen && tcache.res != 3 && tcache.res < 6)
     return tcache.res;
   tcache.on = on; tcache.addr = state.ge_cmd[GE_CMD_TEXADDR0]; tcache.bw = state.ge_cmd[GE_CMD_TEXBUFWIDTH0];
-  tcache.fb = state.framebuf; tcache.cur = state.cur_rt; tcache.gen = rt_gen;
-  return tcache.res = texCheckCalc();
+  tcache.fmt = state.ge_cmd[GE_CMD_TEXFORMAT]; tcache.fb = state.framebuf; tcache.cur = state.cur_rt; tcache.gen = rt_gen;
+  PROF_IN;
+  tcache.res = texCheckCalc();
+  PROF_OUT(P_TEX);
+  return tcache.res;
 }
 
 // El render target a escala 1 se lee a si mismo (desenfoque de Ridge Racer): la textura es lo
@@ -638,6 +749,16 @@ static int texCheckCalc(void) {
   // plugin (0x0A...): para reconocerlo se mira igual que la VRAM falsa
   u32 tex = toFake(raw_tex);
   vramUse(tex);
+  // Diagnostico (dev56.2): textura en un reflejo de la VRAM (asi se lee el z como textura, o un acceso
+  // reordenado) o en el z del juego, que solo existe escalado en la VRAM real: lo que lee no es lo que espera.
+  // El z en un fb conocido no cuenta (GT pone el z en 0, su fb, cuando no lo usa: era un falso positivo).
+  u32 zg = FAKE_VRAM | (state.ge_cmd[GE_CMD_ZBUFPTR] & 0x1fffff);
+  if (passive)
+    ;
+  else if ((raw_tex & 0x0f000000) == 0x04000000 && (raw_tex & 0x00e00000))
+    LOG_ONCE((raw_tex >> 12) ^ 0x7B200000, "textura desde un reflejo de la VRAM %08lx (z del juego o acceso reordenado) -> sin equivalente\n", raw_tex);
+  else if (tex >= zg && tex < zg + 0x44000 && findFramebuf(zg) < 0)
+    LOG_ONCE((zg >> 12) ^ 0x7B300000, "el juego lee su z-buffer %08lx como textura -> el z solo existe escalado en la VRAM real\n", zg);
 
   // Textura desde un framebuffer de pantalla (p.ej. el frame anterior): no hay copia
   int f = findFramebuf(tex);
@@ -654,6 +775,12 @@ static int texCheckCalc(void) {
   if (tex == state.framebuf)
     return 4; // el fb actual: se dibuja igual, pero depende del fb (las sublistas no se guardan)
   if (f < 0) {
+    // Diagnostico (dev56.3): textura dentro de un fb pero no al principio (una parte de la pantalla o de un render
+    // target). findFramebuf solo reconoce el primer KB: esta se lee de la VRAM falsa, que puede tener la imagen vieja.
+    int fi = passive ? 0 : inFramebuf(tex);
+    if (fi && tex - state.framebuf_addr[fi - 1] < 512 * 272 * 2 && !state.fb_tx[fi - 1] && !state.fb_rt1[fi - 1]) // (16 bpp)
+      LOG_ONCE((tex >> 10) ^ 0x7B400000, "textura dentro del fb %08lx (+%lu bytes): se lee la VRAM falsa (puede estar vieja)\n",
+               state.framebuf_addr[fi - 1], tex - state.framebuf_addr[fi - 1]);
     // Textura en la VRAM real que no es un fb (Silent Hill): se lee de la VRAM falsa, donde
     // el plugin dejo las copias del juego. En la real estan los buffers del plugin.
     if (raw_tex != tex && opt.vram_fix && !passive && canRepatch(state.tex_p[1], state.tex_o[1])) {
@@ -1524,25 +1651,61 @@ static int txUpscale(u32 *list, u32 dst, u32 w, u32 h, int bpp) {
 // solo se suman sus palabras (~3 instrucciones por palabra en vez de ~40) y se aplica el
 // estado guardado.
 // ---------------------------------------------------------------------------
-#define WC_ADDR 0x0A780000 // 2048 entradas de 248 bytes en RAM libre (hasta 0x0A7FC000)
+#define WC_ADDR 0x0A780000 // 2048 entradas de 64 bytes (hasta 0x0A7A0000) y su parte fria (hasta 0x0A7FA000)
 #define WC_SIZE 2048
 // Las sublistas suelen estar alineadas: con solo los bits bajos, dos a 16 KB chocaban
 #define WC_SLOT(a) ((((a) >> 2) * 2654435761u) >> 21) // hash multiplicativo: 11 bits = 2048
 enum { T_TME = 1, T_TADDR = 2, T_TBW = 4, T_TSIZE = 8, T_TFMT = 16, T_VTYPE = 32, T_BASE = 64 };
+// dev56.4: un salto costaba ~4 us en GT: la entrada (252 bytes) caia en 4-5 lineas de cache y cada una es una falla
+// (~200 ns). Ahora lo que mira saltar una sublista sin hijas ni texturas cabe en una linea de 64 bytes (WalkCache) y
+// el resto va aparte (WalkCold), en la misma posicion de otra tabla.
 typedef struct {
-  u32 addr, n, sum, base_in, offset_in, gen, fb_in, ndraws, touch, vset, iset;
+  u32 addr, n, sum, base_in, offset_in, gen, fb_in, checked; // checked: ultimo frame en que se comprobo la suma
   void *rt_in;
-  u32 vaddr, iaddr, vtype, base_out, tex[5], nchild, child[32];
-  u32 checked; // ultimo frame en que se comprobo la suma
-  u32 *tex_p[4];
-  u32 tex_o[4];
+  u32 vaddr, iaddr, vtype, ndraws; // vtype: tipo de vertice | BASE de salida (bits 24-27)
+  u16 touch, nchild;
+  u8 vset, iset, pad[6];
 } WalkCache;
+typedef struct {
+  u32 tex[5], tex_o[4];
+  u32 *tex_p[4];
+  u32 child[32];
+} WalkCold;
 static WalkCache *wc = (WalkCache *)WC_ADDR;
+static WalkCold *wcc = (WalkCold *)(WC_ADDR + WC_SIZE * sizeof(WalkCache));
+#define COLD(e) (&wcc[(e) - wc])
+typedef char wc_line[sizeof(WalkCache) == 64 ? 1 : -1];
+typedef char wc_fits[WC_ADDR + WC_SIZE * (sizeof(WalkCache) + sizeof(WalkCold)) <= VLOG_BUF && VLOG_BUF + 0x4000 <= PRES_DESC &&
+                     PRES_DESC == (0x0A7FF000) ? 1 : -1]; // no pisa el log de la Vita (log.h) ni el descriptor
+// Cada sublista puede ir en 4 casillas (s, s^1, s^2, s^3). Con una sola, en GT (~430 sublistas distintas por frame)
+// ~90 compartian casilla con otra, se expulsaban entre si y se recorrian en cada frame (volcado del frame 7171).
+static WalkCache *wcFind(u32 addr) {
+  u32 s = WC_SLOT(addr), i;
+  for (i = 0; i < 4; i++)
+    if (wc[s ^ i].addr == addr)
+      return &wc[s ^ i];
+  return NULL;
+}
+static WalkCache *wcSlotFor(u32 addr) { // la suya, una libre o la comprobada hace mas tiempo (checked)
+  WalkCache *e = wcFind(addr), *o = &wc[WC_SLOT(addr)];
+  u32 i;
+  for (i = 0; !e && i < 4; i++) {
+    WalkCache *c = &wc[WC_SLOT(addr) ^ i];
+    if (!c->addr)
+      return c;
+    if (log_frame - c->checked > log_frame - o->checked)
+      o = c;
+  }
+  return e ? e : o;
+}
 // Lo que cambia la decision del plugin sobre los draws: framebuffers y render targets
 // conocidos (rt_gen) y opciones del menu (opt_gen). El fb actual va en cada entrada.
 #define WC_GEN ((rt_gen << 8) ^ opt_gen)
 // Por que una sublista no se pudo guardar (estadistica, para saber que mejorar)
 enum { W_PATCH, W_2D, W_OMIT, W_JUMP, W_NESTED, W_COPY, W_OFFSET };
+// Por que una sublista guardada no se salto (wcSkip): no estaba (nueva o expulsada), cambio algo del plugin
+// (fb, render targets, opciones), entro con otro BASE/OFFSET, otro destino, hay copias reescritas
+enum { S_NONE, S_GEN, S_BASE, S_FB, S_COPY };
 // Sublistas que se estan anotando, una por nivel de CALL (recs[0] no se usa: es donde
 // escriben los DIRTY/touch cuando no hay ninguna). Una sublista con otras dentro se puede
 // guardar si las de dentro tambien se pudieron: se guardan sus direcciones y al saltarla
@@ -1603,7 +1766,7 @@ static void wcStore(u32 *ret) {
     rec.why |= r->why ? r->why : 1 << W_NESTED; // la que la contiene tampoco se puede guardar
     return;
   }
-  WalkCache *e = &wc[WC_SLOT(r->addr)];
+  WalkCache *e = wcSlotFor(r->addr);
   int i;
   e->addr = r->addr; e->n = ret - (u32 *)r->addr + 1; e->sum = wcSum((u32 *)r->addr, e->n);
   e->base_in = r->base; e->offset_in = r->offset; e->gen = WC_GEN;
@@ -1611,16 +1774,17 @@ static void wcStore(u32 *ret) {
   e->ndraws = st.draws - r->draws; e->touch = r->touch; e->vset = r->vset; e->iset = r->iset;
   e->vaddr = r->vset ? state.vertex_addr : state.vertex_addr - r->vaddr0;
   e->iaddr = r->iset ? state.index_addr : state.index_addr - r->iaddr0;
-  e->vtype = state.vertex_type; e->base_out = state.base;
+  e->vtype = state.vertex_type | state.base;
   e->nchild = r->nchild;
+  WalkCold *k = COLD(e);
   e->checked = log_frame;
   for (i = 0; i < r->nchild; i++)
-    e->child[i] = r->child[i];
+    k->child[i] = r->child[i];
   for (i = 0; i < 5; i++)
-    e->tex[i] = state.ge_cmd[wc_tex_cmd[i]];
+    k->tex[i] = state.ge_cmd[wc_tex_cmd[i]];
   for (i = 0; i < 4; i++) {
-    e->tex_p[i] = state.tex_p[i];
-    e->tex_o[i] = state.tex_o[i];
+    k->tex_p[i] = state.tex_p[i];
+    k->tex_o[i] = state.tex_o[i];
   }
   wcAddChild(r->addr, r->touch, r->vset, r->iset);
 }
@@ -1629,8 +1793,8 @@ static void wcStore(u32 *ret) {
 // La suma se comprueba una vez por frame (una sublista llamada varias veces en el frame, como
 // las ruedas de los autos, no se vuelve a sumar), o cada N frames segun la opcion del menu.
 static u32 wcValid(u32 addr, int depth) {
-  WalkCache *e = &wc[WC_SLOT(addr)];
-  if (e->addr != addr || depth > WC_DEPTH || !validAddr(addr + e->n * 4))
+  WalkCache *e = wcFind(addr);
+  if (!e || depth > WC_DEPTH || !validAddr(addr + e->n * 4))
     return 0;
   u32 every = 1u << opt.wc_check; // 1, 2, 4 u 8 frames
   if (log_frame - e->checked >= every || log_frame < e->checked) {
@@ -1641,19 +1805,26 @@ static u32 wcValid(u32 addr, int depth) {
   }
   u32 n = e->n, i, c;
   for (i = 0; i < e->nchild; i++) {
-    if (!(c = wcValid(e->child[i], depth + 1)))
+    if (!(c = wcValid(COLD(e)->child[i], depth + 1)))
       return 0;
     n += c;
   }
   return n;
 }
 
-// En un CALL: si la sublista esta guardada y no cambio, se aplica su efecto y no se recorre
+// En un CALL: si la sublista esta guardada y no cambio, se aplica su efecto y no se recorre (1). -1: no esta
 static int wcSkip(u32 addr) {
-  WalkCache *e = &wc[WC_SLOT(addr)];
-  if (e->addr != addr || e->gen != WC_GEN || e->base_in != state.base || e->offset_in != state.offset ||
-      e->fb_in != state.ignore_framebuf || e->rt_in != state.cur_rt || tx_patched_any || !opt.walk_cache)
+  WalkCache *e = wcFind(addr);
+  if (!e)
+    return -1;
+  int why = e->gen != WC_GEN ? S_GEN : e->base_in != state.base || e->offset_in != state.offset ? S_BASE
+          : e->fb_in != state.ignore_framebuf || e->rt_in != state.cur_rt ? S_FB : tx_patched_any ? S_COPY : -1;
+  if (!opt.walk_cache)
     return 0;
+  if (why >= 0) {
+    st.wc_skipwhy[why]++;
+    return 0;
+  }
   u32 n = wcValid(addr, 0);
   if (!n) {
     st.wc_miss++;
@@ -1663,15 +1834,15 @@ static int wcSkip(u32 addr) {
   int i;
   state.vertex_addr = e->vset ? e->vaddr : state.vertex_addr + e->vaddr;
   state.index_addr = e->iset ? e->iaddr : state.index_addr + e->iaddr;
-  if (e->touch & T_VTYPE) state.vertex_type = e->vtype;
-  if (e->touch & T_BASE) state.base = e->base_out;
+  if (e->touch & T_VTYPE) state.vertex_type = e->vtype & 0xffffff;
+  if (e->touch & T_BASE) state.base = e->vtype & 0x0f000000;
   for (i = 0; i < 5; i++)
     if (e->touch & (1 << i))
-      state.ge_cmd[wc_tex_cmd[i]] = e->tex[i];
+      state.ge_cmd[wc_tex_cmd[i]] = COLD(e)->tex[i];
   if (e->touch & (T_TADDR | T_TBW | T_TSIZE | T_TFMT))
     for (i = 0; i < 4; i++) {
-      state.tex_p[i] = e->tex_p[i];
-      state.tex_o[i] = e->tex_o[i];
+      state.tex_p[i] = COLD(e)->tex_p[i];
+      state.tex_o[i] = COLD(e)->tex_o[i];
     }
   st.draws += e->ndraws;
   draws_since_flip += e->ndraws;
@@ -1727,6 +1898,32 @@ static void dumpDraw(u32 *list, u32 op, u32 count, int texmode, int omit) {
   }
 }
 
+// Una palabra de textura, BASE o CALL que el plugin pudo haber escrito: solo esas se buscan en la memoria de parches.
+// Antes, con alguna copia reescrita, se buscaban todos los BASE y CALL (SH: ~2000 por frame, una falla de cache
+// cada una en una tabla de 768 KB). El plugin escribe TEXBUFWIDTH0 hacia la VRAM falsa, y BASE 0x0A + CALL al anillo.
+static inline int mayBePatch(u32 op, u32 m) {
+  u32 d = op & 0xffffff, hi = (FAKE_VRAM >> 8) & 0x0f0000;
+  if (m == 2)
+    return tex_patched_any && (d & 0x0f0000) == hi;
+  if (m != 3 || !tx_patched_any)
+    return 0;
+  if ((op >> 24) == GE_CMD_BASE)
+    return d == hi;
+  return ((d + state.offset) & 0xffffff) - (TX_RING & 0xffffff) < TX_N * TX_SLOT;
+}
+
+// Perfil: el tiempo desde el comando anterior va a su tipo (el switch puede tardar en cualquier caso)
+static inline void profStep(u32 cmd) {
+  u32 now = profNow();
+  if (prof_k < P_N) {
+    prof_sec[prof_k] += now - prof_t;
+    prof_n[prof_k]++;
+  }
+  prof_t = now;
+  prof_k = cmd == GE_CMD_PRIM ? ((state.vertex_type & GE_VTYPE_THROUGH_MASK) == GE_VTYPE_THROUGH ? P_2D : P_3D)
+         : cmd == GE_CMD_CALL ? P_CALL : cmd == GE_CMD_TRANSFERSTART ? P_COPY : cmd == GE_CMD_NOP ? P_FAST : P_OTHER;
+}
+
 void patchGeList(u32 *list, u32 *stall) {
   union {
     float f;
@@ -1737,6 +1934,10 @@ void patchGeList(u32 *list, u32 *stall) {
   StackEntry stack_entry_buf;
   int ncmds = 0;
   u32 *lim = NULL; // fin de la region valida actual; NULL = validar de nuevo (tras un salto)
+  profStart();
+  if (!fast_cmd[GE_CMD_TEXLEVEL])
+    fastInit();
+  int fast = capturing || dumping ? 0 : prof_on ? 2 : 1; // la captura y el volcado anotan cada comando; 2: perfil
 
   for (; list && (!stall || (stall && list != stall)); list++) {
     // Nunca leer fuera de la memoria valida ni recorrer para siempre
@@ -1751,11 +1952,18 @@ void patchGeList(u32 *list, u32 *stall) {
       goto finish;
     }
 
+    u32 op = *list;
+    if (fast && fast_cmd[op >> 24]) { // camino corto (ver fast_cmd)
+      if (fast > 1)
+        profStep(GE_CMD_NOP);
+      state.ge_cmd[op >> 24] = op & 0xffffff;
+      continue;
+    }
     // Valor original del juego aunque el comando ya este parcheado (ver memo_cmd)
-    u32 op = *list, m = memo_cmd[op >> 24];
+    u32 m = memo_cmd[op >> 24];
     if (m == 1 && op == (GE_CMD_NOP << 24))
       m = 0; // NOP 0 del juego: no puede ser un draw anulado por el plugin (esos llevan la marca)
-    if (m == 1 || (m == 2 && tex_patched_any) || (m == 3 && tx_patched_any)) {
+    if (m == 1 || ((m == 2 || m == 3) && mayBePatch(op, m))) {
       st.lookups++;
       op = origOp(list);
       // FBPTR 0x000000 del juego es igual al parche del buffer grande. Si el FBWIDTH de al
@@ -1769,6 +1977,8 @@ void patchGeList(u32 *list, u32 *stall) {
     u32 cmd = op >> 24;
     u32 data = op & 0xffffff;
     u32 *cur = dump_cur = list; // el switch puede mover list (CALL, JUMP, RET)
+    if (prof_on)
+      profStep(cmd);
 
     state.ge_cmd[cmd] = data;
     if (capturing)
@@ -1825,14 +2035,20 @@ void patchGeList(u32 *list, u32 *stall) {
           LOG_ONCE_CAP((state.address >> 12) ^ 0xD1000000, "CALL a direccion invalida %08lx, se ignora\n", state.address);
           break;
         }
+        // Primero la cache (antes se leia la sublista para ver si eran solo huesos: 1-2 fallas de cache mas por CALL)
+        int skip = capturing || dumping ? 0 : wcSkip(state.address);
+        if (skip > 0) {
+          st.calls++;
+          break;
+        }
         if (*(u32 *)(state.address) >> 24 == GE_CMD_BONEMATRIXDATA &&
             *(u32 *)(state.address+11*4) >> 24 == GE_CMD_BONEMATRIXDATA &&
             *(u32 *)(state.address+12*4) >> 24 == GE_CMD_RET) {
           break;
         }
         st.calls++;
-        if (!capturing && !dumping && wcSkip(state.address))
-          break;
+        if (skip < 0 && opt.walk_cache)
+          st.wc_skipwhy[S_NONE]++;
         stack_entry = &stack_entry_buf;
         stack_entry->list = list;
         stack_entry->base = state.base; // antes quedaba sin inicializar y un SIGNAL RET lo restauraba
@@ -2133,7 +2349,6 @@ void patchGeList(u32 *list, u32 *stall) {
 
         u16 count = data & 0xffff;
         u8 vertex_size = 0, pos_off = 0, tc_off = 0;
-        vertexInfo(state.vertex_type, &vertex_size, &pos_off, &tc_off);
 
         // El GE avanza VADDR/IADDR despues de cada draw, este o no en modo through.
         // Antes solo se avanzaba en through, y un draw 2D posterior sin VADDR propio
@@ -2141,9 +2356,12 @@ void patchGeList(u32 *list, u32 *stall) {
         int indexed = (state.vertex_type & GE_VTYPE_IDX_MASK) != GE_VTYPE_IDX_NONE;
         if ((state.vertex_type & GE_VTYPE_THROUGH_MASK) != GE_VTYPE_THROUGH ||
             !validAddr(state.vertex_addr) || (indexed && !validAddr(state.index_addr))) {
+          if (!indexed) // con indices solo avanza IADDR: no hace falta el tamano del vertice
+            vertexInfo(state.vertex_type, &vertex_size, &pos_off, &tc_off);
           AdvanceVerts(count, vertex_size);
           break;
         }
+        vertexInfo(state.vertex_type, &vertex_size, &pos_off, &tc_off);
 
         {
           DIRTY(W_2D); // 2D: vertices que se duplican
@@ -2499,6 +2717,7 @@ exit_loop:
   }
 
 finish:
+  profEnd();
   st.cmds += ncmds;
   // Escribe los parches a memoria y descarta la cache: muchos juegos escriben sus listas
   // por la direccion sin cache, y sin invalidar se leerian comandos viejos la proxima vez
@@ -2877,6 +3096,18 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
   pspSdkSetK1(k1);
   u32 combo_mask = PSP_CTRL_LTRIGGER | PSP_CTRL_RTRIGGER | PSP_CTRL_SELECT;
   int combo = (pad.Buttons & combo_mask) == combo_mask;
+  // Volcado diferido (opcion "espera", segundos): en GT, L cambia a la vista trasera; se suelta la combinacion, la
+  // camara vuelve a la normal y recien entonces se captura. Mientras se mantiene apretada se vuelve a armar.
+  static u32 dump_at;
+  if (combo && opt.espera) {
+    dump_at = (sceKernelGetSystemTimeLow() + opt.espera * 1000000) | 1;
+    combo = 0;
+  } else if (dump_at && (int)(sceKernelGetSystemTimeLow() - dump_at) >= 0) {
+    dump_at = 0;
+    LOG("volcado diferido (%d s despues de soltar L+R+SELECT)\n", opt.espera);
+    combo = 1;
+    prev_combo = 0;
+  }
   if (combo && !prev_combo) // con los botones (no las capturas automaticas): tambien el volcado binario
     dumpRequest();
   dumpOnFlip((u32)topaddr, bufferwidth, pixelformat);
@@ -3009,6 +3240,8 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
       copyFrameBuffer(menu);
   }
 
+  prof_frames += prof_any;
+  prof_any = 0;
   st.patch_us += patch_us_frame;
   if (patch_us_frame > st.patch_max)
     st.patch_max = patch_us_frame;
@@ -3046,9 +3279,14 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
       LOG("stats sublistas no guardadas/frame: parches=%lu 2d=%lu omitidos_o_rt=%lu saltos=%lu anidadas=%lu copias=%lu offset=%lu\n",
           st.wc_why[W_PATCH] / w, st.wc_why[W_2D] / w, st.wc_why[W_OMIT] / w, st.wc_why[W_JUMP] / w,
           st.wc_why[W_NESTED] / w, st.wc_why[W_COPY] / w, st.wc_why[W_OFFSET] / w);
+      LOG("stats sublistas recorridas/frame: no_guardada=%lu cambio_del_plugin=%lu otro_base=%lu otro_destino=%lu copias=%lu cambio_su_contenido=%lu\n",
+          st.wc_skipwhy[S_NONE] / w, st.wc_skipwhy[S_GEN] / w, st.wc_skipwhy[S_BASE] / w, st.wc_skipwhy[S_FB] / w,
+          st.wc_skipwhy[S_COPY] / w, st.wc_miss / w);
     }
     if (st.rt_draws)
       LOG("stats rt: draws en render targets a escala 1=%lu\n", st.rt_draws);
+    if (opt.perfil)
+      profLog(st.walked);
     memset(&st, 0, sizeof(st));
   }
 
@@ -3083,6 +3321,11 @@ static int zoneCheck(void) {
   int r = sceKernelQueryMemoryPartitionInfo(2, &pi);
   u32 fin = r < 0 ? 0 : (pi.startaddr & 0x0fffffff) + pi.memsize;
   LOG("particion del juego: %08x-%08lx (%u KB) [%08x]\n", pi.startaddr, fin, r < 0 ? 0 : pi.memsize >> 10, r);
+  PspSysmemPartitionInfo p11;
+  p11.size = sizeof(p11);
+  int r11 = sceKernelQueryMemoryPartitionInfo(11, &p11);
+  LOG("particion 11: %08x (%u KB, attr %x) [%08x]\n", r11 < 0 ? 0 : p11.startaddr, r11 < 0 ? 0 : p11.memsize >> 10,
+      r11 < 0 ? 0 : p11.attr, r11);
   if (fin > FAKE_VRAM)
     return 1;
   SceUID id = sceKernelAllocPartitionMemory(11, "GePatch", PSP_SMEM_Addr, 0x01000000, (void *)FAKE_VRAM);
@@ -3137,7 +3380,7 @@ int module_start(SceSize args, void *argp) {
   }
   memset(memo, 0, MEMO_SIZE * sizeof(MemoEntry));
   memset(vmemo, 0, VMEMO_SIZE * sizeof(VMemo));
-  memset(wc, 0, WC_SIZE * sizeof(WalkCache));
+  memset(wc, 0, WC_SIZE * sizeof(WalkCache)); // (la parte fria solo se lee si la entrada esta)
   if (!passive)
     probeVram();
 

@@ -11,6 +11,33 @@
 #define LOG_MAX  (1024 * 1024) // tope del archivo, para no llenar la tarjeta
 
 u32 log_frame;
+u32 log_us; // tiempo escribiendo el log (perfil de main.c)
+
+// --- Canal con gepresent (ver log.h) ---
+u32 log_io_psp; // escrituras del log hechas por el PSP (sceIo); las de la Vita no cuentan
+static int vita_dead; // no respondio: hasta reiniciar el juego se escribe con sceIo
+int vitaIo(void) {
+  return !vita_dead && VDESC[0] == 0x31565047 && VDESC[8] == 0x56474F4C; // "GPV1" y "LOGV"
+}
+u32 vita_wait_us; // tiempo esperando a gepresent (el volcado lo pone en 0 al empezar)
+int vitaWait(int box) {
+  u32 t0 = sceKernelGetSystemTimeLow();
+  while (VDESC[box] != VDESC[box + 1]) {
+    if (sceKernelGetSystemTimeLow() - t0 > 2000000) {
+      vita_dead = 1;
+      return 0;
+    }
+    sceKernelDelayThread(1000);
+  }
+  vita_wait_us += sceKernelGetSystemTimeLow() - t0;
+  return 1;
+}
+void vitaPost(int box) {
+#ifdef __mips__
+  asm volatile("sync"); // los datos antes que el numero de pedido
+#endif
+  VDESC[box]++;
+}
 
 static char buf[2][8192]; // doble buffer: se llena uno mientras se escribe el otro
 static int cur, len, dropped, written, sync_mode, eager;
@@ -59,6 +86,21 @@ void logFlush(void) {
     return;
   }
 
+  u32 t0 = sceKernelGetSystemTimeLow();
+  if (vitaIo() && vitaWait(VLOG)) { // lo escribe la Vita: aqui solo se copia el texto
+    char *q = (char *)(VLOG_BUF | 0x40000000);
+    int k = d ? sprintf(q, "-- %d lineas perdidas (buffer lleno)\n", d) : 0;
+    memcpy(q + k, p, n);
+    k += n;
+    written += n;
+    if (written >= LOG_MAX)
+      k += sprintf(q + k, "-- log detenido: llego a %d KB\n", LOG_MAX / 1024);
+    VDESC[VLOG + 2] = k;
+    vitaPost(VLOG);
+    log_us += sceKernelGetSystemTimeLow() - t0;
+    flushing = 0;
+    return;
+  }
   int k1 = pspSdkSetK1(0);
   SceUID fd = sceIoOpen(LOG_PATH, PSP_O_WRONLY | PSP_O_CREAT, 0777);
   if (fd >= 0) {
@@ -72,6 +114,8 @@ void logFlush(void) {
       sceIoWrite(fd, t, sprintf(t, "-- log detenido: llego a %d KB\n", LOG_MAX / 1024));
     sceIoClose(fd);
   }
+  log_us += sceKernelGetSystemTimeLow() - t0;
+  log_io_psp++;
   pspSdkSetK1(k1);
   flushing = 0;
 }

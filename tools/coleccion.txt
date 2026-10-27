@@ -1,0 +1,41 @@
+# Coleccion de capturas de prueba (tools/coleccion.py armar coleccion.txt CARPETA_GPD SALIDA)
+# id | juego | volcado activo | volcado pasivo (- si no hay) | estado (ok, bug, ?) | descripcion
+#
+# Como capturar una escena (con dev56.4 o posterior):
+#   1. Activo: con espera=3 en gepatch_<ID>.txt, apretar L+R+SELECT, soltar, y quedarse en la escena 3 s (en GT, L
+#      cambia la camara a la vista trasera; con la espera vuelve a la normal antes de capturar).
+#   2. Pasivo (referencia sin GePatch): abrir el juego con SELECT apretado y capturar la misma escena igual.
+#   3. Agregar la linea aqui con los dos nombres de archivo (llegan a vitabridge/recibidos).
+# Con un pasivo, original y GePatch son frames distintos de la misma escena (comparar a la vista). En el Mac, con
+# --ppsspp=PPSSPPHeadless, coleccion.py dibuja el MISMO frame del activo sin GePatch y da el % de pixeles distintos.
+#
+# Las escenas de versiones viejas sirven de catalogo: hay que recapturarlas con la version actual.
+
+# --- Silent Hill Shattered Memories (ULUS-10450) ---
+sh_logos       | SH | -                             | gepatch_ULUS-10450_000033.gpd | ? | logos al iniciar (referencia pasiva; recapturar activo)
+sh_creditos    | SH | gepatch_ULUS-10450_001933.gpd | gepatch_ULUS-10450_001840.gpd | ? | creditos del inicio (activo dev36: recapturar)
+sh_formulario  | SH | gepatch_ULUS-10450_002177.gpd | gepatch_ULUS-10450_002052.gpd | bug | formulario del psicologo: en dev36 el texto salia roto (arreglado en dev33-dev44; recapturar)
+sh_video       | SH | gepatch_ULUS-10450_004593.gpd | gepatch_ULUS-10450_004242.gpd | ? | video (fb llenado por copias; activo dev28: recapturar)
+sh_exterior    | SH | gepatch_ULUS-10450_004215.gpd | -                             | bug | exterior de noche con nieve: la linterna no ilumina (dev56.1)
+sh_linterna    | SH | gepatch_ULUS-10450_004199.gpd | -                             | bug | linterna sin luz (dev56.3): el juego usa stencil en su fb 8888 y GePatch fuerza 565 (sin stencil)
+
+# --- Ridge Racer (ULJS-00001) ---
+rr_carrera     | RR | gepatch_ULJS-00001_005794.gpd | -                             | ok | carrera en la ciudad, auto y HUD (dev53)
+rr_tunel       | RR | gepatch_ULJS-00001_003500.gpd | -                             | ? | carrera, tunel/acantilado (dev46: recapturar)
+rr_desenfoque  | RR | gepatch_ULJS-00001_001922.gpd | -                             | ? | desenfoque (rt a escala 1 que se lee a si mismo; dev44: recapturar)
+
+# --- Gran Turismo (UCUS-98632) ---
+gt_pausa       | GT | gepatch_UCUS-98632_007171.gpd | -                             | ok | carrera en pausa, retrovisor arriba, menu de pausa (dev56.1)
+gt_auto        | GT | gepatch_UCUS-98632_005269.gpd | -                             | bug | presentacion del auto: manchas blancas/celestes en la pista (dev50; recapturar)
+gt_trasera1    | GT | gepatch_UCUS-98632_006717.gpd | -                             | ? | vista trasera en carrera (dev56.3; el centro del tablero se ve oscuro)
+gt_trasera2    | GT | gepatch_UCUS-98632_006956.gpd | -                             | ? | vista trasera en curva (dev56.3): postes y banderas por encima del HUD?
+
+# --- Por capturar (cada una con su pasivo) ---
+# lr_demo        | LocoRoco MC (NPEG-00024) | demo del inicio (benchmark)
+# gt_curva1      | GT | despues de la primera curva, camara normal (el error visual que volvio)
+# gt_tablero     | GT | carrera, camara normal: tablero y tacometro (usa stencil para las agujas/mascaras)
+# gt_menu        | GT | menu principal y garaje
+# rr_menu        | RR | menu principal
+# rr_retrovisor  | RR | carrera con retrovisor (NO tocar hasta que se pida; sirve de referencia)
+# sh_interior    | SH | interior con linterna (casa)
+# sh_pesadilla   | SH | persecucion en el hielo

@@ -34,6 +34,7 @@ static const char *const no_si[] = { "no", "si" };
 static const char *const fb_modes[] = { "auto", "siempre", "nunca" };
 static const char *const fbtex_modes[] = { "leer memoria", "omitir" };
 static const char *const every_modes[] = { "1 frame", "2 frames", "4 frames", "8 frames" };
+static const char *const perfil_modes[] = { "no", "reloj", "reloj + Allegrex" };
 static const char *const escalas[] = { "2x (960x544)", "1,8x (864x490)", "1,6x (768x436)", "1,5x (720x408)", "1,4x (672x382)",
                                        "1,2x (576x328)" };
 
@@ -53,6 +54,8 @@ static const Item items[] = {
   { "intercambio", "Fb intermedios por intercambio", &opt.swap, 0, 1, 1, no_si },
   { "rt_esc1", "Render targets a escala 1 (VRAM del z)", &opt.rt1, 0, 1, 1, no_si },
   { "escala", "Escala (al abrir el juego; <2x: gepresent)", &opt.escala, 0, 5, 1, escalas },
+  { "perfil", "Perfil del recorrido en el log", &opt.perfil, 0, 2, 1, perfil_modes },
+  { "espera", "Volcado con L+R+SELECT: espera (s)", &opt.espera, 0, 10, 1, NULL },
   { NULL, "Capturar el proximo frame al log", NULL, 0, 0, 0, NULL, ACT_CAPTURE },
   { NULL, "Volcar el proximo frame (.gpd)", NULL, 0, 0, 0, NULL, ACT_DUMP },
   { NULL, "Memoria y CPU al log", NULL, 0, 0, 0, NULL, ACT_SNAPSHOT },
@@ -178,7 +181,10 @@ static void optPath(char *p, int n, const char *id) { snprintf(p, n, "ms0:/gepat
 
 // Opciones conocidas por juego (se aplican antes del archivo, que manda)
 static const struct { const char *id, *opts; } known[] = {
-  { "UCUS-98632", "comprobar=1\n" },   // Gran Turismo: sublistas cada 2 frames, sin glitches
+  // Gran Turismo: sublistas cada 2 frames, sin glitches; texturas desde framebuffer = leer memoria (dev56.8: con
+  // "omitir" faltaban partes de la escena despues de la primera curva, y ~300 draws omitidos por frame impedian
+  // guardar sus sublistas)
+  { "UCUS-98632", "comprobar=1\ntex_fb=0\n" },
 };
 
 void menuLoad(const char *id) {

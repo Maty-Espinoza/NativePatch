@@ -20,6 +20,8 @@ typedef struct {
   int swap;       // pase que se mezcla con la pantalla: se dibuja en el buffer grande guardando la escena en la RAM
   int rt1;        // render targets a escala 1 en la VRAM del z-buffer, copiados a la VRAM falsa al terminar
   int escala;     // escala del buffer grande (indice de scales[] en main.c); se aplica al abrir el juego
+  int perfil;     // perfil del recorrido en el log: 0 no, 1 reloj, 2 reloj + contadores del Allegrex
+  int espera;     // segundos entre soltar L+R+SELECT y el volcado (0: al instante)
 } Options;
 
 extern Options opt;

@@ -975,6 +975,179 @@ static void test_presentacion(void) {
 
 // Etapa 2: buffer grande a 1,5x (720x408). Viewport, scissor y offsets a 1,5x, vertices 2D, z justo despues del
 // buffer grande, buffer temporal en VRAM propia y la imagen publicada para gepresent de 720x408.
+// dev56.3: sublistas que caen en la misma casilla de la cache ya no se expulsan entre si (hasta 4 por casilla)
+static void test_sublistas_misma_casilla(void) {
+  reset();
+  u32 at[3], a, k = 0;
+  for (a = LIST + 0x8000; k < 3 && a < LIST + 0x80000; a += 0x40)
+    if (WC_SLOT(a) == WC_SLOT(LIST + 0x8000))
+      at[k++] = a;
+  CHECK(k == 3, "no hay 3 direcciones en la misma casilla");
+  sub(at[0], 0, 0x09100000); sub(at[1], 0, 0x09100000);
+  begin(); setFb(0x000000, 512); cmd(GE_CMD_BASE, 0x080000);
+  cmd(GE_CMD_CALL, at[0] & 0xffffff); cmd(GE_CMD_CALL, at[1] & 0xffffff);
+  end();
+  run();
+  memset(&st, 0, sizeof(st)); log_frame++;
+  run();
+  CHECK(st.wc_hits == 2 && st.wc_skipwhy[S_NONE] == 0, "misma casilla: saltadas=%lu no_guardadas=%lu (antes se expulsaban)",
+        st.wc_hits, st.wc_skipwhy[S_NONE]);
+  sub(at[2], 0, 0x09100000); // una tercera tambien cabe
+  begin(); setFb(0x000000, 512); cmd(GE_CMD_BASE, 0x080000);
+  cmd(GE_CMD_CALL, at[0] & 0xffffff); cmd(GE_CMD_CALL, at[1] & 0xffffff); cmd(GE_CMD_CALL, at[2] & 0xffffff);
+  end();
+  int i;
+  for (i = 0; i < 3; i++) { log_frame++; memset(&st, 0, sizeof(st)); run(); }
+  CHECK(st.wc_hits == 3 && st.draws == 6, "tres en la misma casilla: saltadas=%lu draws=%lu", st.wc_hits, st.draws);
+}
+
+// dev56.3: diagnostico del z como textura sin el falso positivo de GT (z en 0, que es su fb)
+static void test_diag_z_textura(void) {
+  reset();
+  begin(); setFb(0x000000, 512); cmd(GE_CMD_ZBUFPTR, 0x000000);
+  cmd(GE_CMD_TEXTUREMAPENABLE, 1); cmd(GE_CMD_TEXADDR0, 0x000000); cmd(GE_CMD_TEXBUFWIDTH0, (0x0a << 16) | 512);
+  cmd(GE_CMD_VERTEXTYPE, GE_VTYPE_POS_FLOAT); cmd(GE_CMD_VADDR, VERTS & 0xffffff); cmd(GE_CMD_PRIM, (GE_PRIM_TRIANGLES << 16) | 3);
+  end(); run();
+  CHECK(!logHas("lee su z-buffer"), "z en el fb del juego se reporto como z leido como textura");
+  begin(); setFb(0x000000, 512); cmd(GE_CMD_ZBUFPTR, 0x088000);
+  cmd(GE_CMD_TEXTUREMAPENABLE, 1); cmd(GE_CMD_TEXADDR0, 0x090000); cmd(GE_CMD_TEXBUFWIDTH0, (0x04 << 16) | 512);
+  cmd(GE_CMD_VERTEXTYPE, GE_VTYPE_POS_FLOAT); cmd(GE_CMD_VADDR, VERTS & 0xffffff); cmd(GE_CMD_PRIM, (GE_PRIM_TRIANGLES << 16) | 3);
+  end(); run();
+  CHECK(logHas("lee su z-buffer 0a088000"), "no se reporto el z leido como textura");
+}
+
+// dev56.3: diagnostico de una textura dentro de un fb (no al principio): hoy se lee la VRAM falsa
+static void test_diag_textura_dentro_fb(void) {
+  reset();
+  begin(); setFb(0x044000, 512); setFb(0x000000, 512);
+  cmd(GE_CMD_TEXTUREMAPENABLE, 1); cmd(GE_CMD_TEXADDR0, 0x044000 + 0x2000); cmd(GE_CMD_TEXBUFWIDTH0, (0x0a << 16) | 512);
+  cmd(GE_CMD_VERTEXTYPE, GE_VTYPE_POS_FLOAT); cmd(GE_CMD_VADDR, VERTS & 0xffffff); cmd(GE_CMD_PRIM, (GE_PRIM_TRIANGLES << 16) | 3);
+  end(); run();
+  CHECK(logHas("textura dentro del fb 0a044000 (+8192 bytes)"), "no se reporto la textura dentro del fb");
+}
+
+// dev56.4: el camino corto (comandos que solo se anotan) deja el mismo estado y la misma lista que el recorrido
+// completo (el de la captura, que no lo usa)
+static void test_camino_corto(void) {
+  static u32 g0[256], l0[64];
+  int pass, k;
+  for (pass = 0; pass < 2; pass++) {
+    reset();
+    begin(); setFb(0x000000, 512);
+    cmd(GE_CMD_LIGHTINGENABLE, 1); cmd(GE_CMD_MATERIALAMBIENT, 0x123456); cmd(GE_CMD_CLEARMODE, 0); cmd(GE_CMD_ZTESTENABLE, 1);
+    for (k = 0; k < 12; k++) cmd(GE_CMD_WORLDMATRIXDATA, k);
+    cmd(GE_CMD_VIEWPORTXSCALE, f24(240)); cmd(GE_CMD_TEXLEVEL, 0x10000); cmd(GE_CMD_SIGNAL, 0);
+    cmd(GE_CMD_VERTEXTYPE, GE_VTYPE_POS_FLOAT); cmd(GE_CMD_VADDR, VERTS & 0xffffff); cmd(GE_CMD_PRIM, (GE_PRIM_TRIANGLES << 16) | 3);
+    end();
+    capturing = pass; run(); capturing = 0;
+    if (!pass) { memcpy(g0, state.ge_cmd, sizeof(g0)); memcpy(l0, (u32 *)LIST, sizeof(l0)); }
+  }
+  g0[GE_CMD_WORLDMATRIXDATA] = state.ge_cmd[GE_CMD_WORLDMATRIXDATA]; // (el completo salta las matrices sin anotarlas)
+  CHECK(!memcmp(g0, state.ge_cmd, sizeof(g0)), "el camino corto deja otro estado del GE");
+  CHECK(!memcmp(l0, (u32 *)LIST, sizeof(l0)), "el camino corto deja otra lista");
+  CHECK(state.ge_cmd[GE_CMD_MATERIALAMBIENT] == 0x123456, "estado anotado mal: %06lx", state.ge_cmd[GE_CMD_MATERIALAMBIENT]);
+}
+
+// dev56.4: con copias reescritas, los BASE del juego ya no se buscan en la memoria de parches (solo el del plugin)
+static void test_memo_solo_del_plugin(void) {
+  reset();
+  tx_patched_any = tex_patched_any = 1;
+  begin();
+  cmd(GE_CMD_BASE, 0x090000); cmd(GE_CMD_BASE, 0x080000); cmd(GE_CMD_TEXBUFWIDTH0, (0x09 << 16) | 64);
+  cmd(GE_CMD_TEXADDR0, 0x100000);
+  end();
+  memset(&st, 0, sizeof(st));
+  run();
+  CHECK(st.lookups == 0, "se buscaron %lu palabras del juego en la memoria de parches", st.lookups);
+  CHECK(mayBePatch((GE_CMD_BASE << 24) | 0x0a0000, 3) && mayBePatch((GE_CMD_TEXBUFWIDTH0 << 24) | 0x0a0040, 2),
+        "las palabras que escribe el plugin no se buscarian");
+}
+
+// dev56.4: volcado diferido (opcion "espera"): L+R+SELECT arma el volcado y se hace N segundos despues de soltar
+static void test_volcado_diferido(void) {
+  reset();
+  opt.espera = 1; test_time = 5000000;
+  test_buttons = PSP_CTRL_LTRIGGER | PSP_CTRL_RTRIGGER | PSP_CTRL_SELECT;
+  sceDisplaySetFrameBufPatched((void *)0x04000000, 512, 0, 0);
+  test_buttons = 0; test_time += 500000;
+  sceDisplaySetFrameBufPatched((void *)0x04000000, 512, 0, 0);
+  CHECK(!capturing && !logHas("volcado diferido"), "se volco antes de la espera");
+  test_time += 600000;
+  sceDisplaySetFrameBufPatched((void *)0x04000000, 512, 0, 0);
+  CHECK(capturing && logHas("volcado diferido"), "no se volco despues de la espera");
+  capturing = 0; opt.espera = 0;
+}
+
+// dev56.5: canal con gepresent: la Vita escribe el log y el volcado (aqui una gepresent de mentira)
+extern void (*test_delay_hook)(void);
+static FILE *vita_fp;
+static char vita_log[1 << 16];
+static int vita_log_len, vita_chunks;
+static void fakeGepresent(void) {
+  if (VDESC[VLOG] != VDESC[VLOG + 1]) {
+    u32 n = VDESC[VLOG + 2];
+    if (vita_log_len + n < sizeof(vita_log)) { memcpy(vita_log + vita_log_len, (char *)(VLOG_BUF | 0x40000000), n); vita_log_len += n; vita_log[vita_log_len] = 0; }
+    VDESC[VLOG + 1] = VDESC[VLOG];
+  }
+  if (VDESC[VDUMP] != VDESC[VDUMP + 1]) {
+    u32 a = VDESC[VDUMP + 2], n = VDESC[VDUMP + 3], f = VDESC[VDUMP + 4];
+    if (f & 1) vita_fp = fopen("volcado_vita_test.gpd", "wb");
+    if (vita_fp && n) fwrite((void *)(a | 0x40000000), 1, n, vita_fp);
+    if ((f & 2) && vita_fp) { fclose(vita_fp); vita_fp = NULL; }
+    vita_chunks++;
+    VDESC[VDUMP + 1] = VDESC[VDUMP];
+  }
+}
+static void test_canal_vita(void) {
+  reset();
+  int i;
+  for (i = 0; i < 64; i++) VDESC[i] = 0;
+  VDESC[0] = 0x31565047; VDESC[8] = 0x56474F4C; // "GPV1", "LOGV" (gepresent v6)
+  test_delay_hook = fakeGepresent;
+  vita_log_len = vita_chunks = 0; test_log_len = 0; test_log[0] = 0;
+  LOG("linea por la vita\n");
+  logFlush(); fakeGepresent();
+  CHECK(strstr(vita_log, "linea por la vita") && !strstr(test_log, "linea por la vita"), "el log no lo escribio la Vita");
+  // Volcado: el mismo frame que test_volcado, escrito por la Vita en mitades
+  _sceGeListEnQueue = fakeEnqueue;
+  _sceDisplaySetFrameBuf = fakeSetFrameBuf;
+  dumpSetup();
+  u32 *fmt, *fbp, *start;
+  formFrame(&fmt, &fbp, &start, 1);
+  dumpRequest();
+  sceGeListEnQueuePatched((void *)LIST, NULL, 0, NULL);
+  sceDisplaySetFrameBufPatched((void *)0x0A0D43C0, 1024, 0, 0);
+  sceGeListEnQueuePatched((void *)LIST, NULL, 0, NULL);
+  fakeGepresent(); logFlush(); fakeGepresent();
+  CHECK(!dumping && strstr(vita_log, "lo escribio la Vita"), "el volcado no termino o no lo escribio la Vita");
+  FILE *f = fopen("volcado_vita_test.gpd", "rb");
+  static u8 d[32 << 20];
+  int n = f ? (int)fread(d, 1, sizeof(d), f) : 0, pos = 0, end = 0;
+  if (f) fclose(f);
+  while (pos + 8 <= n) { u32 ty = *(u32 *)(d + pos), sz = *(u32 *)(d + pos + 4); end |= ty == GPD_END; pos += 8 + ((sz + 3) & ~3); }
+  CHECK(n > 0 && !memcmp(d + 8, "GPD1", 4) && end && pos == n, "volcado de la Vita mal armado: %d bytes, fin %d, pos %d", n, end, pos);
+  CHECK(vita_chunks >= 2, "el volcado deberia ir en varias mitades (%d)", vita_chunks);
+  test_delay_hook = NULL;
+  for (i = 0; i < 64; i++) VDESC[i] = 0;
+}
+
+// dev56.3: perfil del recorrido (con el reloj): cuenta los comandos por tipo en los frames medidos
+static void test_perfil(void) {
+  reset();
+  opt.perfil = 1; prof_init = 0;
+  u32 at = LIST + 0x8000;
+  sub(at, 0, 0x09100000);
+  callList(at, 3);
+  log_frame = 32; prof_frames = 0; memset(prof_n, 0, sizeof(prof_n));
+  run();
+  prof_frames += prof_any; prof_any = 0;
+  CHECK(prof_frames == 1 && prof_n[P_CALL] == 3 && prof_n[P_3D] == 2, "perfil: frames=%lu calls=%lu 3d=%lu", prof_frames,
+        prof_n[P_CALL], prof_n[P_3D]);
+  profLog(1);
+  CHECK(logHas("stats perfil") && logHas("sublistas="), "perfil: no salio la linea en el log");
+  opt.perfil = 0;
+}
+
 static void test_escala_15(void) {
   reset();
   bigSetup(1.5f);
@@ -1018,7 +1191,7 @@ int main(void) {
     test_viewport_scissor_x2, test_viewport_zona, test_memo_lista_grande, test_vertices_2d,
     test_vaddr_avanza_tras_3d, test_bjump_no_salta, test_estado_entre_listas, test_textura_fb_al_dibujar,
     test_pitch_0,
-    test_robustez, test_copia_listas_alternas, test_fps, test_doble_buffer_alternado, test_nop_no_revive, test_lista_estatica_fb, test_pasivo_no_escribe, test_pasivo_normaliza, test_desplazamiento_y_1024, test_vertices_2d_muchos_buffers, test_pasivo_muestreo, test_copia_escalada_con_ge, test_sublistas_sin_cambios, test_sublistas_anidadas, test_sublistas_doble_buffer, test_vram_real, test_copia_formulario, test_opciones_juego, test_volcado, test_volcado_pasivo, test_vram_2mb, test_pase_intercambio, test_rt_escala1_z, test_pantalla_se_lee, test_menu, test_presentacion, test_escala_15,
+    test_robustez, test_copia_listas_alternas, test_fps, test_doble_buffer_alternado, test_nop_no_revive, test_lista_estatica_fb, test_pasivo_no_escribe, test_pasivo_normaliza, test_desplazamiento_y_1024, test_vertices_2d_muchos_buffers, test_pasivo_muestreo, test_copia_escalada_con_ge, test_sublistas_sin_cambios, test_sublistas_anidadas, test_sublistas_doble_buffer, test_vram_real, test_copia_formulario, test_opciones_juego, test_volcado, test_volcado_pasivo, test_vram_2mb, test_pase_intercambio, test_rt_escala1_z, test_pantalla_se_lee, test_menu, test_presentacion, test_escala_15, test_sublistas_misma_casilla, test_diag_z_textura, test_diag_textura_dentro_fb, test_perfil, test_camino_corto, test_memo_solo_del_plugin, test_volcado_diferido, test_canal_vita,
   };
   int i;
   for (i = 0; i < (int)(sizeof(tests) / sizeof(tests[0])); i++)
