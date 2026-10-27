@@ -22,6 +22,7 @@ typedef struct {
   int escala;     // escala del buffer grande (indice de scales[] en main.c); se aplica al abrir el juego
   int perfil;     // perfil del recorrido en el log: 0 no, 1 reloj, 2 reloj + contadores del Allegrex
   int espera;     // segundos entre soltar L+R+SELECT y el volcado (0: al instante)
+  int sin_efecto; // omitir draws que no pueden cambiar el buffer 565 (color enmascarado y sin z: solo stencil)
 } Options;
 
 extern Options opt;

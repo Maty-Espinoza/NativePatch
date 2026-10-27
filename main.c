@@ -78,7 +78,7 @@ static void bigSetup(float sc) {
 // Contadores baratos que se vuelcan al log cada STATS_EVERY frames
 static struct {
   u32 lists, heads, stalls, draws, skipped, stack_full, transfers, fb_transfers, fallback, enq_copies, idle_frames;
-  u32 rt_draws;
+  u32 rt_draws, no_effect; // draws sin efecto sobre el buffer 565 omitidos (dev57.1)
   // Rendimiento (microsegundos)
   u32 frames, frame_us, frame_max, slow60, slow30; // tiempo entre flips
   u32 patch_us, patch_max, cmds;                   // costo del plugin por frame
@@ -2268,6 +2268,15 @@ void patchGeList(u32 *list, u32 *stall) {
         }
         int texmode = state.ignore_framebuf ? 0 : texCheck();
         int omit = state.ignore_framebuf || texmode == 1;
+        // dev57.1: un draw con el color enmascarado y sin escritura de z solo puede cambiar el canal alfa/stencil.
+        // El buffer grande es 565 y no lo tiene: el draw no hace nada, pero el GE lo rellena igual (GT: 4 rectangulos
+        // de pantalla completa por frame = 4 pantallas de 960x544, ~3,5-6 ms de GE a 2x). Se omite.
+        if (!omit && opt.sin_efecto && !passive && !state.cur_rt && state.fmt_live == PIXELFORMAT &&
+            !(state.ge_cmd[GE_CMD_CLEARMODE] & 1) && (state.ge_cmd[GE_CMD_MASKRGB] & 0xffffff) == 0xffffff &&
+            (!(state.ge_cmd[GE_CMD_ZTESTENABLE] & 1) || (state.ge_cmd[GE_CMD_ZWRITEDISABLE] & 1))) {
+          omit = 1;
+          st.no_effect++;
+        }
         if (capturing)
           capDraw(cmd == GE_CMD_PRIM ? (data >> 16) & 7 : cmd, cmd == GE_CMD_PRIM ? data & 0xffff : (data & 0xff) * ((data >> 8) & 0xff),
                   omit | (state.cur_rt ? 8 : 0));
@@ -3257,8 +3266,8 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
   walk_now = !passive || capturing || log_frame % PASSIVE_SAMPLE == 0;
 
   if (log_frame % STATS_EVERY == 0) {
-    LOG("stats listas=%lu head=%lu stall=%lu draws=%lu omitidos=%lu frames_sin_draws=%lu fbs=%lu\n",
-        st.lists, st.heads, st.stalls, st.draws, st.skipped, st.idle_frames, state.framebuf_count);
+    LOG("stats listas=%lu head=%lu stall=%lu draws=%lu omitidos=%lu sin_efecto=%lu frames_sin_draws=%lu fbs=%lu\n",
+        st.lists, st.heads, st.stalls, st.draws, st.skipped, st.no_effect, st.idle_frames, state.framebuf_count);
     LOG("stats transfers=%lu a_fb=%lu escalados=%lu copias_en_lista=%lu copias_al_fb_juego=%lu pila_llena=%lu dibujos_cpu=%lu\n",
         st.transfers, st.fb_transfers, st.fallback, st.enq_copies, st.fb_copies, st.stack_full, st.cpu_overlays);
     memSnapshot("stats");

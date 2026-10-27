@@ -1185,13 +1185,43 @@ static void test_escala_15(void) {
   bigSetup(2);
 }
 
+// dev57.1: un draw con el color enmascarado y sin escritura de z (GT: 4 rectangulos de pantalla completa que solo
+// escriben el stencil) no cambia nada en el buffer 565: se omite. Con z, con color, en clear o con la opcion apagada, no.
+static void test_sin_efecto(void) {
+  reset();
+  short *v = (short *)VERTS;
+  memset(v, 0, 64); v[3] = 480; v[4] = 272;
+  u32 *p[5];
+  begin();
+  cmd(GE_CMD_FRAMEBUFPIXFORMAT, 0); cmd(GE_CMD_FRAMEBUFPTR, 0); cmd(GE_CMD_FRAMEBUFWIDTH, 512);
+  cmd(GE_CMD_BASE, 0x080000); cmd(GE_CMD_VERTEXTYPE, GE_VTYPE_THROUGH | GE_VTYPE_POS_16BIT); cmd(GE_CMD_VADDR, VERTS & 0xffffff);
+  cmd(GE_CMD_ZTESTENABLE, 0); cmd(GE_CMD_CLEARMODE, 0); cmd(GE_CMD_STENCILTESTENABLE, 1);
+  cmd(GE_CMD_MASKRGB, 0xffffff); p[0] = cmd(GE_CMD_PRIM, (GE_PRIM_RECTANGLES << 16) | 2);  // solo stencil: se omite
+  cmd(GE_CMD_ZTESTENABLE, 1); cmd(GE_CMD_ZWRITEDISABLE, 0); p[1] = cmd(GE_CMD_PRIM, (GE_PRIM_RECTANGLES << 16) | 2); // escribe z: no
+  cmd(GE_CMD_ZWRITEDISABLE, 1); p[2] = cmd(GE_CMD_PRIM, (GE_PRIM_RECTANGLES << 16) | 2); // z sin escritura: se omite
+  cmd(GE_CMD_MASKRGB, 0x0000ff); p[3] = cmd(GE_CMD_PRIM, (GE_PRIM_RECTANGLES << 16) | 2); // escribe color: no
+  cmd(GE_CMD_MASKRGB, 0xffffff); cmd(GE_CMD_CLEARMODE, 0x201); p[4] = cmd(GE_CMD_PRIM, (GE_PRIM_RECTANGLES << 16) | 2); // clear: no
+  end();
+  memset(&st, 0, sizeof(st));
+  run();
+  CHECK((*p[0] >> 24) == GE_CMD_NOP && (*p[2] >> 24) == GE_CMD_NOP, "los draws solo de stencil no se omitieron: %08lx %08lx", *p[0], *p[2]);
+  CHECK((*p[1] >> 24) == GE_CMD_PRIM && (*p[3] >> 24) == GE_CMD_PRIM && (*p[4] >> 24) == GE_CMD_PRIM,
+        "se omitio un draw con efecto: %08lx %08lx %08lx", *p[1], *p[3], *p[4]);
+  CHECK(st.no_effect == 2 && st.skipped == 2 && st.draws == 3, "sin_efecto=%lu omitidos=%lu draws=%lu", st.no_effect, st.skipped, st.draws);
+  opt.sin_efecto = 0;
+  memset(&st, 0, sizeof(st));
+  run();
+  CHECK((*p[0] >> 24) == GE_CMD_PRIM && st.no_effect == 0 && st.draws == 5, "con la opcion apagada: %08lx draws=%lu", *p[0], st.draws);
+  opt.sin_efecto = 1;
+}
+
 int main(void) {
   mapPspMemory();
   void (*tests[])(void) = {
     test_viewport_scissor_x2, test_viewport_zona, test_memo_lista_grande, test_vertices_2d,
     test_vaddr_avanza_tras_3d, test_bjump_no_salta, test_estado_entre_listas, test_textura_fb_al_dibujar,
     test_pitch_0,
-    test_robustez, test_copia_listas_alternas, test_fps, test_doble_buffer_alternado, test_nop_no_revive, test_lista_estatica_fb, test_pasivo_no_escribe, test_pasivo_normaliza, test_desplazamiento_y_1024, test_vertices_2d_muchos_buffers, test_pasivo_muestreo, test_copia_escalada_con_ge, test_sublistas_sin_cambios, test_sublistas_anidadas, test_sublistas_doble_buffer, test_vram_real, test_copia_formulario, test_opciones_juego, test_volcado, test_volcado_pasivo, test_vram_2mb, test_pase_intercambio, test_rt_escala1_z, test_pantalla_se_lee, test_menu, test_presentacion, test_escala_15, test_sublistas_misma_casilla, test_diag_z_textura, test_diag_textura_dentro_fb, test_perfil, test_camino_corto, test_memo_solo_del_plugin, test_volcado_diferido, test_canal_vita,
+    test_robustez, test_copia_listas_alternas, test_fps, test_doble_buffer_alternado, test_nop_no_revive, test_lista_estatica_fb, test_pasivo_no_escribe, test_pasivo_normaliza, test_desplazamiento_y_1024, test_vertices_2d_muchos_buffers, test_pasivo_muestreo, test_copia_escalada_con_ge, test_sublistas_sin_cambios, test_sublistas_anidadas, test_sublistas_doble_buffer, test_vram_real, test_copia_formulario, test_opciones_juego, test_volcado, test_volcado_pasivo, test_vram_2mb, test_pase_intercambio, test_rt_escala1_z, test_pantalla_se_lee, test_menu, test_presentacion, test_escala_15, test_sublistas_misma_casilla, test_diag_z_textura, test_diag_textura_dentro_fb, test_perfil, test_camino_corto, test_memo_solo_del_plugin, test_volcado_diferido, test_canal_vita, test_sin_efecto,
   };
   int i;
   for (i = 0; i < (int)(sizeof(tests) / sizeof(tests[0])); i++)

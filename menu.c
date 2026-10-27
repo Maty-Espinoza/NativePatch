@@ -15,7 +15,7 @@
 
 // Valores originales (por defecto). El menu marca los que se cambiaron para probar.
 const Options opt_default = { .omit_fbtex = 1, .fallback = 0, .v2d = 1, .tx_ge = 1, .walk_cache = 1, .vram_fix = 1,
-                              .autocap = 1, .cpu_draw = 1, .swap = 1, .rt1 = 1 };
+                              .autocap = 1, .cpu_draw = 1, .swap = 1, .rt1 = 1, .sin_efecto = 1 };
 Options opt = opt_default;
 u32 opt_gen;
 
@@ -56,6 +56,7 @@ static const Item items[] = {
   { "escala", "Escala (al abrir el juego; <2x: gepresent)", &opt.escala, 0, 5, 1, escalas },
   { "perfil", "Perfil del recorrido en el log", &opt.perfil, 0, 2, 1, perfil_modes },
   { "espera", "Volcado con L+R+SELECT: espera (s)", &opt.espera, 0, 10, 1, NULL },
+  { "sin_efecto", "Omitir draws solo de stencil (565)", &opt.sin_efecto, 0, 1, 1, no_si },
   { NULL, "Capturar el proximo frame al log", NULL, 0, 0, 0, NULL, ACT_CAPTURE },
   { NULL, "Volcar el proximo frame (.gpd)", NULL, 0, 0, 0, NULL, ACT_DUMP },
   { NULL, "Memoria y CPU al log", NULL, 0, 0, 0, NULL, ACT_SNAPSHOT },
