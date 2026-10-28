@@ -1,5 +1,8 @@
 # Para empezar la etapa 2 de la arquitectura B (resumen al cerrar la etapa 1, 2026-10-28)
 
+> **Estado al cierre de la primera conversación de la etapa 2: ver `etapa2_avance.md`** (modo sombra + capturador,
+> commit dev61 + gepresent v12.9).
+
 Leer primero: `arquitectura_dibujo_en_vita.md` (el plan; §3 diseño, §5 presupuesto, §6 etapas), `etapa0_resultados.md`
 (cuánto trabajo traen los juegos) y `etapa1_banco_gxm.md` (cuánto cuesta en la Vita). Este documento junta lo necesario
 para arrancar.

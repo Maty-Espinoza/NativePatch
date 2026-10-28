@@ -27,8 +27,9 @@ F="-mcpu=cortex-a9 -mthumb -mfloat-abi=hard -mfpu=neon -O2 -Wall -Wno-format -no
 rm -rf o; mkdir -p o
 arm-none-eabi-gcc $F -I$VH/include -I$TAI/include -c gepresent.c -o o/gepresent.o
 arm-none-eabi-gcc $F -I$VH/include -I$TAI/include -c banco.c -o o/banco.o
+arm-none-eabi-gcc $F -I$VH/include -I$TAI/include -c captura.c -o o/captura.o
 # Stubs: cada funcion que falta sale del primer archivo de $STUBS que la tenga, en este orden de bibliotecas
-arm-none-eabi-ld -r -o o/todo.o o/gepresent.o o/banco.o
+arm-none-eabi-ld -r -o o/todo.o o/gepresent.o o/banco.o o/captura.o
 for s in $(arm-none-eabi-nm -u o/todo.o | awk '{print $2}' | grep -v -E '^(__|tai|mem)' | sort -u); do
   ok=
   for lib in SceLibKernel_SceLibKernel SceIofilemgr_SceIofilemgr SceSysmem_SceSysmem SceKernelThreadMgr_SceThreadmgr \

@@ -4,6 +4,8 @@
 #include <pspintrman.h>
 #include <string.h>
 
+#include <systemctrl.h>
+
 #include "log.h"
 
 #define LOG_PATH "ms0:/ge_patch.log"
@@ -156,7 +158,22 @@ void logGameId(void) {
     sceIoClose(fd);
   }
   pspSdkSetK1(k1);
-  LOG("juego=%s\n", id);
+  // dev61.2: Silent Hill pide la VRAM antes de montar el disco (sin UMD_DATA.BIN): el ID sale de los datos del juego
+  // que guarda el kernel (sceKernelGetGameInfo, +0x44 "ULUS10450"; lo mismo que usa Adrenaline para su titleid)
+  const char *from = "UMD_DATA.BIN";
+  if (id[0] == '?') {
+    char *(*info)(void) = (void *)sctrlHENFindFunction("sceSystemMemoryManager", "SysMemForKernel", 0xEF29061C);
+    char *g = info ? info() : NULL;
+    if (g && g[0x44] >= 'A' && g[0x44] <= 'Z') {
+      g += 0x44;
+      memcpy(id, g, 4);
+      id[4] = '-';
+      memcpy(id + 5, g + (g[4] == '-' ? 5 : 4), 5);
+      id[10] = 0;
+      from = "datos del juego del kernel";
+    }
+  }
+  LOG("juego=%s (de %s)\n", id, from);
 }
 
 static int flushThread(SceSize args, void *argp) {

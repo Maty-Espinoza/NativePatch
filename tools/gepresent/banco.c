@@ -1,5 +1,5 @@
 // banco.c (gepresent v11.3): banco de pruebas GXM de la etapa 1 de la arquitectura B (arquitectura_dibujo_en_vita.md §6).
-// Apagado por defecto: solo corre si existe ux0:data/gepresent/banco (su contenido = segundos de espera antes de
+// Apagado por defecto: solo corre si existe ux0:data/gepresent/banco_v12 (v12; antes "banco", que quedo en la Vita) (su contenido = segundos de espera antes de
 // empezar; 20 si esta vacio). Todo pasa dentro del proceso de Adrenaline, en su hilo de dibujo, justo despues de su
 // escena (gancho a la importacion de sceGxmEndScene), en una superficie propia de 960x544 (8888 + z/stencil):
 //   1. memoria que se puede pedir por tipo (CDRAM, LPDDR): el bloque mas grande y el total; relojes del ARM, bus y GPU;
@@ -512,7 +512,7 @@ static int bancoThread(SceSize args, void *argp) {
 }
 
 void bancoStart(void) {  // desde el hilo de gepresent, con AdrenalineUser ya cargado
-  SceUID fd = sceIoOpen("ux0:data/gepresent/banco", SCE_O_RDONLY, 0);
+  SceUID fd = sceIoOpen("ux0:data/gepresent/banco_v12", SCE_O_RDONLY, 0);
   if (fd < 0) return;
   char b[8] = { 0 };
   sceIoRead(fd, b, 7);

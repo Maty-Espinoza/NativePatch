@@ -33,7 +33,7 @@ TEXMODE = {0: 'normal', 1: 'OMITIR', 2: 'textura render target', 3: 'VRAM real -
            5: 'pantalla reducida', 6: 'mezcla por intercambio', 7: 'rt1 lee la pantalla', 8: 'rt1 se lee a si mismo', 9: 'pantalla se lee a si misma'}
 PRIMS = ['puntos', 'lineas', 'tira_lineas', 'triangulos', 'tira_tri', 'abanico_tri', 'rectangulos', '?']
 OPT_NAMES = ['omit_fbtex', 'fallback', 'wide1024', 'dx', 'dy', 'v2d', 'tx_ge', 'walk_cache', 'wc_check', 'vram_fix',
-             'autocap', 'cpu_draw', 'swap', 'rt1', 'escala', 'perfil', 'espera', 'sin_efecto']  # orden de Options en menu.h (dev55: escala, dev56.3: perfil, dev56.4: espera, dev57.1: sin_efecto)
+             'autocap', 'cpu_draw', 'swap', 'rt1', 'escala', 'perfil', 'espera', 'sin_efecto', 'sombra']  # orden de Options en menu.h (dev55: escala, dev56.3: perfil, dev56.4: espera, dev57.1: sin_efecto, dev61: sombra)
 OPT_NAMES_OLD = ['rt_on', 'rt_scale', 'omit_fbtex', 'fallback', 'nop_mark', 'walk_new', 'wide1024', 'dx', 'dy', 'v2d',
                  'tx_ge', 'walk_cache', 'wc_check', 'layers', 'vram_fix', 'autocap', 'cpu_draw', 'csrc', 'swap', 'rt1', 'sub']
 

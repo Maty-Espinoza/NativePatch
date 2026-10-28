@@ -23,6 +23,7 @@ typedef struct {
   int perfil;     // perfil del recorrido en el log: 0 no, 1 reloj, 2 reloj + contadores del Allegrex
   int espera;     // segundos entre soltar L+R+SELECT y el volcado (0: al instante)
   int sin_efecto; // omitir draws que no pueden cambiar el buffer 565 (color enmascarado y sin z: solo stencil)
+  int sombra;     // modo sombra (etapa 2 de la arquitectura B): el juego corre sin cambios y la Vita lee sus listas
 } Options;
 
 extern Options opt;
@@ -45,6 +46,7 @@ void drawText(u16 *buf, int x, int y, const char *s, u16 fg, u16 bg);
 
 // Acciones del menu que ejecuta main.c
 void menuRequestCapture(void);
+void menuSaveGame(void); // guarda las opciones del juego (modo sombra: L+R+START lo apaga)
 void memSnapshot(const char *why);
 void optChanged(void); // main.c: las decisiones guardadas (texturas) se vuelven a calcular
 

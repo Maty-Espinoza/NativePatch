@@ -25,6 +25,9 @@
 //   +0x20 "LOGV" (v6, este plugin): atiende los buzones del log y de los volcados (ver serveLog/serveDump)
 // Log: ux0:pspemu/ge_patch_gepresent.log
 //
+// v12 (etapa 2 de la arquitectura B): capturador en captura.c. Con GePatch en modo sombra (dev61) sigue el buzon de
+// eventos y recorre las listas del juego desde la Vita, sin dibujar; estadisticas en ux0:pspemu/ge_patch_captura.log.
+//
 // v11 (etapa 1 de la arquitectura B): banco de pruebas GXM en banco.c, apagado por defecto (ux0:data/gepresent/banco).
 //
 // v6 (plan A, paso 1): la Vita escribe el log de GePatch y sus volcados. GePatch deja el texto o un pedazo del
@@ -265,6 +268,7 @@ static unsigned int hookH(const SceGxmTexture *t) {
 }
 
 void bancoStart(void), bancoStop(void);  // banco.c
+void capturaStart(void);                  // captura.c
 
 static int hookThread(SceSize args, void *argp) {
   SceIoStat st;
@@ -281,7 +285,7 @@ static int hookThread(SceSize args, void *argp) {
   alog("ganchos (importaciones de AdrenalineUser) GetWidth %08x GetHeight %08x\n", r_w, r_h);
   if (hk_w < 0 || hk_h < 0)
     return sceKernelExitDeleteThread(0);
-  bancoStart();  // v11: solo si existe ux0:data/gepresent/banco
+  bancoStart();  // v11: solo si existe ux0:data/gepresent/banco_v12 (v12: el archivo "banco" viejo se ignora)
   // La RAM del PSP se mapea en el proceso despues de cargar el plugin: leerla antes cierra Adrenaline
   // (C2-12828-1 en v4). Se espera a que el bloque exista, como vpcdram.
   for (int mapped = 0;;) {  // solo escribe si GePatch dejo su marca (la zona es del XMB fuera de los juegos)
@@ -292,6 +296,7 @@ static int hookThread(SceSize args, void *argp) {
       sceKernelDelayThread(100000);
       continue;
     }
+    if (!mapped) capturaStart();  // v12: el hilo de captura espera el buzon del modo sombra
     mapped = 1;  // (v9: se comprueba una vez; la RAM del PSP queda mapeada mientras viva el proceso)
     int busy = 0;
     if (DESC[0] == 0x31565047) {
@@ -305,12 +310,25 @@ static int hookThread(SceSize args, void *argp) {
   }
 }
 
+// v12.6 (diagnostico): cada hilo que crea el emulador (ScePspemu) con su prioridad y nucleos, para elegir donde corre
+// el capturador sin quitarle tiempo al audio (v12.4 con prioridad 0x40 en el nucleo 2 lo cortaba)
+static tai_hook_ref_t ref_ct;
+static SceUID hk_ct = -1;
+static SceUID hookCT(const char *name, SceKernelThreadEntry entry, int prio, int stack, SceUInt attr, int aff,
+                     const SceKernelThreadOptParam *opt) {
+  SceUID r = TAI_CONTINUE(SceUID, ref_ct, name, entry, prio, stack, attr, aff, opt);
+  alog("hilo de ScePspemu: %s prioridad %x nucleos %x pila %x atributos %x -> %08x\n", name ? name : "?", prio, aff, stack, attr, r);
+  return r;
+}
+
 void _start() __attribute__((weak, alias("module_start")));
 int module_start(SceSize args, void *argp) {
-  alog("gepresent v11.3 (v9 + banco de pruebas GXM de la etapa 1, apagado salvo ux0:data/gepresent/banco) compilado %s %s (dato %d)\n", __DATE__, __TIME__, dato);
+  alog("gepresent v12.9 (v11.3 + capturador de la etapa 2, activo con GePatch en modo sombra) compilado %s %s (dato %d)\n", __DATE__, __TIME__, dato);
   SceIoStat bst;  // v11.2: con el banco no se reserva el anillo de volcados (24 MB que el banco necesita)
-  if (sceIoGetstat("ux0:data/gepresent/banco", &bst) < 0) ringInit();
+  if (sceIoGetstat("ux0:data/gepresent/banco_v12", &bst) < 0) ringInit();
   else alog("banco de pruebas activo: sin anillo de volcados (se escriben directo)\n");
+  hk_ct = taiHookFunctionImport(&ref_ct, "ScePspemu", 0xCAE9ACE6, 0xC5C11EE7, hookCT);
+  alog("gancho de sceKernelCreateThread de ScePspemu: %08x\n", hk_ct);
   SceUID th = sceKernelCreateThread("gepresent", hookThread, 0x60, 0x2000, 0, 0, NULL);
   if (th >= 0) sceKernelStartThread(th, 0, NULL);
   return SCE_KERNEL_START_SUCCESS;
@@ -318,6 +336,7 @@ int module_start(SceSize args, void *argp) {
 int module_stop(SceSize args, void *argp) {
   if (hk_w >= 0) taiHookRelease(hk_w, ref_w);
   if (hk_h >= 0) taiHookRelease(hk_h, ref_h);
+  if (hk_ct >= 0) taiHookRelease(hk_ct, ref_ct);
   bancoStop();
   return SCE_KERNEL_STOP_SUCCESS;
 }

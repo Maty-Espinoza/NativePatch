@@ -2742,12 +2742,126 @@ int (* _sceGeListEnQueueHead)(const void *list, void *stall, int cbid, PspGeList
 
 int (* _sceDisplaySetFrameBuf)(void *topaddr, int bufferwidth, int pixelformat, int sync);
 
+// --- Modo sombra (etapa 2 de la arquitectura B, dev61) -------------------------------------------------------
+// El juego corre como sin plugin: VRAM real, sin recorrer ni tocar sus listas y sin imagen grande (Adrenaline muestra
+// la imagen nativa). Los ganchos solo anotan en un buzon lo que el juego le pide al GE, y el capturador de gepresent
+// (v12, en la Vita) recorre las mismas listas leyendo la RAM del PSP. Se elige por juego en el menu ("Modo sombra")
+// y vale desde la proxima vez que se abre el juego; durante el modo sombra, L+R+START lo apaga para la proxima vez.
+// Buzon en la VRAM falsa (0x0A000000, sin uso en este modo), sin cache:
+//   +0x00 "SOMB"  +0x04 version  +0x08 eventos escritos (PSP)  +0x0C ultima lista capturada (Vita, numero de orden)
+//   +0x10 latido de la Vita  +0x14 eventos leidos (Vita)  +0x18 listas encoladas (PSP)
+//   +0x1000 anillo de SB_N eventos de 32 bytes: tipo | dato << 8, a, b, c, hora del PSP (us), orden de la lista
+// Compuerta en el sync (modo normal de la arquitectura B): sceGeDrawSync/ListSync esperan hasta 5 ms a que la Vita
+// haya capturado las listas que el juego espera. Se mide cuantas veces hace falta esperar y cuanto.
+#define SB ((volatile u32 *)(0x0A000000 | 0x40000000))
+#define SB_MAGIC 0x424D4F53 // "SOMB"
+#define SB_N 4096
+enum { EV_ENQ = 1, EV_HEAD, EV_STALL, EV_DSYNC, EV_LSYNC, EV_FLIP };
+static int sombra, mode_done;
+static u32 sb_ord; // numero de orden de la ultima lista encolada
+static struct { u32 qid, ord; } sb_q[16]; // ultimas listas, para la compuerta de sceGeListSync
+static struct { u32 ev, syncs, late, wait_us, wait_max, timeouts, in_sync_us, lsyncs, llate; } sbs;
+
+static void sbPost(u32 type, u32 aux, u32 a, u32 b, u32 c) {
+  int intr = pspSdkDisableInterrupts();
+  u32 h = SB[2];
+  volatile u32 *e = SB + 0x400 + (h % SB_N) * 8;
+  e[0] = type | aux << 8; e[1] = a; e[2] = b; e[3] = c; e[4] = sceKernelGetSystemTimeLow();
+  if (type <= EV_HEAD) {
+    e[5] = SB[6] = ++sb_ord;
+    sb_q[sb_ord & 15].qid = c; sb_q[sb_ord & 15].ord = sb_ord;
+  }
+  asm volatile("sync");
+  SB[2] = h + 1;
+  sbs.ev++;
+  pspSdkEnableInterrupts(intr);
+}
+static void sbInit(void) {
+  int i;
+  for (i = 0; i < 8; i++) SB[i] = 0;
+  SB[1] = 1; SB[6] = sb_ord;
+  SB[0] = SB_MAGIC;
+}
+static int sbAlive(void) { // el capturador de la Vita responde (su latido cambio hace menos de 0,5 s)
+  static u32 hb, hb_t;
+  u32 now = sceKernelGetSystemTimeLow();
+  if (SB[4] != hb) { hb = SB[4]; hb_t = now; }
+  return hb && now - hb_t < 500000;
+}
+// 0 si la Vita ya capturo hasta la lista 'ord'; si no, los us que se espero (hasta 5 ms) | 1
+static u32 sbGate(u32 ord) {
+  if (!sbAlive() || (int)(SB[3] - ord) >= 0) return 0;
+  u32 t0 = sceKernelGetSystemTimeLow(), w;
+  do {
+    sceKernelDelayThread(50);
+    w = sceKernelGetSystemTimeLow() - t0;
+  } while ((int)(SB[3] - ord) < 0 && w < 5000);
+  sbs.timeouts += (int)(SB[3] - ord) < 0;
+  sbs.wait_us += w;
+  if (w > sbs.wait_max) sbs.wait_max = w;
+  return w | 1;
+}
+int (*_sceGeDrawSync)(int mode);
+int (*_sceGeListSync)(int qid, int mode);
+int sceGeDrawSyncPatched(int mode) {
+  if (!sombra || mode)
+    return _sceGeDrawSync(mode);
+  u32 w = sbGate(sb_ord), t0;
+  sbs.syncs++;
+  sbs.late += !!w;
+  sbPost(EV_DSYNC, mode, w, SB[3], sb_ord);
+  t0 = sceKernelGetSystemTimeLow();
+  int r = _sceGeDrawSync(mode);
+  sbs.in_sync_us += sceKernelGetSystemTimeLow() - t0;
+  return r;
+}
+int sceGeListSyncPatched(int qid, int mode) {
+  if (sombra && !mode) {
+    u32 ord = 0, w;
+    int i;
+    for (i = 0; i < 16; i++)
+      if (sb_q[i].qid == (u32)qid && (int)(sb_q[i].ord - ord) > 0)
+        ord = sb_q[i].ord;
+    w = ord ? sbGate(ord) : 0;
+    sbs.lsyncs++;
+    sbs.llate += !!w;
+    sbPost(EV_LSYNC, mode, qid, w, SB[3]);
+  }
+  return _sceGeListSync(qid, mode);
+}
+
+// Primer gancho que llama el juego (pedir la VRAM, encolar o mostrar): perfil del juego y modo sombra. Antes se
+// cargaba el perfil en scaleDecide; el modo sombra tiene que decidirse antes de que el juego pida la VRAM.
+static int id_done;
+static void modeDecide(void) {
+  mode_done = 1;
+  if (passive)
+    return;
+  if (!id_done) {
+    id_done = 1;
+    logGameId();
+    menuLoad(game_id);
+  }
+  if (!opt.sombra)
+    return;
+  sombra = passive = 1;
+  walk_now = 0;
+  *(u32 *)DRAW_NATIVE = 0; // Adrenaline muestra la imagen nativa
+  sbInit();
+  LOG("modo SOMBRA: el juego corre sin cambios (VRAM real, sin recorrer listas)\n");
+  LOG("sombra: buzon de eventos en 0x0A000000 para el capturador de gepresent; L+R+START lo apaga para la proxima vez\n");
+}
+
 void *sceGeEdramGetAddrPatched(void) {
-  return (void *)FAKE_VRAM;
+  if (!mode_done)
+    modeDecide();
+  return sombra ? _sceGeEdramGetAddr() : (void *)FAKE_VRAM;
 }
 
 unsigned int sceGeEdramGetSizePatched(void) {
-  return 4 * 1024 * 1024;
+  if (!mode_done)
+    modeDecide();
+  return sombra ? (u32)_sceGeEdramGetSize() : 4 * 1024 * 1024;
 }
 
 void guStart(int cid, void *list); // gu.c
@@ -2830,16 +2944,12 @@ static void presSource(u32 src, u32 w, u32 h, int stride, int fmt) {
 
 // Antes del primer recorrido: perfil del juego y escala del buffer grande. Una escala menor que 2 necesita
 // gepresent (amplia la imagen final): su hilo responde "PRES" en el descriptor en cuanto ve la marca.
-static int id_done;
 static void scaleDecide(void) {
   scale_done = 1;
+  if (!mode_done)
+    modeDecide();
   if (passive)
     return;
-  if (!id_done) {
-    id_done = 1;
-    logGameId();
-    menuLoad(game_id);
-  }
   int e = opt.escala >= 0 && opt.escala < 6 ? opt.escala : 0;
   float sc = scales[e];
   if (sc < 2) {
@@ -2858,6 +2968,11 @@ static void scaleDecide(void) {
 }
 
 int sceGeListUpdateStallAddrPatched(int qid, void *stall) {
+  if (sombra && !walk_now && !dumping) { // sombra: solo anotar
+    int r = _sceGeListUpdateStallAddr(qid, stall);
+    sbPost(EV_STALL, 0, qid, (u32)stall, 0);
+    return r;
+  }
   int k1 = pspSdkSetK1(0);
   u32 t0 = sceKernelGetSystemTimeLow();
   st.stalls++;
@@ -2876,7 +2991,10 @@ int sceGeListUpdateStallAddrPatched(int qid, void *stall) {
   }
   patch_us_frame += sceKernelGetSystemTimeLow() - t0;
   pspSdkSetK1(k1);
-  return _sceGeListUpdateStallAddr(qid, stall);
+  int r = _sceGeListUpdateStallAddr(qid, stall);
+  if (sombra)
+    sbPost(EV_STALL, 0, qid, (u32)stall, 0);
+  return r;
 }
 
 int sceGeListEnQueuePatched(const void *list, void *stall, int cbid, PspGeListArgs *arg) {
@@ -2900,7 +3018,10 @@ int sceGeListEnQueuePatched(const void *list, void *stall, int cbid, PspGeListAr
   if (dumpOnList((u32)list, (u32)stall, 0) || walk_now)
     patchGeList((u32 *)((u32)list & 0x0fffffff), (u32 *)((u32)stall & 0x0fffffff));
   patch_us_frame += sceKernelGetSystemTimeLow() - t0;
-  return _sceGeListEnQueue(list, stall, cbid, arg);
+  int r = _sceGeListEnQueue(list, stall, cbid, arg);
+  if (sombra && r >= 0)
+    sbPost(EV_ENQ, 0, (u32)list, (u32)stall, r);
+  return r;
 }
 
 int sceGeListEnQueueHeadPatched(const void *list, void *stall, int cbid, PspGeListArgs *arg) {
@@ -2913,7 +3034,10 @@ int sceGeListEnQueueHeadPatched(const void *list, void *stall, int cbid, PspGeLi
   if (dumpOnList((u32)list, (u32)stall, 1) || walk_now)
     patchGeList((u32 *)((u32)list & 0x0fffffff), (u32 *)((u32)stall & 0x0fffffff));
   patch_us_frame += sceKernelGetSystemTimeLow() - t0;
-  return _sceGeListEnQueueHead(list, stall, cbid, arg);
+  int r = _sceGeListEnQueueHead(list, stall, cbid, arg);
+  if (sombra && r >= 0)
+    sbPost(EV_HEAD, 0, (u32)list, (u32)stall, r);
+  return r;
 }
 
 // Lo que la CPU del juego dibuja directo en el fb mostrado (el spinner de carga de Silent
@@ -3087,6 +3211,8 @@ static void autoCapture(void) {
 }
 
 int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat, int sync) {
+  if (!mode_done)
+    modeDecide();
   log_frame++;
   if (log_frame == 30) {
     if (!id_done) { // en module_start el disco aun no esta montado (lo normal es que ya lo haya hecho scaleDecide)
@@ -3116,6 +3242,21 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
     LOG("volcado diferido (%d s despues de soltar L+R+SELECT)\n", opt.espera);
     combo = 1;
     prev_combo = 0;
+  }
+  if (sombra) {
+    if (SB[0] != SB_MAGIC) // (por si algo limpia la zona, como Adrenaline 8 al cargar el juego)
+      sbInit();
+    if (pres[0] != 0x31565047) // el log y los volcados los escribe gepresent (buzones del descriptor)
+      pres[0] = 0x31565047;
+    sbPost(EV_FLIP, 0, (u32)topaddr, bufferwidth | pixelformat << 16, log_frame);
+    static u32 prev_menu;
+    u32 mc = PSP_CTRL_LTRIGGER | PSP_CTRL_RTRIGGER | PSP_CTRL_START, m = (pad.Buttons & mc) == mc;
+    if (m && !prev_menu && opt.sombra) {
+      opt.sombra = 0;
+      menuSaveGame();
+      LOG("sombra: L+R+START -> modo normal desde la proxima vez que se abra el juego\n");
+    }
+    prev_menu = m;
   }
   if (combo && !prev_combo) // con los botones (no las capturas automaticas): tambien el volcado binario
     dumpRequest();
@@ -3263,7 +3404,7 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
       state.fb_hash[k] = fbHash(state.framebuf_addr[k]);
   draws_since_flip = big_transfer = color_draws = disp_tex = z_used = tx_small = 0;
   last_flip = now;
-  walk_now = !passive || capturing || log_frame % PASSIVE_SAMPLE == 0;
+  walk_now = !passive || capturing || (!sombra && log_frame % PASSIVE_SAMPLE == 0);
 
   if (log_frame % STATS_EVERY == 0) {
     LOG("stats listas=%lu head=%lu stall=%lu draws=%lu omitidos=%lu sin_efecto=%lu frames_sin_draws=%lu fbs=%lu\n",
@@ -3291,6 +3432,15 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
       LOG("stats sublistas recorridas/frame: no_guardada=%lu cambio_del_plugin=%lu otro_base=%lu otro_destino=%lu copias=%lu cambio_su_contenido=%lu\n",
           st.wc_skipwhy[S_NONE] / w, st.wc_skipwhy[S_GEN] / w, st.wc_skipwhy[S_BASE] / w, st.wc_skipwhy[S_FB] / w,
           st.wc_skipwhy[S_COPY] / w, st.wc_miss / w);
+    }
+    if (sombra) {
+      u32 s = sbs.syncs ? sbs.syncs : 1;
+      LOG("stats sombra: eventos=%lu listas=%lu vita=%s capturadas=%lu (faltan %ld) leidos=%lu\n", sbs.ev, sb_ord,
+          sbAlive() ? "si" : "NO", SB[3], (long)(sb_ord - SB[3]), SB[5]);
+      LOG("stats sombra sync: drawsync=%lu atrasados=%lu (>5 ms: %lu) espera=%lu us/sync (max %lu) listsync=%lu atrasados=%lu\n",
+          sbs.syncs, sbs.late, sbs.timeouts, sbs.wait_us / s, sbs.wait_max, sbs.lsyncs, sbs.llate);
+      LOG("stats sombra GE: el juego espera al GE en drawsync %lu us/sync\n", sbs.in_sync_us / s);
+      memset(&sbs, 0, sizeof(sbs));
     }
     if (st.rt_draws)
       LOG("stats rt: draws en render targets a escala 1=%lu\n", st.rt_draws);
@@ -3374,6 +3524,14 @@ int module_start(SceSize args, void *argp) {
   if (!_sceGeEdramGetAddr || !_sceGeEdramGetSize || !_sceGeGetList ||
       !_sceGeListUpdateStallAddr || !_sceGeListEnQueue || !_sceGeListEnQueueHead)
     LOG("ERROR: no se encontro alguna funcion de sceGe_driver\n");
+
+  _sceGeDrawSync = (void *)FindProc("sceGE_Manager", "sceGe_driver", 0xB287BD61);
+  _sceGeListSync = (void *)FindProc("sceGE_Manager", "sceGe_driver", 0x03444EB4);
+  if (_sceGeDrawSync && _sceGeListSync) { // solo actuan en modo sombra
+    sctrlHENPatchSyscall((u32)_sceGeDrawSync, sceGeDrawSyncPatched);
+    sctrlHENPatchSyscall((u32)_sceGeListSync, sceGeListSyncPatched);
+  } else
+    LOG("ERROR: no se encontro sceGeDrawSync/sceGeListSync (modo sombra sin compuerta)\n");
 
   if (!passive) { // en pasivo el juego usa la VRAM real
     sctrlHENPatchSyscall((u32)_sceGeEdramGetAddr, sceGeEdramGetAddrPatched);

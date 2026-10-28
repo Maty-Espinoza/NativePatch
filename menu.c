@@ -15,7 +15,8 @@
 
 // Valores originales (por defecto). El menu marca los que se cambiaron para probar.
 const Options opt_default = { .omit_fbtex = 1, .fallback = 0, .v2d = 1, .tx_ge = 1, .walk_cache = 1, .vram_fix = 1,
-                              .autocap = 1, .cpu_draw = 1, .swap = 1, .rt1 = 1, .sin_efecto = 1 };
+                              .autocap = 1, .cpu_draw = 1, .swap = 1, .rt1 = 1, .sin_efecto = 1,
+                              .sombra = 1 }; // dev61.3: modo sombra por defecto (etapa 2; decision del usuario)
 Options opt = opt_default;
 u32 opt_gen;
 
@@ -57,6 +58,7 @@ static const Item items[] = {
   { "perfil", "Perfil del recorrido en el log", &opt.perfil, 0, 2, 1, perfil_modes },
   { "espera", "Volcado con L+R+SELECT: espera (s)", &opt.espera, 0, 10, 1, NULL },
   { "sin_efecto", "Omitir draws solo de stencil (565)", &opt.sin_efecto, 0, 1, 1, no_si },
+  { "sombra", "Modo sombra (al abrir el juego)", &opt.sombra, 0, 1, 1, no_si },
   { NULL, "Capturar el proximo frame al log", NULL, 0, 0, 0, NULL, ACT_CAPTURE },
   { NULL, "Volcar el proximo frame (.gpd)", NULL, 0, 0, 0, NULL, ACT_DUMP },
   { NULL, "Memoria y CPU al log", NULL, 0, 0, 0, NULL, ACT_SNAPSHOT },
@@ -213,7 +215,7 @@ void menuLoad(const char *id) {
   LOG("opciones del juego cargadas de %s (%d valores)\n", path, n);
 }
 
-static void menuSave(void) {
+void menuSaveGame(void) {
   char path[48], buf[512];
   int i, len = 0;
   optPath(path, sizeof(path), game_id);
@@ -336,7 +338,7 @@ int menuFrame(void) {
         applyChanged();
         LOG("menu: valores originales restaurados\n");
       }
-      else if (it->action == ACT_SAVE) menuSave();
+      else if (it->action == ACT_SAVE) menuSaveGame();
       else if (it->action == ACT_FLUSH) logFlush();
       else if (it->action == ACT_CLOSE) open = 0;
       else if (it->labels) change(it, 1);

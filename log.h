@@ -12,7 +12,7 @@
 // L+R+SELECT durante el juego: captura detallada de un frame (draws y estado del GE).
 // Cada linea parte con el numero de frame (cuantas veces se llamo sceDisplaySetFrameBuf).
 
-#define GEPATCH_VERSION "0.2-dev57"
+#define GEPATCH_VERSION "0.2-dev61"
 
 extern u32 log_frame;
 extern u32 log_us; // tiempo escribiendo el log, en us (lo lee y lo pone en 0 el perfil)

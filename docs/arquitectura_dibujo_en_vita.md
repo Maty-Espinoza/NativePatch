@@ -19,7 +19,8 @@ descartada solo por complejidad) y la pone como arquitectura objetivo. GePatch a
   un draw en GXM dentro de Adrenaline (~1 µs sin cambios, ~2 µs con textura o programa nuevo, ~3 µs textura + uniformes),
   la memoria disponible (~33 MB LPDDR + 4 MB CDRAM), el contexto diferido (funciona; el hilo de Adrenaline solo ejecuta,
   ~30 µs), la GPU leyendo la RAM del PSP (funciona, misma velocidad) y el presentador (funciona). Actualizó §5, §6 y §8.
-- Siguiente: etapa 2.
+- Etapa 2 **en curso** (2026-10-28) → **`etapa2_avance.md`**: modo sombra (GePatch dev61, por defecto) + capturador en la
+  Vita (gepresent v12.9). SH a velocidad original; GT a 55–60 fps salvo el puente (~30 ms de captura por frame).
 
 ---
 
