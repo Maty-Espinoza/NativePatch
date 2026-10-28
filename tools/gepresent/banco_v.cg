@@ -1,0 +1,9 @@
+// Banco de gepresent v11: posicion en pixeles -> pantalla con xf[0] (escala, desplazamiento); xf[1..3] completan 64
+// bytes de uniformes (lo que cambia por draw en el caso U), sin efecto (xf[1] = 1, xf[2] = xf[3] = 0).
+void main(float2 pos, float2 uv, float4 col, uniform float4 xf[4],
+          out float4 oPos : POSITION, out float2 oUv : TEXCOORD0, out float4 oCol : COLOR)
+{
+  oPos = float4(pos * xf[0].xy + xf[0].zw, 0.0f, 1.0f);
+  oUv = uv + xf[2].xy * xf[3].zw;
+  oCol = col * xf[1];
+}

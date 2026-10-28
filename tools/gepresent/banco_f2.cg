@@ -1,0 +1,5 @@
+float4 main(float2 uv : TEXCOORD0, float4 col : COLOR, uniform sampler2D t) : COLOR
+{
+  float4 c = tex2D(t, uv);
+  return float4(c.bgr, 1.0f) + col * 0.25f;
+}

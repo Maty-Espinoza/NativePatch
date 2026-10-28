@@ -25,6 +25,8 @@
 //   +0x20 "LOGV" (v6, este plugin): atiende los buzones del log y de los volcados (ver serveLog/serveDump)
 // Log: ux0:pspemu/ge_patch_gepresent.log
 //
+// v11 (etapa 1 de la arquitectura B): banco de pruebas GXM en banco.c, apagado por defecto (ux0:data/gepresent/banco).
+//
 // v6 (plan A, paso 1): la Vita escribe el log de GePatch y sus volcados. GePatch deja el texto o un pedazo del
 // volcado en su RAM y un pedido en el descriptor; este plugin lo escribe en ux0:pspemu/ y lo marca hecho. El PSP no
 // espera cada escritura a la tarjeta (en un volcado eran ~30 escrituras de 512 KB con el juego detenido).
@@ -262,6 +264,8 @@ static unsigned int hookH(const SceGxmTexture *t) {
   return out_h;
 }
 
+void bancoStart(void), bancoStop(void);  // banco.c
+
 static int hookThread(SceSize args, void *argp) {
   SceIoStat st;
   if (sceIoGetstat("ux0:data/gepresent/off", &st) >= 0) {
@@ -277,6 +281,7 @@ static int hookThread(SceSize args, void *argp) {
   alog("ganchos (importaciones de AdrenalineUser) GetWidth %08x GetHeight %08x\n", r_w, r_h);
   if (hk_w < 0 || hk_h < 0)
     return sceKernelExitDeleteThread(0);
+  bancoStart();  // v11: solo si existe ux0:data/gepresent/banco
   // La RAM del PSP se mapea en el proceso despues de cargar el plugin: leerla antes cierra Adrenaline
   // (C2-12828-1 en v4). Se espera a que el bloque exista, como vpcdram.
   for (int mapped = 0;;) {  // solo escribe si GePatch dejo su marca (la zona es del XMB fuera de los juegos)
@@ -302,8 +307,10 @@ static int hookThread(SceSize args, void *argp) {
 
 void _start() __attribute__((weak, alias("module_start")));
 int module_start(SceSize args, void *argp) {
-  alog("gepresent v9 (log y volcados de GePatch a la RAM de la Vita por DMA; la tarjeta en segundo plano) compilado %s %s (dato %d)\n", __DATE__, __TIME__, dato);
-  ringInit();
+  alog("gepresent v11.3 (v9 + banco de pruebas GXM de la etapa 1, apagado salvo ux0:data/gepresent/banco) compilado %s %s (dato %d)\n", __DATE__, __TIME__, dato);
+  SceIoStat bst;  // v11.2: con el banco no se reserva el anillo de volcados (24 MB que el banco necesita)
+  if (sceIoGetstat("ux0:data/gepresent/banco", &bst) < 0) ringInit();
+  else alog("banco de pruebas activo: sin anillo de volcados (se escriben directo)\n");
   SceUID th = sceKernelCreateThread("gepresent", hookThread, 0x60, 0x2000, 0, 0, NULL);
   if (th >= 0) sceKernelStartThread(th, 0, NULL);
   return SCE_KERNEL_START_SUCCESS;
@@ -311,5 +318,6 @@ int module_start(SceSize args, void *argp) {
 int module_stop(SceSize args, void *argp) {
   if (hk_w >= 0) taiHookRelease(hk_w, ref_w);
   if (hk_h >= 0) taiHookRelease(hk_h, ref_h);
+  bancoStop();
   return SCE_KERNEL_STOP_SUCCESS;
 }
