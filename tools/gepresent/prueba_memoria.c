@@ -4,6 +4,9 @@
 // v13.1, espejo de la VRAM: ./prueba <modo> 1 pone las sublistas en la VRAM (su contenido en el espejo). En el frame 0 se
 // saltan y se piden; desde el 1 deben dar lo mismo que en la RAM. ./prueba <modo> 2: una pagina sin copia (sublistas
 // cortadas, sin colgarse).
+// v13.4: ./prueba <modo> <vram> 1 hace pasar a los dos lectores (comprobacion por adelantado) antes que el capturador:
+// mismas columnas que sin lectores; pre= cuenta las aplicadas con la comprobacion de un lector. Con 2 los lectores pasan
+// despues del capturador: se saltan todos los CALL del nivel de arriba (tarde=) sin leer lineas.
 #include "captura.c"
 #include <stdio.h>
 #include <string.h>
@@ -65,7 +68,7 @@ static void build(int frame) {
 static uint32_t stateSum(void) { uint32_t h = 0; for (int i = 0; i < 256; i++) h = h * 31 + reg[i]; for (int m = 0; m < 5; m++) for (int i = 0; i < 96; i++) h = h * 31 + mtx[m][i]; return h * 31 + vaddr * 7 + iaddr; }
 int main(int argc, char **argv) {
   setvbuf(stdout, NULL, _IONBF, 0); int mode = atoi(argv[1]);  // 0 sin memoria, 1 con memoria, 2 revisando todas
-  vram = argc > 2 ? atoi(argv[2]) : 0;
+  vram = argc > 2 ? atoi(argv[2]) : 0; int lec = argc > 3 ? atoi(argv[3]) : 0;
   if (vram) { SUBS = 0x04100000u; esp_on = 1; }
   if (mmap((void *)0x70000000, 0x2000000, PROT_READ | PROT_WRITE, MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0) == MAP_FAILED) { perror("mmap"); return 1; }
   if (mmap((void *)0x72000000, 0x400000, PROT_READ | PROT_WRITE, MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0) == MAP_FAILED) { perror("mmap2"); return 1; }
@@ -75,16 +78,25 @@ int main(int argc, char **argv) {
     build(f);
     sceClibMemset(&acc, 0, sizeof acc);
     List *l = &q[qt++ & 63]; memset(l, 0, sizeof *l); l->pc = MAIN; l->ord = f + 1;
+    if (lec == 1) {  // los lectores van adelante: recorren toda la lista (y comprueban lo guardado) antes que el capturador
+      pub_stall = 0; pub_pc = MAIN; pub_base = reg[0x10]; pub_ord = l->ord;
+      for (int id = 0; id < 2; id++) { Lec s; lecStart(&s, &RR[id]); while (!s.done) lecWalk(id, &s, 2000); }
+    }
     walk();
+    if (lec == 2) {  // los lectores llegan despues (atrasados): deben saltarse todo lo que el capturador ya alcanzo
+      for (int id = 0; id < 2; id++) { Lec s; lecStart(&s, &RR[id]); while (!s.done) lecWalk(id, &s, 2000); }
+      printf("   lectores atrasados: tarde=%u lineas=%u\n", lv_late[0] + lv_late[1], lv_lines[0] + lv_lines[1]);
+    }
     if (vram) {  // lo que haria el GE del PSP: copiar las paginas pedidas (con vram 2, todas menos la 0x102)
       int pl = 0, pd = 0;
       for (int w = 0; w < 16; w++) { esp_ok[w] |= want_l[w] | want_d[w]; pl += __builtin_popcount(want_l[w]); pd += __builtin_popcount(want_d[w]); }
       if (vram == 2) esp_ok[0x102 >> 5] &= ~(1u << (0x102 & 31));
       printf("   espejo: pedidas listas=%d datos=%d recorridas=%u saltadas=%u cortadas=%u\n", pl, pd, acc.v_ok, acc.vcalls, acc.v_cut);
     }
-    printf("f%d cmds=%u draws=%u verts=%u vbytes=%u tex=%u prim3=%u prim4=%u calls=%u estado=%08x | hit=%u miss=%u dep=%u fail=%u no=%u chk=%u BAD=%u lines=%u saltados=%u\n",
+    printf("f%d cmds=%u draws=%u verts=%u vbytes=%u tex=%u prim3=%u prim4=%u calls=%u estado=%08x | hit=%u miss=%u dep=%u fail=%u no=%u chk=%u BAD=%u lines=%u saltados=%u pre=%u lv=%u/%u/%u\n",
            f, acc.cmds, acc.draws, acc.verts, acc.vbytes, acc.textures, acc.prim[3], acc.prim[4], acc.calls_ram, stateSum(),
-           acc.memo_hit, acc.memo_miss, acc.memo_dep, acc.memo_fail, acc.memo_no, acc.memo_chk, acc.memo_bad, acc.memo_lines, acc.memo_cmds);
+           acc.memo_hit, acc.memo_miss, acc.memo_dep, acc.memo_fail, acc.memo_no, acc.memo_chk, acc.memo_bad, acc.memo_lines, acc.memo_cmds, acc.memo_pre,
+           lv_lines[0] + lv_lines[1], lv_ok[0] + lv_ok[1], lv_bad[0] + lv_bad[1]); lv_lines[0] = lv_lines[1] = lv_ok[0] = lv_ok[1] = lv_bad[0] = lv_bad[1] = lv_late[0] = lv_late[1] = 0;
     gen++; ntex = 0;
   }
   lbuf[lpos] = 0; printf("%s", lbuf);

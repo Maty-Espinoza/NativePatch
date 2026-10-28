@@ -17,6 +17,8 @@
 // v13.2: tabla y deposito de la memoria de sublistas 4 veces mas grandes. v13.3: el capturador marca solo las paginas del
 // espejo ya copiadas (el hilo del espejo, con poca prioridad, a veces no recibia tiempo y las sublistas se seguian
 // saltando); comparacion de lineas con NEON y tiempo de la comparacion en el log.
+// v13.4: los lectores comprueban por adelantado las sublistas guardadas (ver memoVerify): el capturador ya no lee ni
+// compara sus lineas (en el puente de GT eso era ~9 de los ~18 ms por frame) y los lectores dejan de recorrerlas.
 #include <psp2/kernel/threadmgr.h>
 #include <psp2/kernel/clib.h>
 #include <psp2/kernel/processmgr.h>
@@ -45,6 +47,7 @@ typedef struct {
   uint32_t batches_notl, only_tl, sleep_us, cpu_cap, cpu_lec[2], cpu_core[4];  // v12.10
   uint32_t calls_ram, memo_hit, memo_miss, memo_fail, memo_no, memo_cmds, memo_lines, memo_bad, memo_chk, memo_reset, memo_dep;  // v12.12
   uint32_t v_ok, v_cut, tex_rt, memo_us;  // v13.1: sublistas de la VRAM recorridas desde el espejo, cortadas (pagina sin copia), texturas en un destino
+  uint32_t memo_pre, lv_lines, lv_ok, lv_bad, lv_late;  // v13.4: aplicadas con la comprobacion de los lectores; lo que hicieron los lectores
   uint32_t chg[256];  // cambios reales de cada registro "otro" (que impide juntar draws)
 } Stats;
 static Stats acc, rep;
@@ -261,7 +264,7 @@ static void draw(uint32_t d) {
 }
 
 // --- Listas en cola (como el GE: una a la vez, en orden) ---
-typedef struct { uint32_t pc, stall, qid, ord, off, sp, stk[32][2], prev, n; } List;
+typedef struct { uint32_t pc, stall, qid, ord, off, sp, stk[32][2], prev, n, ncall; } List;
 #define LIST_MAX 400000  // comandos: mas que eso es una lista que el juego ya reescribio (la Vita iba atrasada)
 static List q[64];
 static uint32_t qh, qt;  // la primera sin terminar y la siguiente libre
@@ -307,6 +310,7 @@ struct Memo {
   uint32_t mmask, mi[5], mtx[148];                 // matrices tocadas
   uint32_t flags, vaddr, iaddr, vset, dirty, last_prim, last_fb, clut[2], ntex, tex[32];
   uint32_t v_in, i_in, ndep, dv[16]; uint8_t dc[16];  // estado de entrada que usa (registros que lee antes de escribirlos)
+  volatile uint32_t ver, vok;  // (al final: recBegin no los borra) version (sube al regrabar) y comprobacion de un lector (vokOf)
 };
 static Memo *memo;
 static uint32_t *pool, pool_top, pool_gen = 1, pool_reset, memo_on, memo_chk;
@@ -332,7 +336,8 @@ static void recAbort(void) { if (rec) { rec->state = 2; rec->fail_gen = gen; rec
 static void recBegin(List *l, uint32_t t) {
   if (pool_reset || pool_top > POOL_N - 64) { pool_gen++; pool_top = 0; pool_reset = 0; acc.memo_reset++; }
   Memo *e = memoSlot(t, reg[0x10], l->off);
-  sceClibMemset(e, 0, sizeof *e);
+  e->ver++; __sync_synchronize();  // primero la version: un lector que la estuviera comprobando la descarta
+  sceClibMemset(e, 0, (char *)&e->ver - (char *)e);
   e->t = t; e->base = reg[0x10]; e->off = l->off; e->pgen = pool_gen; e->v_in = vaddr; e->i_in = iaddr;
   rec = e; rec_last = ~0u; rec_v0 = vaddr; rec_i0 = iaddr; rec_d0 = dirty;
   sceClibMemset(rec_touch, 0, sizeof rec_touch); sceClibMemset(rec_dep, 0, sizeof rec_dep);
@@ -369,6 +374,7 @@ static void recEnd(List *l) {
   d->yields = d->sleep_us = d->cpu_cap = d->cpu_lec[0] = d->cpu_lec[1] = 0;
   for (int k = 0; k < 4; k++) d->cpu_core[k] = 0;
   d->memo_hit = d->memo_miss = d->memo_fail = d->memo_no = d->memo_cmds = d->memo_lines = d->memo_bad = d->memo_chk = d->memo_reset = d->memo_dep = d->memo_us = 0;
+  d->memo_pre = d->lv_lines = d->lv_ok = d->lv_bad = d->lv_late = 0;
   for (int c = 0; c < 256; c++)
     if (rec_touch[c >> 5] >> (c & 31) & 1) {
       if (e->nreg >= MRG) { e->state = 2; e->fail_gen = gen; return; }
@@ -379,6 +385,7 @@ static void recEnd(List *l) {
   e->iaddr = e->flags & M_IABS ? iaddr : iaddr - rec_i0;
   e->vset = vset; e->dirty = e->flags & M_DRAW ? dirty : dirty & ~rec_d0; e->last_prim = last_prim; e->last_fb = last_fb;
   e->clut[0] = last_clut[0]; e->clut[1] = last_clut[1];
+  __sync_synchronize();  // (los lectores la leen desde otro nucleo: todo escrito antes de marcarla lista)
   e->state = 1;
 }
 static void memoApply(Memo *e) {  // estado del GE como si se hubiera recorrido
@@ -400,6 +407,50 @@ static inline int lineEq(const uint32_t *a, const uint32_t *b) {  // 64 bytes ig
   uint32x2_t y = vorr_u32(vget_low_u32(x), vget_high_u32(x));
   return (vget_lane_u32(y, 0) | vget_lane_u32(y, 1)) == 0;
 }
+// v13.4: comprobacion por adelantado. Leer las lineas de la RAM del PSP es lo caro (~6,5 us cada 256 bytes): los lectores,
+// al llegar a un CALL del nivel de arriba con sublistas guardadas, comparan ellos todas sus lineas con el deposito y dejan
+// en vok la lista (numero de orden) y la version comprobadas. El capturador, si vok coincide, la aplica sin leer nada.
+// Si el capturador regraba la sublista mientras tanto (ver++), o se vacia el deposito, la comprobacion se descarta.
+static volatile uint32_t lv_lines[2], lv_ok[2], lv_bad[2], lv_late[2];  // (acumulados, de cada lector)
+// v13.4: reparto de los CALL del nivel de arriba (n-esimo de la lista) entre los lectores segun su ritmo: cada uno toma
+// el siguiente libre (antes: uno si, uno no; el lector del nucleo 0 recibe la mitad de tiempo y llegaba tarde a los suyos).
+// El capturador marca los que ya alcanzo: los lectores atrasados se los saltan. claim[n] = numero de lista << 2 | quien.
+#define CLM 2048
+static volatile uint32_t claim[CLM];
+static inline void claimSet(uint32_t n, uint32_t ord) { if (n < CLM) claim[n] = ord << 2; }
+static int claimTake(uint32_t n, uint32_t ord, int id) {  // 1: este lector se encarga del CALL n
+  if (n >= CLM) return n % 2 == (uint32_t)id;
+  uint32_t o = claim[n];
+  if (o >> 2 == (ord & 0x3FFFFFFF)) { if (!(o & 3)) lv_late[id]++; return 0; }  // ya tomado (si es del capturador: llegamos tarde)
+  return __sync_bool_compare_and_swap(&claim[n], o, ord << 2 | (id + 1));
+}
+static inline uint32_t vokOf(uint32_t ord, uint32_t ver) { return ord << 16 | (ver & 0xFFFF); }
+static int memoVerify(int id, Rd *r, uint32_t t, uint32_t base, uint32_t off, uint32_t ord) {  // 1: alguna version comprobada
+  int ok = 0;
+  uint32_t i = memoHash(t, base, off);
+  for (int k = 0; k < 8; k++, i = (i + 1) & (MEMO_N - 1)) {
+    Memo *e = &memo[i];
+    uint32_t pg = pool_gen, v = e->ver;
+    __sync_synchronize();
+    if (e->pgen != pg || e->state != 1 || e->t != t || e->base != base || e->off != off) continue;
+    uint32_t nr = e->nr, good = nr <= MR, st = pub_stall;
+    for (uint32_t j = 0; j < nr && good; j++) {
+      uint32_t a = e->ra[j], n = e->rn[j], p = e->rp[j];
+      if (p + n > POOL_N || (st && !(a + n * 64 <= st || a >= st + 0x40000))) good = 0;  // (cerca del stall: lo ve el capturador)
+      for (uint32_t m = 0; m < n && good; m++) {
+        uint32_t b = a + m * 64;
+        if (ramEnd(b) < b + 64) { good = 0; break; }
+        rdc(r, b, ord); lv_lines[id]++;
+        good = lineEq(r->buf + (b - r->a) / 4, pool + (p + m) * 16);
+      }
+    }
+    __sync_synchronize();
+    if (e->ver != v || pool_gen != pg) continue;  // el capturador la cambio mientras tanto
+    e->vok = good ? vokOf(ord, v) : 0;
+    if (good) { ok = 1; lv_ok[id]++; } else lv_bad[id]++;
+  }
+  return ok;
+}
 static int memoTry(List *l, uint32_t t) {
   Memo *e = NULL;
   uint32_t base = reg[0x10], i = memoHash(t, base, l->off), seen = 0, no = 0;
@@ -417,6 +468,7 @@ static int memoTry(List *l, uint32_t t) {
     return 0;
   }
   if (nearStall(e, l->stall)) return -1;
+  if (e->vok == vokOf(l->ord, e->ver)) { acc.memo_pre++; goto ok; }  // un lector ya la comprobo en esta lista
   static uint32_t n8;
   uint32_t lines = 0, tm = ++n8 & 7 ? 0 : now();  // (tiempo de la comparacion: 1 de cada 8, x8)
 #define TM() if (tm) acc.memo_us += (now() - tm) * 8
@@ -431,6 +483,7 @@ static int memoTry(List *l, uint32_t t) {
     }
   acc.memo_lines += lines;
   TM();
+ok:;
   static uint32_t nchk;
   if (memo_chk || !(++nchk & 31)) {  // revision (1 de cada 32, o todas): se calcula lo guardado y se recorre igual para comparar
     stSave(&g_tmp); memoApply(e); stSave(&g_memo); stLoad(&g_tmp);
@@ -519,6 +572,7 @@ static int walkList(List *l) {
       if (c == 0x0A) {
         if (l->sp >= 32) { acc.bad++; return 1; }
         acc.calls_ram++;
+        if (!l->sp) claimSet(l->ncall++, l->ord);
         if (!l->sp && memo_on && !rec && !chk) {  // sublista del nivel de arriba: memoria (v12.12)
           int r = memoTry(l, t);
           if (r > 0) break;  // aplicada: se sigue despues del CALL
@@ -651,10 +705,11 @@ static void event(volatile uint32_t *e) {
     gen++; ntex = 0;
     uint32_t n = now();
     if (n - sec_t0 >= 1000000) {  // cada segundo: a la linea del log
-      static uint32_t last[4];  // contadores de lecturas (acumulados) al segundo anterior
-      uint32_t cur[4] = { R0.own, R0.hits, RR[0].own, RR[1].own };
+      static uint32_t last[8];  // contadores de lecturas y de los lectores (acumulados) al segundo anterior
+      uint32_t cur[8] = { R0.own, R0.hits, RR[0].own, RR[1].own, lv_lines[0] + lv_lines[1], lv_ok[0] + lv_ok[1], lv_bad[0] + lv_bad[1], lv_late[0] + lv_late[1] };
       acc.own = cur[0] - last[0]; acc.hits = cur[1] - last[1]; acc.rown[0] = cur[2] - last[2]; acc.rown[1] = cur[3] - last[3];
-      for (int k = 0; k < 4; k++) last[k] = cur[k];
+      acc.lv_lines = cur[4] - last[4]; acc.lv_ok = cur[5] - last[5]; acc.lv_bad = cur[6] - last[6]; acc.lv_late = cur[7] - last[7];
+      for (int k = 0; k < 8; k++) last[k] = cur[k];
       acc.t0 = n - sec_t0;
       cpuSample();
       if (!rep_ready) { rep = acc; rep_ready = 1; }
@@ -734,9 +789,9 @@ static int repThread(SceSize args, void *argp) {
            r->cmds ? (uint32_t)((unsigned long long)r->us * r->cpu_cap / awake * 1000 / r->cmds) : 0,
            r->cpu_lec[0] / 1000, r->cpu_lec[1] / 1000, r->cpu_core[0] / 1000, r->cpu_core[1] / 1000, r->cpu_core[2] / 1000,
            r->cpu_core[3] / 1000);
-      clog("  memoria de sublistas (por frame): aplicadas=%u comandos_sin_recorrer=%u (%u%% de todos) lineas_comprobadas=%u comparar_us=%u | nuevas=%u cambiaron=%u otra_entrada=%u sin_guardar=%u | por seg: deposito_vaciado=%u revisadas=%u DISTINTAS=%u\n",
-           PF(memo_hit), PF(memo_cmds), r->cmds ? (uint32_t)((unsigned long long)r->memo_cmds * 100 / r->cmds) : 0, PF(memo_lines), PF(memo_us),
-           PF(memo_miss), PF(memo_fail), PF(memo_dep), PF(memo_no), r->memo_reset, r->memo_chk, r->memo_bad);
+      clog("  memoria de sublistas (por frame): aplicadas=%u (comprobadas_por_lectores=%u) comandos_sin_recorrer=%u (%u%% de todos) lineas_comprobadas=%u comparar_us=%u | nuevas=%u cambiaron=%u otra_entrada=%u sin_guardar=%u | lectores/f: lineas=%u comprobadas=%u no_iguales=%u tarde=%u | por seg: deposito_vaciado=%u revisadas=%u DISTINTAS=%u\n",
+           PF(memo_hit), PF(memo_pre), PF(memo_cmds), r->cmds ? (uint32_t)((unsigned long long)r->memo_cmds * 100 / r->cmds) : 0, PF(memo_lines), PF(memo_us),
+           PF(memo_miss), PF(memo_fail), PF(memo_dep), PF(memo_no), PF(lv_lines), PF(lv_ok), PF(lv_bad), PF(lv_late), r->memo_reset, r->memo_chk, r->memo_bad);
       clog("  memoria/f: texturas=%u (en vram %u) draws_tex_vram=%u draws_vert_vram=%u | vertices=%u KB indices=%u KB | paletas=%u (vram %u) copias=%u (vram %u)\n",
            PF(textures), PF(tex_vram), PF(dtex_vram), PF(dvert_vram), PF(vbytes) >> 10, PF(ibytes) >> 10, PF(cluts), PF(clut_vram),
            PF(transfers), PF(tr_vram));
@@ -811,38 +866,49 @@ static int espThread(SceSize args, void *argp) {
 
 // Lector: recorre la lista que publica el capturador solo para traer sus lineas a la cache compartida (sigue saltos,
 // sublistas, BASE y OFFSET; no interpreta draws). Las sublistas del nivel de arriba se reparten entre los lectores.
+// v13.4: las sublistas del nivel de arriba que ya estan en la memoria no se recorren: se comprueban (memoVerify).
+// Cada CALL del nivel de arriba lo toma el primer lector que llega (claimTake), no uno si y uno no.
+typedef struct { uint32_t ord, pc, off, base, sp, stk[32][2], prev, ncall, n, done; } Lec;
+static void lecStart(Lec *s, Rd *r) {  // lista nueva (la que publico el capturador)
+  s->ord = pub_ord;
+  __sync_synchronize();
+  s->pc = pub_pc; s->base = pub_base; s->off = s->sp = s->prev = s->ncall = s->n = 0; s->done = !s->ord; r->n = 0;
+}
+static void lecWalk(int id, Lec *s, int budget) {  // hasta budget comandos, el stall o el fin de la lista
+  Rd *r = &RR[id];
+  uint32_t st = pub_stall;
+  r->n = 0;  // (el stall pudo moverse)
+  for (int k = 0; k < budget && pub_ord == s->ord && !s->done; k++) {
+    if (st && s->pc == st) break;
+    uint32_t ra = vtr(s->pc);
+    if (!ra && s->sp && isVram(s->pc)) { s->sp = 0; s->pc = s->stk[0][0]; s->off = s->stk[0][1]; continue; }  // (como el capturador)
+    if (!ra || ++s->n > LIST_MAX) { s->done = 1; break; }
+    uint32_t at = s->pc, op = rdc(r, ra, s->ord), c = op >> 24, d = op & 0xFFFFFF;
+    s->pc += 4;
+    if (c == 0x08 || c == 0x0A) {
+      uint32_t t = ((((s->base & 0x0F0000) << 8) | (d & 0xFFFFFC)) + s->off) & 0x0FFFFFFF;
+      if (!vtr(t)) { if (c == 0x08) s->done = 1; }  // VRAM sin copia: no se puede leer
+      else if (c == 0x08) s->pc = t;
+      else if (s->sp < 32 && (s->sp || claimTake(s->ncall++, s->ord, id))) {
+        if (!s->sp && memo_on && memoVerify(id, r, t, s->base, s->off, s->ord)) ;  // comprobada: no hace falta recorrerla
+        else { s->stk[s->sp][0] = s->pc; s->stk[s->sp++][1] = s->off; s->pc = t; }
+      }
+    } else if (c == 0x0B) { if (s->sp) { s->sp--; s->pc = s->stk[s->sp][0]; s->off = s->stk[s->sp][1]; } }
+    else if (c == 0x0C) { if ((s->prev >> 24) != 0x0E) s->done = 1; }
+    else if (c == 0x10) s->base = d;
+    else if (c == 0x13) s->off = d << 8;
+    else if (c == 0x14) s->off = at;
+    s->prev = op;
+  }
+}
 static int lectorThread(SceSize args, void *argp) {
   int id = *(int *)argp;
-  Rd *r = &RR[id];
-  uint32_t ord = 0, pc = 0, off = 0, base = 0, sp = 0, stk[32][2], prev = 0, ncall = 0, n = 0, done = 1;
+  Lec s; s.ord = 0; s.done = 1;
   for (;;) {
-    if (pub_ord != ord) {  // lista nueva
-      ord = pub_ord;
-      __sync_synchronize();
-      pc = pub_pc; base = pub_base; off = sp = prev = ncall = n = 0; done = !ord; r->n = 0;
-    }
+    if (pub_ord != s.ord) lecStart(&s, &RR[id]);
     uint32_t st = pub_stall;
-    if (done || (st && pc == st)) { sceKernelDelayThread(100); continue; }
-    r->n = 0;  // (el stall pudo moverse)
-    for (int k = 0; k < 2000 && pub_ord == ord; k++) {
-      if (st && pc == st) break;
-      uint32_t ra = vtr(pc);
-      if (!ra && sp && isVram(pc)) { sp = 0; pc = stk[0][0]; off = stk[0][1]; continue; }  // (como el capturador)
-      if (!ra || ++n > LIST_MAX) { done = 1; break; }
-      uint32_t at = pc, op = rdc(r, ra, ord), c = op >> 24, d = op & 0xFFFFFF;
-      pc += 4;
-      if (c == 0x08 || c == 0x0A) {
-        uint32_t t = ((((base & 0x0F0000) << 8) | (d & 0xFFFFFC)) + off) & 0x0FFFFFFF;
-        if (!vtr(t)) { if (c == 0x08) done = 1; }  // VRAM sin copia: no se puede leer
-        else if (c == 0x08) pc = t;
-        else if (sp < 32 && (sp || ncall++ % 2 == (uint32_t)id)) { stk[sp][0] = pc; stk[sp++][1] = off; pc = t; }
-      } else if (c == 0x0B) { if (sp) { sp--; pc = stk[sp][0]; off = stk[sp][1]; } }
-      else if (c == 0x0C) { if ((prev >> 24) != 0x0E) done = 1; }
-      else if (c == 0x10) base = d;
-      else if (c == 0x13) off = d << 8;
-      else if (c == 0x14) off = at;
-      prev = op;
-    }
+    if (s.done || (st && s.pc == st)) { sceKernelDelayThread(100); continue; }
+    lecWalk(id, &s, 2000);
   }
   return 0;
 }
@@ -853,7 +919,7 @@ void capturaStart(void) {
   sceIoRename(LOGC, "ux0:pspemu/ge_patch_captura_prev.log");
   SceUID r = sceKernelCreateThread("gepresent_captura_log", repThread, 0xB0, 0x2000, 0, 0, NULL);  // primero: que
   if (r >= 0) sceKernelStartThread(r, 0, NULL);                                                      // quede el log
-  clog("gepresent v13.3: capturador de la etapa 2 con memoria de sublistas y espejo de la VRAM\n");
+  clog("gepresent v13.4: capturador de la etapa 2 con memoria de sublistas (comprobada por los lectores) y espejo de la VRAM\n");
   for (uint32_t a = 0x08000000u; a < 0x0C000000u && nr < 4;) {  // tramos de la RAM del PSP mapeados en este proceso
     SceKernelMemBlockInfo in; in.size = sizeof in;
     int e = sceKernelGetMemBlockInfoByAddr((void *)PSP(a), &in);
