@@ -314,16 +314,18 @@ static int hookThread(SceSize args, void *argp) {
 // el capturador sin quitarle tiempo al audio (v12.4 con prioridad 0x40 en el nucleo 2 lo cortaba)
 static tai_hook_ref_t ref_ct;
 static SceUID hk_ct = -1;
+SceUID emu_th[256]; int emu_aff[256], emu_n;  // v12.10: captura.c mide cuanto procesador usa cada uno
 static SceUID hookCT(const char *name, SceKernelThreadEntry entry, int prio, int stack, SceUInt attr, int aff,
                      const SceKernelThreadOptParam *opt) {
   SceUID r = TAI_CONTINUE(SceUID, ref_ct, name, entry, prio, stack, attr, aff, opt);
   alog("hilo de ScePspemu: %s prioridad %x nucleos %x pila %x atributos %x -> %08x\n", name ? name : "?", prio, aff, stack, attr, r);
+  if (r >= 0 && emu_n < 256) { emu_th[emu_n] = r; emu_aff[emu_n] = aff; emu_n++; }
   return r;
 }
 
 void _start() __attribute__((weak, alias("module_start")));
 int module_start(SceSize args, void *argp) {
-  alog("gepresent v12.9 (v11.3 + capturador de la etapa 2, activo con GePatch en modo sombra) compilado %s %s (dato %d)\n", __DATE__, __TIME__, dato);
+  alog("gepresent v12.13 (v11.3 + capturador de la etapa 2 con memoria de sublistas, activo con GePatch en modo sombra) compilado %s %s (dato %d)\n", __DATE__, __TIME__, dato);
   SceIoStat bst;  // v11.2: con el banco no se reserva el anillo de volcados (24 MB que el banco necesita)
   if (sceIoGetstat("ux0:data/gepresent/banco_v12", &bst) < 0) ringInit();
   else alog("banco de pruebas activo: sin anillo de volcados (se escriben directo)\n");

@@ -8,6 +8,11 @@
 // Lectura de la lista: ver "Lectura de la RAM del PSP" (v12.9: de a 256 bytes + dos lectores adelantados).
 // Lo que esta en la VRAM del PSP no se puede leer (no esta mapeada en Adrenaline): se cuenta y se salta (espejo:
 // siguiente paso de la etapa 2).
+// v12.10: tiempo de procesador que de verdad recibe cada hilo (runClocks) y lotes sin cortar por TEXLEVEL (0xC8).
+// v12.11 (diagnostico): donde se va el tiempo (cada 5 s se vuelve a recorrer una lista ya leida, desde la cache) y
+// cuantas sublistas se repiten de un frame a otro (para la memoria de sublistas).
+// v12.13: estadisticas de la memoria corregidas (frames y tiempos se sumaban de mas al aplicar).
+// v12.12: memoria de sublistas (ver "memoria de sublistas"); se quitan la segunda pasada y las huellas de v12.11.
 #include <psp2/kernel/threadmgr.h>
 #include <psp2/kernel/clib.h>
 #include <psp2/kernel/processmgr.h>
@@ -23,6 +28,22 @@
 #define LOGC "ux0:pspemu/ge_patch_captura.log"
 enum { EV_ENQ = 1, EV_HEAD, EV_STALL, EV_DSYNC, EV_LSYNC, EV_FLIP };
 static inline uint32_t now(void) { return sceKernelGetProcessTimeLow(); }
+
+// --- Estadisticas (por segundo) ---
+typedef struct {
+  uint32_t t0, frames, lists, cmds, cmds_max, draws, draws_max, us, us_max, own, hits, rown[2];
+  uint32_t d3d, dthr, dclear, dempty, prim[8], curves, verts;
+  uint32_t ch_tex, ch_mtx, ch_rt, ch_other, ch_none, texnew, batches, batches_cont, rt_switch;
+  uint32_t textures, tex_vram, dtex_vram, dvert_vram, vbytes, ibytes, cluts, clut_vram, transfers, tr_vram;
+  uint32_t vcalls, vjumps, lost, bad, signals, bjumps, events, stalls, syncs, syncs_waited, sync_wait_us, behind, resyncs;
+  uint32_t lsyncs, flips_behind, aborted, yields;
+  uint32_t batches_notl, only_tl, sleep_us, cpu_cap, cpu_lec[2], cpu_core[4];  // v12.10
+  uint32_t calls_ram, memo_hit, memo_miss, memo_fail, memo_no, memo_cmds, memo_lines, memo_bad, memo_chk, memo_reset, memo_dep;  // v12.12
+  uint32_t chg[256];  // cambios reales de cada registro "otro" (que impide juntar draws)
+} Stats;
+static Stats acc, rep;
+static volatile int rep_ready;
+static uint32_t f_cmds, f_draws, f_us;  // del frame en curso
 
 // --- Lectura de la RAM del PSP ---
 // Cada lectura de la RAM del PSP desde el ARM espera mucho (vista sin cache): casi todo el costo del capturador es esa
@@ -99,26 +120,15 @@ static uint32_t rdc(Rd *r, uint32_t a, uint32_t ord) {
   return r->buf[(a - b) >> 2];
 }
 
-// --- Estadisticas (por segundo) ---
-typedef struct {
-  uint32_t t0, frames, lists, cmds, cmds_max, draws, draws_max, us, us_max, own, hits, rown[2];
-  uint32_t d3d, dthr, dclear, dempty, prim[8], curves, verts;
-  uint32_t ch_tex, ch_mtx, ch_rt, ch_other, ch_none, texnew, batches, batches_cont, rt_switch;
-  uint32_t textures, tex_vram, dtex_vram, dvert_vram, vbytes, ibytes, cluts, clut_vram, transfers, tr_vram;
-  uint32_t vcalls, vjumps, lost, bad, signals, bjumps, events, stalls, syncs, syncs_waited, sync_wait_us, behind, resyncs;
-  uint32_t lsyncs, flips_behind, aborted, yields;
-  uint32_t chg[256];  // cambios reales de cada registro "otro" (que impide juntar draws)
-} Stats;
-static Stats acc, rep;
-static volatile int rep_ready;
-static uint32_t f_cmds, f_draws, f_us;  // del frame en curso
-
 // --- Estado del GE (sombra) ---
+typedef struct Memo Memo;
+static Memo *rec;  // sublista que se esta grabando (memoria de sublistas, v12.12)
+static void recDraw(int idx, int tex), recTex(uint32_t ta), recRead(uint32_t c);
 static uint32_t reg[256], mtx[5][96], mi[5];
 static uint8_t cls[256];  // 0 no es estado, 1 textura, 2 matriz, 3 destino (rt), 4 otro
-enum { C_TEX = 1, C_MTX = 2, C_RT = 4, C_OTHER = 8 };
+enum { C_TEX = 1, C_MTX = 2, C_RT = 4, C_OTHER = 8, C_TL = 16 };  // C_TL: TEXLEVEL (0xC8), un "otro" aparte
 static uint32_t dirty, vaddr, iaddr, vset, last_prim = 99, last_vend, last_fb;
-static uint32_t tset[2048], tgen[2048], gen, ntex, last_clut[2];
+static uint32_t tset[2048], tgen[2048], gen = 1, ntex, last_clut[2];  // (gen empieza en 1: tgen en 0 = vacio)
 static void initCls(void) {
   for (int c = 0x15; c < 256; c++) cls[c] = C_OTHER;
   for (int c = 0xA0; c <= 0xB1; c++) cls[c] = C_TEX;
@@ -129,6 +139,7 @@ static void initCls(void) {
   static const uint8_t no[] = { 0x2A, 0x2B, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F, 0x40, 0x41, 0xB2, 0xB3, 0xB4, 0xB5, 0xC4,
                                 0xCB, 0xCC, 0xEA, 0xEB, 0xEC, 0xEE };
   for (unsigned i = 0; i < sizeof no; i++) cls[no[i]] = 0;
+  cls[0xC8] = C_TL;
 }
 static int texAdd(uint32_t a) {  // 1 si es una textura nueva en este frame
   if (ntex >= 1500) return 0;
@@ -157,6 +168,8 @@ static void draw(uint32_t d) {
   if (!n) { acc.dempty++; return; }
   acc.draws++; f_draws++; acc.prim[type]++; acc.verts += n;
   int clear = reg[0xD3] & 1, tex = (reg[0x1E] & 1) && !clear;
+  if (rec) recDraw(idx, tex);  // (antes de que cambien vaddr/iaddr)
+  if (rec && tex) recTex(TEXADDR());
   if (clear) acc.dclear++;
   else if (vt >> 23 & 1) acc.dthr++;
   else acc.d3d++;
@@ -175,12 +188,14 @@ static void draw(uint32_t d) {
   if (dirty & C_TEX) acc.ch_tex++;
   if (dirty & C_MTX) acc.ch_mtx++;
   if (dirty & C_RT) acc.ch_rt++;
-  if (dirty & C_OTHER) acc.ch_other++;
+  if (dirty & (C_OTHER | C_TL)) acc.ch_other++;
+  if (dirty == C_TL) acc.only_tl++;
   if (!dirty) acc.ch_none++;
   // Lote: draws seguidos que se podrian dibujar como uno (mismo estado y mismo tipo de primitiva). "Contiguo": ademas
   // los vertices siguen donde termino el anterior (sin indices nuevos)
   int same = !dirty && type == last_prim;
   if (!same) acc.batches++;
+  if ((dirty & ~C_TL) || type != last_prim) acc.batches_notl++;  // si TEXLEVEL fuera por draw (no corta el lote)
   if (!same || idx || (vset && vstart != last_vend)) acc.batches_cont++;
   last_prim = type; last_vend = vaddr; dirty = vset = 0;
 }
@@ -192,6 +207,209 @@ static List q[64];
 static uint32_t qh, qt;  // la primera sin terminar y la siguiente libre
 static inline uint32_t rel(List *l, uint32_t d) { return ((((reg[0x10] & 0x0F0000) << 8) | d) + l->off) & 0x0FFFFFFF; }
 
+static void clog(const char *fmt, ...);
+typedef struct { uint32_t reg[256], mtx[5][96], mi[5], v[8]; } GeState;
+static GeState g_tmp;
+static void stSave(GeState *g) {
+  sceClibMemcpy(g->reg, reg, sizeof reg); sceClibMemcpy(g->mtx, mtx, sizeof mtx); sceClibMemcpy(g->mi, mi, sizeof mi);
+  uint32_t v[8] = { dirty, vaddr, iaddr, vset, last_prim, last_vend, last_fb, 0 };
+  sceClibMemcpy(g->v, v, sizeof v);
+}
+static void stLoad(GeState *g) {
+  sceClibMemcpy(reg, g->reg, sizeof reg); sceClibMemcpy(mtx, g->mtx, sizeof mtx); sceClibMemcpy(mi, g->mi, sizeof mi);
+  dirty = g->v[0]; vaddr = g->v[1]; iaddr = g->v[2]; vset = g->v[3]; last_prim = g->v[4]; last_vend = g->v[5];
+  last_fb = g->v[6];
+}
+
+// --- v12.12: memoria de sublistas ---
+// GT repite ~88 % de sus comandos en sublistas identicas de un frame a otro (v12.11) y lo caro es interpretar comando por
+// comando (~360 ns), no leer. Cuando el nivel de arriba llama una sublista (CALL a la RAM), se busca por (direccion, BASE,
+// OFFSET de entrada). Si ya se recorrio, se comparan sus lineas de memoria (64 bytes; incluye sus sublistas anidadas) con
+// la copia guardada, palabra por palabra: si son iguales, se aplica lo que hizo (registros y matrices a la salida,
+// direcciones de vertices/indices, contadores, texturas) sin interpretarla. Si no estaba o cambio, se recorre y se guarda.
+// Aproximado (solo estadisticas): "cambios" y lotes del primer draw dependen del estado de entrada; chg[] no se suma.
+// Revision: 1 de cada 32 sublistas que se podrian aplicar se recorre igual y se compara el estado que deja con lo
+// guardado (DISTINTAS en el log = error de la memoria). ux0:data/gepresent/memo_revisar: todas.
+// ux0:data/gepresent/sin_memoria: apagada (para comparar).
+#define MEMO_N 512    // sublistas guardadas
+#define POOL_N 8192   // lineas de 64 bytes en el deposito (512 KB)
+#define MR 32         // tramos de memoria por sublista
+#define MRG 64        // registros que puede dejar cambiados
+#define SW (sizeof(Stats) / 4 - 256)  // palabras de Stats que se suman (las anteriores a chg[256], que va al final)
+enum { M_DRAW = 1, M_VABS = 2, M_IABS = 4, M_CLUT = 8, M_VDEP = 16, M_IDEP = 32 };  // VDEP/IDEP: dibuja con los vertices/indices de entrada
+static const uint8_t moff[5] = { 0, 12, 24, 40, 52 }, msz[5] = { 12, 12, 16, 12, 96 };
+struct Memo {
+  uint32_t t, base, off, pgen, state, fail_gen;  // state: 0 grabando, 1 lista, 2 no se puede guardar (reintento en 64 frames)
+  uint32_t nr, ra[MR], rn[MR], rp[MR];            // tramos: primera linea, cantidad, posicion en el deposito
+  uint32_t d[SW];                                  // lo que suma a las estadisticas
+  uint32_t nreg, rv[MRG]; uint8_t rc[MRG];         // registros a la salida
+  uint32_t mmask, mi[5], mtx[148];                 // matrices tocadas
+  uint32_t flags, vaddr, iaddr, vset, dirty, last_prim, last_fb, clut[2], ntex, tex[32];
+  uint32_t v_in, i_in, ndep, dv[16]; uint8_t dc[16];  // estado de entrada que usa (registros que lee antes de escribirlos)
+};
+static Memo *memo;
+static uint32_t *pool, pool_top, pool_gen = 1, pool_reset, memo_on, memo_chk;
+static Memo *chk;  // sublista que se esta revisando
+static uint32_t rec_last, rec_v0, rec_i0, rec_d0, rec_touch[8], rec_dep[8], rec_acc0[SW];
+static GeState g_memo;
+
+// Cada (direccion, BASE, OFFSET) puede tener varias versiones (una por estado de entrada), en 8 lugares seguidos
+static inline uint32_t memoHash(uint32_t t, uint32_t base, uint32_t off) { return ((t >> 2) ^ (base * 0x9E37) ^ (off >> 4)) * 2654435761u >> 23; }
+static Memo *victim;  // version que cambio: se graba encima
+static Memo *memoSlot(uint32_t t, uint32_t base, uint32_t off) {  // lugar para grabar una sublista
+  if (victim) { Memo *v = victim; victim = NULL; return v; }
+  uint32_t i = memoHash(t, base, off);
+  for (int k = 0; k < 8; k++, i = (i + 1) & (MEMO_N - 1)) if (memo[i].pgen != pool_gen) return &memo[i];
+  return &memo[(memoHash(t, base, off) + (gen & 7)) & (MEMO_N - 1)];  // (llenos: se reemplaza uno)
+}
+static int depsOk(Memo *e) {
+  if ((e->flags & M_VDEP && vaddr != e->v_in) || (e->flags & M_IDEP && iaddr != e->i_in)) return 0;
+  for (uint32_t i = 0; i < e->ndep; i++) if (reg[e->dc[i]] != e->dv[i]) return 0;
+  return 1;
+}
+static void recAbort(void) { if (rec) { rec->state = 2; rec->fail_gen = gen; rec = NULL; } }
+static void recBegin(List *l, uint32_t t) {
+  if (pool_reset || pool_top > POOL_N - 64) { pool_gen++; pool_top = 0; pool_reset = 0; acc.memo_reset++; }
+  Memo *e = memoSlot(t, reg[0x10], l->off);
+  sceClibMemset(e, 0, sizeof *e);
+  e->t = t; e->base = reg[0x10]; e->off = l->off; e->pgen = pool_gen; e->v_in = vaddr; e->i_in = iaddr;
+  rec = e; rec_last = ~0u; rec_v0 = vaddr; rec_i0 = iaddr; rec_d0 = dirty;
+  sceClibMemset(rec_touch, 0, sizeof rec_touch); sceClibMemset(rec_dep, 0, sizeof rec_dep);
+  sceClibMemcpy(rec_acc0, &acc, sizeof rec_acc0);
+}
+static void recLine(uint32_t b) {  // linea nueva de la sublista: se copia al deposito (R0 la tiene: es la del comando)
+  Memo *e = rec;
+  rec_last = b;
+  for (uint32_t i = 0; i < e->nr; i++) if (b - e->ra[i] < e->rn[i] * 64) return;  // ya guardada (sublista llamada 2 veces)
+  if (b < R0.a || b + 64 > R0.a + R0.n || pool_top >= POOL_N) { if (pool_top >= POOL_N) pool_reset = 1; recAbort(); return; }
+  sceClibMemcpy(pool + pool_top * 16, R0.buf + (b - R0.a) / 4, 64);
+  uint32_t n = e->nr - 1;
+  if (e->nr && e->ra[n] + e->rn[n] * 64 == b && e->rp[n] + e->rn[n] == pool_top) e->rn[n]++;
+  else if (e->nr < MR) { e->ra[e->nr] = b; e->rn[e->nr] = 1; e->rp[e->nr] = pool_top; e->nr++; }
+  else { recAbort(); return; }
+  pool_top++;
+}
+static int nearStall(Memo *e, uint32_t st) {  // algun tramo cerca del stall (puede no estar escrito todavia)
+  if (!st) return 0;
+  for (uint32_t i = 0; i < e->nr; i++) if (!(e->ra[i] + e->rn[i] * 64 <= st || e->ra[i] >= st + 0x40000)) return 1;
+  return 0;
+}
+static void recEnd(List *l) {
+  Memo *e = rec;
+  rec = NULL;
+  if (nearStall(e, l->stall)) { e->state = 2; e->fail_gen = gen; return; }
+  uint32_t *a = (uint32_t *)&acc;
+  for (int i = 0; i < SW; i++) e->d[i] = a[i] - rec_acc0[i];
+  Stats *d = (Stats *)e->d;  // (solo las primeras SW palabras)
+  d->textures = d->tex_vram = 0;  // se vuelven a contar con texAdd al aplicarla
+  // (v12.13) lo que no cuenta el recorrido sino el hilo (eventos, tiempos, frames): la grabacion puede cruzar varias vueltas
+  d->t0 = d->frames = d->lists = d->cmds_max = d->draws_max = d->us = d->us_max = d->own = d->hits = d->rown[0] = d->rown[1] = 0;
+  d->events = d->stalls = d->syncs = d->syncs_waited = d->sync_wait_us = d->behind = d->resyncs = d->lsyncs = d->flips_behind = 0;
+  d->yields = d->sleep_us = d->cpu_cap = d->cpu_lec[0] = d->cpu_lec[1] = 0;
+  for (int k = 0; k < 4; k++) d->cpu_core[k] = 0;
+  d->memo_hit = d->memo_miss = d->memo_fail = d->memo_no = d->memo_cmds = d->memo_lines = d->memo_bad = d->memo_chk = d->memo_reset = d->memo_dep = 0;
+  for (int c = 0; c < 256; c++)
+    if (rec_touch[c >> 5] >> (c & 31) & 1) {
+      if (e->nreg >= MRG) { e->state = 2; e->fail_gen = gen; return; }
+      e->rc[e->nreg] = c; e->rv[e->nreg++] = reg[c];
+    }
+  for (int m = 0; m < 5; m++) if (e->mmask >> m & 1) { e->mi[m] = mi[m]; sceClibMemcpy(e->mtx + moff[m], mtx[m], msz[m] * 4); }
+  e->vaddr = e->flags & M_VABS ? vaddr : vaddr - rec_v0;
+  e->iaddr = e->flags & M_IABS ? iaddr : iaddr - rec_i0;
+  e->vset = vset; e->dirty = e->flags & M_DRAW ? dirty : dirty & ~rec_d0; e->last_prim = last_prim; e->last_fb = last_fb;
+  e->clut[0] = last_clut[0]; e->clut[1] = last_clut[1];
+  e->state = 1;
+}
+static void memoApply(Memo *e) {  // estado del GE como si se hubiera recorrido
+  for (uint32_t i = 0; i < e->nreg; i++) reg[e->rc[i]] = e->rv[i];
+  for (int m = 0; m < 5; m++) if (e->mmask >> m & 1) { mi[m] = e->mi[m]; sceClibMemcpy(mtx[m], e->mtx + moff[m], msz[m] * 4); }
+  vaddr = e->flags & M_VABS ? e->vaddr : vaddr + e->vaddr;
+  iaddr = e->flags & M_IABS ? e->iaddr : iaddr + e->iaddr;
+  if (e->flags & (M_DRAW | M_VABS)) vset = e->vset;
+  dirty = e->flags & M_DRAW ? e->dirty : dirty | e->dirty;
+  if (e->flags & M_DRAW) { last_prim = e->last_prim; last_fb = e->last_fb; last_vend = vaddr; }
+  if (e->flags & M_CLUT) { last_clut[0] = e->clut[0]; last_clut[1] = e->clut[1]; }
+}
+// CALL del nivel de arriba a la RAM: 1 = aplicada (no se recorre), 0 = recorrerla (grabando o revisando), -1 = recorrerla sin grabar
+static int memoTry(List *l, uint32_t t) {
+  Memo *e = NULL;
+  uint32_t base = reg[0x10], i = memoHash(t, base, l->off), seen = 0, no = 0;
+  victim = NULL;
+  for (int k = 0; k < 8 && !e; k++, i = (i + 1) & (MEMO_N - 1)) {
+    Memo *m = &memo[i];
+    if (m->pgen != pool_gen || m->t != t || m->base != base || m->off != l->off) continue;
+    seen = 1;
+    if (m->state == 2) { if (gen - m->fail_gen < 64) no = 1; else victim = m; }  // (pasado el plazo se reintenta ahi)
+    else if (m->state == 1 && depsOk(m)) e = m;
+  }
+  if (!e) {
+    if (no) { acc.memo_no++; return -1; }
+    if (seen) acc.memo_dep++; else acc.memo_miss++;  // (seen: ya estaba, con otro estado de entrada: otra version)
+    return 0;
+  }
+  if (nearStall(e, l->stall)) return -1;
+  uint32_t lines = 0;
+  for (uint32_t i = 0; i < e->nr; i++)
+    for (uint32_t k = 0; k < e->rn[i]; k++) {
+      uint32_t b = e->ra[i] + k * 64, *p = pool + (e->rp[i] + k) * 16;
+      if (ramEnd(b) < b + 64) { acc.memo_fail++; victim = e; return 0; }
+      rdc(&R0, b, l->ord);
+      const uint32_t *s = R0.buf + (b - R0.a) / 4;
+      lines++;
+      for (int w = 0; w < 16; w++) if (s[w] != p[w]) { acc.memo_lines += lines; acc.memo_fail++; victim = e; return 0; }
+    }
+  acc.memo_lines += lines;
+  static uint32_t nchk;
+  if (memo_chk || !(++nchk & 31)) {  // revision (1 de cada 32, o todas): se calcula lo guardado y se recorre igual para comparar
+    stSave(&g_tmp); memoApply(e); stSave(&g_memo); stLoad(&g_tmp);
+    chk = e; acc.memo_chk++;
+    return -1;
+  }
+  memoApply(e);
+  for (uint32_t i = 0; i < e->ntex; i++) if (texAdd(e->tex[i])) { acc.textures++; if (isVram(e->tex[i])) acc.tex_vram++; }
+  uint32_t *a = (uint32_t *)&acc;
+  for (int i = 0; i < SW; i++) a[i] += e->d[i];
+  Stats *d = (Stats *)e->d;
+  f_cmds += d->cmds; f_draws += d->draws; l->n += d->cmds;
+  acc.memo_hit++; acc.memo_cmds += d->cmds;
+  return 1;
+}
+static void chkEnd(void) {  // revision: el recorrido debe dejar lo mismo que lo guardado
+  Memo *e = chk;
+  chk = NULL;
+  int bad = 0, c = 0;
+  for (c = 0; c < 256; c++) if (reg[c] != g_memo.reg[c]) { bad = 1; break; }
+  if (!bad && sceClibMemcmp(mtx, g_memo.mtx, sizeof mtx)) bad = 2;
+  if (!bad && sceClibMemcmp(mi, g_memo.mi, sizeof mi)) bad = 3;
+  if (!bad && (vaddr != g_memo.v[1] || iaddr != g_memo.v[2])) bad = 4;
+  if (!bad) return;
+  acc.memo_bad++;
+  static int nlog;
+  if (nlog++ < 10)
+    clog("memoria: sublista %08x (base %06x) DISTINTA al recorrerla: %s %02x guardado=%06x recorrido=%06x | vertices %08x/%08x\n",
+         e->t, e->base, bad == 1 ? "registro" : bad == 2 ? "matriz" : bad == 3 ? "indice de matriz" : "direccion", bad == 1 ? c : 0,
+         bad == 1 ? g_memo.reg[c] : 0, bad == 1 ? reg[c] : 0, g_memo.v[1], vaddr);
+}
+static void recRead(uint32_t c) {  // registro leido: si todavia no se escribio dentro, es estado de entrada
+  if (rec_touch[c >> 5] >> (c & 31) & 1 || rec_dep[c >> 5] >> (c & 31) & 1) return;
+  rec_dep[c >> 5] |= 1u << (c & 31);
+  if (rec->ndep >= 16) { recAbort(); return; }
+  rec->dc[rec->ndep] = c; rec->dv[rec->ndep++] = reg[c];
+}
+static void recDraw(int idx, int tex) {
+  rec->flags |= M_DRAW;
+  if (!(rec->flags & M_VABS)) rec->flags |= M_VDEP;
+  if (idx && !(rec->flags & M_IABS)) rec->flags |= M_IDEP;
+  static const uint8_t r1[] = { 0x12, 0xD3, 0x1E, 0x9C, 0x9D }, r2[] = { 0xA0, 0xA8 };
+  for (unsigned i = 0; i < sizeof r1 && rec; i++) recRead(r1[i]);
+  for (unsigned i = 0; i < sizeof r2 && rec && tex; i++) recRead(r2[i]);
+}
+static void recTex(uint32_t ta) {
+  for (uint32_t i = 0; i < rec->ntex; i++) if (rec->tex[i] == ta) return;
+  if (rec->ntex < 32) rec->tex[rec->ntex++] = ta;  // (mas de 32 texturas distintas: el contador de texturas queda corto)
+}
+
+
 // Recorre la lista hasta su stall o su fin (1: termino), con un tope de comandos por llamada
 static int walkList(List *l) {
   for (int budget = 8000; budget--;) {  // ~3 ms: despues se vuelve al bucle (eventos y pausa)
@@ -200,12 +418,14 @@ static int walkList(List *l) {
     uint32_t pc = l->pc, op = rdc(&R0, pc, l->ord), c = op >> 24, d = op & 0xFFFFFF, prev = l->prev;
     if (++l->n > LIST_MAX) { acc.aborted++; return 1; }
     l->pc += 4; l->prev = op; acc.cmds++; f_cmds++;
+    if (rec && (pc & ~63u) != rec_last) recLine(pc & ~63u);
+#define TOUCH(c) if (rec) rec_touch[(c) >> 5] |= 1u << ((c) & 31)
     switch (c) {
     case 0x00: break;
-    case 0x01: vaddr = rel(l, d); vset = 1; break;
-    case 0x02: iaddr = rel(l, d); break;
+    case 0x01: vaddr = rel(l, d); vset = 1; if (rec) rec->flags |= M_VABS; break;
+    case 0x02: iaddr = rel(l, d); if (rec) rec->flags |= M_IABS; break;
     case 0x04: draw(d); break;
-    case 0x05: case 0x06: acc.curves++; acc.draws++; f_draws++; dirty = 0; last_prim = 99; break;
+    case 0x05: case 0x06: acc.curves++; acc.draws++; f_draws++; dirty = 0; last_prim = 99; if (rec) recDraw(0, 0); break;
     case 0x08: case 0x0A: {
       uint32_t t = rel(l, d & 0xFFFFFC);
       if (!okRam(t)) {  // en la VRAM (Gran Turismo: sublistas) o invalido
@@ -215,45 +435,54 @@ static int walkList(List *l) {
       }
       if (c == 0x0A) {
         if (l->sp >= 32) { acc.bad++; return 1; }
+        acc.calls_ram++;
+        if (!l->sp && memo_on && !rec && !chk) {  // sublista del nivel de arriba: memoria (v12.12)
+          int r = memoTry(l, t);
+          if (r > 0) break;  // aplicada: se sigue despues del CALL
+          if (r == 0) recBegin(l, t);
+        }
         l->stk[l->sp][0] = l->pc; l->stk[l->sp++][1] = l->off;
       }
       l->pc = t;
       break;
     }
     case 0x09: acc.bjumps++; break;  // salto condicional por bounding box: se supone que no salta
-    case 0x0B: if (l->sp) { l->sp--; l->pc = l->stk[l->sp][0]; l->off = l->stk[l->sp][1]; } break;
+    case 0x0B: if (l->sp) { l->sp--; l->pc = l->stk[l->sp][0]; l->off = l->stk[l->sp][1]; if (!l->sp) { if (rec) recEnd(l); else if (chk) chkEnd(); } } break;
     case 0x0C:  // END: termina la lista, salvo despues de un SIGNAL (el juego la continua)
       if ((prev >> 24) == 0x0E) { acc.signals++; break; }
       return 1;
     case 0x0E: case 0x0F: break;
-    case 0x10: reg[0x10] = d; break;
+    case 0x10: reg[0x10] = d; TOUCH(0x10); break;
     case 0x13: l->off = d << 8; break;
     case 0x14: l->off = pc; break;
     case 0x2A: case 0x3A: case 0x3C: case 0x3E: case 0x40: {
       int m = c == 0x2A ? 4 : (c - 0x3A) / 2;
-      mi[m] = d & 0x7F;
+      mi[m] = d & 0x7F; if (rec) rec->mmask |= 1 << m;
       break;
     }
     case 0x2B: case 0x3B: case 0x3D: case 0x3F: case 0x41: {
       int m = c == 0x2B ? 4 : (c - 0x3B) / 2, max = m == 4 ? 96 : m == 2 ? 16 : 12;
+      if (rec) rec->mmask |= 1 << m;
       if (mi[m] < (uint32_t)max) { if (mtx[m][mi[m]] != d) { mtx[m][mi[m]] = d; dirty |= C_MTX; } mi[m]++; }
       break;
     }
     case 0xC4: {  // carga de paleta: cambio solo si es otra paleta u otro tamano
+      if (rec) { recRead(0xB0); recRead(0xB1); }
       uint32_t ca = CLUTADDR();
-      acc.cluts++; if (isVram(ca)) acc.clut_vram++;
+      acc.cluts++; if (isVram(ca)) acc.clut_vram++; if (rec) rec->flags |= M_CLUT;
       if (ca != last_clut[0] || d != last_clut[1]) { last_clut[0] = ca; last_clut[1] = d; dirty |= C_TEX; }
       break;
     }
     case 0xEA: {
+      for (uint32_t k = 0xB2; k <= 0xB5 && rec; k++) recRead(k);
       acc.transfers++;
       uint32_t s = (reg[0xB2] & 0xFFFFF0) | ((reg[0xB3] << 8) & 0x0F000000), t = (reg[0xB4] & 0xFFFFF0) | ((reg[0xB5] << 8) & 0x0F000000);
       if (isVram(s) || isVram(t)) acc.tr_vram++;
       break;
     }
     default:
-      if (cls[c] && reg[c] != d) { dirty |= cls[c]; if (cls[c] == C_OTHER) acc.chg[c]++; }
-      reg[c] = d;
+      if (cls[c] && reg[c] != d) { dirty |= cls[c]; if (cls[c] & (C_OTHER | C_TL)) acc.chg[c]++; }
+      reg[c] = d; TOUCH(c);
     }
   }
   return 0;  // tope: se sigue en la proxima vuelta
@@ -268,8 +497,10 @@ static void walk(void) {
       pub_stall = l->stall; pub_pc = l->pc; pub_base = reg[0x10];
       __sync_synchronize();
       pub_ord = l->ord;
+      recAbort(); chk = NULL;  // (lo que quedo a medias de la lista anterior)
     }
     if (!walkList(l)) return;
+    recAbort(); chk = NULL;  // la lista termino dentro de una sublista (END, salto a la VRAM...): no se guarda
     capt = l->ord; SB[3] = capt; qh++; acc.lists++;
   }
 }
@@ -280,6 +511,27 @@ static void resetQueue(void) {
 }
 
 static uint32_t tail, beat, sec_t0;
+// v12.10: tiempo de procesador de cada hilo (runClocks, us) para separar "nucleo compartido" de "trabajo por comando"
+#define EMU_N 256
+extern SceUID emu_th[EMU_N]; extern int emu_aff[EMU_N], emu_n;  // hilos del emulador (gepresent.c, gancho de CreateThread)
+static SceUID cap_uid = -1, lec_uid[2] = { -1, -1 };
+static uint32_t runClk(SceUID t) {
+  SceKernelThreadInfo in; sceClibMemset(&in, 0, sizeof in); in.size = sizeof in;
+  if (t < 0 || sceKernelGetThreadInfo(t, &in) < 0) return 0;
+  return (uint32_t)in.runClocks;
+}
+static void cpuSample(void) {  // diferencias desde el segundo anterior
+  static uint32_t lc, ll[2], le[EMU_N];
+  uint32_t c = runClk(cap_uid);
+  acc.cpu_cap = c - lc; lc = c;
+  for (int k = 0; k < 2; k++) { c = runClk(lec_uid[k]); acc.cpu_lec[k] = c - ll[k]; ll[k] = c; }
+  for (int i = 0; i < emu_n && i < EMU_N; i++) {
+    c = runClk(emu_th[i]);  // (0: el hilo ya no existe)
+    int a = emu_aff[i], k = a == 0x10000 ? 0 : a == 0x20000 ? 1 : a == 0x40000 ? 2 : 3;
+    if (c && le[i] && c >= le[i]) acc.cpu_core[k] += c - le[i];
+    le[i] = c;
+  }
+}
 static void event(volatile uint32_t *e) {
   uint32_t t = e[0] & 0xFF, a = e[1], b = e[2], c = e[3];
   acc.events++;
@@ -321,14 +573,15 @@ static void event(volatile uint32_t *e) {
       acc.own = cur[0] - last[0]; acc.hits = cur[1] - last[1]; acc.rown[0] = cur[2] - last[2]; acc.rown[1] = cur[3] - last[3];
       for (int k = 0; k < 4; k++) last[k] = cur[k];
       acc.t0 = n - sec_t0;
+      cpuSample();
       if (!rep_ready) { rep = acc; rep_ready = 1; }
+      if (rec) { uint32_t *a = (uint32_t *)&acc; for (int i = 0; i < SW; i++) rec_acc0[i] -= a[i]; }  // (v12.13) grabando: que la diferencia siga valiendo
       sceClibMemset(&acc, 0, sizeof acc);
       sec_t0 = n;
     }
   }
 }
 
-static void clog(const char *fmt, ...);
 static int capThread(SceSize args, void *argp) {
   uint32_t idle_t = 0, on = 0;
   for (;;) {
@@ -354,7 +607,7 @@ static int capThread(SceSize args, void *argp) {
     if (acc.cmds != c0) work = 1;
     uint32_t dt = now() - t0;
     if (work) { acc.us += dt; f_us += dt; idle_t = now(); }
-    else if (now() - idle_t > 300) sceKernelDelayThread(100);  // sin trabajo hace 0,3 ms: dormir un poco (~0,4 ms)
+    else if (now() - idle_t > 300) { uint32_t s0 = now(); sceKernelDelayThread(100); acc.sleep_us += now() - s0; }  // sin trabajo hace 0,3 ms: dormir un poco (~0,4 ms)
   }
   return 0;
 }
@@ -384,9 +637,20 @@ static int repThread(SceSize args, void *argp) {
       clog("  draws/f: 3d=%u 2d=%u clear=%u vacios=%u | tri=%u tira=%u abanico=%u rect=%u lineas=%u puntos=%u curvas=%u | vertices/f=%u\n",
            PF(d3d), PF(dthr), PF(dclear), PF(dempty), PF(prim[3]), PF(prim[4]), PF(prim[5]), PF(prim[6]), PF(prim[1]) + PF(prim[2]),
            PF(prim[0]), PF(curves), PF(verts));
-      clog("  estado (draws/f): textura_nueva=%u cambia_textura=%u matriz=%u destino=%u otro=%u sin_cambio=%u (%u%%) | lotes/f=%u contiguos/f=%u cambios_de_destino/f=%u\n",
+      clog("  estado (draws/f): textura_nueva=%u cambia_textura=%u matriz=%u destino=%u otro=%u sin_cambio=%u (%u%%) | lotes/f=%u contiguos/f=%u sin_cortar_por_texlevel/f=%u solo_texlevel=%u cambios_de_destino/f=%u\n",
            PF(texnew), PF(ch_tex), PF(ch_mtx), PF(ch_rt), PF(ch_other), PF(ch_none), r->ch_none * 100 / d, PF(batches), PF(batches_cont),
-           PF(rt_switch));
+           PF(batches_notl), PF(only_tl), PF(rt_switch));
+      uint32_t awake = r->t0 > r->sleep_us ? r->t0 - r->sleep_us : 1;  // tiempo que el capturador no estuvo durmiendo
+      clog("  procesador (ms por seg): captura=%u de %u despierta (%u%%) trabajando=%u | ns/comando: reloj=%u procesador_max=%u procesador_estimado=%u | lectores=%u+%u | emulador nucleo0=%u nucleo1=%u nucleo2=%u sin_fijo=%u\n",
+           r->cpu_cap / 1000, awake / 1000, (uint32_t)((unsigned long long)r->cpu_cap * 100 / awake), r->us / 1000,
+           r->cmds ? (uint32_t)((unsigned long long)r->us * 1000 / r->cmds) : 0,
+           r->cmds ? (uint32_t)((unsigned long long)r->cpu_cap * 1000 / r->cmds) : 0,
+           r->cmds ? (uint32_t)((unsigned long long)r->us * r->cpu_cap / awake * 1000 / r->cmds) : 0,
+           r->cpu_lec[0] / 1000, r->cpu_lec[1] / 1000, r->cpu_core[0] / 1000, r->cpu_core[1] / 1000, r->cpu_core[2] / 1000,
+           r->cpu_core[3] / 1000);
+      clog("  memoria de sublistas (por frame): aplicadas=%u comandos_sin_recorrer=%u (%u%% de todos) lineas_comprobadas=%u | nuevas=%u cambiaron=%u otra_entrada=%u sin_guardar=%u | por seg: deposito_vaciado=%u revisadas=%u DISTINTAS=%u\n",
+           PF(memo_hit), PF(memo_cmds), r->cmds ? (uint32_t)((unsigned long long)r->memo_cmds * 100 / r->cmds) : 0, PF(memo_lines),
+           PF(memo_miss), PF(memo_fail), PF(memo_dep), PF(memo_no), r->memo_reset, r->memo_chk, r->memo_bad);
       clog("  memoria/f: texturas=%u (en vram %u) draws_tex_vram=%u draws_vert_vram=%u | vertices=%u KB indices=%u KB | paletas=%u (vram %u) copias=%u (vram %u)\n",
            PF(textures), PF(tex_vram), PF(dtex_vram), PF(dvert_vram), PF(vbytes) >> 10, PF(ibytes) >> 10, PF(cluts), PF(clut_vram),
            PF(transfers), PF(tr_vram));
@@ -458,7 +722,7 @@ void capturaStart(void) {
   sceIoRename(LOGC, "ux0:pspemu/ge_patch_captura_prev.log");
   SceUID r = sceKernelCreateThread("gepresent_captura_log", repThread, 0xB0, 0x2000, 0, 0, NULL);  // primero: que
   if (r >= 0) sceKernelStartThread(r, 0, NULL);                                                      // quede el log
-  clog("gepresent v12.9: capturador de la etapa 2; lectura de a 256 bytes (NEON) sin cache\n");
+  clog("gepresent v12.13: capturador de la etapa 2 con memoria de sublistas\n");
   for (uint32_t a = 0x08000000u; a < 0x0C000000u && nr < 4;) {  // tramos de la RAM del PSP mapeados en este proceso
     SceKernelMemBlockInfo in; in.size = sizeof in;
     int e = sceKernelGetMemBlockInfoByAddr((void *)PSP(a), &in);
@@ -473,6 +737,22 @@ void capturaStart(void) {
   }
   initCls();
   if (!okRam(0x0A000000u) || !okRam(0x08800000u)) { clog("la RAM del PSP no cubre el buzon o el juego: sin captura\n"); return; }
+  if (sceIoGetstat("ux0:data/gepresent/sin_memoria", &st) >= 0) clog("memoria de sublistas: apagada (sin_memoria)\n");
+  else {
+    void *mm = NULL;
+    uint32_t sz = (MEMO_N * sizeof(Memo) + POOL_N * 64 + 0xFFF) & ~0xFFF;
+    SceUID mb = sceKernelAllocMemBlock("gepresent_memoria", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, sz, NULL);
+    if (mb < 0 || sceKernelGetMemBlockBase(mb, &mm) < 0) clog("memoria de sublistas: sin memoria (%08x)\n", mb);
+    else {
+      sceClibMemset(mm, 0, MEMO_N * sizeof(Memo));
+      memo = mm; pool = (uint32_t *)((char *)mm + MEMO_N * sizeof(Memo));
+      memo_chk = sceIoGetstat("ux0:data/gepresent/memo_revisar", &st) >= 0;
+      __sync_synchronize();
+      memo_on = 1;
+      clog("memoria de sublistas: %u sublistas, deposito de %u KB (%u KB en total)%s\n", MEMO_N, POOL_N * 64 >> 10, sz >> 10,
+           memo_chk ? "; REVISION de todas (memo_revisar)" : "; revision de 1 de cada 32");
+    }
+  }
   SceUID t = sceKernelCreateThread("gepresent_captura", capThread, 0x61, 0x4000, 0, 0x20000 /* nucleo 1 */, NULL);
   // Prioridad (v12.7): en el nucleo 2 el emulador tiene ScePspemuRemoteMe (Media Engine: decodifica el audio del juego),
   // TitleInfo y AvcAuInput con 0x60. Con 0x40 (v12.4/v12.6) el capturador los tapaba y el audio se cortaba; con 0xA0
@@ -481,7 +761,8 @@ void capturaStart(void) {
   // v12.8: nucleo 1. En el 2 (v12.7) el Media Engine ocupaba mas de la mitad del nucleo en carrera (~900 ns por comando);
   // en el 1 solo estan los hilos de salida de audio (0x40-0x43, trabajos cortos), que siguen pasando antes.
   if (t >= 0) sceKernelStartThread(t, 0, NULL);
-  clog("hilos: captura %08x (nucleo 1, prioridad 0x61, debajo de los hilos de audio) log %08x\n", t, r);
+  cap_uid = t;
+  clog("hilos: captura %08x (nucleo 1, prioridad 0x61, debajo de los hilos de audio) log %08x; hilos del emulador vistos: %d\n", t, r, emu_n);
   if (sceIoGetstat("ux0:data/gepresent/captura_sin_lectores", &st) >= 0) { clog("lectores: apagados (captura_sin_lectores)\n"); return; }
   void *m = NULL;
   SceUID blk = sceKernelAllocMemBlock("gepresent_lineas", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, (CL_N * 68 + 0xFFF) & ~0xFFF, NULL);
@@ -495,6 +776,7 @@ void capturaStart(void) {
   for (int k = 0; k < 2; k++) {
     SceUID lt = sceKernelCreateThread(k ? "gepresent_lector1" : "gepresent_lector0", lectorThread, 0xB0, 0x2000, 0, cores[k], NULL);
     if (lt >= 0) sceKernelStartThread(lt, sizeof(int), &ids[k]);
+    lec_uid[k] = lt;
     clog("lector %d: %08x (nucleo %d, prioridad 0xB0)\n", k, lt, k ? 2 : 0);
   }
 }
