@@ -2776,12 +2776,16 @@ static void sbPost(u32 type, u32 aux, u32 a, u32 b, u32 c) {
   sbs.ev++;
   pspSdkEnableInterrupts(intr);
 }
+static u32 esp_have[16]; // (espejo, ver abajo) paginas de datos ya copiadas alguna vez
 static void sbInit(void) {
   int i;
-  for (i = 0; i < 8; i++) SB[i] = 0;
-  SB[1] = 1; SB[6] = sb_ord;
+  for (i = 0; i < 0x50; i++) SB[i] = 0;
+  for (i = 0x200; i < 0x400; i++) SB[i] = 0;
+  for (i = 0; i < 16; i++) esp_have[i] = 0;
+  SB[1] = 2; SB[6] = sb_ord; // version 2: con espejo de la VRAM (dev62)
   SB[0] = SB_MAGIC;
 }
+
 static int sbAlive(void) { // el capturador de la Vita responde (su latido cambio hace menos de 0,5 s)
   static u32 hb, hb_t;
   u32 now = sceKernelGetSystemTimeLow();
@@ -2828,6 +2832,56 @@ int sceGeListSyncPatched(int qid, int mode) {
     sbPost(EV_LSYNC, mode, qid, w, SB[3]);
   }
   return _sceGeListSync(qid, mode);
+}
+
+// --- Espejo de la VRAM (dev62, etapa 2) ---
+// La Vita no ve la VRAM real del PSP (no esta mapeada en Adrenaline), y GT guarda ahi sublistas, texturas y paletas.
+// El capturador pide paginas de 4 KB en dos mapas de bits del buzon ("listas" y "datos") y en cada flip el GE copia
+// las pedidas a MIRROR (RAM, la VRAM falsa sin uso en sombra): las de listas en cada frame; las de datos la primera
+// vez (hasta 64 por frame) y despues de a 8 por frame, rotando. Una copia final de 16 bytes escribe en SB[0x40] el
+// numero de la copia: asi la Vita sabe cuando termino. Sin pedidos no se encola nada (SH).
+// Buzon: +0x80 listas y +0xC0 datos (16 palabras cada uno, Vita) | +0x100 ultima copia terminada (GE) | +0x110 copias
+// encoladas, +0x114 paginas copiadas, +0x118 veces que la copia anterior no habia terminado (PSP) | +0x800 numero de la
+// ultima copia de cada pagina (512 palabras, PSP).
+#define MIRROR 0x0A200000
+#define ESP_LIST 0x0A100000 // dos listas de 4 KB, alternadas (en la VRAM falsa, sin uso en sombra; no en RENDER_LIST: TX_RING)
+void guStart(int cid, void *list); // gu.c
+static int esp_qid[2] = { -1, -1 };
+static u32 esp_seq, esp_rr, esp_pages, esp_busy; // (los dos ultimos: totales, para la Vita)
+static struct { u32 copies, pages, busy, runs_max; } esps;
+static void espejoFlip(void) {
+  u32 cp[16], wl[16], wd[16], i, p, w, b, nd = 0, nr = 0, any = 0;
+  for (i = 0; i < 16; i++) { wl[i] = SB[0x20 + i]; wd[i] = SB[0x30 + i]; cp[i] = wl[i]; any |= wl[i] | wd[i]; }
+  if (!any) return;
+  for (p = 0; p < 512; p++) { // datos nuevos
+    w = p >> 5; b = 1u << (p & 31);
+    if ((wd[w] & b) && !(esp_have[w] & b) && !(cp[w] & b) && nd < 64) { cp[w] |= b; nd++; }
+  }
+  for (i = 0; i < 512 && nr < 8; i++) { // repaso de los datos ya copiados
+    p = esp_rr = (esp_rr + 1) & 511; w = p >> 5; b = 1u << (p & 31);
+    if ((wd[w] & b) && (esp_have[w] & b) && !(cp[w] & b)) { cp[w] |= b; nr++; }
+  }
+  int s = esp_seq & 1;
+  if (esp_qid[s] >= 0 && _sceGeListSync(esp_qid[s], 1) > 0) { // la de hace dos frames sigue en el GE
+    esps.busy++; SB[0x46] = ++esp_busy;
+    return;
+  }
+  u32 rl = ESP_LIST + s * 0x1000, seq = ++esp_seq, runs = 0;
+  guStart(0, (void *)(rl | 0xA0000000));
+  for (p = 0; p < 512 && runs < 100;) {
+    if (!(cp[p >> 5] >> (p & 31) & 1)) { p++; continue; }
+    u32 p0 = p;
+    while (p < 512 && cp[p >> 5] >> (p & 31) & 1) { SB[0x200 + p] = seq; esp_have[p >> 5] |= 1u << (p & 31); p++; }
+    sceGuCopyImage(GE_FORMAT_8888, 0, 0, 1024, p - p0, 1024, (void *)(0x04000000 + p0 * 4096), 0, 0, 1024, (void *)(MIRROR + p0 * 4096));
+    esps.pages += p - p0; esp_pages += p - p0; runs++;
+  }
+  if (runs > esps.runs_max) esps.runs_max = runs;
+  ((volatile u32 *)((rl + 0xFF0) | 0xA0000000))[0] = seq; // la copia final la pone en SB[0x40]
+  sceGuCopyImage(GE_FORMAT_8888, 0, 0, 4, 1, 64, (void *)(rl + 0xFF0), 0, 0, 64, (void *)0x0A000100);
+  sceGuFinish();
+  esp_qid[s] = _sceGeListEnQueue((void *)rl, NULL, -1, NULL);
+  esps.copies++;
+  SB[0x44] = seq; SB[0x45] = esp_pages;
 }
 
 // Primer gancho que llama el juego (pedir la VRAM, encolar o mostrar): perfil del juego y modo sombra. Antes se
@@ -3249,6 +3303,9 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
     if (pres[0] != 0x31565047) // el log y los volcados los escribe gepresent (buzones del descriptor)
       pres[0] = 0x31565047;
     sbPost(EV_FLIP, 0, (u32)topaddr, bufferwidth | pixelformat << 16, log_frame);
+    int k1e = pspSdkSetK1(0);
+    espejoFlip(); // copia de la VRAM pedida por la Vita (dev62)
+    pspSdkSetK1(k1e);
     static u32 prev_menu;
     u32 mc = PSP_CTRL_LTRIGGER | PSP_CTRL_RTRIGGER | PSP_CTRL_START, m = (pad.Buttons & mc) == mc;
     if (m && !prev_menu && opt.sombra) {
@@ -3440,6 +3497,11 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
       LOG("stats sombra sync: drawsync=%lu atrasados=%lu (>5 ms: %lu) espera=%lu us/sync (max %lu) listsync=%lu atrasados=%lu\n",
           sbs.syncs, sbs.late, sbs.timeouts, sbs.wait_us / s, sbs.wait_max, sbs.lsyncs, sbs.llate);
       LOG("stats sombra GE: el juego espera al GE en drawsync %lu us/sync\n", sbs.in_sync_us / s);
+      u32 pl = 0, pd = 0, i;
+      for (i = 0; i < 512; i++) pl += SB[0x20 + (i >> 5)] >> (i & 31) & 1, pd += SB[0x30 + (i >> 5)] >> (i & 31) & 1;
+      LOG("stats espejo: paginas pedidas listas=%lu datos=%lu (KB: %lu) | copias=%lu paginas_copiadas=%lu (KB/frame %lu) tramos_max=%lu ocupado=%lu terminada=%lu/%lu\n",
+          pl, pd, (pl + pd) * 4, esps.copies, esps.pages, esps.pages * 4 / STATS_EVERY, esps.runs_max, esps.busy, SB[0x40], esp_seq);
+      esps.copies = esps.pages = esps.busy = esps.runs_max = 0;
       memset(&sbs, 0, sizeof(sbs));
     }
     if (st.rt_draws)

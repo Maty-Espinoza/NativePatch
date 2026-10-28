@@ -1,6 +1,9 @@
 // Prueba de la memoria de sublistas (v12.12) fuera de la Vita: listas sinteticas en una "RAM del PSP" falsa, bajo qemu.
 // arm-linux-gnueabihf-gcc -static -O2 -mthumb -mfpu=neon -mfloat-abi=hard -w -I<vita-headers>/include -o prueba prueba_memoria.c
 // qemu-arm-static ./prueba 0   (0 sin memoria, 1 con memoria, 2 revisando todas): las columnas antes de "|" deben ser iguales.
+// v13.1, espejo de la VRAM: ./prueba <modo> 1 pone las sublistas en la VRAM (su contenido en el espejo). En el frame 0 se
+// saltan y se piden; desde el 1 deben dar lo mismo que en la RAM. ./prueba <modo> 2: una pagina sin copia (sublistas
+// cortadas, sin colgarse).
 #include "captura.c"
 #include <stdio.h>
 #include <string.h>
@@ -28,11 +31,11 @@ int sceKernelGetMemBlockBase(SceUID u, void **b) { return -1; }
 int sceKernelGetMemBlockInfoByAddr(void *a, SceKernelMemBlockInfo *i) { return -1; }
 SceUID emu_th[EMU_N]; int emu_aff[EMU_N], emu_n;
 
-static uint32_t *W(uint32_t a) { return (uint32_t *)PSP(a); }
+static uint32_t *W(uint32_t a) { return (uint32_t *)PSP(isVram(a) ? MIRROR + (a & 0x1FFFFF) : a); }
 static uint32_t pc_;
 static void E(uint32_t c, uint32_t d) { *W(pc_) = c << 24 | (d & 0xFFFFFF); pc_ += 4; }
 #define MAIN 0x08800000u
-#define SUBS 0x08900000u
+static uint32_t SUBS = 0x08900000u, vram;
 #define SHARED 0x08A00000u
 static void build(int frame) {
   // sublista compartida (anidada): fija color/alpha y dibuja 1 tira con vertices propios
@@ -42,7 +45,7 @@ static void build(int frame) {
     if (k % 3) E(0x01, 0xC00000 + k * 0x100);  // las k%3==0 dibujan con los vertices de entrada (VDEP)
     E(0xC8, k & 3); E(0x3A, 0); for (int i = 0; i < 12; i++) E(0x3B, (k * 7 + i) & 0xFFFFFF);
     E(0x04, 4 << 16 | (6 + k));
-    if (k % 5 == 0) E(0x0A, SHARED & 0xFFFFFF);  // con BASE 0x08 de la lista de arriba
+    if (k % 5 == 0) { E(0x10, 0x080000); E(0x0A, SHARED & 0xFFFFFF); }  // (BASE 0x08: la compartida esta en la RAM)
     if (k % 7 == 0) { E(0x10, 0x090000); }      // cambia BASE (se filtra a la salida)
     E(0x04, 3 << 16 | 3);
     if (k == 10 && frame >= 3) E(0xC8, 2);       // esta cambia desde el frame 3
@@ -51,26 +54,34 @@ static void build(int frame) {
   pc_ = MAIN;
   E(0x12, 0x00011F); E(0x1E, 1); E(0xD3, 0); E(0x9C, 0x000000); E(0x9D, 0x040000 | 512);
   for (int k = 0; k < 40; k++) {
-    E(0x10, 0x080000);
+    E(0x10, SUBS >> 8 & 0x0F0000);
     E(0xA0, 0x100000 + (k & 1 ? frame * 0x1000 : 0)); E(0xA8, 0x090000);  // textura impar cambia cada frame (dependencia)
     E(0x01, 0xD00000 + k * 0x40 + (k == 12 && frame >= 5 ? 0x1000 : 0));
     E(0x0A, (SUBS + k * 0x200) & 0xFFFFFF);
-    if (k == 20) E(0x0A, (SUBS + k * 0x200) & 0xFFFFFF);  // la misma dos veces seguidas (otra entrada: vertices)
+    if (k == 20) { E(0x10, SUBS >> 8 & 0x0F0000); E(0x0A, (SUBS + k * 0x200) & 0xFFFFFF); }  // la misma dos veces seguidas (otra entrada: vertices)
   }
   E(0x0F, 0); E(0x0C, 0);
 }
 static uint32_t stateSum(void) { uint32_t h = 0; for (int i = 0; i < 256; i++) h = h * 31 + reg[i]; for (int m = 0; m < 5; m++) for (int i = 0; i < 96; i++) h = h * 31 + mtx[m][i]; return h * 31 + vaddr * 7 + iaddr; }
 int main(int argc, char **argv) {
   setvbuf(stdout, NULL, _IONBF, 0); int mode = atoi(argv[1]);  // 0 sin memoria, 1 con memoria, 2 revisando todas
+  vram = argc > 2 ? atoi(argv[2]) : 0;
+  if (vram) { SUBS = 0x04100000u; esp_on = 1; }
   if (mmap((void *)0x70000000, 0x2000000, PROT_READ | PROT_WRITE, MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0) == MAP_FAILED) { perror("mmap"); return 1; }
-  if (mmap((void *)0x72000000, 0x100000, PROT_READ | PROT_WRITE, MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0) == MAP_FAILED) { perror("mmap2"); return 1; }
-  rlo[0] = 0x08000000; rhi[0] = 0x0A000000; nr = 1; initCls();
-  if (mode) { memo = calloc(MEMO_N, sizeof(Memo)); pool = calloc(POOL_N, 64); memo_on = 1; memo_chk = mode == 2; }
+  if (mmap((void *)0x72000000, 0x400000, PROT_READ | PROT_WRITE, MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0) == MAP_FAILED) { perror("mmap2"); return 1; }
+  rlo[0] = 0x08000000; rhi[0] = 0x0B000000; nr = 1; initCls();
+  if (mode) { MEMO_N = 512; POOL_N = 8192; memo_sh = 23; memo = calloc(MEMO_N, sizeof(Memo)); pool = calloc(POOL_N, 64); memo_on = 1; memo_chk = mode == 2; }
   for (int f = 0; f < 8; f++) {
     build(f);
     sceClibMemset(&acc, 0, sizeof acc);
     List *l = &q[qt++ & 63]; memset(l, 0, sizeof *l); l->pc = MAIN; l->ord = f + 1;
     walk();
+    if (vram) {  // lo que haria el GE del PSP: copiar las paginas pedidas (con vram 2, todas menos la 0x102)
+      int pl = 0, pd = 0;
+      for (int w = 0; w < 16; w++) { esp_ok[w] |= want_l[w] | want_d[w]; pl += __builtin_popcount(want_l[w]); pd += __builtin_popcount(want_d[w]); }
+      if (vram == 2) esp_ok[0x102 >> 5] &= ~(1u << (0x102 & 31));
+      printf("   espejo: pedidas listas=%d datos=%d recorridas=%u saltadas=%u cortadas=%u\n", pl, pd, acc.v_ok, acc.vcalls, acc.v_cut);
+    }
     printf("f%d cmds=%u draws=%u verts=%u vbytes=%u tex=%u prim3=%u prim4=%u calls=%u estado=%08x | hit=%u miss=%u dep=%u fail=%u no=%u chk=%u BAD=%u lines=%u saltados=%u\n",
            f, acc.cmds, acc.draws, acc.verts, acc.vbytes, acc.textures, acc.prim[3], acc.prim[4], acc.calls_ram, stateSum(),
            acc.memo_hit, acc.memo_miss, acc.memo_dep, acc.memo_fail, acc.memo_no, acc.memo_chk, acc.memo_bad, acc.memo_lines, acc.memo_cmds);
