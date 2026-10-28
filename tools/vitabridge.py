@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Relevo entre Claude y la PS Vita (correr en la Terminal del Mac, en la misma red que la Vita).
+"""Relevo entre Claude y la PS Vita (correr en la Terminal del Mac o en Windows, en la misma red que la Vita).
+  En Windows: doble clic en vitabridge.cmd (usa el Python de Windows; en WSL la busqueda automatica de la Vita no funciona).
 
   python3 vitabridge.py [IP_DE_LA_VITA] [CARPETA]    (CARPETA: ~/Downloads/vitabridge)
   Sin IP (o con "buscar") busca la Vita en la red local: el puerto 1338 de vitacompanion.
@@ -24,7 +25,13 @@ WATCH_DIR, PATTERNS = 'ux0:/pspemu', ['ge_patch*.log', '*.gpd', 'gepatch_*.png']
 seen = {}  # archivo de la Vita -> tamano ya bajado
 
 def log(*a):
-    print(time.strftime('%H:%M:%S'), *a, flush=True)
+    line = ' '.join([time.strftime('%H:%M:%S')] + [str(x) for x in a])
+    print(line, flush=True)
+    try:  # copia en CARPETA/vitabridge.log: Claude ve que paso aunque no vea la ventana
+        with open(os.path.join(BASE, 'vitabridge.log'), 'a', encoding='utf-8') as f:
+            f.write(line + '\n')
+    except OSError:
+        pass
 
 def ftp():
     f = ftplib.FTP()
@@ -37,8 +44,8 @@ def vpath(p):  # VitaShell y vitacompanion usan /ux0:/...
     p = p.replace('\\', '/')
     return p if p.startswith('/') else '/' + p
 
-def command(line):
-    s = socket.create_connection((IP, 1338), timeout=30)
+def command(line, ip=None):
+    s = socket.create_connection((ip or IP, 1338), timeout=30)
     s.sendall((line.strip() + '\n').encode())
     s.settimeout(3)
     out = b''
@@ -86,6 +93,8 @@ def step(f):
     send = os.path.join(BASE, 'enviar')
     for root, _, files in os.walk(send):
         for name in files:
+            if name.startswith('.') or name.lower() in ('desktop.ini', 'thumbs.db'):
+                continue  # basura del Finder/Explorador: subirla traba el relevo
             local = os.path.join(root, name)
             rel = os.path.relpath(local, send).split(os.sep)
             remote = rel[0] + ':/' + '/'.join(rel[1:])
@@ -105,15 +114,15 @@ def step(f):
         path = os.path.join(BASE, name)
         if fnmatch.fnmatch(name, 'cmd_*.txt'):
             res = []
-            for line in open(path).read().splitlines():
+            for line in open(path, encoding='utf-8').read().splitlines():
                 if line.strip():
                     log('comando', line)
                     res.append('> ' + line + '\n' + command(line))
             os.makedirs(os.path.join(BASE, 'respuestas'), exist_ok=True)
-            open(os.path.join(BASE, 'respuestas', name), 'w').write('\n'.join(res))
+            open(os.path.join(BASE, 'respuestas', name), 'w', encoding='utf-8').write('\n'.join(res))
             os.remove(path)
         elif fnmatch.fnmatch(name, 'bajar_*.txt'):
-            lines = [l for l in open(path).read().splitlines() if l.strip()]
+            lines = [l for l in open(path, encoding='utf-8').read().splitlines() if l.strip()]
             os.remove(path)  # antes de bajar: si se corta, un archivo grande no se vuelve a pedir solo
             for line in lines:
                 remote, _, dest = line.partition('->')
@@ -127,7 +136,7 @@ def step(f):
                         os.remove(dest + '.parcial')
         elif fnmatch.fnmatch(name, 'listar_*.txt'):
             res = []
-            for line in open(path).read().splitlines():
+            for line in open(path, encoding='utf-8').read().splitlines():
                 if line.strip():
                     rows = []
                     try:
@@ -136,14 +145,14 @@ def step(f):
                         rows.append('error: %s' % e)
                     res.append('> ' + line.strip() + '\n' + '\n'.join(rows))
             os.makedirs(os.path.join(BASE, 'respuestas'), exist_ok=True)
-            open(os.path.join(BASE, 'respuestas', name), 'w').write('\n'.join(res) + '\n')
+            open(os.path.join(BASE, 'respuestas', name), 'w', encoding='utf-8').write('\n'.join(res) + '\n')
             os.remove(path)
     # Lo nuevo de ux0:/pspemu (logs, volcados, capturas)
     for name, size in listing(f, WATCH_DIR).items():
         if any(fnmatch.fnmatch(name, p) for p in PATTERNS) and seen.get(name) != size:
             download(f, WATCH_DIR + '/' + name, os.path.join(BASE, 'recibidos', name))
             seen[name] = size
-    open(os.path.join(BASE, 'estado.txt'), 'w').write('vivo %s, Vita %s\n' % (time.strftime('%Y-%m-%d %H:%M:%S'), IP))
+    open(os.path.join(BASE, 'estado.txt'), 'w', encoding='utf-8').write('vivo %s, Vita %s\n' % (time.strftime('%Y-%m-%d %H:%M:%S'), IP))
 
 def local_nets():
     """Redes /24 de este Mac (por la interfaz con ruta a internet y las de los nombres locales)."""
@@ -161,7 +170,18 @@ def local_nets():
         pass
     return sorted({ip.rsplit('.', 1)[0] for ip in ips if not ip.startswith('127.')})
 
+def is_vita(ip):  # el puerto 1338 abierto no basta (VPN, otros equipos): debe responder vitacompanion
+    try:
+        return 'vitacompanion' in command('version', ip)
+    except OSError:
+        return False
+
 def find_vita():
+    last = os.path.join(BASE, 'ultima_ip.txt')
+    if os.path.exists(last):  # primero la IP de la vez anterior
+        ip = open(last, encoding='utf-8').read().strip()
+        if is_vita(ip):
+            return ip
     def probe(ip):
         try:
             c = socket.create_connection((ip, 1338), timeout=0.6)
@@ -169,13 +189,17 @@ def find_vita():
             return ip
         except OSError:
             return None
-    for net in local_nets():
+    nets = sorted(local_nets(), key=lambda n: not n.startswith('192.168.'))  # la red de la casa primero
+    log('redes de este equipo:', nets)
+    for net in nets:
         log('buscando la Vita en %s.1-254 (puerto 1338)...' % net)
         with ThreadPoolExecutor(64) as ex:
             found = [ip for ip in ex.map(probe, ['%s.%d' % (net, i) for i in range(1, 255)]) if ip]
         for ip in found:
             log('puerto 1338 abierto en', ip)
-            return ip
+            if is_vita(ip):
+                open(last, 'w', encoding='utf-8').write(ip)
+                return ip
     return None
 
 def main():
@@ -183,8 +207,8 @@ def main():
     if not IP:
         IP = find_vita()
         if not IP:
-            print('No se encontro la Vita. Revisa que este en la misma red y con vitacompanion activo, o pasa la IP:')
-            print('  python3 vitabridge.py 192.168.x.y')
+            log('No se encontro la Vita. Revisa que este en la misma red y con vitacompanion activo, o pasa la IP:')
+            log('  python3 vitabridge.py 192.168.x.y')
             return 1
         try:
             log('vitacompanion responde:', command('version').strip() or '(sin texto)')
@@ -219,7 +243,12 @@ def main():
         time.sleep(1)
 
 if __name__ == '__main__':
+    os.makedirs(BASE, exist_ok=True)
     try:
         sys.exit(main())
     except KeyboardInterrupt:
         print()
+    except Exception:
+        import traceback
+        log('fallo:', traceback.format_exc())
+        raise
