@@ -12,8 +12,11 @@ Claude escribe en CARPETA y el relevo hace el resto:
   bajar_*.txt -> cada linea es una ruta de la Vita (ux0:/...) que se baja a recibidos/, o
                  "ruta -> destino" para dejarla en otra carpeta del Mac (p. ej. ~/Documents/...)
   listar_*.txt -> cada linea es una carpeta de la Vita; el listado queda en respuestas/
-  Ademas baja solo lo nuevo de ux0:/pspemu: ge_patch*.log, *.gpd y gepatch_*.png
-  estado.txt  -> latido (hora) para saber que el relevo esta vivo
+  Ademas baja lo nuevo de ux0:/pspemu (ge_patch*.log, *.gpd y gepatch_*.png), pero solo cuando el archivo deja de
+  crecer (al cerrar el juego o Adrenaline): mira la carpeta cada 15 s y baja un archivo cuando su tamano no cambio
+  desde la vez anterior. (2026-10-29: antes listaba cada 1 s y bajaba los logs enteros cada vez que crecian; despues de
+  ~600 descargas el FTP de vitacompanion respondia "550 Could not allocate memory" y la Vita no abria programas.)
+  estado.txt  -> latido (hora) para saber que el relevo esta vivo, y la ultima vez que respondio la Vita
 Solo usa la biblioteca estandar. Ctrl+C para terminar.
 """
 import ftplib, os, socket, sys, time, fnmatch, shutil
@@ -23,6 +26,9 @@ IP = sys.argv[1] if len(sys.argv) > 1 and sys.argv[1] != 'buscar' else None
 BASE = os.path.expanduser(sys.argv[2] if len(sys.argv) > 2 else '~/Downloads/vitabridge')
 WATCH_DIR, PATTERNS = 'ux0:/pspemu', ['ge_patch*.log', '*.gpd', 'gepatch_*.png']
 seen = {}  # archivo de la Vita -> tamano ya bajado
+last_size = {}  # archivo de la Vita -> tamano en la mirada anterior (si no cambio, el juego ya no lo escribe)
+WATCH_EVERY = 15  # segundos entre miradas a ux0:/pspemu
+watch_t, vita_t = 0, '-'
 
 def log(*a):
     line = ' '.join([time.strftime('%H:%M:%S')] + [str(x) for x in a])
@@ -147,12 +153,19 @@ def step(f):
             os.makedirs(os.path.join(BASE, 'respuestas'), exist_ok=True)
             open(os.path.join(BASE, 'respuestas', name), 'w', encoding='utf-8').write('\n'.join(res) + '\n')
             os.remove(path)
-    # Lo nuevo de ux0:/pspemu (logs, volcados, capturas)
-    for name, size in listing(f, WATCH_DIR).items():
-        if any(fnmatch.fnmatch(name, p) for p in PATTERNS) and seen.get(name) != size:
-            download(f, WATCH_DIR + '/' + name, os.path.join(BASE, 'recibidos', name))
-            seen[name] = size
-    open(os.path.join(BASE, 'estado.txt'), 'w', encoding='utf-8').write('vivo %s, Vita %s\n' % (time.strftime('%Y-%m-%d %H:%M:%S'), IP))
+    # Lo nuevo de ux0:/pspemu (logs, volcados, capturas): solo lo que dejo de crecer, mirando cada WATCH_EVERY s
+    global watch_t, vita_t
+    if time.time() - watch_t >= WATCH_EVERY:
+        watch_t = time.time()
+        for name, size in listing(f, WATCH_DIR).items():
+            if not any(fnmatch.fnmatch(name, p) for p in PATTERNS) or seen.get(name) == size:
+                continue
+            if last_size.get(name) == size:  # igual que hace 15 s: el juego ya no lo escribe
+                download(f, WATCH_DIR + '/' + name, os.path.join(BASE, 'recibidos', name))
+                seen[name] = size
+            last_size[name] = size
+        vita_t = time.strftime('%H:%M:%S')
+    open(os.path.join(BASE, 'estado.txt'), 'w', encoding='utf-8').write('vivo %s, Vita %s (respondio %s)\n' % (time.strftime('%Y-%m-%d %H:%M:%S'), IP, vita_t))
 
 def local_nets():
     """Redes /24 de este Mac (por la interfaz con ruta a internet y las de los nombres locales)."""

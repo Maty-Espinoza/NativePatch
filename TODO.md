@@ -64,6 +64,18 @@ sugerido: 1 y 4 juntos (nombre y versión), después 5 y 6 (limpieza), 2 (README
       compuerta nueva (dev66), la comprobación por adelantado y las sublistas de la VRAM solo se vieron en GT (y SH).
 - [ ] Desde v13.12 una línea de una sublista de la VRAM sin copia válida en el espejo del frame se regraba en vez de
       compararse con la copia vieja: si en otros juegos aparecen muchas "cambiaron" en sublistas de la VRAM, mirar esto.
+- [x] ~~LocoRoco~~ (2026-10-29, v13.12, `vitabridge/etapa2_v13.12/locoroco1`): 59,9 fps casi siempre, 0 DISTINTAS en 65 330;
+      cambia una sublista antes de encolar la siguiente → la compuerta se queda en el sync (correcto). ~4–8 ms de Vita.
+- [ ] **Ridge Racer** (2026-10-29, v13.12, `vitabridge/etapa2_v13.12/rr1`): cae a **~30 fps en dos tramos de ~10 s**
+      (uno por vuelta, el mismo lugar de la pista: 17–19 mil comandos y 3 300–3 700 draws por frame, el doble de lo normal)
+      y a ~40–48 fps en tramos cortos (15–17 mil comandos). Hasta ~12 mil comandos va a 59,5–60. 0 DISTINTAS.
+      Por qué: RR no usa sublistas (la memoria se salta ~1 % de los comandos; en GT ~85 %), así que la Vita interpreta
+      todo: ~1,05 µs por comando → 20 ms por frame en lo pesado. Además RR reescribe 16 líneas de su lista antes de encolar
+      la siguiente, así que la compuerta queda en el sync (menos tiempo para la Vita), y RR espera la Vita con vsync: si no
+      llega a 16,7 ms baja directo a 30 fps (la espera llega al tope de 5 ms). El PSP tiene ~70 % de CPU libre: sin la
+      espera iría a 60. El capturador recibe ~65 % del núcleo 1 (el audio de RR usa ~30 %, en GT ~19 %).
+      Arreglos posibles: acortar el bucle de interpretación (ver "Rendimiento de la captura"); más núcleo para el
+      capturador; ver qué cambian esas 16 líneas (¿se puede capturar antes de que cambien?).
 - [ ] **Cuelgue de la Vita** en la primera corrida de GT con v13.11.1 (~10 s después de largar). No volvió a pasar con
       v13.12.1 ni v13.12.2. Si vuelve, anotar versión y momento.
 

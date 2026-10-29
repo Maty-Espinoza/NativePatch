@@ -77,7 +77,7 @@ Lo pone en marcha el usuario (§1). Claude solo trabaja con archivos en la carpe
 | `enviar/ux0/...` | se sube a la misma ruta de la Vita y pasa a `enviados/` |
 | `bajar_<algo>.txt` | una línea por archivo: `ux0:/ruta` (va a `recibidos/`) o `ux0:/ruta -> ~/Downloads/vitabridge/...` |
 | `cmd_<algo>.txt` | comandos a vitacompanion (puerto 1338): `destroy` cierra las aplicaciones, `reboot` reinicia la Vita; la respuesta queda en `respuestas/` |
-| `recibidos/` | los logs se bajan solos mientras crecen (`ux0:/pspemu/ge_patch*.log`) |
+| `recibidos/` | los logs (`ux0:/pspemu/ge_patch*.log`) se bajan solos **al cerrar el juego o Adrenaline**: el relevo mira la carpeta cada 15 s y baja un archivo cuando su tamaño no cambió desde la vez anterior. Durante el juego no baja nada |
 
 - GePatch: `enviar/ux0/pspemu/seplugins/ge_patch.prx`. Copia también en `Descargas/ge_patch.prx` (pedido del usuario).
 - gepresent: `enviar/ux0/data/gepresent/gepresent.suprx`. Lo carga Adrenaline al abrirse: después de subirlo, mandar
@@ -110,7 +110,12 @@ Lo pone en marcha el usuario (§1). Claude solo trabaja con archivos en la carpe
 - Después de cada cambio: un resumen simple (qué se intenta, qué hace cada componente), sin detalles técnicos.
 
 ## 6. Guardar y leer resultados
-- Al terminar cada corrida, **antes de que abra otro juego** (los logs se reemplazan): copiar de `recibidos/`
+- 2026-10-29: con el relevo anterior (listaba cada 1 s y bajaba los logs enteros cada vez que crecían) el FTP de
+  vitacompanion respondía "550 Could not allocate memory" después de ~600 descargas y la Vita dejaba de abrir programas
+  (hubo que reiniciarla dos veces). Con el relevo nuevo, una sesión de Ridge Racer hizo 7 transferencias y ningún error.
+  `estado.txt` dice también la última vez que respondió la Vita.
+- Al terminar cada corrida, **antes de que abra otro juego** (los logs se reemplazan): esperar a que el relevo los baje
+  (15–30 s después de cerrar) y copiar de `recibidos/`
   `ge_patch.log`, `ge_patch_prev.log`, `ge_patch_captura.log`, `ge_patch_captura_prev.log`, `ge_patch_gepresent.log`
   (y `ge_patch_banco.log` si corrió un banco; con registro extremo, `ge_patch_frames.log` y `ge_patch_tarde.log`) a `vitabridge/<etapa>_<versión>/<juego><n>/` (p. ej.
   `etapa2_dev64/gt1`).
