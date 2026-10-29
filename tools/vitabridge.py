@@ -7,12 +7,12 @@
 
 En la Vita: vitacompanion (FTP en 1337 y comandos en 1338: launch, press, wait, kill...).
 Claude escribe en CARPETA y el relevo hace el resto:
-  enviar/ux0/pspemu/seplugins/ge_patch.prx  -> se sube a ux0:/pspemu/seplugins/ge_patch.prx
+  enviar/ux0/pspemu/seplugins/nativelink.prx  -> se sube a ux0:/pspemu/seplugins/nativelink.prx (igual con ur0/...)
   cmd_*.txt   -> cada linea va al puerto 1338; la respuesta queda en respuestas/cmd_*.txt
   bajar_*.txt -> cada linea es una ruta de la Vita (ux0:/...) que se baja a recibidos/, o
                  "ruta -> destino" para dejarla en otra carpeta del Mac (p. ej. ~/Documents/...)
   listar_*.txt -> cada linea es una carpeta de la Vita; el listado queda en respuestas/
-  Ademas baja lo nuevo de ux0:/pspemu (ge_patch*.log, *.gpd y gepatch_*.png), pero solo cuando el archivo deja de
+  Ademas baja lo nuevo de ux0:/pspemu (native*.log), pero solo cuando el archivo deja de
   crecer (al cerrar el juego o Adrenaline): mira la carpeta cada 15 s y baja un archivo cuando su tamano no cambio
   desde la vez anterior. (2026-10-29: antes listaba cada 1 s y bajaba los logs enteros cada vez que crecian; despues de
   ~600 descargas el FTP de vitacompanion respondia "550 Could not allocate memory" y la Vita no abria programas.)
@@ -24,7 +24,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 IP = sys.argv[1] if len(sys.argv) > 1 and sys.argv[1] != 'buscar' else None
 BASE = os.path.expanduser(sys.argv[2] if len(sys.argv) > 2 else '~/Downloads/vitabridge')
-WATCH_DIR, PATTERNS = 'ux0:/pspemu', ['ge_patch*.log', '*.gpd', 'gepatch_*.png']
+WATCH_DIR, PATTERNS = 'ux0:/pspemu', ['native*.log']
 seen = {}  # archivo de la Vita -> tamano ya bajado
 last_size = {}  # archivo de la Vita -> tamano en la mirada anterior (si no cambio, el juego ya no lo escribe)
 WATCH_EVERY = 15  # segundos entre miradas a ux0:/pspemu

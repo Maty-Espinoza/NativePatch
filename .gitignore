@@ -1,16 +1,16 @@
+# Salidas de compilacion (tools/compilar.sh deja todo en build/)
+build/
 *.o
 *.elf
 *.prx
-*.SFO
-exports.c
-.DS_Store
-tests/test_main
-tests/bench_bin
-EBOOT.PBP
-__pycache__/
-*.o_stub
-tools/geptest/escena/kcap/kcap.S
 *.velf
 *.suprx
-tools/gepresent/o/
-tools/vprobe/vita/o/
+*.SFO
+*.vpk
+eboot.bin
+param.sfo
+nativelink/exports.c
+nativedraw/o/
+EBOOT.PBP
+__pycache__/
+.DS_Store

@@ -3,7 +3,7 @@
 
 #include <psptypes.h>
 
-// Volcado binario de un frame (ms0:/gepatch_<ID>_<frame>.gpd) para analizarlo en el PC con
+// Volcado binario de un frame (ms0:/nativelink_<ID>_<frame>.gpd) para analizarlo en el PC con
 // tools/gpd.py: todos los comandos recorridos (valor del juego y lo que quedo), cada draw
 // con la decision del plugin y sus datos (vertices antes y despues, indices, texturas,
 // CLUT, origen de copias), las lineas del log, los flips y la VRAM y registros del GE al

@@ -1,4 +1,4 @@
-// Sombreadores del banco (gepresent v11), compilados con el compilador de Sony (JagerDesu/vita-shaders bajo qemu)
+// Sombreadores del banco (NativeDraw v11), compilados con el compilador de Sony (JagerDesu/vita-shaders bajo qemu)
 // desde banco_v.cg, banco_f1.cg y banco_f2.cg. Regenerar: ver build.sh.
 static const unsigned char v_gxp[] __attribute__((aligned(16))) = {
  0x47,0x58,0x50,0x00,0x01,0x05,0x10,0x03,0x66,0x01,0x00,0x00,0x00,0x00,0x00,0x00,

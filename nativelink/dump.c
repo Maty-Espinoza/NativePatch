@@ -1,6 +1,6 @@
 // Volcado binario de un frame (ver dump.h). Se arma en un buffer en la RAM libre del plugin
 // y se escribe a la tarjeta cuando se llena: durante el volcado el juego va lento (es puntual).
-// Con gepresent v6 (dev56.5) el buffer va en dos mitades: la Vita escribe una a la tarjeta mientras el PSP llena la
+// Con NativeDraw v6 (dev56.5) el buffer va en dos mitades: la Vita escribe una a la tarjeta mientras el PSP llena la
 // otra, y el PSP solo espera si la Vita no termino la anterior (antes el juego esperaba cada sceIoWrite).
 #include <pspkernel.h>
 #include <pspsdk.h>
@@ -38,7 +38,7 @@ static void closeCmds(void) {
     cmds_at = ~0u;
   }
 }
-// Pedido a gepresent: escribir esta mitad (banderas 1 abrir, 2 cerrar) y pasar a la otra
+// Pedido a NativeDraw: escribir esta mitad (banderas 1 abrir, 2 cerrar) y pasar a la otra
 static void vitaChunk(u32 flags) {
   if (!vio)
     return;
@@ -266,13 +266,13 @@ static void start(void) {
     geGetMtx = (void *)FindProc("sceGE_Manager", "sceGe_driver", 0x57C8945B);
     geDrawSync = (void *)FindProc("sceGE_Manager", "sceGe_driver", 0xB287BD61);
   }
-  snprintf(path, sizeof(path), "ms0:/gepatch_%s_%06lu.gpd", game_id[0] ? game_id : "juego", log_frame);
+  snprintf(path, sizeof(path), "ms0:/nativelink_%s_%06lu.gpd", game_id[0] ? game_id : "juego", log_frame);
   t_start = sceKernelGetSystemTimeLow();
   half = 0;
   buf = (u8 *)(DUMP_BUF | 0x40000000);
   vio = vitaIo() && vitaWait(VDUMP); // el volcado anterior ya termino de escribirse
   vita_wait_us = 0;
-  if (vio) { // nombre sin "ms0:/" (gepresent lo escribe en ux0:pspemu/)
+  if (vio) { // nombre sin "ms0:/" (NativeDraw lo escribe en ux0:pspemu/)
     vio_first = 1;
     u32 w[12];
     memset(w, 0, sizeof(w));
@@ -299,7 +299,7 @@ static void start(void) {
   memcpy(h.magic, "GPD1", 4);
   h.version = 1;
   strncpy(h.game, game_id, sizeof(h.game) - 1);
-  strncpy(h.plugin, GEPATCH_VERSION, sizeof(h.plugin) - 1);
+  strncpy(h.plugin, NATIVELINK_VERSION, sizeof(h.plugin) - 1);
   h.frame = log_frame; h.passive = dump_info.passive && *dump_info.passive; h.idle = idle; h.opt_size = dump_info.opt_size;
   dumpRecord(GPD_HEADER, &h, sizeof(h), dump_info.opt, dump_info.opt_size);
   regs(0);

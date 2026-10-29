@@ -10,7 +10,7 @@ ifdef DEST
 	cp $(TARGET).prx $(DEST)/$(TARGET).prx
 endif
 
-TARGET = ge_patch
+TARGET = nativelink
 OBJS = main.o log.o menu.o dump.o gu.o exports.o
 main.o log.o menu.o dump.o: log.h menu.h font.h dump.h
 

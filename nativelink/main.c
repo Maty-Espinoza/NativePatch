@@ -16,7 +16,7 @@
 #include "menu.h"
 #include "dump.h"
 
-PSP_MODULE_INFO("GePatch", 0x1007, 1, 0);
+PSP_MODULE_INFO("NativeLink", 0x1007, 1, 0);
 
 #define DRAW_NATIVE 0xABCDEF00
 
@@ -28,13 +28,13 @@ PSP_MODULE_INFO("GePatch", 0x1007, 1, 0);
 
 #define FAKE_VRAM 0x0A000000
 #define DISPLAY_BUFFER 0x0A400000
-#define DISPLAY_BUFFER2 0x0AE00000 // segunda imagen nativa (doble buffer con gepresent)
+#define DISPLAY_BUFFER2 0x0AE00000 // segunda imagen nativa (doble buffer con NativeDraw)
 #define RENDER_LIST 0x0A800000
 
-// Presentacion con gepresent.suprx (plugin de la Vita, tools/gepresent): Adrenaline dibuja la imagen nativa
-// como textura de la GPU de la Vita; gepresent cambia esa textura por la que dice este descriptor, la escala a la
-// pantalla y responde. Sin gepresent Adrenaline sigue leyendo DISPLAY_BUFFER a 960x544, como siempre.
-//   +0x00 "GPV1" (GePatch)   +0x04 'K' + contador (gepresent, en cada frame que dibuja la imagen nativa)
+// Presentacion con nativedraw.suprx (plugin de la Vita, tools/NativeDraw): Adrenaline dibuja la imagen nativa
+// como textura de la GPU de la Vita; NativeDraw cambia esa textura por la que dice este descriptor, la escala a la
+// pantalla y responde. Sin NativeDraw Adrenaline sigue leyendo DISPLAY_BUFFER a 960x544, como siempre.
+//   +0x00 "GPV1" (NativeLink)   +0x04 'K' + contador (NativeDraw, en cada frame que dibuja la imagen nativa)
 //   +0x10 imagen a mostrar: direccion, ancho, alto, ancho de linea | formato << 16. La escribe el GE con una
 //         copia de 16 bytes al final de cada lista de copia: queda publicada cuando la imagen ya esta completa.
 #define PRES_DESC 0x0A7FF000
@@ -51,8 +51,8 @@ static u32 depth_vram = 0x04100000;
 #define VRAM_1KB 0x041ff000
 
 // Escala del buffer grande (etapa 2, opcion "escala" del perfil). A 2x el buffer grande es la imagen nativa de
-// 960x544. Menos de 2x solo con gepresent: GePatch dibuja a BW x BH y la Vita amplia la imagen final (VPROBE 9:
-// ampliarla con el GE costaria 5,4 ms; copiarla para gepresent, 1,3 ms a 1,5x). Se decide una vez, antes del
+// 960x544. Menos de 2x solo con NativeDraw: NativeLink dibuja a BW x BH y la Vita amplia la imagen final (VPROBE 9:
+// ampliarla con el GE costaria 5,4 ms; copiarla para NativeDraw, 1,3 ms a 1,5x). Se decide una vez, antes del
 // primer recorrido (scaleDecide): los vertices 2D se escalan en la memoria del juego y no se pueden reescalar.
 // Con escala < 2 sobra VRAM despues del z: ahi va el buffer temporal (copy_vram) y los rt a escala 1, sin
 // guardar el z en la RAM (Z_SAVE).
@@ -90,7 +90,7 @@ static struct {
 } st;
 static u32 patch_us_frame; // costo del plugin en el frame en curso
 
-// Perfil del recorrido (opcion "perfil", etapa 4): en que se va la CPU que gasta GePatch. En 1 de cada 16 frames
+// Perfil del recorrido (opcion "perfil", etapa 4): en que se va la CPU que gasta NativeLink. En 1 de cada 16 frames
 // se anota el tiempo de cada comando segun su tipo (ver profStep). Con perfil=2 se leen ademas los contadores de
 // hardware del Allegrex (ciclos, espera de memoria, fallos de cache) en todo el recorrido, si Adrenaline los tiene.
 static int capturing; // captura al log en curso (ver mas abajo)
@@ -2744,7 +2744,7 @@ int (* _sceDisplaySetFrameBuf)(void *topaddr, int bufferwidth, int pixelformat, 
 
 // --- Modo sombra (etapa 2 de la arquitectura B, dev61) -------------------------------------------------------
 // El juego corre como sin plugin: VRAM real, sin recorrer ni tocar sus listas y sin imagen grande (Adrenaline muestra
-// la imagen nativa). Los ganchos solo anotan en un buzon lo que el juego le pide al GE, y el capturador de gepresent
+// la imagen nativa). Los ganchos solo anotan en un buzon lo que el juego le pide al GE, y el capturador de NativeDraw
 // (v12, en la Vita) recorre las mismas listas leyendo la RAM del PSP. Se elige por juego en el menu ("Modo sombra")
 // y vale desde la proxima vez que se abre el juego; durante el modo sombra, L+R+START lo apaga para la proxima vez.
 // Buzon en la VRAM falsa (0x0A000000, sin uso en este modo), sin cache:
@@ -2762,18 +2762,18 @@ static int sombra, mode_done;
 // en la compuerta | syncs en que la Vita iba atrasada pero no se espero (sin_compuerta) << 8; a = frame (us, flip a flip),
 // b = espera en la compuerta (us), c = espera al GE dentro de sceGeDrawSync/ListSync (us); e[5] = vueltas del hilo de CPU
 // libre (SB[0x4D]: vueltas por ms = 100 %), e[6] = espejo: CPU del flip (us) | paginas << 16, e[7] = ganchos (us en sbPost).
-// Interruptores que pone gepresent en SB[0x4A]: 1 sin compuerta (no se espera a la Vita, solo se cuenta), 2 sin espejo, 4
+// Interruptores que pone NativeDraw en SB[0x4A]: 1 sin compuerta (no se espera a la Vita, solo se cuenta), 2 sin espejo, 4
 // sin hilo de CPU libre. Mientras la compuerta espera: SB[0x4B] = lista esperada, SB[0x4C] = hora de inicio.
-// dev65.3: nivel de registro de gepresent en SB[0x4E] (0 minimo, 1 mediano, 2 extremo; docs/registros.md): EV_FRAME y el hilo
+// dev65.3: nivel de registro de NativeDraw en SB[0x4E] (0 minimo, 1 mediano, 2 extremo; docs/registros.md): EV_FRAME y el hilo
 // de CPU libre desde mediano; la vida de la lista (EV_VIDA) y los eventos de la CPU del juego (T4: EV_CPU, EV_CPUSUM) solo en extremo.
 static volatile u32 spin, spin_cal;  // hilo de CPU libre (como vpjuego): vueltas y calibracion (vueltas por ms)
 static struct { u32 gate_us, gate_n, nowait, sync_us, post_us, esp_us, esp_pages; } fr;              // del frame
 static struct { u32 frames, frame_us, spin, gate_us, gate_n, nowait, sync_us, post_us, esp_us, esp_pages; } frs; // (log, 10 s)
 static u32 sb_x[3];  // e[5..7] de EV_FRAME
-// dev65.2, vida de la lista: gepresent deja una muestra de lineas de 64 bytes de la ultima lista que capturo (SB[0x50]
+// dev65.2, vida de la lista: NativeDraw deja una muestra de lineas de 64 bytes de la ultima lista que capturo (SB[0x50]
 // numero de muestra, 0 mientras la escribe; SB[0x51] cuantas, hasta 32; SB[0x52] cuantas son del nivel de arriba; SB[0x60+k]
 // direccion, SB[0x80+k] huella FNV de sus 16 palabras, como lineHash en captura.c). Antes de cada encolado y en cada sync,
-// GePatch rehace las huellas con la cache (lo que ve la CPU del juego) y anota EV_VIDA: dato = 0 encolado / 1 drawsync / 2
+// NativeLink rehace las huellas con la cache (lo que ve la CPU del juego) y anota EV_VIDA: dato = 0 encolado / 1 drawsync / 2
 // listsync, a = numero de muestra, b = cambiadas del nivel de arriba | de sublistas << 8, c = ultima lista encolada.
 static int (*_sceGeGetReg)(int); // (T6, dev63)
 static u32 geBusy(void) { // 1 si el GE tiene una lista en curso (desde un gancho: con k1 = 0, dev63.2)
@@ -2858,12 +2858,12 @@ static u32 sbGate(u32 ord) {
 // En GT la lista de un frame no cambia hasta que el juego encola la siguiente (fase 1: 0 de 11 436). Entonces el juego
 // no tiene que esperar a la Vita en el sync: puede esperar recien antes de encolar la lista siguiente, y la Vita gana
 // ~2,4 ms por frame (lo que va del sync al encolado). En el sync solo se anota hasta que lista hay que esperar.
-// Autocomprobacion (para cualquier juego): gepresent deja una muestra de huellas de la ultima lista que capturo
-// (SB[0x50..], SB[0x53] = su numero de orden). Antes de cada encolado, si esa lista ya paso por un sync, GePatch rehace
+// Autocomprobacion (para cualquier juego): NativeDraw deja una muestra de huellas de la ultima lista que capturo
+// (SB[0x50..], SB[0x53] = su numero de orden). Antes de cada encolado, si esa lista ya paso por un sync, NativeLink rehace
 // las huellas: si cambiaron, el juego reescribe la lista antes de encolar la siguiente y la Vita podria leer algo que el
 // GE no dibujo -> la compuerta vuelve al sync. Empieza en el sync y pasa a "antes de encolar" despues de 60
 // comprobaciones limpias seguidas; un cambio la devuelve al sync hasta juntar otras 60 (dev66.2: en GT cambia una vez al
-// pasar de la presentacion a la carrera, en la pantalla de carga) y con 10 cambios se queda en el sync hasta cerrar el juego. Interruptor de gepresent compuerta_sync (SB[0x4A] & 8): siempre en el
+// pasar de la presentacion a la carrera, en la pantalla de carga) y con 10 cambios se queda en el sync hasta cerrar el juego. Interruptor de NativeDraw compuerta_sync (SB[0x4A] & 8): siempre en el
 // sync (las comprobaciones siguen, para comparar). SB[0x54] = modo (0 probando, 1 antes de encolar, 2 la lista cambio 10 veces).
 // dev66.3: solo vale la muestra de una lista encolada despues del sync anterior (sync_lo, sync_ord]: la de una lista mas vieja
 // puede estar en la zona que el juego ya reusa (GT alterna dos zonas) y daba falsos cambios (dev66.2: 10 en una carrera).
@@ -2939,7 +2939,7 @@ int sceGeListSyncPatched(int qid, int mode) {
 
 // --- T6 y T4 (dev63, etapa 2): cuando trabaja el GE y que escribe la CPU del juego ---
 // T6: un hilo mira el GE cada ~250 us con sceGeGetReg (como vpjuego) solo mientras tiene trabajo; sin listas duerme
-// 2 ms. dev63.3: apagado salvo que gepresent lo pida (SB[0x47] = 1, archivo ux0:data/gepresent/medir_ge): despertar
+// 2 ms. dev63.3: apagado salvo que NativeDraw lo pida (SB[0x47] = 1, archivo ux0:data/nativedraw/medir_ge): despertar
 // cada 250 us le quitaba ~2-3 fps a GT en el puente. Por cada tramo en que el GE estuvo ocupado sin pausa anota EV_GEFIN: a = inicio (hora del encolado si el GE
 // estaba libre), b = muestras detenido en el stall, c = muestras; la hora del evento es el fin (+-250 us).
 // T4: ganchos de las funciones con que el juego deja datos listos para el GE (vaciar la cache de un rango, DMA):
@@ -2947,11 +2947,11 @@ int sceGeListSyncPatched(int qid, int mode) {
 // WritebackInvalidateAll, 5 sceDmacMemcpy, 6 sceDmacTryMemcpy; a = direccion o destino, b = tamano o origen, c =
 // tamano del DMA). Hasta 96 por frame (el resto solo se cuenta); en el flip EV_CPUSUM con los totales del frame.
 static volatile u32 ge_kick; // hora del ultimo encolado (0: ya visto)
-static struct { u32 busy_us, runs, run_max, stall_n, n; } ges;  // (para el log de GePatch)
+static struct { u32 busy_us, runs, run_max, stall_n, n; } ges;  // (para el log de NativeLink)
 static int geThread(SceSize args, void *argp) {
   u32 busy0 = 0, n = 0, nst = 0;
   for (;;) {
-    if (!sombra || !_sceGeGetReg || SB[0x47] != 1) { // (dev63.3) solo si gepresent lo pide: le quitaba ~2-3 fps a GT
+    if (!sombra || !_sceGeGetReg || SB[0x47] != 1) { // (dev63.3) solo si NativeDraw lo pide: le quitaba ~2-3 fps a GT
       busy0 = ge_kick = 0;
       sceKernelDelayThread(100000);
       continue;
@@ -2984,7 +2984,7 @@ static int libreThread(SceSize args, void *argp) { // (dev65) ver t4t6Install
   return 0;
 }
 static struct { u32 n, kb, dn, dkb, posted, dropped; } t4;  // del frame
-static struct { u32 n, kb, dn, dkb; } t4s;                  // (para el log de GePatch)
+static struct { u32 n, kb, dn, dkb; } t4s;                  // (para el log de NativeLink)
 static void t4Post(u32 kind, u32 a, u32 b, u32 c) {
   if (SB[0x4E] < 2) return; // (dev65.3: solo en extremo)
   if (t4.posted < 96) { t4.posted++; sbPost(EV_CPU, kind, a, b, c); } else t4.dropped++;
@@ -3030,7 +3030,7 @@ static void t4t6Install(void) {
   }
   if (_dmac) { sctrlHENPatchSyscall((u32)_dmac, dmacPatched); nm++; }
   if (_dmacTry) { sctrlHENPatchSyscall((u32)_dmacTry, dmacTryPatched); nm++; }
-  SceUID th = _sceGeGetReg ? sceKernelCreateThread("GePatchGE", geThread, 0x11, 0x800, 0, NULL) : -1;
+  SceUID th = _sceGeGetReg ? sceKernelCreateThread("NativeLinkGE", geThread, 0x11, 0x800, 0, NULL) : -1;
   if (th >= 0) sceKernelStartThread(th, 0, NULL);
   // (dev65) CPU libre del PSP, como vpjuego: el mismo bucle se cronometra aqui (2 millones de vueltas) y un hilo de
   // prioridad minima lo repite: solo avanza cuando nadie mas quiere la CPU. Solo en modo sombra.
@@ -3038,7 +3038,7 @@ static void t4t6Install(void) {
   for (k = 0; k < 2000000; k++) { spin++; asm volatile("" ::: "memory"); }
   tc = sceKernelGetSystemTimeLow() - tc;
   spin_cal = tc ? 2000000u / (tc / 1000 + 1) : 0;
-  SceUID tl = sceKernelCreateThread("GePatchLibre", libreThread, 126, 0x400, 0, NULL);
+  SceUID tl = sceKernelCreateThread("NativeLinkLibre", libreThread, 126, 0x400, 0, NULL);
   if (tl >= 0) sceKernelStartThread(tl, 0, NULL);
   LOG("CPU libre: %lu vueltas/ms = 100%% (hilo %08lx)\n", spin_cal, (u32)tl);
   LOG("T4/T6: sceGeGetReg %s, hilo del GE %08lx | ganchos de la cache %d de 5, del DMA %d de 2\n", _sceGeGetReg ? "si" : "NO",
@@ -3057,7 +3057,7 @@ static void t4t6Install(void) {
 // ese espejo (totales, PSP) | +0x120 copia en uso (Vita) | +0x800 y +0x21000: numero de la ultima copia de cada pagina
 // en MIRROR y en MIRROR2 (512 palabras cada uno, PSP).
 #define MIRROR 0x0A200000
-#define MIRROR2 0x0AC00000 // (sin uso en ningun modo de GePatch)
+#define MIRROR2 0x0AC00000 // (sin uso en ningun modo de NativeLink)
 #define ESP_LIST 0x0A100000 // dos listas de 8 KB, alternadas (en la VRAM falsa, sin uso en sombra; no en RENDER_LIST: TX_RING)
 #define ESP_DATOS 64 // paginas de datos por copia (256 KB; dev64.3 las copiaba todas: ~730 KB por frame bajaban GT a ~57 fps)
 void guStart(int cid, void *list); // gu.c
@@ -3123,7 +3123,7 @@ static void modeDecide(void) {
   *(u32 *)DRAW_NATIVE = 0; // Adrenaline muestra la imagen nativa
   sbInit();
   LOG("modo SOMBRA: el juego corre sin cambios (VRAM real, sin recorrer listas)\n");
-  LOG("sombra: buzon de eventos en 0x0A000000 para el capturador de gepresent; L+R+START lo apaga para la proxima vez\n");
+  LOG("sombra: buzon de eventos en 0x0A000000 para el capturador de NativeDraw; L+R+START lo apaga para la proxima vez\n");
 }
 
 void *sceGeEdramGetAddrPatched(void) {
@@ -3149,11 +3149,11 @@ void guStart(int cid, void *list); // gu.c
 static struct { int x, y, w, h; } ovl;
 
 static volatile u32 *pres = (u32 *)(PRES_DESC | 0x40000000);
-static int pres_on;              // gepresent responde: doble buffer y la Vita escala la imagen
+static int pres_on;              // NativeDraw responde: doble buffer y la Vita escala la imagen
 static u32 pres_ack, pres_ack_frame, pres_copies, pres_fail;
 static void presCheck(void) {
   // Adrenaline 8 limpia la zona 0x0A000000 al cargar el juego, despues de cargar los plugins: la marca escrita en
-  // module_start se perdia y gepresent nunca veia un descriptor valido (dev54.1). Se repone en cada flip.
+  // module_start se perdia y NativeDraw nunca veia un descriptor valido (dev54.1). Se repone en cada flip.
   if (pres[0] != 0x31565047)
     pres[0] = 0x31565047;
   u32 a = pres[1];
@@ -3172,7 +3172,7 @@ static void presCheck(void) {
   int on = pres_ack && log_frame - pres_ack_frame < 120 && !pres_fail;
   if (on != pres_on) {
     pres_on = on;
-    LOG("presentacion: %s\n", on ? "gepresent responde -> doble buffer, la Vita escala la imagen" : "sin gepresent -> imagen unica en 0x0A400000");
+    LOG("presentacion: %s\n", on ? "NativeDraw responde -> doble buffer, la Vita escala la imagen" : "sin NativeDraw -> imagen unica en 0x0A400000");
   }
 }
 // Al final de la lista: espera la copia anterior y publica la imagen en el descriptor (ver PRES_DESC)
@@ -3206,7 +3206,7 @@ void copyFrameBuffer(int menu) {
   _sceGeListEnQueue((void *)rl, NULL, -1, NULL);
 }
 
-// Frame que no paso por el GE (video, imagen de la CPU) con gepresent: se muestra el fb del juego tal cual y
+// Frame que no paso por el GE (video, imagen de la CPU) con NativeDraw: se muestra el fb del juego tal cual y
 // la Vita lo escala. Reemplaza al escalado por CPU (upscaleGameBuffer, ~10 ms por frame).
 static void presSource(u32 src, u32 w, u32 h, int stride, int fmt) {
   *(u32 *)DRAW_NATIVE = 1;
@@ -3217,7 +3217,7 @@ static void presSource(u32 src, u32 w, u32 h, int stride, int fmt) {
 }
 
 // Antes del primer recorrido: perfil del juego y escala del buffer grande. Una escala menor que 2 necesita
-// gepresent (amplia la imagen final): su hilo responde "PRES" en el descriptor en cuanto ve la marca.
+// NativeDraw (amplia la imagen final): su hilo responde "PRES" en el descriptor en cuanto ve la marca.
 static void scaleDecide(void) {
   scale_done = 1;
   if (!mode_done)
@@ -3232,7 +3232,7 @@ static void scaleDecide(void) {
     while (pres[2] != 0x53455250 && sceKernelGetSystemTimeLow() - t0 < 200000)
       sceKernelDelayThread(1000);
     if (pres[2] != 0x53455250) {
-      LOG("escala %d/10 pedida, pero gepresent no responde -> 2x\n", (int)(sc * 10 + 0.5f));
+      LOG("escala %d/10 pedida, pero NativeDraw no responde -> 2x\n", (int)(sc * 10 + 0.5f));
       sc = 2;
     }
   }
@@ -3527,7 +3527,7 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
   if (sombra) {
     if (SB[0] != SB_MAGIC) // (por si algo limpia la zona, como Adrenaline 8 al cargar el juego)
       sbInit();
-    if (pres[0] != 0x31565047) // el log y los volcados los escribe gepresent (buzones del descriptor)
+    if (pres[0] != 0x31565047) // el log y los volcados los escribe NativeDraw (buzones del descriptor)
       pres[0] = 0x31565047;
     t4Flip();
     int k1e = pspSdkSetK1(0);
@@ -3659,7 +3659,7 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
       LOG_ONCE(0xE5000000 ^ src, "imagen original escalada desde %08lx ancho=%d fmt=%d (video/imagen fuera del GE)%s\n", src, sw, sf,
                pres_on && !menu && (src & 0x0fffffff) >= FAKE_VRAM && (src & 0x0fffffff) < DISPLAY_BUFFER ? " por la Vita" : "");
       st.fallback++;
-      u32 s0 = src & 0x0fffffff; // la GPU de la Vita solo lee la VRAM falsa (la que registra gepresent)
+      u32 s0 = src & 0x0fffffff; // la GPU de la Vita solo lee la VRAM falsa (la que registra NativeDraw)
       if (pres_on && !menu && s0 >= FAKE_VRAM && s0 + sw * 272 * (sf == 3 ? 4 : 2) <= DISPLAY_BUFFER) { // escalado por la Vita
         presSource(src, 480, 272, sw, sf);
         shown = 1;
@@ -3810,7 +3810,7 @@ static int zoneCheck(void) {
       r11 < 0 ? 0 : p11.attr, r11);
   if (fin > FAKE_VRAM)
     return 1;
-  SceUID id = sceKernelAllocPartitionMemory(11, "GePatch", PSP_SMEM_Addr, 0x01000000, (void *)FAKE_VRAM);
+  SceUID id = sceKernelAllocPartitionMemory(11, "NativeLink", PSP_SMEM_Addr, 0x01000000, (void *)FAKE_VRAM);
   LOG("reserva de 0x0A000000-0x0B000000 en la particion 11: %08x%s\n", id,
       id >= 0 ? "" : " (Adrenaline 7, o algo ya esta ahi: un plugin de usuario cargado en la particion 11)");
   return 0;
@@ -3864,7 +3864,7 @@ int module_start(SceSize args, void *argp) {
   sctrlHENPatchSyscall((u32)_sceGeListEnQueue, sceGeListEnQueuePatched);
   sctrlHENPatchSyscall((u32)_sceGeListEnQueueHead, sceGeListEnQueueHeadPatched);
 
-  if (!passive) { // descriptor de la presentacion: la imagen unica hasta que gepresent responda
+  if (!passive) { // descriptor de la presentacion: la imagen unica hasta que NativeDraw responda
     pres[0] = 0x31565047; pres[1] = 0; // "GPV1"
     pres[4] = DISPLAY_BUFFER; pres[5] = WIDTH; pres[6] = HEIGHT; pres[7] = PITCH | (PIXELFORMAT << 16);
   }

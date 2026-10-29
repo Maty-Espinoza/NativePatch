@@ -54,7 +54,7 @@ static const Item items[] = {
   { "cpu", "Dibujos de la CPU en pantalla", &opt.cpu_draw, 0, 1, 1, no_si },
   { "intercambio", "Fb intermedios por intercambio", &opt.swap, 0, 1, 1, no_si },
   { "rt_esc1", "Render targets a escala 1 (VRAM del z)", &opt.rt1, 0, 1, 1, no_si },
-  { "escala", "Escala (al abrir el juego; <2x: gepresent)", &opt.escala, 0, 5, 1, escalas },
+  { "escala", "Escala (al abrir el juego; <2x: NativeDraw)", &opt.escala, 0, 5, 1, escalas },
   { "perfil", "Perfil del recorrido en el log", &opt.perfil, 0, 2, 1, perfil_modes },
   { "espera", "Volcado con L+R+SELECT: espera (s)", &opt.espera, 0, 10, 1, NULL },
   { "sin_efecto", "Omitir draws solo de stencil (565)", &opt.sin_efecto, 0, 1, 1, no_si },
@@ -121,7 +121,7 @@ static void drawMenu(u16 *buf) {
   int x = 8, w = MENU_W - 16, i;
   char line[32];
   fillRect(buf, 0, 0, MENU_W, MENU_H, C_BG);
-  drawText(buf, x, 8, "GePatch " GEPATCH_VERSION, C_TEXT, C_BG);
+  drawText(buf, x, 8, "NativeLink " NATIVELINK_VERSION, C_TEXT, C_BG);
   for (i = 0; i < N_ITEMS; i++) {
     const Item *it = &items[i];
     int yy = 40 + i * 16;
@@ -147,7 +147,7 @@ static void drawMenu(u16 *buf) {
   drawText(buf, x, 40 + N_ITEMS * 16 + 8, foot, C_DIM, C_BG);
 }
 
-// --- Opciones por juego: ms0:/gepatch_<ID>.txt, una linea clave=valor ---------
+// --- Opciones por juego: ms0:/nativelink_<ID>.txt, una linea clave=valor ---------
 static void applyChanged(void) {
   optChanged();
   logResetOnce();
@@ -180,7 +180,7 @@ int menuParse(const char *s) {
   return n;
 }
 
-static void optPath(char *p, int n, const char *id) { snprintf(p, n, "ms0:/gepatch_%s.txt", id); }
+static void optPath(char *p, int n, const char *id) { snprintf(p, n, "ms0:/nativelink_%s.txt", id); }
 
 // Opciones conocidas por juego (se aplican antes del archivo, que manda)
 static const struct { const char *id, *opts; } known[] = {

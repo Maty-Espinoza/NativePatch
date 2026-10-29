@@ -1,12 +1,12 @@
 #!/bin/sh
-# Compiladores de GePatch (pspdev) y gepresent (vitasdk) en el contenedor Linux x86_64 de Claude (2026-10-29).
-# El contenedor se borra con la sesion: esto lo rearma en ~3 min en $T (/home/claude/tc).
+# Compiladores de NativeLink (pspdev) y NativeDraw (vitasdk) en Linux x86_64: el contenedor de Claude o Ubuntu en WSL.
+# Se puede correr de nuevo: salta lo que ya esta. Queda en $T ($HOME/tc). El contenedor se borra con la sesion (~3 min).
 # - El proxy del contenedor no deja ver las paginas de github.com (listados de releases ni la API), pero si bajar archivos
 #   de releases: se usa el nombre fijo "vitasdk-bootstrap-<host>.tar.bz2" de la ultima instantanea (git ls-remote).
 # - GCC 15 de vitasdk usa C23 por defecto: el envoltorio de arm-none-eabi-gcc agrega -std=gnu17 (por taihen.h).
-# Uso: sh preparar.sh ; despues: . /home/claude/tc/env.sh y sh compilar.sh
+# Uso: sh tools/preparar.sh ; despues: sh tools/compilar.sh (la VM ARM64 del Mac usa tools/mac/preparar_vm.sh)
 set -e
-T=${T:-/home/claude/tc}; mkdir -p $T; cd $T
+T=${T:-$HOME/tc}; mkdir -p $T; cd $T
 [ -d pspdev ] || curl -sSL https://github.com/pspdev/pspdev/releases/latest/download/pspdev-ubuntu-latest-x86_64.tar.gz | tar xz
 [ -d Adrenaline ] || git clone -q --depth 1 https://github.com/TheOfficialFloW/Adrenaline
 if [ ! -d vcore ]; then

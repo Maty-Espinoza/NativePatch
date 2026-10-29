@@ -1,5 +1,5 @@
-// banco.c (gepresent v11.3): banco de pruebas GXM de la etapa 1 de la arquitectura B (arquitectura_dibujo_en_vita.md §6).
-// Apagado por defecto: solo corre si existe ux0:data/gepresent/banco_v12 (v12; antes "banco", que quedo en la Vita) (su contenido = segundos de espera antes de
+// banco.c (NativeDraw v11.3): banco de pruebas GXM de la etapa 1 de la arquitectura B (arquitectura_dibujo_en_vita.md §6).
+// Apagado por defecto: solo corre si existe ux0:data/nativedraw/banco_v12 (v12; antes "banco", que quedo en la Vita) (su contenido = segundos de espera antes de
 // empezar; 20 si esta vacio). Todo pasa dentro del proceso de Adrenaline, en su hilo de dibujo, justo despues de su
 // escena (gancho a la importacion de sceGxmEndScene), en una superficie propia de 960x544 (8888 + z/stencil):
 //   1. memoria que se puede pedir por tipo (CDRAM, LPDDR): el bloque mas grande y el total; relojes del ARM, bus y GPU;
@@ -12,16 +12,16 @@
 //      tambien grabado en 2 hilos a la vez (mitad cada uno), para ver si grabar escala con los nucleos;
 //   4. la GPU leyendo vertices de la RAM del PSP contra memoria propia (LPDDR y CDRAM);
 //   5. presentacion: durante ~10 s Adrenaline muestra la superficie propia (la imagen del juego dibujada por el banco
-//      + un cuadro de color que se mueve arriba) en vez de su textura de 512x272. Solo sin GePatch (juego abierto con L).
+//      + un cuadro de color que se mueve arriba) en vez de su textura de 512x272. Solo sin NativeLink (juego abierto con L).
 // v11.1 no pudo crear el contexto diferido ni la memoria propia de la prueba 4 (la memoria del proceso de Adrenaline es
-// poca: bloques de 6-7 MB, y el anillo de volcados de gepresent ya usa 24 MB). v11.2: con el banco, gepresent no reserva
+// poca: bloques de 6-7 MB, y el anillo de volcados de NativeDraw ya usa 24 MB). v11.2: con el banco, NativeDraw no reserva
 // el anillo, y la memoria grande sale de LPDDR fisica contigua si el tipo pedido no alcanza.
 // v11.2 hizo caer la GPU ("GPU Driver detects GPU Crash") en el segundo caso del contexto diferido: el pozo se vaciaba
 // (pos = 0) antes de cada grabacion, pero el contexto diferido sigue usando los pedazos que ya recibio; el pozo volvia a
 // entregar esa misma memoria para otro anillo y la GPU leia comandos pisados. v11.3: el pozo nunca se reusa (12 + 4 MB,
 // pedidos antes que el resto) y una lista grabada sin memoria no se ejecuta.
-// Resultados: ux0:pspemu/ge_patch_banco.log (el relevo lo baja solo). Tiempos con sceKernelGetProcessTimeLow (us).
-// v13.7 (etapa 2): "banco de nucleos" (ver mas abajo), activo con ux0:data/gepresent/banco_nucleos en vez de banco_v12.
+// Resultados: ux0:pspemu/nativedraw_banco.log (el relevo lo baja solo). Tiempos con sceKernelGetProcessTimeLow (us).
+// v13.7 (etapa 2): "banco de nucleos" (ver mas abajo), activo con ux0:data/nativedraw/banco_nucleos en vez de banco_v12.
 #include <psp2/kernel/threadmgr.h>
 #include <psp2/kernel/clib.h>
 #include <psp2/kernel/processmgr.h>
@@ -33,7 +33,7 @@
 #include <stdarg.h>
 #include "banco_shaders.h"
 
-#define BLOG "ux0:pspemu/ge_patch_banco.log"
+#define BLOG "ux0:pspemu/nativedraw_banco.log"
 #define PSP(a) (0x68000000u + ((a) & 0x0FFFFFFFu))
 #define N 2000        // draws por caso
 #define REP 3
@@ -64,7 +64,7 @@ static uint32_t now(void) { return sceKernelGetProcessTimeLow(); }
 static void *gmem1(uint32_t type, uint32_t size, int attr) {
   size = (size + (type == PHY ? 0xFFFFF : 0x3FFFF)) & ~(type == PHY ? 0xFFFFFu : 0x3FFFFu);  // 1 MB fisica, 256 KB el resto
   void *p = 0;
-  SceUID b = sceKernelAllocMemBlock("gepresent_banco", type, size, 0);
+  SceUID b = sceKernelAllocMemBlock("nativedraw_banco", type, size, 0);
   if (b < 0 || sceKernelGetMemBlockBase(b, &p) < 0) return 0;
   if (attr && sceGxmMapMemory(p, size, attr) < 0) { sceKernelFreeMemBlock(b); return 0; }
   return p;
@@ -89,7 +89,7 @@ static uint32_t probe(uint32_t type) {  // MB que se pueden pedir de una vez (bu
   uint32_t lo = 0, hi = 512;
   while (lo < hi) {
     uint32_t m = (lo + hi + 1) / 2;
-    SceUID b = sceKernelAllocMemBlock("gepresent_prueba", type, m << 20, 0);
+    SceUID b = sceKernelAllocMemBlock("nativedraw_prueba", type, m << 20, 0);
     if (b >= 0) { sceKernelFreeMemBlock(b); lo = m; } else hi = m - 1;
   }
   return lo;
@@ -97,7 +97,7 @@ static uint32_t probe(uint32_t type) {  // MB que se pueden pedir de una vez (bu
 static uint32_t total(uint32_t type) {  // MB en total: bloques de 1 MB hasta que no haya mas (y se liberan)
   SceUID b[256];
   uint32_t n = 0;
-  while (n < 256 && (b[n] = sceKernelAllocMemBlock("gepresent_prueba", type, 1 << 20, 0)) >= 0) n++;
+  while (n < 256 && (b[n] = sceKernelAllocMemBlock("nativedraw_prueba", type, 1 << 20, 0)) >= 0) n++;
   for (uint32_t i = 0; i < n; i++) sceKernelFreeMemBlock(b[i]);
   return n;
 }
@@ -456,7 +456,7 @@ static int hookEnd(SceGxmContext *c, const SceGxmNotification *v, const SceGxmNo
     pruebaV(c, paso / 2, paso % 2);  // (un origen sin memoria se salta)
     if (++paso == 6) {
       fase = 4; paso = 0;
-      if (!psp_tex) { blog("presentacion: no se vio la textura de 512x272 (GePatch prendido o filtro Original): se salta\n"); fase = 5; }
+      if (!psp_tex) { blog("presentacion: no se vio la textura de 512x272 (NativeLink prendido o filtro Original): se salta\n"); fase = 5; }
     }
   } else if (fase == 4) {
     if (paso == 0) blog("presentacion: 10 s mostrando la superficie del banco (imagen del juego + cuadro de color arriba)\n");
@@ -494,7 +494,7 @@ static int bancoThread(SceSize args, void *argp) {
   blog("contextos diferidos: %08x %08x (pozos en %s, %s)\n", r3, r5, tipo(pozo[0].p), tipo(pozo[1].p));
   if (r3 < 0) dctx[0] = 0;
   if (r5 < 0) dctx[1] = 0;
-  SceUID th2 = dctx[1] ? sceKernelCreateThread("gepresent_banco2", hilo2, 0xA0, 0x4000, 0, 0, 0) : -1;
+  SceUID th2 = dctx[1] ? sceKernelCreateThread("nativedraw_banco2", hilo2, 0xA0, 0x4000, 0, 0, 0) : -1;
   if (th2 >= 0) sceKernelStartThread(th2, 0, 0);
   else dctx[1] = 0;
   vsrc[0] = gmem1(UNC, NVD * NV * 16, RD);
@@ -609,11 +609,11 @@ static int nucleosThread(SceSize args, void *argp) {
     npozo[i].cap = (i ? 3 : 5) << 20;
     npozo[i].p = gmem(UNC, npozo[i].cap, RW);
   }
-  nfin = sceKernelCreateSema("gepresent_nfin", 0, 0, 3, 0);
+  nfin = sceKernelCreateSema("nativedraw_nfin", 0, 0, 3, 0);
   int nh = 0;
   for (int i = 0; i < 6; i++) {
-    gw[i].go = sceKernelCreateSema("gepresent_ngo", 0, 0, 1, 0);
-    gw[i].th = sceKernelCreateThread("gepresent_grabador", grabador, 0xA0, 0x4000, 0, i < 3 ? 0 : 0x10000 << (i - 3), 0);
+    gw[i].go = sceKernelCreateSema("nativedraw_ngo", 0, 0, 1, 0);
+    gw[i].th = sceKernelCreateThread("nativedraw_grabador", grabador, 0xA0, 0x4000, 0, i < 3 ? 0 : 0x10000 << (i - 3), 0);
     Grab *p = &gw[i];
     if (gw[i].th >= 0 && sceKernelStartThread(gw[i].th, sizeof p, &p) >= 0) nh++;
   }
@@ -673,18 +673,18 @@ static int leerEspera(const char *f, int def) {  // segundos escritos en el arch
   return s ? s : def;
 }
 
-void bancoStart(void) {  // desde el hilo de gepresent, con AdrenalineUser ya cargado
-  int sn = leerEspera("ux0:data/gepresent/banco_nucleos", 30);
+void bancoStart(void) {  // desde el hilo de NativeDraw, con AdrenalineUser ya cargado
+  int sn = leerEspera("ux0:data/nativedraw/banco_nucleos", 30);
   if (sn >= 0) {  // v13.7
     nmodo = 1; espera = sn * 60;
     hk_end = taiHookFunctionImport(&ref_end, "AdrenalineUser", 0xF76B66BD, 0xFE300E2F, hookEnd);
-    blog("gepresent v13.7 banco de nucleos (etapa 2), compilado %s %s: espera %d s, %d draws por grabacion, gancho EndScene %08x\n",
+    blog("NativeDraw v13.7 banco de nucleos (etapa 2), compilado %s %s: espera %d s, %d draws por grabacion, gancho EndScene %08x\n",
          __DATE__, __TIME__, sn, ND, hk_end);
-    SceUID th = hk_end >= 0 ? sceKernelCreateThread("gepresent_nucleos", nucleosThread, 0xA0, 0x4000, 0, 0, 0) : -1;
+    SceUID th = hk_end >= 0 ? sceKernelCreateThread("nativedraw_nucleos", nucleosThread, 0xA0, 0x4000, 0, 0, 0) : -1;
     if (th >= 0) sceKernelStartThread(th, 0, 0);
     return;
   }
-  SceUID fd = sceIoOpen("ux0:data/gepresent/banco_v12", SCE_O_RDONLY, 0);
+  SceUID fd = sceIoOpen("ux0:data/nativedraw/banco_v12", SCE_O_RDONLY, 0);
   if (fd < 0) return;
   char b[8] = { 0 };
   sceIoRead(fd, b, 7);
@@ -694,10 +694,10 @@ void bancoStart(void) {  // desde el hilo de gepresent, con AdrenalineUser ya ca
   if (s) espera = s * 60;
   hk_end = taiHookFunctionImport(&ref_end, "AdrenalineUser", 0xF76B66BD, 0xFE300E2F, hookEnd);
   hk_tex = taiHookFunctionImport(&ref_tex, "AdrenalineUser", 0xF76B66BD, 0x29C34DF5, hookTex);
-  blog("gepresent v11.3 banco de pruebas GXM (etapa 1), compilado %s %s: espera %d s, ganchos EndScene %08x SetFragmentTexture %08x\n",
+  blog("NativeDraw v11.3 banco de pruebas GXM (etapa 1), compilado %s %s: espera %d s, ganchos EndScene %08x SetFragmentTexture %08x\n",
        __DATE__, __TIME__, espera / 60, hk_end, hk_tex);
   if (hk_end < 0 || hk_tex < 0) return;
-  SceUID th = sceKernelCreateThread("gepresent_banco", bancoThread, 0xA0, 0x4000, 0, 0, 0);
+  SceUID th = sceKernelCreateThread("nativedraw_banco", bancoThread, 0xA0, 0x4000, 0, 0, 0);
   if (th >= 0) sceKernelStartThread(th, 0, 0);
 }
 

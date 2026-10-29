@@ -1,10 +1,10 @@
-// captura.c: capturador de la etapa 2 de la arquitectura B (gepresent v12).
-// GePatch en modo sombra (dev61) anota en un buzon en la RAM del PSP (0x0A000000, ver "Modo sombra" en main.c) cada
+// captura.c: capturador de la etapa 2 de la arquitectura B (NativeDraw v12).
+// NativeLink en modo sombra (dev61) anota en un buzon en la RAM del PSP (0x0A000000, ver "Modo sombra" en main.c) cada
 // lista que el juego encola, cada stall, cada sync y cada flip. Este hilo sigue ese buzon y recorre las mismas listas
 // leyendo la RAM del PSP, como lo haria el GE, sin dibujar nada: cuenta lo que habria que traducir a GXM (draws,
 // cambios reales de estado, lotes que se podrian juntar, texturas) y cuanto tarda el ARM. Publica en el buzon la ultima
-// lista capturada (la usa la compuerta del sync de GePatch) y un latido.
-// Estadisticas cada segundo en ux0:pspemu/ge_patch_captura.log (la sesion anterior: ge_patch_captura_prev.log).
+// lista capturada (la usa la compuerta del sync de NativeLink) y un latido.
+// Estadisticas cada segundo en ux0:pspemu/nativedraw_captura.log (la sesion anterior: nativedraw_captura_prev.log).
 // Lectura de la lista: ver "Lectura de la RAM del PSP" (v12.9: de a 256 bytes + dos lectores adelantados).
 // Lo que esta en la VRAM del PSP no se puede leer (no esta mapeada en Adrenaline): se cuenta y se salta (espejo:
 // siguiente paso de la etapa 2).
@@ -13,23 +13,23 @@
 // cuantas sublistas se repiten de un frame a otro (para la memoria de sublistas).
 // v12.13: estadisticas de la memoria corregidas (frames y tiempos se sumaban de mas al aplicar).
 // v12.12: memoria de sublistas (ver "memoria de sublistas"); se quitan la segunda pasada y las huellas de v12.11.
-// v13.1: espejo de la VRAM (ver "Espejo de la VRAM"): con GePatch dev62 se recorren las sublistas que estan en la VRAM.
+// v13.1: espejo de la VRAM (ver "Espejo de la VRAM"): con NativeLink dev62 se recorren las sublistas que estan en la VRAM.
 // v13.2: tabla y deposito de la memoria de sublistas 4 veces mas grandes. v13.3: el capturador marca solo las paginas del
 // espejo ya copiadas (el hilo del espejo, con poca prioridad, a veces no recibia tiempo y las sublistas se seguian
 // saltando); comparacion de lineas con NEON y tiempo de la comparacion en el log.
 // v13.4: los lectores comprueban por adelantado las sublistas guardadas (ver memoVerify): el capturador ya no lee ni
 // compara sus lineas (en el puente de GT eso era ~9 de los ~18 ms por frame) y los lectores dejan de recorrerlas.
-// v13.5: con GePatch dev63, T6 (cuando trabaja el GE del PSP), T4 (que escribe la CPU del juego: cache y DMA) y la
+// v13.5: con NativeLink dev63, T6 (cuando trabaja el GE del PSP), T4 (que escribe la CPU del juego: cache y DMA) y la
 // "vida de los datos" (ver smpAdd): cuantos vertices, indices, texturas y paletas cambian 1 y 2 frames despues de leerlos.
-// v13.6: con GePatch dev64, espejo doble (ver "Espejo de la VRAM"): cada lista lee una copia que el GE no esta
+// v13.6: con NativeLink dev64, espejo doble (ver "Espejo de la VRAM"): cada lista lee una copia que el GE no esta
 // sobrescribiendo; los destinos de copias de bloque (TRANSFER) en la VRAM cuentan como destinos de dibujo.
-// v13.9 (fase de analisis, con GePatch dev65): por que todavia le cuesta al juego. ge_patch_frames.log: una linea por
+// v13.9 (fase de analisis, con NativeLink dev65): por que todavia le cuesta al juego. nativedraw_frames.log: una linea por
 // frame con lo que le costo al PSP (EV_FRAME: compuerta, espera al GE, CPU libre, espejo, ganchos) y lo que hizo la Vita.
-// ge_patch_tarde.log: cada sync en que la Vita iba atrasada, con los tiempos de la lista esperada (ver "Atrasos").
-// Interruptores (ux0:data/gepresent/, se apagan con "no" adentro): sin_compuerta, sin_espejo, sin_libre (los aplica GePatch,
+// nativedraw_tarde.log: cada sync en que la Vita iba atrasada, con los tiempos de la lista esperada (ver "Atrasos").
+// Interruptores (ux0:data/nativedraw/, se apagan con "no" adentro): sin_compuerta, sin_espejo, sin_libre (los aplica NativeLink,
 // SB[0x4A]) y sin_captura (la Vita no recorre nada: solo marca las listas como capturadas).
-// v13.10 (fase 2, con GePatch dev66): la compuerta pasa del sync a "antes de encolar la lista siguiente". La muestra de
-// huellas de la lista (lifeTake) se deja en todos los niveles con su numero de orden (SB[0x53]): GePatch la usa para
+// v13.10 (fase 2, con NativeLink dev66): la compuerta pasa del sync a "antes de encolar la lista siguiente". La muestra de
+// huellas de la lista (lifeTake) se deja en todos los niveles con su numero de orden (SB[0x53]): NativeLink la usa para
 // comprobar que el juego no reescribe la lista antes de encolar la siguiente. Interruptor compuerta_sync (SB[0x4A] & 8):
 // la compuerta se queda en el sync, como antes (para comparar).
 // v13.11 (fase 2, punto 3): cada sublista guardada lleva solo las estadisticas que suma distintas de 0 (indice y valor,
@@ -51,13 +51,14 @@
 #include <psp2/io/stat.h>
 #include <stdarg.h>
 #include <arm_neon.h>
+#include "version.h"
 
 #define PSP(a) (0x68000000u + ((a) & 0x0FFFFFFFu))
 #define SB ((volatile uint32_t *)PSP(0x0A000000u))
 #define SB_MAGIC 0x424D4F53u
 #define SB_N 4096
-#define LOGC "ux0:pspemu/ge_patch_captura.log"
-enum { EV_ENQ = 1, EV_HEAD, EV_STALL, EV_DSYNC, EV_LSYNC, EV_FLIP, EV_GEFIN, EV_SYNCEND, EV_CPU, EV_CPUSUM, EV_FRAME, EV_VIDA };  // (7-10: GePatch dev63; 11: dev65; 12: dev65.2)
+#define LOGC "ux0:pspemu/nativedraw_captura.log"
+enum { EV_ENQ = 1, EV_HEAD, EV_STALL, EV_DSYNC, EV_LSYNC, EV_FLIP, EV_GEFIN, EV_SYNCEND, EV_CPU, EV_CPUSUM, EV_FRAME, EV_VIDA };  // (7-10: NativeLink dev63; 11: dev65; 12: dev65.2)
 static inline uint32_t now(void) { return sceKernelGetProcessTimeLow(); }
 
 // --- Estadisticas (por segundo) ---
@@ -75,7 +76,7 @@ typedef struct {
   uint32_t ge_us, ge_runs, ge_max, ge_stall, ge_n, sy_n, sy_us, sy_wait, sy_busy;  // v13.5, T6: GE del PSP y esperas del juego al GE
   uint32_t dc_n, dc_kb, dm_n, dm_kb, cpu_drop, cpu_vram, dc_all;                   // v13.5, T4: escrituras de la CPU del juego
   uint32_t pf_n, pf_us, pf_gate, pf_gate_n, pf_nowait, pf_sync, pf_spin, pf_esp, pf_pg, pf_post, pf_late, pf_late_us;  // v13.9: EV_FRAME y atrasos
-  uint32_t eg_n, eg_us;  // v13.10: esperas del juego antes de encolar (compuerta de GePatch dev66)
+  uint32_t eg_n, eg_us;  // v13.10: esperas del juego antes de encolar (compuerta de NativeLink dev66)
   uint32_t rd_us, rd_n;  // v13.9: lecturas propias del capturador cronometradas (1 de 16)
   uint32_t hit_us, hit_n;  // v13.9.4: lineas de la cache compartida cronometradas (1 de 8)
   uint32_t pv_ok, pv_bad, pv_late, pv_plan;  // v13.12: comprobacion por adelantado (lectores) y sublistas del plan
@@ -83,10 +84,10 @@ typedef struct {
 } Stats;
 static Stats acc, rep;
 static volatile int rep_ready;
-// v13.9.5: nivel de registro (ux0:data/gepresent/registro: "minimo", "mediano" o "extremo"; sin archivo: mediano). GePatch lo
+// v13.9.5: nivel de registro (ux0:data/nativedraw/registro: "minimo", "mediano" o "extremo"; sin archivo: mediano). NativeLink lo
 // lee en SB[0x4E]. minimo (para publicar): una linea cada 10 s, sin revision de la memoria de sublistas. mediano (desarrollo):
 // lo de siempre por segundo + revision 1/32 + costo por frame para el juego (EV_FRAME, CPU libre del PSP). extremo (analisis):
-// ademas ge_patch_frames.log, ge_patch_tarde.log, vida de la lista y de los datos, tiempos de lectura y de la memoria,
+// ademas nativedraw_frames.log, nativedraw_tarde.log, vida de la lista y de los datos, tiempos de lectura y de la memoria,
 // muestreo del espejo y escrituras de la CPU del juego (T4). Ver docs/registros.md.
 static uint32_t nivel = 1;
 static uint32_t f_cmds, f_draws, f_us;  // del frame en curso
@@ -99,7 +100,7 @@ static uint32_t f_cmds, f_draws, f_us;  // del frame en curso
 // 2. Dos lectores (nucleos 0 y 2, prioridad 0xB0: solo el tiempo que les sobra a esos nucleos) recorren la misma lista
 //    por adelantado, repartiendose las sublistas, y dejan las lineas de 64 bytes en una cache compartida; el capturador
 //    (nucleo 1) las toma de ahi. Cada linea va marcada con la lista (numero de orden): no se usa de una lista a otra.
-//    Lo que esta despues del stall (todavia sin escribir) no se comparte. ux0:data/gepresent/captura_sin_lectores: sin ellos.
+//    Lo que esta despues del stall (todavia sin escribir) no se comparte. ux0:data/nativedraw/captura_sin_lectores: sin ellos.
 // La RAM del PSP puede estar en varios bloques de la Vita (v12.2): hasta 4 tramos legibles.
 static uint32_t rlo[4], rhi[4], nr;
 static inline uint32_t ramEnd(uint32_t a) {  // fin del tramo legible que contiene a (0: no legible)
@@ -109,7 +110,7 @@ static inline uint32_t ramEnd(uint32_t a) {  // fin del tramo legible que contie
 static inline int okRam(uint32_t a) { return ramEnd(a) != 0; }
 static inline int isVram(uint32_t a) { return (a & 0x0F000000u) == 0x04000000u; }
 
-// --- Espejo de la VRAM (v13.1 con GePatch dev62; doble desde v13.6 con dev64) ---
+// --- Espejo de la VRAM (v13.1 con NativeLink dev62; doble desde v13.6 con dev64) ---
 // La VRAM del PSP no esta mapeada en Adrenaline. El capturador pide paginas de 4 KB en dos mapas de bits del buzon:
 // "listas" (sublistas que el juego llama en la VRAM: GT) y "datos" (texturas y paletas; no las de un destino de dibujo
 // o de TRANSFER, que la Vita tendra en HD). En cada flip el GE del PSP copia todas las pedidas (ver espejoFlip en main.c)
@@ -120,7 +121,7 @@ static inline int isVram(uint32_t a) { return (a & 0x0F000000u) == 0x04000000u; 
 // del espejo solo cuenta cuantas paginas cambian (por muestreo).
 #define MIRROR 0x0A200000u
 #define MIRROR2 0x0AC00000u
-#define CPY(b, p) SB[((b) ? 0x8400 : 0x200) + (p)]  // ultima copia de la pagina p en el espejo b (la escribe GePatch)
+#define CPY(b, p) SB[((b) ? 0x8400 : 0x200) + (p)]  // ultima copia de la pagina p en el espejo b (la escribe NativeLink)
 static uint32_t esp_on, want_l[16], want_d[16], rt_pg[16];  // (del capturador)
 static volatile uint32_t esp_ok[2][16], esp_reset;           // paginas con copia valida en cada espejo
 static volatile uint32_t esp_u;                               // copia con la que se lee la lista actual (0: ninguna todavia)
@@ -360,7 +361,7 @@ static uint32_t qh, qt;  // la primera sin terminar y la siguiente libre
 static inline uint32_t rel(List *l, uint32_t d) { return ((((reg[0x10] & 0x0F0000) << 8) | d) + l->off) & 0x0FFFFFFF; }
 
 static void clog(const char *fmt, ...);
-static void rput(int k, const char *fmt, ...);  // (v13.9) 0: ge_patch_frames.log, 1: ge_patch_tarde.log
+static void rput(int k, const char *fmt, ...);  // (v13.9) 0: nativedraw_frames.log, 1: nativedraw_tarde.log
 static uint32_t sin_captura, gp_flags;           // (v13.9) interruptores
 typedef struct { uint32_t reg[256], mtx[5][96], mi[5], v[8]; } GeState;
 static GeState g_tmp;
@@ -383,8 +384,8 @@ static void stLoad(GeState *g) {
 // direcciones de vertices/indices, contadores, texturas) sin interpretarla. Si no estaba o cambio, se recorre y se guarda.
 // Aproximado (solo estadisticas): "cambios" y lotes del primer draw dependen del estado de entrada; chg[] no se suma.
 // Revision: 1 de cada 32 sublistas que se podrian aplicar se recorre igual y se compara el estado que deja con lo
-// guardado (DISTINTAS en el log = error de la memoria). ux0:data/gepresent/memo_revisar: todas.
-// ux0:data/gepresent/sin_memoria: apagada (para comparar).
+// guardado (DISTINTAS en el log = error de la memoria). ux0:data/nativedraw/memo_revisar: todas.
+// ux0:data/nativedraw/sin_memoria: apagada (para comparar).
 // v13.2: tabla y deposito 4 veces mas grandes (si hay memoria): con las sublistas de la VRAM GT llama ~250 por frame y
 // con 512 lugares y 512 KB el deposito se vaciaba 4-5 veces por segundo (todo se volvia a grabar: 33-38 fps).
 static uint32_t MEMO_N = 2048, POOL_N = 32768, memo_sh = 21;  // sublistas guardadas, lineas de 64 bytes del deposito (2 MB)
@@ -808,7 +809,7 @@ static uint32_t capt;  // numero de orden de la ultima lista capturada
 
 // --- Atrasos (v13.9) ---
 // Cada sync en que la Vita iba atrasada (la lista que el juego espera termino de capturarse despues de que el juego llego
-// al sync) va a ge_patch_tarde.log con de donde salio la demora: cuando el juego encolo la lista y cuando la termino de
+// al sync) va a nativedraw_tarde.log con de donde salio la demora: cuando el juego encolo la lista y cuando la termino de
 // escribir (ultimo stall), cuando la Vita empezo a recorrerla, cuanto tardo y cuanto de eso trabajo. Las horas de la Vita
 // se pasan a horas del PSP con off: la diferencia minima (en el ultimo segundo) entre la hora de la Vita al leer un evento
 // y la que le puso el PSP (lo que tarda un evento en llegar con el capturador libre, decenas de us).
@@ -854,7 +855,7 @@ static void lifeTake(List *l) {  // al terminar de capturar la lista mas grande 
   x->ntop = x->n;
   for (uint32_t k = 0; k < l->nsub; k++) if (ramEnd(l->subs[k]) >= (l->subs[k] & ~63u) + 64) x->a[x->n++] = l->subs[k] & ~63u;
   for (uint32_t k = 0; k < x->n; k++) x->h[k] = lineHash(x->a[k]);
-  if (SB[1] >= 5) {  // (v13.9.3) la muestra para GePatch dev65.2: la revisa antes de cada encolado y en cada sync (EV_VIDA)
+  if (SB[1] >= 5) {  // (v13.9.3) la muestra para NativeLink dev65.2: la revisa antes de cada encolado y en cada sync (EV_VIDA)
     static uint32_t vseq;
     SB[0x50] = 0; __sync_synchronize();
     for (uint32_t k = 0; k < x->n; k++) { SB[0x60 + k] = x->a[k]; SB[0x80 + k] = x->h[k]; }
@@ -864,7 +865,7 @@ static void lifeTake(List *l) {  // al terminar de capturar la lista mas grande 
     SB[0x50] = x->sq;
   }
 }
-// (v13.9.3) respuestas de GePatch: por tipo (0 antes de encolar, 1 drawsync, 2 listsync) y por cuantas listas se encolaron
+// (v13.9.3) respuestas de NativeLink: por tipo (0 antes de encolar, 1 drawsync, 2 listsync) y por cuantas listas se encolaron
 // despues de la de la muestra (0, 1, 2; el chequeo del encolado es antes de encolar: 0 = antes de encolar la siguiente): revisadas y con cambios en el nivel de arriba / en las sublistas (la primera de cada una)
 static uint32_t vd[3][3][3];
 static struct { uint32_t n, sum, max, t_sync; } gap;  // del sync al encolado siguiente (hora del PSP)
@@ -929,7 +930,7 @@ static void walk(void) {
     l->work += now() - tw;
     if (!fin) return;
     recAbort(); chk = NULL;  // la lista termino dentro de una sublista (END, salto a la VRAM...): no se guarda
-    lifeTake(l);  // (v13.10: en todos los niveles, para la autocomprobacion de GePatch dev66; v13.10.3: antes de SB[3], asi GePatch nunca ve la lista capturada con la muestra de la anterior)
+    lifeTake(l);  // (v13.10: en todos los niveles, para la autocomprobacion de NativeLink dev66; v13.10.3: antes de SB[3], asi NativeLink nunca ve la lista capturada con la muestra de la anterior)
     capt = l->ord; SB[3] = capt; qh++; acc.lists++;
     listDone(l);
   }
@@ -944,7 +945,7 @@ static uint32_t tail, beat, sec_t0;
 static uint32_t pfr[8], lc, s_own, s_hit, s_memo, s_pre, s_late;  // (v13.9) EV_FRAME del frame en curso; ultimos valores de la linea por frame
 // v12.10: tiempo de procesador de cada hilo (runClocks, us) para separar "nucleo compartido" de "trabajo por comando"
 #define EMU_N 256
-extern SceUID emu_th[EMU_N]; extern int emu_aff[EMU_N], emu_n;  // hilos del emulador (gepresent.c, gancho de CreateThread)
+extern SceUID emu_th[EMU_N]; extern int emu_aff[EMU_N], emu_n;  // hilos del emulador (nativedraw.c, gancho de CreateThread)
 static SceUID cap_uid = -1, lec_uid[2] = { -1, -1 };
 static uint32_t runClk(SceUID t) {
   SceKernelThreadInfo in; sceClibMemset(&in, 0, sizeof in); in.size = sizeof in;
@@ -976,7 +977,7 @@ static void event(volatile uint32_t *e) {
     sceClibMemset(l, 0, sizeof *l);
     l->pc = a & 0x0FFFFFFC; l->stall = b & 0x0FFFFFFF; l->qid = c; l->ord = e[5];
     l->t_enq = l->t_stall = e[4]; l->t_seen = now(); l->ahead = qt - qh - 1; l->lo = ~0u;
-    uint32_t w = e[0] >> 8 & ~1u;  // (v13.10) GePatch dev66: lo que espero el juego antes de encolar esta lista
+    uint32_t w = e[0] >> 8 & ~1u;  // (v13.10) NativeLink dev66: lo que espero el juego antes de encolar esta lista
     if (e[0] >> 8) { acc.eg_n++; acc.eg_us += w; syncSeen(sync_ord_v, e[4] - w, w, 'e'); }
     if (gap.t_sync) { uint32_t g = e[4] - gap.t_sync; if (g < 100000) { gap.n++; gap.sum += g; if (g > gap.max) gap.max = g; } gap.t_sync = 0; }
   } else if (t == EV_STALL) {
@@ -1014,7 +1015,7 @@ static void event(volatile uint32_t *e) {
     acc.dc_n += b; acc.dc_kb += c; acc.dm_n += e[3] & 0xFFFF; acc.dm_kb += e[3] >> 16; acc.cpu_drop += e[0] >> 8;
   } else if (t == EV_VIDA) {  // (v13.9.3)
     vidaEv(e[0] >> 8 & 0xFF, a, b, c);
-  } else if (t == EV_FRAME) {  // (v13.9, GePatch dev65) lo que le costo el frame al juego
+  } else if (t == EV_FRAME) {  // (v13.9, NativeLink dev65) lo que le costo el frame al juego
     uint32_t x[7] = { a, b, e[0] >> 8 & 0xFF, e[0] >> 16 & 0xFF, c, e[5], e[7] };
     sceClibMemcpy(pfr, x, sizeof x); pfr[7] = e[6];
     acc.pf_n++; acc.pf_us += a; acc.pf_gate += b; acc.pf_gate_n += x[2]; acc.pf_nowait += x[3]; acc.pf_sync += c; acc.pf_spin += e[5];
@@ -1023,7 +1024,7 @@ static void event(volatile uint32_t *e) {
     uint32_t t0 = now(), c0 = acc.cmds;  // lo encolado antes del flip se recorre antes de cerrar el frame
     walk();
     if (acc.cmds != c0) { uint32_t dt = now() - t0; acc.us += dt; f_us += dt; }
-    if (nivel >= 2) {  // (v13.9) una linea por frame en ge_patch_frames.log (extremo)
+    if (nivel >= 2) {  // (v13.9) una linea por frame en nativedraw_frames.log (extremo)
       uint32_t cc = runClk(cap_uid), cal = SB[0x4D], fus = pfr[0] ? pfr[0] : 1;
       uint32_t lib = cal ? (uint32_t)((unsigned long long)pfr[5] * 1000000 / cal / fus) : 0;  // CPU libre del PSP, por mil
       rput(0, "%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%08x,%u,%u,%u\n", now() / 1000, pfr[0], pfr[1], pfr[2], pfr[3], pfr[4], lib,
@@ -1071,8 +1072,8 @@ static void event(volatile uint32_t *e) {
 static int capThread(SceSize args, void *argp) {
   uint32_t idle_t = 0, on = 0;
   for (;;) {
-    if (SB[0] != SB_MAGIC) {  // sin GePatch en modo sombra
-      if (on) { clog("buzon de GePatch desaparecio: captura en pausa\n"); on = 0; esp_on = 0; }
+    if (SB[0] != SB_MAGIC) {  // sin NativeLink en modo sombra
+      if (on) { clog("buzon de NativeLink desaparecio: captura en pausa\n"); on = 0; esp_on = 0; }
       sceKernelDelayThread(50000);
       continue;
     }
@@ -1080,12 +1081,12 @@ static int capThread(SceSize args, void *argp) {
       on = 1; tail = SB[2]; resetQueue(); sec_t0 = now(); sceClibMemset(&acc, 0, sizeof acc);
       for (int w = 0; w < 16; w++) want_l[w] = want_d[w] = rt_pg[w] = esp_ok[0][w] = esp_ok[1][w] = 0;
       esp_u = 0; esp_reset = 1; esp_on = SB[1] >= 4;
-      clog("buzon de GePatch (modo sombra) encontrado: eventos=%u listas=%u -> captura activa%s\n", tail, SB[6],
-           esp_on ? ", con espejo de la VRAM" : " (GePatch sin espejo doble de la VRAM: hace falta dev64)");
+      clog("buzon de NativeLink (modo sombra) encontrado: eventos=%u listas=%u -> captura activa%s\n", tail, SB[6],
+           esp_on ? ", con espejo de la VRAM" : " (NativeLink sin espejo doble de la VRAM: hace falta dev64)");
     }
     SB[4] = ++beat;
     uint32_t h = SB[2], work = 0;
-    if ((int)(h - tail) < 0 || h - tail > SB_N) {  // se perdieron eventos (o GePatch reinicio el buzon)
+    if ((int)(h - tail) < 0 || h - tail > SB_N) {  // se perdieron eventos (o NativeLink reinicio el buzon)
       acc.resyncs++; tail = h; resetQueue();
     }
     uint32_t t0 = now();
@@ -1113,10 +1114,10 @@ static void clog(const char *fmt, ...) {
   if (lpos + n > sizeof lbuf) return;
   sceClibMemcpy(lbuf + lpos, b, n); lpos += n;
 }
-// (v13.9) ge_patch_frames.log y ge_patch_tarde.log: anillos de un solo escritor (el capturador); el hilo del log los vacia
+// (v13.9) nativedraw_frames.log y nativedraw_tarde.log: anillos de un solo escritor (el capturador); el hilo del log los vacia
 static char rb0[65536], rb1[16384];
 static struct { char *b; uint32_t n; volatile uint32_t w, r; const char *path; } RG[2] = {
-  { rb0, sizeof rb0, 0, 0, "ux0:pspemu/ge_patch_frames.log" }, { rb1, sizeof rb1, 0, 0, "ux0:pspemu/ge_patch_tarde.log" } };
+  { rb0, sizeof rb0, 0, 0, "ux0:pspemu/nativedraw_frames.log" }, { rb1, sizeof rb1, 0, 0, "ux0:pspemu/nativedraw_tarde.log" } };
 static void rput(int k, const char *fmt, ...) {
   char b[384];
   va_list ap; va_start(ap, fmt);
@@ -1219,7 +1220,7 @@ static int repThread(SceSize args, void *argp) {
              x[0], x[4], x[8], x[12], x[16], x[1], x[5], x[9], x[13], x[17], x[2], x[6], x[10], x[14], x[18], x[3], x[7], x[11], x[15], x[19],
              x[20] / nn / 10, x[21] / nn / 10, LT.ch2[0], LT.n[0], LT.ch2[2], LT.n[2]);
       }
-      if (r->pf_n) {  // (v13.9) lo que le costo cada frame al juego (GePatch dev65) y los syncs en que la Vita iba atrasada
+      if (r->pf_n) {  // (v13.9) lo que le costo cada frame al juego (NativeLink dev65) y los syncs en que la Vita iba atrasada
         uint32_t g = r->pf_n, cal = SB[0x4D], ms = r->pf_us / 1000 + 1;
         clog("  impacto en el PSP (por frame del juego): frames=%u frame_us=%u CPU_libre=%u%% compuerta_us=%u (esperas/seg=%u sin_esperar/seg=%u) sync_GE_us=%u ganchos_us=%u espejo_us=%u paginas=%u | Vita atrasada: syncs/seg=%u atraso_us=%u c/u | lectura propia: %u us (%u cronometradas) | linea de la cache compartida: %u ns (%u) | compuerta (v13.10): %s, esperas antes de encolar/seg=%u (%u us c/u)\n",
              g, r->pf_us / g, cal ? r->pf_spin / cal * 100 / ms : 0, r->pf_gate / g, r->pf_gate_n, r->pf_nowait, r->pf_sync / g, r->pf_post / g,
@@ -1230,7 +1231,7 @@ static int repThread(SceSize args, void *argp) {
       if (nivel >= 2) {  // (v13.9.2) vida de la lista (acumulado desde el inicio)
         clog("  vida de la lista (acumulado): revisadas en el flip de su frame=%u (cambio el nivel de arriba %u, sublistas %u) | en el flip siguiente=%u (%u, %u)\n",
              lf_n[0], lf_top[0], lf_sub[0], lf_n[1], lf_top[1], lf_sub[1]);
-        clog("  vida de la lista segun GePatch (acumulado; revisadas, cambio arriba, cambio sublistas): drawsync de su frame %u %u %u | antes de encolar la siguiente %u %u %u | drawsync siguiente %u %u %u | antes de encolar la subsiguiente %u %u %u | listsync %u %u %u / %u %u %u | del drawsync al encolado siguiente: %u us (max %u)\n",
+        clog("  vida de la lista segun NativeLink (acumulado; revisadas, cambio arriba, cambio sublistas): drawsync de su frame %u %u %u | antes de encolar la siguiente %u %u %u | drawsync siguiente %u %u %u | antes de encolar la subsiguiente %u %u %u | listsync %u %u %u / %u %u %u | del drawsync al encolado siguiente: %u us (max %u)\n",
              vd[1][0][0], vd[1][0][1], vd[1][0][2], vd[0][0][0], vd[0][0][1], vd[0][0][2], vd[1][1][0], vd[1][1][1], vd[1][1][2],
              vd[0][1][0], vd[0][1][1], vd[0][1][2], vd[2][0][0], vd[2][0][1], vd[2][0][2], vd[2][1][0], vd[2][1][1], vd[2][1][2],
              gap.n ? gap.sum / gap.n : 0, gap.max);
@@ -1286,14 +1287,14 @@ static void ltFlip(void) {  // (capturador, en cada flip) revisa las muestras de
   }
   while (smp_r != smp_w && smp[smp_r & (SMP_N - 1)].st == 2) smp_r++;
 }
-static uint32_t medir_ge;  // (v13.5.3) pedirle a GePatch el hilo que mira el GE (T6): ux0:data/gepresent/medir_ge
+static uint32_t medir_ge;  // (v13.5.3) pedirle a NativeLink el hilo que mira el GE (T6): ux0:data/nativedraw/medir_ge
 static int espThread(SceSize args, void *argp) {  // (v13.6) huella de 4 paginas pedidas cada 5 ms, por turnos
   static uint32_t seen[512], hs[512], buf[64] __attribute__((aligned(16)));
   uint32_t n = 0, rr = 0;
   for (;;) {
     sceKernelDelayThread(5000);
     if (SB[0] == SB_MAGIC && SB[1] >= 3 && SB[0x47] != medir_ge) SB[0x47] = medir_ge;
-    if (SB[0] == SB_MAGIC && SB[1] >= 5 && SB[0x4A] != gp_flags) SB[0x4A] = gp_flags;  // (v13.9) interruptores para GePatch
+    if (SB[0] == SB_MAGIC && SB[1] >= 5 && SB[0x4A] != gp_flags) SB[0x4A] = gp_flags;  // (v13.9) interruptores para NativeLink
     if (SB[0] == SB_MAGIC && SB[1] >= 5 && SB[0x4E] != nivel) SB[0x4E] = nivel;         // (v13.9.5) nivel de registro
     if (esp_reset) { sceClibMemset(seen, 0, sizeof seen); sceClibMemset(hs, 0, sizeof hs); esp_reset = 0; }
     if (!esp_on) continue;
@@ -1311,7 +1312,7 @@ static int espThread(SceSize args, void *argp) {  // (v13.6) huella de 4 paginas
       hs[p] = h | 1; ES.chk++;
     }
     ES.us += now() - t0;
-    if (++n % 20 == 0)  // (por si GePatch reinicio el buzon sin que el capturador lo notara)
+    if (++n % 20 == 0)  // (por si NativeLink reinicio el buzon sin que el capturador lo notara)
       for (int w = 0; w < 16; w++) { if (SB[0x20 + w] != want_l[w]) SB[0x20 + w] = want_l[w]; if (SB[0x30 + w] != want_d[w]) SB[0x30 + w] = want_d[w]; }
   }
   return 0;
@@ -1375,30 +1376,30 @@ static int swOn(const char *p) {  // (v13.9) interruptor: el archivo existe y no
 }
 void capturaStart(void) {
   SceIoStat st;
-  sceIoRemove("ux0:pspemu/ge_patch_captura_prev.log");
-  sceIoRename(LOGC, "ux0:pspemu/ge_patch_captura_prev.log");
-  SceUID r = sceKernelCreateThread("gepresent_captura_log", repThread, 0xB0, 0x2000, 0, 0, NULL);  // primero: que
+  sceIoRemove("ux0:pspemu/nativedraw_captura_prev.log");
+  sceIoRename(LOGC, "ux0:pspemu/nativedraw_captura_prev.log");
+  SceUID r = sceKernelCreateThread("nativedraw_captura_log", repThread, 0xB0, 0x2000, 0, 0, NULL);  // primero: que
   if (r >= 0) sceKernelStartThread(r, 0, NULL);                                                      // quede el log
   {  // (v13.9.5) nivel de registro
     char b[8] = { 0 };
-    SceUID fd = sceIoOpen("ux0:data/gepresent/registro", SCE_O_RDONLY, 0);
+    SceUID fd = sceIoOpen("ux0:data/nativedraw/registro", SCE_O_RDONLY, 0);
     if (fd >= 0) { sceIoRead(fd, b, 7); sceIoClose(fd); nivel = b[0] == 'e' ? 2 : b[0] == 'm' && b[1] == 'i' ? 0 : 1; }
   }
   if (nivel >= 2) { uint32_t t0 = now(), x = 0; for (int i = 0; i < 10000; i++) x += now(); clog("(v13.9.4) costo de leer la hora: %u ns (%u)\n", (now() - t0) / 10, x & 1); }
-  clog("gepresent v13.13: capturador de la etapa 2 (memoria de sublistas, espejo de la VRAM) con registros de la fase de analisis\n");
-  static const char *rot[2][2] = { { "ux0:pspemu/ge_patch_frames.log", "ux0:pspemu/ge_patch_frames_prev.log" },
-                                   { "ux0:pspemu/ge_patch_tarde.log", "ux0:pspemu/ge_patch_tarde_prev.log" } };
+  clog("NativeDraw " NATIVEDRAW_VERSION ": capturador de la etapa 2 (memoria de sublistas, espejo de la VRAM) con registros de la fase de analisis\n");
+  static const char *rot[2][2] = { { "ux0:pspemu/nativedraw_frames.log", "ux0:pspemu/nativedraw_frames_prev.log" },
+                                   { "ux0:pspemu/nativedraw_tarde.log", "ux0:pspemu/nativedraw_tarde_prev.log" } };
   for (int k = 0; k < 2; k++) { sceIoRemove(rot[k][1]); sceIoRename(rot[k][0], rot[k][1]); }
   if (nivel >= 2) rput(0, "t_ms,frame_us,compuerta_us,esperas,sin_esperar,sync_GE_us,cpu_libre_x1000,espejo_us,espejo_paginas,ganchos_us,"
           "comandos,draws,captura_us,captura_cpu_us,aplicadas,comprobadas_lectores,lecturas_propias,de_lectores,listas_pendientes,syncs_atrasados,"
           "lista_dir,lista_kb,memoria_us,aplicar_us\n");
   if (nivel >= 2) rput(1, "t_ms,tipo,espera_us,lista,atraso_us,comandos,listas_antes,encolada_hace_us,ultimo_stall_hace_us,vita_empezo_tras_us,"
           "vita_recorrio_us,trabajo_us,lecturas_propias,de_lectores,aplicadas,procesador_us\n");
-  static const char *sw[4] = { "ux0:data/gepresent/sin_compuerta", "ux0:data/gepresent/sin_espejo", "ux0:data/gepresent/sin_libre", "ux0:data/gepresent/compuerta_sync" };
+  static const char *sw[4] = { "ux0:data/nativedraw/sin_compuerta", "ux0:data/nativedraw/sin_espejo", "ux0:data/nativedraw/sin_libre", "ux0:data/nativedraw/compuerta_sync" };
   for (int k = 0; k < 4; k++) if (swOn(sw[k])) gp_flags |= 1u << k;
-  sin_captura = swOn("ux0:data/gepresent/sin_captura");
-  pv_on = !swOn("ux0:data/gepresent/sin_adelanto");  // (v13.12)
-  clog("registro: %s (ux0:data/gepresent/registro: minimo, mediano o extremo) | interruptores%s%s%s%s%s%s%s\n", nivel == 2 ? "extremo" : nivel ? "mediano" : "minimo", gp_flags & 1 ? " sin_compuerta" : "", gp_flags & 2 ? " sin_espejo" : "",
+  sin_captura = swOn("ux0:data/nativedraw/sin_captura");
+  pv_on = !swOn("ux0:data/nativedraw/sin_adelanto");  // (v13.12)
+  clog("registro: %s (ux0:data/nativedraw/registro: minimo, mediano o extremo) | interruptores%s%s%s%s%s%s%s\n", nivel == 2 ? "extremo" : nivel ? "mediano" : "minimo", gp_flags & 1 ? " sin_compuerta" : "", gp_flags & 2 ? " sin_espejo" : "",
        gp_flags & 4 ? " sin_libre" : "", gp_flags & 8 ? " compuerta_sync" : "", sin_captura ? " sin_captura" : "", pv_on ? "" : " sin_adelanto", gp_flags || sin_captura || !pv_on ? "" : ": ninguno (todo normal)");
   for (uint32_t a = 0x08000000u; a < 0x0C000000u && nr < 4;) {  // tramos de la RAM del PSP mapeados en este proceso
     SceKernelMemBlockInfo in; in.size = sizeof in;
@@ -1414,14 +1415,14 @@ void capturaStart(void) {
   }
   initCls();
   if (!okRam(0x0A000000u) || !okRam(0x08800000u)) { clog("la RAM del PSP no cubre el buzon o el juego: sin captura\n"); return; }
-  if (sceIoGetstat("ux0:data/gepresent/sin_memoria", &st) >= 0) clog("memoria de sublistas: apagada (sin_memoria)\n");
+  if (sceIoGetstat("ux0:data/nativedraw/sin_memoria", &st) >= 0) clog("memoria de sublistas: apagada (sin_memoria)\n");
   else {
     void *mm = NULL;
     uint32_t sz = 0;
     SceUID mb = -1;
     for (; MEMO_N >= 512 && !mm; MEMO_N /= 2, POOL_N /= 2, memo_sh++) {  // (si no alcanza la memoria: la mitad)
       sz = (MEMO_N * sizeof(Memo) + POOL_N * 64 + 0xFFF) & ~0xFFF;
-      mb = sceKernelAllocMemBlock("gepresent_memoria", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, sz, NULL);
+      mb = sceKernelAllocMemBlock("nativedraw_memoria", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, sz, NULL);
       if (mb >= 0 && sceKernelGetMemBlockBase(mb, &mm) < 0) mm = NULL;
       if (mm) break;
     }
@@ -1429,7 +1430,7 @@ void capturaStart(void) {
     else {
       sceClibMemset(mm, 0, MEMO_N * sizeof(Memo));
       memo = mm; pool = (uint32_t *)((char *)mm + MEMO_N * sizeof(Memo));
-      memo_chk = sceIoGetstat("ux0:data/gepresent/memo_revisar", &st) >= 0;
+      memo_chk = sceIoGetstat("ux0:data/nativedraw/memo_revisar", &st) >= 0;
       __sync_synchronize();
       memo_on = 1;
       clog("memoria de sublistas: %u sublistas, deposito de %u KB (%u KB en total)%s\n", MEMO_N, POOL_N * 64 >> 10, sz >> 10,
@@ -1441,27 +1442,27 @@ void capturaStart(void) {
   // tramo del publico; GT: 58,2 -> 60 en lo mas pesado; sin cortes de audio. Interruptor nucleo_captura ("0", "1" o "2")
   // para fijarlo a un nucleo si algun juego lo necesita (sin archivo o "libre": cualquiera).
   char nc[8] = { 0 }; uint32_t cmask = 0x70000; const char *cname = "libre (0, 1 o 2)";
-  SceUID nf = sceIoOpen("ux0:data/gepresent/nucleo_captura", SCE_O_RDONLY, 0);
+  SceUID nf = sceIoOpen("ux0:data/nativedraw/nucleo_captura", SCE_O_RDONLY, 0);
   if (nf >= 0) { sceIoRead(nf, nc, 7); sceIoClose(nf); }
   if (nc[0] >= '0' && nc[0] <= '2') { cmask = 0x10000 << (nc[0] - '0'); nc[1] = 0; cname = nc; }
-  SceUID t = sceKernelCreateThread("gepresent_captura", capThread, 0x61, 0x4000, 0, cmask, NULL);
+  SceUID t = sceKernelCreateThread("nativedraw_captura", capThread, 0x61, 0x4000, 0, cmask, NULL);
   // Prioridad (v12.7): en el nucleo 2 el emulador tiene ScePspemuRemoteMe (Media Engine: decodifica el audio del juego),
   // TitleInfo y AvcAuInput con 0x60. Con 0x40 (v12.4/v12.6) el capturador los tapaba y el audio se cortaba; con 0xA0
   // (v12.5) recibia un tercio del nucleo (~1000 ns por comando). 0x61: justo debajo de ellos. (Audio: nucleo 1, 0x40-0x43;
-  // ScePspemuMain y los servicios remotos: nucleo 0. Lista completa en ge_patch_gepresent.log de gepresent v12.6)
+  // ScePspemuMain y los servicios remotos: nucleo 0. Lista completa en nativedraw.log de NativeDraw v12.6)
   // v12.8: nucleo 1. En el 2 (v12.7) el Media Engine ocupaba mas de la mitad del nucleo en carrera (~900 ns por comando);
   // en el 1 solo estan los hilos de salida de audio (0x40-0x43, trabajos cortos), que siguen pasando antes.
   if (t >= 0) sceKernelStartThread(t, 0, NULL);
   cap_uid = t;
-  clog("hilos: captura %08x (nucleo %s, prioridad 0x61, debajo de los hilos de audio; ux0:data/gepresent/nucleo_captura) log %08x; hilos del emulador vistos: %d\n", t, cname, r, emu_n);
-  SceUID et = sceKernelCreateThread("gepresent_espejo", espThread, 0xBE, 0x2000, 0, 0x10000 /* nucleo 0 */, NULL);  // (v13.6: debajo de los lectores)
+  clog("hilos: captura %08x (nucleo %s, prioridad 0x61, debajo de los hilos de audio; ux0:data/nativedraw/nucleo_captura) log %08x; hilos del emulador vistos: %d\n", t, cname, r, emu_n);
+  SceUID et = sceKernelCreateThread("nativedraw_espejo", espThread, 0xBE, 0x2000, 0, 0x10000 /* nucleo 0 */, NULL);  // (v13.6: debajo de los lectores)
   if (et >= 0) sceKernelStartThread(et, 0, NULL);
   clog("espejo de la VRAM: hilo %08x (nucleo 0, prioridad 0xBE); copias en %08x y %08x\n", et, MIRROR, MIRROR2);
-  medir_ge = sceIoGetstat("ux0:data/gepresent/medir_ge", &st) >= 0;
-  clog("T6 (hilo de GePatch que mira el GE): %s\n", medir_ge ? "pedido (medir_ge)" : "apagado (crear ux0:data/gepresent/medir_ge para medir)");
-  if (sceIoGetstat("ux0:data/gepresent/captura_sin_lectores", &st) >= 0) { clog("lectores: apagados (captura_sin_lectores)\n"); return; }
+  medir_ge = sceIoGetstat("ux0:data/nativedraw/medir_ge", &st) >= 0;
+  clog("T6 (hilo de NativeLink que mira el GE): %s\n", medir_ge ? "pedido (medir_ge)" : "apagado (crear ux0:data/nativedraw/medir_ge para medir)");
+  if (sceIoGetstat("ux0:data/nativedraw/captura_sin_lectores", &st) >= 0) { clog("lectores: apagados (captura_sin_lectores)\n"); return; }
   void *m = NULL;
-  SceUID blk = sceKernelAllocMemBlock("gepresent_lineas", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, (CL_N * 68 + 0xFFF) & ~0xFFF, NULL);
+  SceUID blk = sceKernelAllocMemBlock("nativedraw_lineas", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, (CL_N * 68 + 0xFFF) & ~0xFFF, NULL);
   if (blk < 0 || sceKernelGetMemBlockBase(blk, &m) < 0) { clog("lectores: sin memoria para la cache (%08x)\n", blk); return; }
   cl_tag = (volatile uint32_t *)((char *)m + CL_N * 64);
   for (int i = 0; i < CL_N; i++) cl_tag[i] = 0xFFFFFFFFu;
@@ -1470,7 +1471,7 @@ void capturaStart(void) {
   static int ids[2] = { 0, 1 };
   static const int cores[2] = { 0x10000, 0x40000 };  // nucleo 0 (emulador) y 2 (Media Engine): solo lo que sobra
   for (int k = 0; k < 2; k++) {
-    SceUID lt = sceKernelCreateThread(k ? "gepresent_lector1" : "gepresent_lector0", lectorThread, 0xB0, 0x2000, 0, cores[k], NULL);
+    SceUID lt = sceKernelCreateThread(k ? "nativedraw_lector1" : "nativedraw_lector0", lectorThread, 0xB0, 0x2000, 0, cores[k], NULL);
     if (lt >= 0) sceKernelStartThread(lt, sizeof(int), &ids[k]);
     lec_uid[k] = lt;
     clog("lector %d: %08x (nucleo %d, prioridad 0xB0)\n", k, lt, k ? 2 : 0);

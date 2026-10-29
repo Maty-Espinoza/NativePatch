@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-# Fase de analisis (GePatch dev65 + gepresent v13.9): resume ge_patch_frames.log y ge_patch_tarde.log de una o varias
+# Fase de analisis (desde GePatch dev65 + gepresent v13.9): resume nativedraw_frames.log y nativedraw_tarde.log (antes
+# ge_patch_frames.log y ge_patch_tarde.log) de una o varias
 # corridas. Uso: python3 tools/analisis_fase1.py <carpeta> [<carpeta> ...] [--tabla]
 # "Carrera" = frames con mas de 30 000 comandos (GT en pista). Por carpeta: fps, frames lentos y lo que le costo cada
 # parte al juego por frame; con varias, una columna por carpeta. --tabla: ademas, cada 10 s de cada corrida.
@@ -7,14 +8,15 @@ import csv, sys, os, statistics as st
 
 def leer(d, f):
     p = os.path.join(d, f)
+    if not os.path.exists(p): p = os.path.join(d, f.replace('nativedraw_', 'ge_patch_'))  # corridas viejas
     if not os.path.exists(p): return []
     return [{k: (int(v) if v.lstrip('-').isdigit() else v) for k, v in r.items()} for r in csv.DictReader(open(p, errors='replace'))
             if r.get('t_ms', '').isdigit()]
 
 def resumen(d):
-    F = [r for r in leer(d, 'ge_patch_frames.log') if 0 < r['frame_us'] < 200000]
+    F = [r for r in leer(d, 'nativedraw_frames.log') if 0 < r['frame_us'] < 200000]
     C = [r for r in F if r['comandos'] > 30000]
-    T = [r for r in leer(d, 'ge_patch_tarde.log') if r['comandos'] > 30000]
+    T = [r for r in leer(d, 'nativedraw_tarde.log') if r['comandos'] > 30000]
     if not C: return None
     fus = sum(r['frame_us'] for r in C); n = len(C); m = lambda k: sum(r[k] for r in C) / n
     lib = [r['cpu_libre_x1000'] for r in C if r['cpu_libre_x1000'] <= 1000]

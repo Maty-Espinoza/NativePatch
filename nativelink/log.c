@@ -8,20 +8,20 @@
 
 #include "log.h"
 
-#define LOG_PATH "ms0:/ge_patch.log"
-#define LOG_PREV "ms0:/ge_patch_prev.log"
+#define LOG_PATH "ms0:/nativelink.log"
+#define LOG_PREV "ms0:/nativelink_prev.log"
 #define LOG_MAX  (1024 * 1024) // tope del archivo, para no llenar la tarjeta
 
 u32 log_frame;
 u32 log_us; // tiempo escribiendo el log (perfil de main.c)
 
-// --- Canal con gepresent (ver log.h) ---
+// --- Canal con NativeDraw (ver log.h) ---
 u32 log_io_psp; // escrituras del log hechas por el PSP (sceIo); las de la Vita no cuentan
 static int vita_dead; // no respondio: hasta reiniciar el juego se escribe con sceIo
 int vitaIo(void) {
   return !vita_dead && VDESC[0] == 0x31565047 && VDESC[8] == 0x56474F4C; // "GPV1" y "LOGV"
 }
-u32 vita_wait_us; // tiempo esperando a gepresent (el volcado lo pone en 0 al empezar)
+u32 vita_wait_us; // tiempo esperando a NativeDraw (el volcado lo pone en 0 al empezar)
 int vitaWait(int box) {
   u32 t0 = sceKernelGetSystemTimeLow();
   while (VDESC[box] != VDESC[box + 1]) {
@@ -193,12 +193,12 @@ void logInit(int sync) {
   pspSdkSetK1(k1);
 
   sync_mode = sync;
-  LOG("GePatch %s (build %s %s) modo=%s\n", GEPATCH_VERSION, __DATE__, __TIME__, sync ? "sync" : "async");
+  LOG("NativeLink %s (build %s %s) modo=%s\n", NATIVELINK_VERSION, __DATE__, __TIME__, sync ? "sync" : "async");
   LOG("archivo=%s\n", file ? file : "?");
   logFlush();
 
   if (!sync) {
-    SceUID th = sceKernelCreateThread("GePatchLog", flushThread, 0x70, 0x1000, 0, NULL);
+    SceUID th = sceKernelCreateThread("NativeLinkLog", flushThread, 0x70, 0x1000, 0, NULL);
     if (th >= 0)
       sceKernelStartThread(th, 0, NULL);
   }

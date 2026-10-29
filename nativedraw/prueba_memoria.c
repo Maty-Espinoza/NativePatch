@@ -10,7 +10,7 @@
 // v13.5.2: VIDA=1 ./prueba 1 0 0 prueba la vida de los datos (muestras que cambian 1 o 2 flips despues; lineas "vida:").
 // v13.9.5: NIVEL=0|1|2 elige el nivel de registro (por defecto 2, extremo: vida de la lista y TARDE lo necesitan).
 // v13.9.2: al final, la vida de la lista (la lista principal cambia una textura en cada frame).
-// v13.9: TARDE=1 ./prueba 0 simula un sync atrasado (linea de ge_patch_tarde.log).
+// v13.9: TARDE=1 ./prueba 0 simula un sync atrasado (linea de nativedraw_tarde.log).
 // v13.6: espejo doble. El "GE" copia al final de cada frame f la copia f + 1 al espejo (f + 1) & 1; el frame siguiente la
 // usa (como el evento del flip). La sublista se escribe en los dos espejos.
 // v13.12: ./prueba <modo> 3: cada frame escribe sus sublistas de la VRAM solo en el espejo de ese frame (el otro queda con
@@ -126,7 +126,7 @@ int main(int argc, char **argv) {
     gen++; ntex = 0;
   }
   printf("vida de la lista: flip de su frame %u (arriba %u, sublistas %u) | flip siguiente %u (%u, %u) (esperado 8 (0, 0) | 7 (7, 0))\n", lf_n[0], lf_top[0], lf_sub[0], lf_n[1], lf_top[1], lf_sub[1]);
-  if (getenv("TARDE")) {  // v13.9: un sync que llega 100 us despues de encolar: la Vita va atrasada (linea en ge_patch_tarde)
+  if (getenv("TARDE")) {  // v13.9: un sync que llega 100 us despues de encolar: la Vita va atrasada (linea en nativedraw_tarde)
     build(0); qh = qt = 0; capt = 0;
     uint32_t t = now() - 50, ev[8] = { EV_ENQ, MAIN, 0, 7, t, 99, 0, 0 };
     event(ev);

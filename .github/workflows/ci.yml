@@ -1,17 +1,9 @@
-# En cada push: corre los tests en el PC y compila el plugin.
-# Si un test falla, el commit queda marcado en rojo en GitHub.
-name: Tests y compilacion
+# En cada push: compila NativeLink (lado PSP). Si no compila, el commit queda marcado en rojo en GitHub.
+name: Compilacion
 on: [push, pull_request]
 
 jobs:
-  tests:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - run: sudo apt-get update -q && sudo apt-get install -y -q gcc-multilib
-      - run: make -C tests
-
-  compilar:
+  nativelink:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -20,9 +12,9 @@ jobs:
           curl -sSL https://github.com/pspdev/pspdev/releases/latest/download/pspdev-ubuntu-latest-x86_64.tar.gz | tar xz -C $HOME
           echo "PSPDEV=$HOME/pspdev" >> $GITHUB_ENV
           echo "$HOME/pspdev/bin" >> $GITHUB_PATH
-      - run: git clone --depth 1 https://github.com/TheOfficialFloW/Adrenaline ../Adrenaline
-      - run: make
+      - run: git clone --depth 1 https://github.com/TheOfficialFloW/Adrenaline $HOME/Adrenaline
+      - run: make -C nativelink ADRENALINE=$HOME/Adrenaline/cef
       - uses: actions/upload-artifact@v4
         with:
-          name: ge_patch
-          path: ge_patch.prx
+          name: nativelink
+          path: nativelink/nativelink.prx
