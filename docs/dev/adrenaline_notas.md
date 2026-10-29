@@ -1,4 +1,24 @@
-# Adrenaline: cómo funciona y qué recursos usa GePatch
+# Adrenaline: cómo funciona y qué recursos usa NativePatch
+
+**Nota (2026-10-29):** las secciones de abajo que hablan del "uso de GePatch" (VRAM falsa, buffer nativo, menú, volcados,
+recorrer listas en el PSP) describen la arquitectura A, que se quitó en NativeLink 0.0.2. Lo vigente de la zona
+0x0A000000–0x0B000000 está en `funcionamiento.md`. Lo de Adrenaline en sí (pantalla, Kermit, mapa de memoria) sigue valiendo.
+
+## Adrenaline 8: cómo carga los plugins (código de isage/Adrenaline, commit c8475f5, revisado el 2026-10-29)
+- **Plugins del PSP:** `cef/core/systemctrl/src/plugin.c` (`loadPlugins`) lee `ms0:/seplugins/plugins.txt`
+  (= `ux0:pspemu/seplugins/plugins.txt`), o **`EPIplugins.txt` en su lugar si existe**. Una línea por plugin:
+  `<runlevel>, <ruta>, <on|off>` (p. ej. `game, ms0:/seplugins/nativelink.prx, on`); `#`, `;` y `//` son comentarios.
+  `game` = juegos; también hay `vsh` y `pops`. Una ruta sin `:` se toma relativa a `ms0:/seplugins/`.
+- **`game.txt`/`vsh.txt` ya no se leen al cargar plugins**: solo el modo recuperación los convierte una vez a
+  `plugins.txt` (`cef/core/recovery/src/plugins.c`). Los documentos viejos que dicen "activar en `game.txt`" son de
+  Adrenaline 7.
+- El administrador de plugins del XMB (`cef/core/xmbctrl/src/plugins.c`) lee y reescribe el mismo archivo: el usuario puede
+  prender o apagar NativeLink desde el XMB.
+- Mantener **L** al abrir un juego desactiva todos los plugins (`g_disable_plugins`).
+- **Plugins de la Vita (taiHEN):** `ux0:tai/config.txt` si existe; si no, `ur0:tai/config.txt`. La sección `*PSPEMUCFW`
+  carga plugins en el proceso de Adrenaline (ahí va NativeDraw). Un cambio en `config.txt` necesita reiniciar la Vita
+  (o refrescar taiHEN desde la configuración de HENkaku).
+- El instalador (`instalador/main.c`) sigue estas reglas.
 
 Fuente: código de Adrenaline 7 (TheOfficialFloW/Adrenaline, commit 7d382b7). Revisado el 2026-10-21.
 

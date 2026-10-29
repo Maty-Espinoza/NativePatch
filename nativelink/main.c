@@ -56,7 +56,7 @@ static int activo, mode_done; // activo: el juego no se abrio con L o SELECT y l
 // libre (SB[0x4D]: vueltas por ms = 100 %), e[6] = espejo: CPU del flip (us) | paginas << 16, e[7] = ganchos (us en sbPost).
 // Interruptores que pone NativeDraw en SB[0x4A]: 1 sin compuerta (no se espera a la Vita, solo se cuenta), 2 sin espejo, 4
 // sin hilo de CPU libre. Mientras la compuerta espera: SB[0x4B] = lista esperada, SB[0x4C] = hora de inicio.
-// dev65.3: nivel de registro de NativeDraw en SB[0x4E] (0 minimo, 1 mediano, 2 extremo; docs/registros.md): EV_FRAME y el hilo
+// dev65.3: nivel de registro de NativeDraw en SB[0x4E] (0 minimo, 1 mediano, 2 extremo; docs/dev/registros.md): EV_FRAME y el hilo
 // de CPU libre desde mediano; la vida de la lista (EV_VIDA) y los eventos de la CPU del juego (T4: EV_CPU, EV_CPUSUM) solo en extremo.
 static volatile u32 spin, spin_cal;  // hilo de CPU libre (como vpjuego): vueltas y calibracion (vueltas por ms)
 static struct { u32 gate_us, gate_n, nowait, sync_us, post_us, esp_us, esp_pages; } fr;              // del frame

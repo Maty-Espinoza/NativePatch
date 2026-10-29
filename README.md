@@ -1,135 +1,75 @@
-# GE Patch Plugin (NativePatch)
+# NativePatch
 
-Plugin para [Adrenaline](https://github.com/TheOfficialFloW/Adrenaline) que muestra los juegos de PSP
-en la PS Vita a resolución nativa (960x544). Este fork revive el GePatch original de TheFlow
-(abandonado en v0.2) y corrige sus errores. Versión actual: 0.2-dev49 (rama `dev`).
+Proyecto para ver los juegos de PSP en la PS Vita a la resolución de la Vita (960x544) con
+[Adrenaline 8](https://github.com/isage/Adrenaline), sin que el juego pierda velocidad.
 
-- **Compilar:** `make ADRENALINE=<ruta a Adrenaline/cef>` (toolchain pspdev). Tests en el PC: `make -C tests`.
-- **Instalar:** `ux0:/pspemu/seplugins/ge_patch.prx` y en `game.txt`: `ms0:/seplugins/ge_patch.prx 1`.
-- **En el juego:** L al arrancar = modo pasivo (sin cambios, como referencia); L+R+START = menú de opciones;
-  L+R+SELECT = captura en el log y volcado `.gpd` de 3 frames. El log queda en `ms0:/ge_patch.log`.
-- **Documentación:** [`docs/CONTEXTO_IA.md`](docs/CONTEXTO_IA.md) (arquitectura, memoria, estado, cómo
-  continuar) y los demás documentos de `docs/`. Herramientas en `tools/` (`gpd.py` para los volcados,
-  modelo de Adrenaline en PPSSPP, pruebas del GE, laboratorio en el Mac, relevo con la Vita).
+> **En desarrollo, todavía no sirve para jugar.** Hoy los plugins capturan y miden lo que dibuja el juego, pero aún no
+> lo dibujan en alta resolución (eso empieza en la etapa 3, ver más abajo). El juego se ve igual que sin plugins.
 
----
+> **Proyecto hecho con IA ("vibecoded").** El código y los documentos los escribió Claude (Anthropic) siguiendo las
+> pruebas, ideas y decisiones de [Maty-Espinoza](https://github.com/Maty-Espinoza), que lo prueba en su propia Vita.
 
-Historial del GePatch original (TheFlow):
+## Cómo funciona
+El PSP de la Vita corre el juego tal cual, a su velocidad original. Dos plugins trabajan juntos:
 
+| Plugin | Dónde corre | Qué hace |
+|---|---|---|
+| **NativeLink** (`nativelink.prx`) | lado PSP (dentro de Adrenaline) | No cambia nada del juego: anota en una memoria compartida cada lista de dibujo que el juego le manda a su chip gráfico (el GE), y copia para la Vita lo que la Vita no puede ver (la VRAM del PSP). |
+| **NativeDraw** (`nativedraw.suprx`) | lado Vita (plugin de taiHEN) | Lee esas mismas listas desde la Vita. Hoy las recorre y mide; desde la etapa 3 las va a dibujar con la GPU de la Vita, en alta resolución. |
 
-This is an experimental plugin for [Adrenaline](https://github.com/TheOfficialFloW/Adrenaline) that allows you to play a few games in native resolution.
+Si la Vita se atrasa, NativeLink hace esperar un poco al juego (hasta 5 ms) para no perder información. Con la versión
+actual Gran Turismo, Ridge Racer y LocoRoco van a 60 fps con los dos plugins activos.
 
-## Compatibility List
+Más detalle: [`docs/dev/funcionamiento.md`](docs/dev/funcionamiento.md) y la hoja de ruta en
+[`docs/dev/arquitectura_dibujo_en_vita.md`](docs/dev/arquitectura_dibujo_en_vita.md) (§6).
 
-Please help testing games and filling out the [spreadsheet](https://docs.google.com/spreadsheets/d/1aZlmKwELcdpCb9ezI5iRfgcX9hoGxgL4tNC-673aKqk/edit#gid=0).
+## Etapas
+| Etapa | Estado |
+|---|---|
+| 0–1: medir si la Vita puede dibujar lo del PSP (cantidad de dibujos, costo en GXM) | hecha |
+| 2: capturar las listas del juego desde la Vita sin frenarlo | hecha (≥ 58 fps en lo más pesado de Gran Turismo) |
+| 3: dibujo mínimo en la Vita (2D, copias, presentación en HD) | siguiente |
+| 4–6: 3D, framebuffers en HD, rendimiento | pendiente |
 
-## Changelog v0.2
+## Requisitos
+- PS Vita con HENkaku/Ensō y **Adrenaline 8** (las versiones anteriores no están probadas).
+- VitaShell para instalar el VPK.
 
-- Added ability to skip GE patches by holding L while starting a game.
-- Changed framebuffer copy algorithm.
-- Changed behavior of sync opcode.
-- Disabled forced dithering again.
+## Instalar
+1. Instalar `NativePatch.vpk` con VitaShell y abrir **NativePatch** (instalador).
+2. **Instalar / actualizar**: copia NativeLink a `ux0:pspemu/seplugins/` y lo activa en `plugins.txt` (el administrador
+   de plugins de Adrenaline 8); copia NativeDraw a `ux0:data/nativedraw/` y lo agrega en la sección `*PSPEMUCFW` del
+   `config.txt` de taiHEN. Antes de cambiar un archivo de configuración deja un respaldo en
+   `ux0:data/nativepatch/respaldo/`.
+3. Reiniciar la Vita si el instalador lo pide (cuando cambió `config.txt`).
 
-## Changelog v0.19.1
+Para actualizar: instalar el VPK nuevo y volver a usar **Instalar / actualizar**. El instalador también desinstala.
 
-- Removed optimization introduced earlier since it's not working.
-- Forced dithering on.
+- Abrir un juego manteniendo **L** (o SELECT): NativeLink queda apagado para esa sesión (con L, Adrenaline 8 además
+  apaga todos los plugins).
+- Logs en `ux0:pspemu/`: `nativelink.log`, `nativedraw.log` y `nativedraw_captura.log`.
 
-## Changelog v0.19
+## Compilar
+Linux x86_64 (o WSL en Windows; en Windows: `tools/windows/instalar.cmd`):
+```sh
+sh tools/preparar.sh     # una vez: compiladores del PSP (pspdev) y de la Vita (vitasdk) en ~/tc
+sh tools/compilar.sh     # deja nativelink.prx, nativedraw.suprx y NativePatch.vpk en build/
+```
+Cómo se trabaja (pruebas en la Vita, relevo, versiones): [`docs/dev/FLUJO_DE_TRABAJO.md`](docs/dev/FLUJO_DE_TRABAJO.md).
+Pendientes: [`TODO.md`](TODO.md). Cambios de cada versión: [`CHANGELOG.md`](CHANGELOG.md).
 
-- Fixed a small bug that was introduced earlier.
-- Fixed a few bugs that caused certain games to crash.
+## Versiones
+NativeLink y NativeDraw llevan cada uno su versión `0.MENOR.PARCHE`. Un cambio en un solo plugin sube su PARCHE; un
+cambio que necesita a los dos (por ejemplo, en la memoria compartida) sube el MENOR de los dos. Dos plugins con el mismo
+MENOR funcionan juntos. Detalle y equivalencias con las versiones viejas: [`docs/dev/versiones.md`](docs/dev/versiones.md).
 
-## Changelog v0.18.1
+## Origen y créditos
+Nació como fork de [GePatch](https://github.com/TheOfficialFloW/GePatch) de TheFlow (abandonado en v0.2), que escalaba
+la imagen haciendo dibujar al PSP más grande. Ese camino tenía un límite de rendimiento (el chip gráfico del PSP no da
+abasto con 4 veces los píxeles) y errores que venían de engañar al juego, así que el proyecto cambió de arquitectura y
+desde NativeLink 0.0.2 ya no usa esa forma de escalar. Gracias a TheFlow por GePatch y por Adrenaline, y a isage por
+Adrenaline 8. El estado del proyecto cuando todavía era GePatch está en la etiqueta `gepatch-dev66`.
 
-**This must be used with Adrenaline-7, not Adrenaline-6.9!**
-
-- Fixed bug that enables more games to render without smear.
-
-## Changelog v0.18
-
-**This must be used with Adrenaline-7, not Adrenaline-6.9!**
-
-- Changed fake vram address to allow more games to work.
-- Added patch to allow games to use more memory of fake vram to store textures.
-- Added optimization to prevent double patching of vertices. May increase performance in some games and prevent overzoomed textures.
-
-## Changelog v0.17.1
-
-- Fixed indexed draws which caused some games to render at 480x272 only.
-
-## Changelog v0.17
-
-- Fixed artifacts, flickering and black screens in some games.
-- Fixed some regressions introduced in earlier versions.
-
-## Changelog v0.16
-
-- Added behavior of signal commands.
-- Optimized draws to ignored framebuffers.
-
-## Changelog v0.15
-
-- Switched to using dfs algorithm to traverse the display list.
-- Fixed a few commands and changed their stopping criteras.
-- Added indexed draws support.
-
-## Changelog v0.14
-
-- Fixed another issue that causes games to show black screen only.
-
-## Changelog v0.13
-
-- Fixed issue where some games would render a black screen only.
-- Fixed issue where some games would crash because vertices were updated multiple times.
-
-## Changelog v0.12
-
-- Fixed issue where some games would be inverted or upsidedown.
-
-## Changelog v0.11
-
-- Fixed issue where black rectangles would cover the screen in lots of games.
-
-## Desarrollo
-
-- **Compilar:** necesita el [SDK de PSP](https://github.com/pspdev/pspdev) y el código de [Adrenaline](https://github.com/TheOfficialFloW/Adrenaline) clonado al lado de este repo (`../Adrenaline`). Luego `make`, o `make DEST=/Volumes/<vita>/pspemu/seplugins` para copiar el plugin al terminar.
-- **Tests:** `make -C tests` corre en el PC sin el SDK (necesita gcc con 32 bits: `apt install gcc-multilib`). Arman display lists en una memoria simulada de la PSP y revisan cómo las parchea el plugin. Varios corresponden a bugs ya arreglados: si uno falla, ese bug volvió. GitHub los corre en cada push.
-- **Botones al iniciar el juego:** L = modo pasivo (el juego corre sin cambios, pero se registra el mismo log para comparar), R = log sin buffer (para cuelgues), TRIANGULO = NOP 0 antiguo, CIRCULO = recorrido de listas antiguo.
-- **Durante el juego:** L+R+START abre el menu de diagnostico (render targets y su escala, texturas desde framebuffer: leer memoria / omitir / copia reducida, imagen original para videos, NOP y recorrido antiguos, duplicar vertices 2D, framebuffer de 1024, desplazamiento X/Y, memoria y CPU al log). L+R+SELECT captura un frame en detalle al log. Con "Force high memory layout" activo en Adrenaline el juego puede pisar la memoria del plugin.
-- **Log:** `ms0:/ge_patch.log` (en la Vita, `ux0:pspemu/ge_patch.log`); la sesion anterior queda en `ge_patch_prev.log`. Cada cambio del menu queda registrado con su frame.
-
-## Installation
-
-- Before you start make sure that you have
-
-  - Adrenaline 7 or higher.
-  - The option `Recovery Menu->Advanced->Advanced configuration->Force high memory layout` **DISABLED**.
-  - All plugins in `ux0:pspemu/seplugins/game.txt` and `ux0:pspemu/seplugins/vsh.txt` disabled (you can gradually enable them if you think they should not interfere with GePatch. Please be aware that plugins that print stuff to the screen may not be visible with GePatch since the framebuffer is redirected.
-
-- Download [ge_patch.prx](https://github.com/TheOfficialFloW/GePatch/releases) and copy it to `ux0:pspemu/seplugins/`.
-
-- Write this line to `ux0:pspemu/seplugins/game.txt` (`ux0:pspemu` is mounted as `ms0:` in the PSP emu):
-
-  ```
-  ms0:/seplugins/ge_patch.prx 1
-  ```
-
-  You can also do the same change in file `ux0:pspemu/seplugins/vsh.txt` to get a XMB in higher resolution, but be aware that the VSH menu will be invisible.
-
-## Known Issues
-
-Some games may:
-
-- Not display cutscenes.
-- Have a black screen.
-- Not display all textures.
-- Contain clipping/culling.
-
-## Donation
-
-If you like my work and want to support future projects, you can make a donation:
-
-- via bitcoin `361jRJtjppd2iyaAhBGjf9GUCWnunxtZ49`
-- via [paypal](https://www.paypal.me/flowsupport/20)
-- via [patreon](https://www.patreon.com/TheOfficialFloW)
+## Licencia
+[GPLv3](LICENSE): cualquiera puede usar, estudiar, modificar y compartir el código, y hacer su propia versión, siempre
+que lo que distribuya siga siendo GPLv3 con su código fuente disponible. Partes de terceros: [`AVISOS_TERCEROS.md`](AVISOS_TERCEROS.md).

@@ -1,52 +1,57 @@
-# TODO: pendientes que no son urgentes
+# TODO: pendientes
 
-Cosas que no bloquean el trabajo actual pero pueden servir más adelante. Cada una dice de dónde salió (documento en
-`docs/` o en el proyecto). Actualizado: 2026-10-29 (GePatch 0.2-dev66 + gepresent v13.13: **etapa 2 cerrada**; después, Ridge Racer a 60 fps). Lo que
-sigue es la preparación para la etapa 3 (abajo) y después la etapa 3 de `docs/arquitectura_dibujo_en_vita.md` §6.
-Cómo se trabaja: `docs/FLUJO_DE_TRABAJO.md`.
+Cosas pendientes, de lo más próximo a lo que puede esperar. Cada una dice de dónde salió (documento en `docs/dev/`,
+`docs/changelog/` o en el proyecto de claude.ai). Actualizado: 2026-10-29 (**NativeLink 0.0.2 + NativeDraw 0.0.2**:
+nombres nuevos, limpieza, instalador; antes GePatch 0.2-dev66 + gepresent v13.13 con la **etapa 2 cerrada**). Lo que
+sigue es la etapa 3 de `docs/dev/arquitectura_dibujo_en_vita.md` §6. Cómo se trabaja: `docs/dev/FLUJO_DE_TRABAJO.md`.
+Los números viejos (devNN, vNN) se explican en `docs/dev/versiones.md`. Los `etapaN_*.md` citados están en
+`docs/changelog/`; `arquitectura_dibujo_en_vita.md` y `registros.md`, en `docs/dev/`.
 
-## Preparación para la etapa 3: nueva identidad del proyecto (pedido del usuario, 2026-10-29)
-**Va antes de la etapa 3.** El proyecto ya no tiene relación con el GePatch original, así que se separa de él. Orden
-sugerido: 1 y 4 juntos (nombre y versión), después 5 y 6 (limpieza), 2 (README) y al final 3 (instalación).
-- [ ] **1. Cambio de nombre**, diciendo expresamente qué hace cada parte:
-      - GePatch → **NativeLink**: el plugin que corre en el lado PSP (Adrenaline). Engancha el GE del juego, captura sus
-        listas de dibujo y se las pasa a la Vita.
-      - gepresent → **NativeDraw**: el plugin del lado Vita. Recibe lo capturado y lo dibuja con la GPU de la Vita.
-      Afecta: nombres de archivo (`ge_patch.prx`, `gepresent.suprx`), carpetas en la Vita (`ux0:data/gepresent/`,
-      `ux0:/pspemu/seplugins/`), logs (`ge_patch*.log`), textos del menú, `tools/gepresent/`, el relevo, scripts
-      (`resumen_corrida.py`, `compilar.sh`...) y los documentos. Ver si conviene dejar una migración (borrar los
-      archivos viejos en la Vita) para no quedar con los dos cargados. Los atajos originales no cambian (L).
-- [ ] **2. README nuevo:** ya no es un fork de GePatch. Decir que es un proyecto hecho con IA ("vibecoded"), que está en
-      proceso (no listo para usar), qué hace cada plugin, qué se necesita (Adrenaline 8) y el crédito a GePatch como
-      punto de partida. Resolver antes la licencia (ver "Pendientes heredados": GPL de PPSSPP/Adrenaline).
-- [ ] **3. Instalación final (decidir):** dos plugins que el usuario instala por separado y funcionan juntos, o un
-      instalador que deja todo de una vez. Opcional: un actualizador. A considerar: NativeDraw lo carga Adrenaline y
-      NativeLink va en `seplugins` (dos lugares distintos); un instalador evita versiones mezcladas entre los dos.
-- [ ] **4. Versionado nuevo:** el primer release es **NativeLink 0.1** y **NativeDraw 0.1**. Todas las versiones
-      intermedias hasta ese release son **0.0.x**. Definir cómo quedan las de prueba (hoy `.x` sobre la versión: p. ej.
-      0.0.5.1) y dónde se anota la equivalencia con las viejas (dev66 / v13.12) para no perder la historia de los
-      documentos.
-- [ ] **5. Limpiar lo heredado de GePatch** que ya no usa la nueva implementación (arquitectura A: escalado en el PSP,
-      opciones de menú que ya no aplican, código muerto). Revisar antes qué sigue usando el modo sombra.
-- [ ] **6. Limpiar archivos innecesarios del repo:** ambientes compilados, binarios y restos de pruebas (por ejemplo los
-      `.o`, `ge_patch.elf` y `ge_patch.prx` que quedan en la raíz al compilar), dejando en su lugar scripts que los
-      preparen o instalen (como `tools/contenedor/preparar.sh`). Revisar también `tools/` (adrfsr, bancos, vprobe...)
-      para ver qué queda como herramienta y qué se archiva.
+## Nueva identidad del proyecto (pedido del usuario, 2026-10-29)
+- [x] ~~1. Cambio de nombre~~: GePatch → **NativeLink** (lado PSP), gepresent → **NativeDraw** (lado Vita), cada uno en
+      su carpeta; archivos, logs, rutas en la Vita, relevo y scripts con los nombres nuevos (0.0.1).
+- [x] ~~2. README nuevo~~ (proyecto hecho con IA, en desarrollo, qué hace cada plugin, Adrenaline 8, crédito a GePatch) y
+      **licencia GPLv3** (`LICENSE`, `AVISOS_TERCEROS.md`).
+- [x] ~~3. Instalación~~: un VPK (`instalador/`, `NativePatch.vpk`) que instala/actualiza, desinstala y limpia restos.
+- [x] ~~4. Versionado~~ (`docs/dev/versiones.md`): `0.MENOR.PARCHE` por plugin; un plugin solo = PARCHE, los dos = MENOR.
+- [x] ~~5. Quitar lo heredado de GePatch~~ (NativeLink 0.0.2, NativeDraw 0.0.2).
+- [x] ~~6. Limpiar el repo~~: salidas de compilación en `build/`, herramientas viejas fuera (etiqueta `gepatch-dev66`),
+      ambiente por scripts (`tools/preparar.sh`, `tools/compilar.sh`, `tools/windows/`), documentos en `docs/dev` y
+      `docs/changelog`.
+- [ ] **Separar el repo del fork en GitHub** (lo hace el usuario: en GitHub, Settings del repo → "Leave fork network" si
+      aparece, o pedirlo a soporte de GitHub con el asistente "detach fork"). Después, la rama por defecto pasa a `master`
+      con lo confirmado (hoy `master` ya está al día con `dev`).
+- [x] ~~Probar el instalador en la Vita~~: limpiar restos + instalar funcionaron (`docs/changelog/etapa3_preparacion.md`).
+      Falta probar en la Vita "Desinstalar" y reinstalar sobre una instalación hecha (en el PC funcionan).
+- [ ] Correr **Ridge Racer** con NativeDraw 0.0.2 (solo se probó GT; la captura no cambió).
+- [ ] **Menú L+R+START dibujado por NativeDraw** (decisión del usuario): todas las opciones que hoy son archivos en
+      `ux0:data/nativedraw/` (`registro`, `nucleo_captura`, `medir_ge`, `off` y los de análisis, `docs/dev/registros.md`)
+      tienen que poder cambiarse desde ese menú. Depende de que NativeDraw dibuje (etapa 3). Ideas: NativeLink detecta los
+      botones y bloquea los del juego mientras el menú está abierto (la parte de los botones del menú viejo está en la
+      etiqueta `gepatch-dev66`, `menu.c`: `ctrl*Patched`); el estado del menú va por el buzón; NativeDraw lo dibuja encima
+      con GXM y guarda las opciones en `ux0:data/nativedraw/opciones.txt`. Las que solo valen al abrir Adrenaline
+      (`nucleo_captura`, `off`) lo tienen que decir en el menú.
+- [ ] **Actualizador** en el instalador (a futuro): buscar en GitHub (releases) si hay un VPK nuevo y bajarlo.
+- [ ] **Antes de la 1.0:** quitar "Limpiar restos de pruebas" del instalador.
+- [ ] **Antes del primer release:** quitar `docs/changelog/conversaciones/` (queda `CHANGELOG.md` como resumen) y armar el
+      release en GitHub (VPK + plugins sueltos), con etiquetas `nativelink-X.Y.Z` / `nativedraw-X.Y.Z`.
+- [ ] Compilación automática de GitHub (`.github/workflows/ci.yml`): hoy compila todo con `tools/preparar.sh` +
+      `tools/compilar.sh`; si falla por descargas de vitasdk, fijar la versión.
 
 ## Rendimiento de la captura para el futuro (etapa 2 cerrada con ≥ 58 fps en lo más pesado de GT)
 - [ ] **Leer la memoria del PSP más barato** (decidido postergar, 2026-10-29: 58 fps mínimo alcanza por ahora). Es lo
       que limita la revisión de sublistas: ~2 µs por línea para el capturador y los lectores; el capturador sigue
       comparando ~5,5 ms por frame en lo más pesado de GT. Ideas: vista con caché o DMA (KBENCH: 1,7–4 veces más rápido
-      en bloques grandes). Medir primero. (`etapa2_fase2_adelanto.md`, `etapa2_fase1_impacto.md`)
+      en bloques grandes). Medir primero. (`docs/changelog/etapa2_fase2_adelanto.md`, `etapa2_fase1_impacto.md`)
 - [x] ~~Arranque y final de la vuelta de GT esperando a la Vita~~: con v13.13 GT va a 60,2 fps en lo más pesado
-      (13,4 ms de Vita por frame), 0 segundos de carrera bajo 58. (`etapa2_ridge_racer.md`)
+      (13,4 ms de Vita por frame), 0 segundos de carrera bajo 58. (`docs/changelog/etapa2_ridge_racer.md`)
 - [x] ~~El capturador pierde ~17 % de su núcleo (el 1, con el audio)~~: v13.13, el capturador puede correr en cualquiera
       de los 3 núcleos (interruptor `nucleo_captura` para fijarlo): recibe ~100 %, sin cortes de audio en RR ni en GT.
 - [ ] Aplicar una sublista todavía copia sus registros (hasta 64) y matrices: medir cuánto queda con el registro extremo
       (`aplicar_us`) antes de tocarlo.
 - [ ] Corrida `sin_captura` en GT para saber si los frames lentos del final de la vuelta son del juego solo.
 - [x] ~~Acortar el bucle de interpretación: revisar el tramo de RAM una vez por línea~~: v13.13, `walkList` de a línea
-      de 64 bytes (RR: ~1 070 → ~800 ns por comando). (`etapa2_ridge_racer.md`)
+      de 64 bytes (RR: ~1 070 → ~800 ns por comando). (`docs/changelog/etapa2_ridge_racer.md`)
 - [ ] Bucle de interpretación, lo que queda: todavía cuenta por comando `l->n`, `acc.cmds`, `f_cmds`, `l->pc`, `l->prev`
       y `l->hi`; se podrían sumar una vez por línea (cuidando los `return` dentro del `switch`). Las estadísticas de
       `draw` (lotes, cambios de estado) podrían pasar al registro extremo ahora que la etapa 2 terminó.
@@ -63,7 +68,7 @@ sugerido: 1 y 4 juntos (nombre y versión), después 5 y 6 (limpieza), 2 (README
 - [x] ~~Leer menos de la RAM del PSP (no releer líneas, de a 64–256 B)~~: v13.8.1/v13.8.2, descartado.
 
 ## Probar en otros juegos (después de la etapa 2)
-- [ ] Probar gepresent v13.13 en los otros juegos instalados del usuario y en Silent Hill (y LocoRoco con el núcleo
+- [ ] Probar NativeDraw (= gepresent v13.13) en los otros juegos instalados del usuario y en Silent Hill (y LocoRoco con el núcleo
       libre): la compuerta nueva (dev66), la comprobación por adelantado, las sublistas de la VRAM y el capturador en
       cualquier núcleo solo se vieron en GT, RR y LocoRoco.
 - [ ] Desde v13.12 una línea de una sublista de la VRAM sin copia válida en el espejo del frame se regraba en vez de
@@ -72,7 +77,7 @@ sugerido: 1 y 4 juntos (nombre y versión), después 5 y 6 (limpieza), 2 (README
       cambia una sublista antes de encolar la siguiente → la compuerta se queda en el sync (correcto). ~4–8 ms de Vita.
 - [x] ~~**Ridge Racer** a ~30 fps en el tramo del público~~ (v13.12: 17–21 mil comandos y ~3 700 draws por frame; sin
       sublistas que saltar, ~1 µs por comando, capturador con ~65 % de su núcleo): **60 fps con v13.13** (de a línea +
-      capturador en cualquier núcleo), 1 segundo a 55 en toda la carrera. (`etapa2_ridge_racer.md`)
+      capturador en cualquier núcleo), 1 segundo a 55 en toda la carrera. (`docs/changelog/etapa2_ridge_racer.md`)
 - [ ] Ridge Racer reescribe 16 líneas de su lista antes de encolar la siguiente, así que la compuerta se queda en el sync
       (menos margen para la Vita). Ver qué cambian: si es algo que la Vita ya leyó, se podría usar la compuerta antes de
       encolar. Va a importar cuando la Vita además dibuje (etapa 3).
@@ -97,8 +102,9 @@ sugerido: 1 y 4 juntos (nombre y versión), después 5 y 6 (limpieza), 2 (README
       espejo en que se grabaron (en los frames del otro espejo, una copia de un frame atrás). Ahora guarda la dirección
       de la VRAM y la traduce con `vtr` al comparar. 0 DISTINTAS en ~100 000 revisiones (antes 1–7 por corrida).
       (`etapa2_fase2_adelanto.md`)
-- [ ] Registrar MIRROR2 (0x0AC00000–0x0AE00000) para la GPU de la Vita antes de dibujar desde el espejo (`mapZonas` en
-      gepresent.c registra 0x0A000000–0x0A400000, donde está MIRROR). (`etapa2_espejo_doble.md`)
+- [ ] Registrar los espejos (MIRROR 0x0A200000 y MIRROR2 0x0AC00000, 2 MB cada uno) con `sceGxmMapMemory` para que la
+      GPU de la Vita pueda leerlos al dibujar. La presentación vieja registraba 0x0A000000–0x0A400000 (`mapZonas`, en la
+      etiqueta `gepatch-dev66`); NativeDraw 0.0.2 no registra ninguna zona. (`etapa2_espejo_doble.md`)
 - [ ] La Vita tendrá que repetir las copias de bloque (TRANSFER) a la VRAM y guardar el resultado: desde v13.6 esos
       destinos ya no se piden al espejo (en GT, casi todas las texturas que cambian; en SH, la copia de su imagen).
       (`etapa2_espejo_doble.md`)
@@ -111,25 +117,22 @@ sugerido: 1 y 4 juntos (nombre y versión), después 5 y 6 (limpieza), 2 (README
       medir sin eso. (`etapa2_t4_t6_vida_datos.md`). Desde dev65 los eventos T4 solo van con registro extremo.
 - [ ] T6: "GE ocupado al llamar" al sync sale siempre 0, aunque el juego espera ~0,7 ms (GT) o ~3,7 ms (SH) dentro de
       `sceGeDrawSync`. Entender qué espera ahí (¿el fin de la lista con el GE ya detenido, o los callbacks?).
-- [ ] T6 apagado por defecto (le quitaba ~2–3 fps a GT): encender con `ux0:data/gepresent/medir_ge`. Si se quiere
+- [ ] T6 apagado por defecto (le quitaba ~2–3 fps a GT): encender con `ux0:data/nativedraw/medir_ge`. Si se quiere
       dejar siempre, muestrear cada ~1 ms o desde otro lado.
 
 ## Pruebas y herramientas
-- [ ] Las pruebas del PSP (`tests/`) no compilan desde dev61: `asm("sync")` en `sbPost` con el compilador del PC.
-      (`etapa2_espejo_vram.md`)
-- [ ] En el contenedor, `gcc-multilib` (pruebas del PSP) desinstala `gcc-arm-linux-gnueabihf` (prueba de qemu de
-      gepresent): no instalarlos a la vez, o buscar cómo tener los dos. (`resumen_conversacion_2026-10-28_etapa2c.md`)
-      La prueba de qemu se compila con `-I` a una carpeta con solo `psp2*` y `vitasdk*` de los encabezados de vitasdk
-      (con toda la carpeta `include` choca la libc de vitasdk con la del PC).
-- [ ] La VM de Claude en el PC con Windows a veces no llega a GitHub (proxy 403; 2026-10-29 pasó las dos cosas): pull y
-      push por paquetes de git (`FLUJO_DE_TRABAJO.md` §2). El push desde el contenedor (`add_repo` con push) funciona;
-      los commits subidos así quedan a nombre de Claude.
+- [ ] La prueba de qemu de NativeDraw (`nativedraw/prueba_memoria.c`) se compila con `-I` a una carpeta con solo `psp2*`
+      y `vitasdk*` de los encabezados de vitasdk (con toda la carpeta `include` choca la libc de vitasdk con la del PC).
+      Las pruebas del PSP (`tests/`) se quitaron en 0.0.2 (eran de la arquitectura A y no compilaban desde dev61).
+- [ ] La VM de Claude en el PC con Windows a veces no llega a GitHub (proxy 403): pull y push por paquetes de git
+      (`docs/dev/FLUJO_DE_TRABAJO.md` §2). El push desde el contenedor (`add_repo` con push) funciona; los commits
+      subidos así quedan a nombre de Claude.
 - [ ] `resumen_corrida.py` todavía no muestra las líneas de la compuerta de dev66 ni la del adelanto de v13.12: hoy se
-      sacan con `grep "stats compuerta" ge_patch.log` y `grep "adelanto/f" ge_patch_captura.log`.
+      sacan con `grep "stats compuerta" nativelink.log` y `grep "adelanto/f" nativedraw_captura.log`.
 
 ## Mediciones poco confiables
 - [ ] El núcleo 0 de la línea `procesador` del log sale casi vacío: el gancho de CreateThread no ve los hilos que
-      Adrenaline creó antes de cargar gepresent. (`etapa2_memoria_sublistas.md`)
+      Adrenaline creó antes de cargar NativeDraw. (`docs/changelog/etapa2_memoria_sublistas.md`)
 - [ ] Estadísticas aproximadas de la memoria de sublistas: "cambios" y lotes del primer draw de una sublista aplicada
       dependen del estado de entrada; `chg[]` no suma las sublistas aplicadas. (`etapa2_memoria_sublistas.md`)
 - [ ] vpjuego: "GE en stall" siempre da 0 %. Para los tiempos del GE usar las horas de encolado y FINISH (T6).
@@ -138,31 +141,27 @@ sugerido: 1 y 4 juntos (nombre y versión), después 5 y 6 (limpieza), 2 (README
 
 ## Pendientes heredados
 - [ ] Pantalla negra durante la presentación del banco de la etapa 1: la textura del juego llegó negra en esos 10 s.
-      Sin el banco, la cinemática de GT se ve bien. Postergado por el usuario. (`etapa1_banco_gxm.md` §3.3)
-- [ ] **Licencia de GePatch/NativePatch** antes de copiar código de PPSSPP (GPL 2.0+; Adrenaline es GPLv3).
-      `LICENSE.TXT` solo trae el aviso del PSPSDK. Resolver antes del README nuevo (preparación etapa 3, punto 2).
-      (`arquitectura_dibujo_en_vita.md` §3.10)
-- [ ] La causa de que la Vita se apagara con el banco v11.3 y GePatch activo a 2x sigue sin confirmar. Mientras tanto,
-      lo nuevo de la GPU se prueba con el modo sombra o el pasivo. (`etapa1_banco_gxm.md`)
+      El banco se quitó en NativeDraw 0.0.2, pero mirar esto cuando la Vita presente su imagen (etapa 3).
+      (`docs/changelog/etapa1_banco_gxm.md` §3.3)
+- [x] ~~Licencia~~: GPLv3 (`LICENSE`); lo de PPSSPP (GPL 2.0 o posterior) es compatible. `AVISOS_TERCEROS.md`.
+- [ ] La causa de que la Vita se apagara con el banco v11.3 y GePatch activo a 2x sigue sin confirmar (el escalado de
+      GePatch ya no existe; tener cuidado con lo nuevo de la GPU igual). (`docs/changelog/etapa1_banco_gxm.md`)
 - [ ] A mediano plazo: proponer a Adrenaline un punto de enganche oficial para un "presentador externo", para no
-      depender de enganchar su hilo de dibujo. (`arquitectura_dibujo_en_vita.md` §8)
+      depender de enganchar su hilo de dibujo. (`docs/dev/arquitectura_dibujo_en_vita.md` §8)
 - [ ] Recuperación de la Vita (el usuario la notó "ligeramente afectada" el 2026-10-29): pasos ya dados (apagado
       completo → modo seguro → reconstruir base de datos → reinstalar Adrenaline; nunca actualizar el firmware). Cuando
-      el usuario quiera. (`resumen_conversacion_2026-10-29_etapa2j.md`)
+      el usuario quiera. (`docs/changelog/conversaciones/resumen_conversacion_2026-10-29_etapa2j.md`)
 
 ## Limpieza
-- [ ] La Vita queda con `ux0:data/gepresent/banco_nucleos`, `sin_compuerta` y `compuerta_sync` = "no" (apagados); se
-      pueden borrar con VitaShell.
+- [x] ~~En la Vita, los restos de GePatch, gepresent y las pruebas~~: borrados con "Limpiar restos de pruebas" del
+      instalador (2026-10-29).
 - [ ] Paquetes de git sueltos en `Descargas\vitabridge` (`*.bundle`) y los parches de prueba (`*_v13.8.*.patch`,
       `fase1_*.patch`, `fase2_*.patch`): se pueden borrar.
-- [ ] Borrar en la Vita `ux0:data/gepresent/banco` (con VitaShell: el relevo solo sube archivos) y los ~100 volcados
-      `.gpd` viejos de `ux0:/pspemu` (el relevo los vuelve a bajar en su primera corrida).
-- [ ] Borrar a mano las carpetas vacías `C:\Users\spect\GePatch` y `Documents\ambientepsp` del PC con Windows.
-      (`ambiente_windows.md`)
+- [ ] Borrar a mano en el PC con Windows: las carpetas vacías `C:\Users\spect\GePatch` y `Documents\ambientepsp`, y
+      `Documents\GitHub\gepatch-lab` (scripts y memstick del laboratorio, que ya no se usa). En WSL, `~/gepatch-lab`
+      (PPSSPP compilado) y `~/pspdev` (lo reemplaza `~/tc` de `tools/preparar.sh`). En el Mac, `~/Documents/gepatch-lab`.
 
 ## Documentación
-- [ ] `ambientes_de_prueba.md` sigue describiendo dev56 y gepresent v6–v9 en varias tablas.
-- [ ] `errores_conocidos.md` describe GePatch actual (arquitectura A, dev56.8). Cuando la Vita dibuje (etapa 3 en
-      adelante), marcar cuáles desaparecen con B (ver la tabla de `arquitectura_dibujo_en_vita.md` §3.7).
-- [ ] `CONTEXTO_IA.md` está desactualizado desde dev49 (lo vigente para trabajar está en `FLUJO_DE_TRABAJO.md`).
-- [x] Subir a GitHub los commits de dev64 + v13.6, dev65 + v13.9, dev66 + v13.10, v13.11 y v13.12.
+- [ ] `ambientes_de_prueba.md` y `errores_conocidos.md` (proyecto de claude.ai) describen GePatch con la arquitectura A.
+      Cuando la Vita dibuje (etapa 3 en adelante), revisar cuáles errores de imagen desaparecen con B (tabla de
+      `docs/dev/arquitectura_dibujo_en_vita.md` §3.7) y archivarlos.

@@ -1,5 +1,9 @@
 # Manual básico de gráficos para NativePatch
 
+> **Nota (2026-10-29):** lo de gráficos (CPU, GE, RAM, VRAM, listas, texturas...) sigue valiendo. Los ejemplos que hablan
+> de lo que hace "GePatch" (dibujar más grande en el PSP) son de la arquitectura A, que ya no se usa: hoy el PSP dibuja
+> normal y la Vita lee sus listas (NativeLink + NativeDraw, ver `funcionamiento.md`).
+
 Para Matías. La idea es entender lo justo para seguir lo que hacemos, saber qué mirar cuando algo
 se ve mal y poder mandar reportes más completos. No hace falta saber de gráficos: se explica
 desde cero, con ejemplos de Ridge Racer (RR) y Silent Hill (SH).

@@ -1,20 +1,21 @@
-# En cada push: compila NativeLink (lado PSP). Si no compila, el commit queda marcado en rojo en GitHub.
+# En cada push: compila NativeLink, NativeDraw y el instalador con los mismos scripts que se usan a mano.
+# Si no compila, el commit queda marcado en rojo en GitHub. Los binarios quedan como "artifact" de la corrida.
 name: Compilacion
 on: [push, pull_request]
 
 jobs:
-  nativelink:
+  compilar:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: SDK de PSP
-        run: |
-          curl -sSL https://github.com/pspdev/pspdev/releases/latest/download/pspdev-ubuntu-latest-x86_64.tar.gz | tar xz -C $HOME
-          echo "PSPDEV=$HOME/pspdev" >> $GITHUB_ENV
-          echo "$HOME/pspdev/bin" >> $GITHUB_PATH
-      - run: git clone --depth 1 https://github.com/TheOfficialFloW/Adrenaline $HOME/Adrenaline
-      - run: make -C nativelink ADRENALINE=$HOME/Adrenaline/cef
+      - name: Compiladores (pspdev y vitasdk)
+        run: sh tools/preparar.sh
+      - name: Compilar
+        run: sh tools/compilar.sh
       - uses: actions/upload-artifact@v4
         with:
-          name: nativelink
-          path: nativelink/nativelink.prx
+          name: nativepatch
+          path: |
+            build/nativelink.prx
+            build/nativedraw.suprx
+            build/NativePatch.vpk

@@ -35,14 +35,14 @@
 // v13.11 (fase 2, punto 3): cada sublista guardada lleva solo las estadisticas que suma distintas de 0 (indice y valor,
 // hasta SN) en vez de las 127 palabras: aplicarla suma unas pocas y lee mucha menos memoria (antes ~7 us por sublista).
 // En el nivel minimo solo se suman comandos y draws. (v13.11.1, el capturador leyendo directo sin la cache compartida,
-// se descarto: en GT casi 3 veces mas esperas. Ver docs/etapa2_fase2_estadisticas.md)
+// se descarto: en GT casi 3 veces mas esperas. Ver docs/changelog/etapa2_fase2_estadisticas.md)
 // v13.12 (fase 2, punto 4): 1) las lineas guardadas de una sublista de la VRAM llevan su direccion de la VRAM (no la del
 // espejo en que se grabo) y se traducen al espejo del frame al compararlas (mline): antes se comparaba contra el otro
 // espejo, que podia tener una copia vieja (las DISTINTAS, todas de la VRAM). 2) Comprobacion por adelantado: el capturador
 // anota en orden las sublistas que aplico (estables: racha >= pv_min); al empezar la lista siguiente los lectores las
-// comprueban primero, sin esperar a llegar a su CALL (plan pv). Interruptor sin_adelanto. Ver docs/etapa2_fase2_adelanto.md
+// comprueban primero, sin esperar a llegar a su CALL (plan pv). Interruptor sin_adelanto. Ver docs/changelog/etapa2_fase2_adelanto.md
 // v13.13 (Ridge Racer, que no repite sublistas: todo se interpreta): walkList de a linea de 64 bytes (~1 070 -> ~800 ns por
-// comando) y el capturador en cualquier nucleo (nucleo_captura). Ver docs/etapa2_ridge_racer.md
+// comando) y el capturador en cualquier nucleo (nucleo_captura). Ver docs/changelog/etapa2_ridge_racer.md
 #include <psp2/kernel/threadmgr.h>
 #include <psp2/kernel/clib.h>
 #include <psp2/kernel/processmgr.h>
@@ -88,7 +88,7 @@ static volatile int rep_ready;
 // lee en SB[0x4E]. minimo (para publicar): una linea cada 10 s, sin revision de la memoria de sublistas. mediano (desarrollo):
 // lo de siempre por segundo + revision 1/32 + costo por frame para el juego (EV_FRAME, CPU libre del PSP). extremo (analisis):
 // ademas nativedraw_frames.log, nativedraw_tarde.log, vida de la lista y de los datos, tiempos de lectura y de la memoria,
-// muestreo del espejo y escrituras de la CPU del juego (T4). Ver docs/registros.md.
+// muestreo del espejo y escrituras de la CPU del juego (T4). Ver docs/dev/registros.md.
 static uint32_t nivel = 1;
 static uint32_t f_cmds, f_draws, f_us;  // del frame en curso
 

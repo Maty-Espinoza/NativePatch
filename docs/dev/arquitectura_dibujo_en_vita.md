@@ -1,5 +1,12 @@
 # Arquitectura propuesta: el PSP dibuja normal y la Vita dibuja en HD (análisis del 2026-10-28)
 
+> **Nota (2026-10-29, NativeLink 0.0.2 + NativeDraw 0.0.2):** este es el documento de la hoja de ruta (§6) y sigue vigente.
+> Usa los nombres de su época: **GePatch** = NativeLink (lado PSP), **gepresent** = NativeDraw (lado Vita); "modo sombra" =
+> lo que hoy hace NativeLink siempre; "GePatch actual (A)" = el escalado en el PSP, que se quitó en NativeLink 0.0.2 (no
+> queda como modo de respaldo). Los documentos que cita (`contexto_ia.md`, `etapaN_*.md`, `errores_conocidos.md`...) están
+> en `docs/changelog/` o en el proyecto de claude.ai. **Etapa 2 cerrada** (`docs/changelog/etapa2_ridge_racer.md`); sigue
+> la **etapa 3**. Cómo funciona hoy: `funcionamiento.md`.
+
 Conversación de análisis (sin cambios de código, sin tocar la Vita ni el laboratorio). Pregunta del usuario: revisar
 toda la documentación y otros proyectos (Adrenaline 8, PPSSPP, GePatch original, NativePatch) y proponer **la mejor
 forma de implementar el escalado** con dos criterios: **rendimiento igual o parecido al original** y **juegos que se
