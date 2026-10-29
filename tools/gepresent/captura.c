@@ -21,6 +21,8 @@
 // compara sus lineas (en el puente de GT eso era ~9 de los ~18 ms por frame) y los lectores dejan de recorrerlas.
 // v13.5: con GePatch dev63, T6 (cuando trabaja el GE del PSP), T4 (que escribe la CPU del juego: cache y DMA) y la
 // "vida de los datos" (ver smpAdd): cuantos vertices, indices, texturas y paletas cambian 1 y 2 frames despues de leerlos.
+// v13.6: con GePatch dev64, espejo doble (ver "Espejo de la VRAM"): cada lista lee una copia que el GE no esta
+// sobrescribiendo; los destinos de copias de bloque (TRANSFER) en la VRAM cuentan como destinos de dibujo.
 #include <psp2/kernel/threadmgr.h>
 #include <psp2/kernel/clib.h>
 #include <psp2/kernel/processmgr.h>
@@ -76,26 +78,32 @@ static inline uint32_t ramEnd(uint32_t a) {  // fin del tramo legible que contie
 static inline int okRam(uint32_t a) { return ramEnd(a) != 0; }
 static inline int isVram(uint32_t a) { return (a & 0x0F000000u) == 0x04000000u; }
 
-// --- Espejo de la VRAM (v13.1, con GePatch dev62) ---
+// --- Espejo de la VRAM (v13.1 con GePatch dev62; doble desde v13.6 con dev64) ---
 // La VRAM del PSP no esta mapeada en Adrenaline. El capturador pide paginas de 4 KB en dos mapas de bits del buzon:
-// "listas" (sublistas que el juego llama en la VRAM: GT) y "datos" (texturas y paletas; no las de un destino de dibujo,
-// que la Vita tendra en HD). En cada flip el GE del PSP copia las pedidas a MIRROR (ver espejoFlip en main.c) y escribe
-// el numero de la copia. El hilo del espejo (nucleo 0, solo el tiempo que sobra) marca como validas las paginas ya
-// copiadas y cuenta cuantas cambian de una copia a otra (para saber si el espejo se mantiene al dia).
+// "listas" (sublistas que el juego llama en la VRAM: GT) y "datos" (texturas y paletas; no las de un destino de dibujo
+// o de TRANSFER, que la Vita tendra en HD). En cada flip el GE del PSP copia todas las pedidas (ver espejoFlip en main.c)
+// alternando dos espejos: las copias pares a MIRROR y las impares a MIRROR2. Cada lista se lee con la ultima copia ya
+// terminada al empezarla (esp_u, sin esperar: v13.6.1 esperaba la del ultimo flip y por la compuerta del sync eso frenaba
+// a GT; ademas, si el juego encolo la lista antes del flip, la copia buena es la anterior) y la anota en el buzon
+// (SB[0x48]) para que el GE no la pise. Una pagina sirve en un espejo si su ultima copia ahi ya termino (espCheck). El hilo
+// del espejo solo cuenta cuantas paginas cambian (por muestreo).
 #define MIRROR 0x0A200000u
+#define MIRROR2 0x0AC00000u
+#define CPY(b, p) SB[((b) ? 0x8400 : 0x200) + (p)]  // ultima copia de la pagina p en el espejo b (la escribe GePatch)
 static uint32_t esp_on, want_l[16], want_d[16], rt_pg[16];  // (del capturador)
-static volatile uint32_t esp_ok[16], esp_reset;              // paginas con copia valida (del hilo del espejo)
-static struct { uint32_t chk, nuevas, ch_l, ch_d, inval, us; } ES;  // estadisticas del hilo del espejo
-static int espCheck(uint32_t p) {  // la copia de la pagina p ya termino: se marca valida (sin esperar al hilo del espejo)
-  uint32_t sq = esp_on ? SB[0x200 + p] : 0;
-  if (!sq || (int)(SB[0x40] - sq) < 0) return 0;
-  __sync_fetch_and_or(&esp_ok[p >> 5], 1u << (p & 31));
+static volatile uint32_t esp_ok[2][16], esp_reset;           // paginas con copia valida en cada espejo
+static volatile uint32_t esp_u;                               // copia con la que se lee la lista actual (0: ninguna todavia)
+static struct { uint32_t chk, nuevas, ch_l, ch_d, us, listas, ant; } ES;  // estadisticas del espejo
+static int espCheck(uint32_t b, uint32_t p, uint32_t u) {  // la ultima copia de p en el espejo b ya termino: valida
+  uint32_t sq = esp_on ? CPY(b, p) : 0;
+  if (!sq || (int)(u - sq) < 0) return 0;
+  __sync_fetch_and_or(&esp_ok[b][p >> 5], 1u << (p & 31));
   return 1;
 }
-static inline uint32_t vtr(uint32_t a) {  // direccion legible para a (la VRAM, en el espejo); 0: no se puede leer
+static inline uint32_t vtr(uint32_t a) {  // direccion legible para a (la VRAM, en el espejo del frame); 0: no se puede leer
   if (!isVram(a)) return okRam(a) ? a : 0;
-  uint32_t o = a & 0x1FFFFF, p = o >> 12;
-  return esp_ok[p >> 5] >> (p & 31) & 1 || espCheck(p) ? MIRROR + o : 0;
+  uint32_t o = a & 0x1FFFFF, p = o >> 12, u = esp_u, b = u & 1;
+  return esp_ok[b][p >> 5] >> (p & 31) & 1 || espCheck(b, p, u) ? (b ? MIRROR2 : MIRROR) + o : 0;
 }
 static void want(uint32_t a, uint32_t n, int list) {  // pide las paginas de la VRAM [a, a + n)
   if (!esp_on) return;
@@ -665,6 +673,11 @@ static int walkList(List *l) {
       acc.transfers++;
       uint32_t s = (reg[0xB2] & 0xFFFFF0) | ((reg[0xB3] << 8) & 0x0F000000), t = (reg[0xB4] & 0xFFFFF0) | ((reg[0xB5] << 8) & 0x0F000000);
       if (isVram(s) || isVram(t)) acc.tr_vram++;
+      uint32_t bp = d & 1 ? 4 : 2, w = (reg[0xEE] & 0x3FF) + 1, h = (reg[0xEE] >> 10 & 0x3FF) + 1, sw = reg[0xB3] & 0x7FF, dw = reg[0xB5] & 0x7FF;
+      if (isVram(t)) {  // (v13.6) destino en la VRAM: lo tendra la Vita (repite la copia); el origen en la VRAM, del espejo
+        markRt(t + ((reg[0xEC] >> 10 & 0x3FF) * dw + (reg[0xEC] & 0x3FF)) * bp, ((h - 1) * dw + w) * bp);
+        if (isVram(s)) want(s + ((reg[0xEB] >> 10 & 0x3FF) * sw + (reg[0xEB] & 0x3FF)) * bp, ((h - 1) * sw + w) * bp, 0);
+      }
       break;
     }
     default:
@@ -682,6 +695,10 @@ static void walk(void) {
     R0.n = 0;  // lo que se leyo despues del stall anterior puede haber cambiado
     if (l->ord != pub_ord) {  // los lectores empiezan esta lista
       pub_stall = l->stall; pub_pc = l->pc; pub_base = reg[0x10];
+      if (esp_on) {  // (v13.6.3) la ultima copia terminada del espejo, para toda la lista (y para el GE: no pisarla)
+        uint32_t d = SB[0x40]; ES.listas++; if (d != SB[0x44]) ES.ant++;
+        esp_u = d; SB[0x48] = d;
+      }
       __sync_synchronize();
       pub_ord = l->ord;
       recAbort(); chk = NULL;  // (lo que quedo a medias de la lista anterior)
@@ -798,10 +815,10 @@ static int capThread(SceSize args, void *argp) {
     }
     if (!on) {
       on = 1; tail = SB[2]; resetQueue(); sec_t0 = now(); sceClibMemset(&acc, 0, sizeof acc);
-      for (int w = 0; w < 16; w++) want_l[w] = want_d[w] = rt_pg[w] = esp_ok[w] = 0;
-      esp_reset = 1; esp_on = SB[1] >= 2;
+      for (int w = 0; w < 16; w++) want_l[w] = want_d[w] = rt_pg[w] = esp_ok[0][w] = esp_ok[1][w] = 0;
+      esp_u = 0; esp_reset = 1; esp_on = SB[1] >= 4;
       clog("buzon de GePatch (modo sombra) encontrado: eventos=%u listas=%u -> captura activa%s\n", tail, SB[6],
-           esp_on ? ", con espejo de la VRAM" : " (GePatch sin espejo de la VRAM)");
+           esp_on ? ", con espejo de la VRAM" : " (GePatch sin espejo doble de la VRAM: hace falta dev64)");
     }
     SB[4] = ++beat;
     uint32_t h = SB[2], work = 0;
@@ -867,15 +884,21 @@ static int repThread(SceSize args, void *argp) {
            r->vcalls, r->vjumps, r->lost, r->aborted, r->bad, r->signals, r->bjumps, r->syncs, r->syncs_waited,
            r->syncs_waited ? r->sync_wait_us / r->syncs_waited : 0, r->behind, r->flips_behind, r->lsyncs, r->resyncs, r->yields);
       {  // espejo: paginas pedidas / validas (ahora) y lo del ultimo segundo
-        static uint32_t lc, lp, lb, le[5];
-        uint32_t pl = 0, pd = 0, po = 0, pr = 0, c = SB[0x44], pg = SB[0x45], bz = SB[0x46];
-        for (int i = 0; i < 512; i++) { pl += want_l[i >> 5] >> (i & 31) & 1; pd += want_d[i >> 5] >> (i & 31) & 1; po += esp_ok[i >> 5] >> (i & 31) & 1; pr += rt_pg[i >> 5] >> (i & 31) & 1; }
-        uint32_t e[5] = { ES.chk, ES.nuevas, ES.ch_l, ES.ch_d, ES.us };
-        if (esp_on)
-          clog("  espejo: paginas pedidas listas=%u datos=%u validas=%u en_destinos=%u | por seg: copias=%u paginas_copiadas=%u (KB/f %u) ocupado=%u revisadas=%u nuevas=%u cambiaron listas=%u datos=%u hilo_us=%u invalidadas=%u | sublistas_vram/f recorridas=%u cortadas=%u texturas_en_destino/f=%u\n",
-               pl, pd, po, pr, c - lc, pg - lp, (pg - lp) * 4 / f, bz - lb, e[0] - le[0], e[1] - le[1], e[2] - le[2], e[3] - le[3], e[4] - le[4], ES.inval,
-               PF(v_ok), PF(v_cut), PF(tex_rt));
-        lc = c; lp = pg; lb = bz; for (int i = 0; i < 5; i++) le[i] = e[i];
+        static uint32_t lc, lp, lb, lv, le[8];
+        uint32_t pl = 0, pd = 0, po0 = 0, po1 = 0, pr = 0, c = SB[0x44], pg = SB[0x45], bz = SB[0x46], vu = SB[0x49];
+        for (int i = 0; i < 512; i++) {
+          pl += want_l[i >> 5] >> (i & 31) & 1; pd += want_d[i >> 5] >> (i & 31) & 1; pr += rt_pg[i >> 5] >> (i & 31) & 1;
+          po0 += esp_ok[0][i >> 5] >> (i & 31) & 1; po1 += esp_ok[1][i >> 5] >> (i & 31) & 1;
+        }
+        uint32_t e[8] = { ES.chk, ES.nuevas, ES.ch_l, ES.ch_d, ES.us, ES.listas, ES.ant, 0 }, x[8];
+        for (int i = 0; i < 8; i++) { x[i] = e[i] - le[i]; le[i] = e[i]; }
+        if (esp_on) {
+          clog("  espejo: paginas pedidas listas=%u datos=%u validas=%u/%u en_destinos=%u | por seg: copias=%u paginas_copiadas=%u (KB/f %u) ocupado=%u vita_usando=%u | sublistas_vram/f recorridas=%u cortadas=%u texturas_en_destino/f=%u\n",
+               pl, pd, po0, po1, pr, c - lc, pg - lp, (pg - lp) * 4 / f, bz - lb, vu - lv, PF(v_ok), PF(v_cut), PF(tex_rt));
+          clog("  espejo (por seg): listas=%u con_la_copia_anterior=%u | muestreo: revisadas=%u nuevas=%u cambiaron listas=%u datos=%u hilo_us=%u\n",
+               x[5], x[6], x[0], x[1], x[2], x[3], x[4]);
+        }
+        lc = c; lp = pg; lb = bz; lv = vu;
       }
       char top[160]; int k = 0;  // los 10 registros "otro" que mas cambian (comando: cambios por frame)
       for (int j = 0; j < 10; j++) {
@@ -948,30 +971,26 @@ static void ltFlip(void) {  // (capturador, en cada flip) revisa las muestras de
   while (smp_r != smp_w && smp[smp_r & (SMP_N - 1)].st == 2) smp_r++;
 }
 static uint32_t medir_ge;  // (v13.5.3) pedirle a GePatch el hilo que mira el GE (T6): ux0:data/gepresent/medir_ge
-static int espThread(SceSize args, void *argp) {
+static int espThread(SceSize args, void *argp) {  // (v13.6) huella de 4 paginas pedidas cada 5 ms, por turnos
   static uint32_t seen[512], hs[512], buf[64] __attribute__((aligned(16)));
-  uint32_t n = 0;
+  uint32_t n = 0, rr = 0;
   for (;;) {
     sceKernelDelayThread(5000);
     if (SB[0] == SB_MAGIC && SB[1] >= 3 && SB[0x47] != medir_ge) SB[0x47] = medir_ge;
     if (esp_reset) { sceClibMemset(seen, 0, sizeof seen); sceClibMemset(hs, 0, sizeof hs); esp_reset = 0; }
     if (!esp_on) continue;
     uint32_t t0 = now(), done = SB[0x40];
-    for (uint32_t w = 0; w < 16; w++) {
-      uint32_t m = want_l[w] | want_d[w];
-      for (uint32_t k = 0; m && k < 32; k++) {
-        if (!(m >> k & 1)) continue;
-        uint32_t p = w * 32 + k, sq = SB[0x200 + p], b = 1u << k;
-        if (!sq) { if (esp_ok[w] & b) { __sync_fetch_and_and(&esp_ok[w], ~b); ES.inval++; } continue; }  // (GePatch reinicio el buzon)
-        if (sq == seen[p] || (int)(done - sq) < 0) continue;  // ya revisada, o la copia no termino
-        seen[p] = sq;
-        uint32_t h = 2166136261u | 1;
-        for (uint32_t o = 0; o < 4096; o += 256) { neon256(buf, MIRROR + p * 4096 + o); for (int i = 0; i < 64; i++) h = (h ^ buf[i]) * 16777619u; }
-        __sync_fetch_and_or(&esp_ok[w], b);
-        if (!hs[p]) ES.nuevas++;  // (primera copia revisada: no cuenta como cambio)
-        else if (h != hs[p]) { if (want_l[w] & b) ES.ch_l++; else ES.ch_d++; }
-        hs[p] = h | 1; ES.chk++;
-      }
+    for (uint32_t k = 0, m = 0; k < 512 && m < 4; k++) {
+      uint32_t p = rr = (rr + 1) & 511, w = p >> 5, b = 1u << (p & 31);
+      if (!((want_l[w] | want_d[w]) & b)) continue;
+      uint32_t s0 = CPY(0, p), s1 = CPY(1, p), sq = (int)(s1 - s0) > 0 && (int)(done - s1) >= 0 ? s1 : s0;  // la ultima terminada
+      if (!sq || sq == seen[p] || (int)(done - sq) < 0) continue;
+      seen[p] = sq; m++;
+      uint32_t h = 2166136261u | 1, base = (sq & 1 ? MIRROR2 : MIRROR) + p * 4096;
+      for (uint32_t o = 0; o < 4096; o += 256) { neon256(buf, base + o); for (int i = 0; i < 64; i++) h = (h ^ buf[i]) * 16777619u; }
+      if (!hs[p]) ES.nuevas++;  // (primera vez: no cuenta como cambio)
+      else if (h != hs[p]) { if (want_l[w] & b) ES.ch_l++; else ES.ch_d++; }
+      hs[p] = h | 1; ES.chk++;
     }
     ES.us += now() - t0;
     if (++n % 20 == 0)  // (por si GePatch reinicio el buzon sin que el capturador lo notara)
@@ -1082,9 +1101,9 @@ void capturaStart(void) {
   if (t >= 0) sceKernelStartThread(t, 0, NULL);
   cap_uid = t;
   clog("hilos: captura %08x (nucleo 1, prioridad 0x61, debajo de los hilos de audio) log %08x; hilos del emulador vistos: %d\n", t, r, emu_n);
-  SceUID et = sceKernelCreateThread("gepresent_espejo", espThread, 0xB0, 0x2000, 0, 0x10000 /* nucleo 0 */, NULL);
+  SceUID et = sceKernelCreateThread("gepresent_espejo", espThread, 0xBE, 0x2000, 0, 0x10000 /* nucleo 0 */, NULL);  // (v13.6: debajo de los lectores)
   if (et >= 0) sceKernelStartThread(et, 0, NULL);
-  clog("espejo de la VRAM: hilo %08x (nucleo 0, prioridad 0xB0); copia en %08x\n", et, MIRROR);
+  clog("espejo de la VRAM: hilo %08x (nucleo 0, prioridad 0xBE); copias en %08x y %08x\n", et, MIRROR, MIRROR2);
   medir_ge = sceIoGetstat("ux0:data/gepresent/medir_ge", &st) >= 0;
   clog("T6 (hilo de GePatch que mira el GE): %s\n", medir_ge ? "pedido (medir_ge)" : "apagado (crear ux0:data/gepresent/medir_ge para medir)");
   if (sceIoGetstat("ux0:data/gepresent/captura_sin_lectores", &st) >= 0) { clog("lectores: apagados (captura_sin_lectores)\n"); return; }

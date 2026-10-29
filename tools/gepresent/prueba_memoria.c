@@ -8,6 +8,8 @@
 // mismas columnas que sin lectores; pre= cuenta las aplicadas con la comprobacion de un lector. Con 2 los lectores pasan
 // despues del capturador: se saltan todos los CALL del nivel de arriba (tarde=) sin leer lineas.
 // v13.5.2: VIDA=1 ./prueba 1 0 0 prueba la vida de los datos (muestras que cambian 1 o 2 flips despues; lineas "vida:").
+// v13.6: espejo doble. El "GE" copia al final de cada frame f la copia f + 1 al espejo (f + 1) & 1; el frame siguiente la
+// usa (como el evento del flip). La sublista se escribe en los dos espejos.
 #include "captura.c"
 #include <stdio.h>
 #include <string.h>
@@ -37,7 +39,11 @@ SceUID emu_th[EMU_N]; int emu_aff[EMU_N], emu_n;
 
 static uint32_t *W(uint32_t a) { return (uint32_t *)PSP(isVram(a) ? MIRROR + (a & 0x1FFFFF) : a); }
 static uint32_t pc_;
-static void E(uint32_t c, uint32_t d) { *W(pc_) = c << 24 | (d & 0xFFFFFF); pc_ += 4; }
+static void E(uint32_t c, uint32_t d) {
+  *W(pc_) = c << 24 | (d & 0xFFFFFF);
+  if (isVram(pc_)) *(uint32_t *)PSP(MIRROR2 + (pc_ & 0x1FFFFF)) = c << 24 | (d & 0xFFFFFF);
+  pc_ += 4;
+}
 #define MAIN 0x08800000u
 static uint32_t SUBS = 0x08900000u, vram;
 #define SHARED 0x08A00000u
@@ -72,11 +78,13 @@ int main(int argc, char **argv) {
   vram = argc > 2 ? atoi(argv[2]) : 0; int lec = argc > 3 ? atoi(argv[3]) : 0;
   if (vram) { SUBS = 0x04100000u; esp_on = 1; }
   if (mmap((void *)0x70000000, 0x2000000, PROT_READ | PROT_WRITE, MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0) == MAP_FAILED) { perror("mmap"); return 1; }
+  if (mmap((void *)0x72C00000, 0x200000, PROT_READ | PROT_WRITE, MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0) == MAP_FAILED) { perror("mmap3"); return 1; }
   if (mmap((void *)0x72000000, 0x400000, PROT_READ | PROT_WRITE, MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0) == MAP_FAILED) { perror("mmap2"); return 1; }
   rlo[0] = 0x08000000; rhi[0] = 0x0B000000; nr = 1; initCls();
   if (mode) { MEMO_N = 512; POOL_N = 8192; memo_sh = 23; memo = calloc(MEMO_N, sizeof(Memo)); pool = calloc(POOL_N, 64); memo_on = 1; memo_chk = mode == 2; }
   for (int f = 0; f < 8; f++) {
     build(f);
+    esp_u = f;  // (v13.6) la copia hecha al final del frame anterior (en la Vita: la ultima terminada, al empezar la lista)
     sceClibMemset(&acc, 0, sizeof acc);
     List *l = &q[qt++ & 63]; memset(l, 0, sizeof *l); l->pc = MAIN; l->ord = f + 1;
     if (lec == 1) {  // los lectores van adelante: recorren toda la lista (y comprueban lo guardado) antes que el capturador
@@ -90,8 +98,12 @@ int main(int argc, char **argv) {
     }
     if (vram) {  // lo que haria el GE del PSP: copiar las paginas pedidas (con vram 2, todas menos la 0x102)
       int pl = 0, pd = 0;
-      for (int w = 0; w < 16; w++) { esp_ok[w] |= want_l[w] | want_d[w]; pl += __builtin_popcount(want_l[w]); pd += __builtin_popcount(want_d[w]); }
-      if (vram == 2) esp_ok[0x102 >> 5] &= ~(1u << (0x102 & 31));
+      for (int p = 0; p < 512; p++) {
+        int w = p >> 5, b = 1 << (p & 31);
+        pl += !!(want_l[w] & b); pd += !!(want_d[w] & b);
+        if ((want_l[w] | want_d[w]) & b && !(vram == 2 && p == 0x102)) CPY((f + 1) & 1, p) = f + 1;
+      }
+      SB[0x40] = f + 1;
       printf("   espejo: pedidas listas=%d datos=%d recorridas=%u saltadas=%u cortadas=%u\n", pl, pd, acc.v_ok, acc.vcalls, acc.v_cut);
     }
     printf("f%d cmds=%u draws=%u verts=%u vbytes=%u tex=%u prim3=%u prim4=%u calls=%u estado=%08x | hit=%u miss=%u dep=%u fail=%u no=%u chk=%u BAD=%u lines=%u saltados=%u pre=%u lv=%u/%u/%u\n",

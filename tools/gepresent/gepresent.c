@@ -325,7 +325,7 @@ static SceUID hookCT(const char *name, SceKernelThreadEntry entry, int prio, int
 
 void _start() __attribute__((weak, alias("module_start")));
 int module_start(SceSize args, void *argp) {
-  alog("gepresent v13.5 (v11.3 + capturador de la etapa 2 con memoria de sublistas, espejo de la VRAM, T4/T6 y vida de los datos, activo con GePatch en modo sombra) compilado %s %s (dato %d)\n", __DATE__, __TIME__, dato);
+  alog("gepresent v13.6 (v11.3 + capturador de la etapa 2 con memoria de sublistas, espejo doble de la VRAM, T4/T6 y vida de los datos, activo con GePatch en modo sombra) compilado %s %s (dato %d)\n", __DATE__, __TIME__, dato);
   SceIoStat bst;  // v11.2: con el banco no se reserva el anillo de volcados (24 MB que el banco necesita)
   if (sceIoGetstat("ux0:data/gepresent/banco_v12", &bst) < 0) ringInit();
   else alog("banco de pruebas activo: sin anillo de volcados (se escriben directo)\n");

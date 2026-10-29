@@ -186,6 +186,10 @@ una textura, una CLUT, **una sublista o un búfer de vértices** vive en la VRAM
 
 - **GT recorre sublistas que están en la VRAM** (~20 % de sus comandos) [medido en volcados, etapa 0]: sin espejo el
   capturador no puede seguir sus listas. Es el caso más exigente; SH es el más simple (solo lee sus propios rt).
+- **Espejo doble (etapa 2, dev64 + v13.6, `etapa2_espejo_doble.md`):** dos copias alternadas (0x0A200000 y 0x0AC00000);
+  cada lista se lee con la última copia terminada y la Vita avisa cuál usa, así el GE nunca la pisa. En cada copia van
+  todas las sublistas pedidas y hasta 256 KB de texturas. Los destinos de TRANSFER en la VRAM se tratan como rt: en GT
+  son casi todas las texturas que cambian en carrera, y en SH la copia de su imagen para efectos [medido].
 - **La imagen nativa ya llega gratis a la Vita**: en el modo normal de Adrenaline (sin `DRAW_NATIVE`), el hardware de
   compatibilidad deja cada frame en el búfer 0x74000000 (512x272, 8888), Adrenaline lo copia a su textura de 512x272 y
   la dibuja [código]. **Etapa 1:** el banco la dibujó dentro de su superficie propia mientras reemplazaba la textura

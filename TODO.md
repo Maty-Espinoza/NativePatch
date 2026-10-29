@@ -2,7 +2,7 @@
 
 Cosas que no bloquean el trabajo actual pero pueden servir más adelante. Cada una dice de dónde salió (documento en
 `docs/` o en el proyecto). Lo que sí falta para cerrar la etapa 2 está en `docs/arquitectura_dibujo_en_vita.md` §6, no
-aquí. Actualizado: 2026-10-28 (GePatch 0.2-dev63 + gepresent v13.5).
+aquí. Actualizado: 2026-10-28 (GePatch 0.2-dev64 + gepresent v13.6).
 
 ## Rendimiento de la captura (gepresent, lado Vita)
 - [ ] **Comprobar al empezar cada cuadro las sublistas estables.** Hoy un ayudante las comprueba cuando la lista llega
@@ -20,9 +20,14 @@ aquí. Actualizado: 2026-10-28 (GePatch 0.2-dev63 + gepresent v13.5).
       una vez por tramo. Hoy en GT casi siempre hay una sola versión, así que no se nota. (`etapa2_comparar_menos.md`)
 
 ## Espejo de la VRAM
-- [ ] **SH: dejar de pedir 1 MB que cambia en cada copia.** Son destinos que SH escribe con TRANSFER y no se detectan
-      como destino. Cuesta ~0,07 ms de GE por cuadro: no afecta hoy. Marcar como destino lo que escribe TRANSFER en la
-      VRAM. (`etapa2_espejo_vram.md`)
+- [ ] **DISTINTAS con el espejo doble:** la revisión de la memoria de sublistas encontró 1–7 por corrida de GT (≈0,01 %
+      de ~50 000 revisadas) desde v13.6; con v13.5 siempre 0. Entender por qué antes de dibujar (etapa 3).
+      (`etapa2_espejo_doble.md`)
+- [ ] Registrar MIRROR2 (0x0AC00000–0x0AE00000) para la GPU de la Vita antes de dibujar desde el espejo (`mapZonas` en
+      gepresent.c registra 0x0A000000–0x0A400000, donde está MIRROR). (`etapa2_espejo_doble.md`)
+- [ ] La Vita tendrá que repetir las copias de bloque (TRANSFER) a la VRAM y guardar el resultado: desde v13.6 esos
+      destinos ya no se piden al espejo (en GT, casi todas las texturas que cambian; en SH, la copia de su imagen).
+      (`etapa2_espejo_doble.md`)
 - [ ] Buscar la dirección física de la VRAM desde el kernel de la Vita, para leerla sin espejo. Riesgoso y de baja
       prioridad. (`arquitectura_dibujo_en_vita.md` §7)
 
@@ -70,4 +75,4 @@ aquí. Actualizado: 2026-10-28 (GePatch 0.2-dev63 + gepresent v13.5).
 - [ ] `ambientes_de_prueba.md` sigue describiendo dev56 y gepresent v6–v9 en varias tablas.
 - [ ] `errores_conocidos.md` describe GePatch actual (arquitectura A, dev56.8). Cuando la Vita dibuje (etapa 3 en
       adelante), marcar cuáles desaparecen con B (ver la tabla de `arquitectura_dibujo_en_vita.md` §3.7).
-- [ ] `dev` va varios commits adelante de `origin/dev` (desde `81d835b`, etapa 2): falta el push.
+- [ ] Subir a GitHub el commit de dev64 + v13.6 (hecho desde el Mac).
