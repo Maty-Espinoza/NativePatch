@@ -2,7 +2,7 @@
 
 Cosas que no bloquean el trabajo actual pero pueden servir más adelante. Cada una dice de dónde salió (documento en
 `docs/` o en el proyecto). Lo que sí falta para cerrar la etapa 2 está en `docs/arquitectura_dibujo_en_vita.md` §6, no
-aquí. Actualizado: 2026-10-29 (GePatch 0.2-dev66 + gepresent v13.10, fase 2 en curso). Cómo se trabaja:
+aquí. Actualizado: 2026-10-29 (GePatch 0.2-dev66 + gepresent v13.11, fase 2 en curso). Cómo se trabaja:
 `docs/FLUJO_DE_TRABAJO.md`.
 
 ## Fase 2: quitar la espera del juego a la Vita (de `etapa2_fase1_impacto.md`, 2026-10-29)
@@ -10,11 +10,17 @@ aquí. Actualizado: 2026-10-29 (GePatch 0.2-dev66 + gepresent v13.10, fase 2 en 
       (huellas de la lista). GT: 3 veces menos esperas en la carrera, casi ninguna en la mitad de la vuelta; SH sin
       cambios en la lista. (`etapa2_fase2_compuerta.md`)
 - [ ] **Arranque y final de la vuelta de GT** siguen esperando (la Vita necesita más de 16,7 ms por frame). El final quedó
-      en 54,7 fps (contra 56,0 con la espera en el sync, una sola corrida): confirmar si es variación.
-- [ ] Capturador: leer directo de a 256 B (3,0 µs = 0,75 µs/línea) en vez de tomar líneas de la caché compartida
-      (1,13 µs/línea); los lectores quedarían solo para comprobar sublistas por adelantado.
-- [ ] Aplicar una sublista guardada cuesta ~7 µs (sumar ~200 contadores de estadística y copiar registros): ~1,7 ms por
-      frame. Sumar solo lo necesario (el resto según el nivel de registro).
+      en 54,7 fps (contra 56,0 con la espera en el sync, una sola corrida): confirmar si es variación. Con v13.11 el
+      tramo más pesado (más de 75 mil comandos) subió de 54,3 a 57,3 fps; el final de la vuelta sigue esperando.
+- [x] ~~Capturador: leer directo de a 256 B en vez de la caché compartida~~: probado en v13.11.1, **descartado** (casi 3
+      veces más esperas en GT). La caché compartida conviene. Idea chica si vuelve a importar: sacar la línea con NEON y
+      menos barreras en `clGet`. (`etapa2_fase2_estadisticas.md`)
+- [x] ~~Aplicar sublistas sin sumar todas las estadísticas~~: hecho en v13.11 (solo las distintas de 0, hasta 48). GT:
+      19,1 → 17,0 ms de Vita por frame en lo más pesado. (`etapa2_fase2_estadisticas.md`)
+- [ ] Aplicar una sublista todavía copia sus registros (hasta 64) y matrices: medir cuánto queda con el registro extremo
+      (`aplicar_us`) antes de tocarlo.
+- [ ] **Cuelgue de la Vita** en la primera corrida de GT con v13.11.1 (~10 s después de largar; la segunda corrida con
+      la misma versión terminó bien). Si vuelve a pasar, anotar versión y momento.
 - [ ] Revisar sublistas guardadas: ~5,5 ms por frame en carrera. Que los lectores lleguen antes a más sublistas.
 - [ ] El capturador pierde ~17 % de su núcleo (el 1, con el audio): probar prioridad / núcleo con cuidado del audio.
 - [ ] Corrida `sin_captura` en GT para saber si los frames lentos del final de la vuelta son del juego solo.
@@ -50,7 +56,7 @@ aquí. Actualizado: 2026-10-29 (GePatch 0.2-dev66 + gepresent v13.10, fase 2 en 
 ## Espejo de la VRAM
 - [ ] **DISTINTAS con el espejo doble:** la revisión de la memoria de sublistas encontró 1–7 por corrida de GT (≈0,01 %
       de ~50 000 revisadas) desde v13.6; con v13.5 siempre 0. 2026-10-29: 2 de 175 172 (dev64), 13 de 134 312 (v13.7.1
-      con el banco), 7 de 49 211 (dev65), 1 de 50 536 (dev66.3). **Todas son sublistas en la VRAM (0x041xxxxx).**
+      con el banco), 7 de 49 211 (dev65), 1 de 50 536 (dev66.3), 3 de 51 121 (v13.11.2). **Todas son sublistas en la VRAM (0x041xxxxx).**
       Hipótesis: la memoria guarda las líneas con la dirección del espejo en que se grabó (MIRROR o MIRROR2) y en los
       frames que usan el otro espejo compara contra una copia vieja (que el GE puede estar sobrescribiendo). Arreglo
       posible: guardar la dirección de la VRAM y traducirla con `vtr` al comparar. Arreglar antes de dibujar (etapa 3).
@@ -121,3 +127,4 @@ aquí. Actualizado: 2026-10-29 (GePatch 0.2-dev66 + gepresent v13.10, fase 2 en 
 - [x] Subir a GitHub el commit de dev64 + v13.6 (hecho desde el Mac).
 - [x] Subir a GitHub el commit de dev65 + v13.9 (`6193d07`, desde el contenedor, a nombre de Claude).
 - [x] Subir a GitHub el commit de dev66 + v13.10 (desde el contenedor).
+- [x] Subir a GitHub el commit de gepresent v13.11 (desde el contenedor).

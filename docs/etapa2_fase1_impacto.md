@@ -83,8 +83,11 @@ Resumen: `python3 tools/analisis_fase1.py gt1 gt2_sin_compuerta gt3_vida_lista g
    el PSP) y volver al sync si cambian. **Hecho en dev66 + v13.10 (`etapa2_fase2_compuerta.md`): 3 veces menos esperas
    en la carrera de GT, casi ninguna en la mitad de la vuelta.**
 2. Capturador: leer directo de a 256 bytes en vez de tomar líneas de la caché compartida (~0,8 ms); los lectores solo
-   comprueban sublistas por adelantado.
+   comprueban sublistas por adelantado. **Probado en v13.11.1 y descartado: casi 3 veces más esperas en GT (el capturador
+   aprovecha ~2,3 de las 4 líneas de cada lectura y pierde el paralelismo de los lectores). `etapa2_fase2_estadisticas.md`.**
 3. Aplicar sublistas sin sumar todas las estadísticas (solo lo necesario; el resto según el nivel de registro): ~1,5 ms.
+   **Hecho en v13.11 (estadísticas compactas): ~2 ms menos de Vita por frame en lo más pesado de GT (19,1 → 17,0 ms),
+   54,3 → 57,3 fps en ese tramo. `etapa2_fase2_estadisticas.md`.**
 4. Revisar sublistas más barato o por adelantado (hoy ~5,5–6,8 ms): que los lectores lleguen antes a más sublistas.
 5. Núcleo / prioridad del capturador (pierde ~17 %), con cuidado del audio.
 6. Pendiente de la fase 1: corrida `sin_captura` para el final de la vuelta; DISTINTAS de las sublistas en la VRAM

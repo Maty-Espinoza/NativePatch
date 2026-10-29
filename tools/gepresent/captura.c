@@ -32,6 +32,10 @@
 // huellas de la lista (lifeTake) se deja en todos los niveles con su numero de orden (SB[0x53]): GePatch la usa para
 // comprobar que el juego no reescribe la lista antes de encolar la siguiente. Interruptor compuerta_sync (SB[0x4A] & 8):
 // la compuerta se queda en el sync, como antes (para comparar).
+// v13.11 (fase 2, punto 3): cada sublista guardada lleva solo las estadisticas que suma distintas de 0 (indice y valor,
+// hasta SN) en vez de las 127 palabras: aplicarla suma unas pocas y lee mucha menos memoria (antes ~7 us por sublista).
+// En el nivel minimo solo se suman comandos y draws. (v13.11.1, el capturador leyendo directo sin la cache compartida,
+// se descarto: en GT casi 3 veces mas esperas. Ver docs/etapa2_fase2_estadisticas.md)
 #include <psp2/kernel/threadmgr.h>
 #include <psp2/kernel/clib.h>
 #include <psp2/kernel/processmgr.h>
@@ -377,12 +381,13 @@ static uint32_t MEMO_N = 2048, POOL_N = 32768, memo_sh = 21;  // sublistas guard
 #define MR 32         // tramos de memoria por sublista
 #define MRG 64        // registros que puede dejar cambiados
 #define SW (sizeof(Stats) / 4 - 256)  // palabras de Stats que se suman (las anteriores a chg[256], que va al final)
+#define SN 48         // (v13.11) estadisticas distintas de 0 que puede sumar una sublista (mas: no se guarda)
 enum { M_DRAW = 1, M_VABS = 2, M_IABS = 4, M_CLUT = 8, M_VDEP = 16, M_IDEP = 32 };  // VDEP/IDEP: dibuja con los vertices/indices de entrada
 static const uint8_t moff[5] = { 0, 12, 24, 40, 52 }, msz[5] = { 12, 12, 16, 12, 96 };
 struct Memo {
   uint32_t t, base, off, pgen, state, fail_gen;  // state: 0 grabando, 1 lista, 2 no se puede guardar (reintento en 64 frames)
   uint32_t nr, ra[MR], rn[MR], rp[MR];            // tramos: primera linea, cantidad, posicion en el deposito
-  uint32_t d[SW];                                  // lo que suma a las estadisticas
+  uint32_t cmds, draws, sn, sv[SN]; uint8_t si[SN]; // lo que suma a las estadisticas: solo lo distinto de 0 (v13.11)
   uint32_t nreg, rv[MRG]; uint8_t rc[MRG];         // registros a la salida
   uint32_t mmask, mi[5], mtx[148];                 // matrices tocadas
   uint32_t flags, vaddr, iaddr, vset, dirty, last_prim, last_fb, clut[2], ntex, tex[32];
@@ -442,9 +447,10 @@ static void recEnd(List *l) {
   Memo *e = rec;
   rec = NULL;
   if (nearStall(e, l->stall)) { e->state = 2; e->fail_gen = gen; return; }
-  uint32_t *a = (uint32_t *)&acc;
-  for (int i = 0; i < SW; i++) e->d[i] = a[i] - rec_acc0[i];
-  Stats *d = (Stats *)e->d;  // (solo las primeras SW palabras)
+  static Stats ds;  // (solo se usan las primeras SW palabras)
+  uint32_t *a = (uint32_t *)&acc, *td = (uint32_t *)&ds;
+  for (int i = 0; i < SW; i++) td[i] = a[i] - rec_acc0[i];
+  Stats *d = &ds;
   d->textures = d->tex_vram = 0;  // se vuelven a contar con texAdd al aplicarla
   // (v12.13) lo que no cuenta el recorrido sino el hilo (eventos, tiempos, frames): la grabacion puede cruzar varias vueltas
   d->t0 = d->frames = d->lists = d->cmds_max = d->draws_max = d->us = d->us_max = d->own = d->hits = d->rown[0] = d->rown[1] = 0;
@@ -457,6 +463,12 @@ static void recEnd(List *l) {
   d->dc_n = d->dc_kb = d->dm_n = d->dm_kb = d->cpu_drop = d->cpu_vram = d->dc_all = 0;
   d->hit_us = d->hit_n = 0;
   d->pf_n = d->pf_us = d->pf_gate = d->pf_gate_n = d->pf_nowait = d->pf_sync = d->pf_spin = d->pf_esp = d->pf_pg = d->pf_post = d->pf_late = d->pf_late_us = d->rd_us = d->rd_n = d->eg_n = d->eg_us = 0;
+  e->cmds = d->cmds; e->draws = d->draws;
+  for (int i = 0; i < SW; i++)
+    if (td[i]) {
+      if (e->sn >= SN) { static int nl; if (nl++ < 3) clog("memoria: sublista %08x suma mas de %d estadisticas: no se guarda\n", e->t, SN); e->state = 2; e->fail_gen = gen; return; }
+      e->si[e->sn] = i; e->sv[e->sn++] = td[i];
+    }
   for (int c = 0; c < 256; c++)
     if (rec_touch[c >> 5] >> (c & 31) & 1) {
       if (e->nreg >= MRG) { e->state = 2; e->fail_gen = gen; return; }
@@ -577,10 +589,10 @@ ok:;
   memoApply(e);
   for (uint32_t i = 0; i < e->ntex; i++) if (texAdd(e->tex[i])) { acc.textures++; if (isVram(e->tex[i])) acc.tex_vram++; else smpAdd(e->tex[i], 256, 2); }
   uint32_t *a = (uint32_t *)&acc;
-  for (int i = 0; i < SW; i++) a[i] += e->d[i];
-  Stats *d = (Stats *)e->d;
-  f_cmds += d->cmds; f_draws += d->draws; l->n += d->cmds;
-  acc.memo_hit++; acc.memo_cmds += d->cmds;
+  if (nivel) for (uint32_t i = 0; i < e->sn; i++) a[e->si[i]] += e->sv[i];
+  else { acc.cmds += e->cmds; acc.draws += e->draws; }  // (minimo: solo lo que sale en su linea)
+  f_cmds += e->cmds; f_draws += e->draws; l->n += e->cmds;
+  acc.memo_hit++; acc.memo_cmds += e->cmds;
   if (ta) tm_apply += now() - ta;
   return 1;
 }
@@ -1298,7 +1310,7 @@ void capturaStart(void) {
     if (fd >= 0) { sceIoRead(fd, b, 7); sceIoClose(fd); nivel = b[0] == 'e' ? 2 : b[0] == 'm' && b[1] == 'i' ? 0 : 1; }
   }
   if (nivel >= 2) { uint32_t t0 = now(), x = 0; for (int i = 0; i < 10000; i++) x += now(); clog("(v13.9.4) costo de leer la hora: %u ns (%u)\n", (now() - t0) / 10, x & 1); }
-  clog("gepresent v13.10: capturador de la etapa 2 (memoria de sublistas, espejo de la VRAM) con registros de la fase de analisis\n");
+  clog("gepresent v13.11: capturador de la etapa 2 (memoria de sublistas, espejo de la VRAM) con registros de la fase de analisis\n");
   static const char *rot[2][2] = { { "ux0:pspemu/ge_patch_frames.log", "ux0:pspemu/ge_patch_frames_prev.log" },
                                    { "ux0:pspemu/ge_patch_tarde.log", "ux0:pspemu/ge_patch_tarde_prev.log" } };
   for (int k = 0; k < 2; k++) { sceIoRemove(rot[k][1]); sceIoRename(rot[k][0], rot[k][1]); }

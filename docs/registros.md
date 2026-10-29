@@ -1,4 +1,4 @@
-# Niveles de registro (GePatch dev65 + gepresent v13.9, 2026-10-29; compuerta de dev66 + v13.10)
+# Niveles de registro (GePatch dev65 + gepresent v13.9, 2026-10-29; compuerta de dev66 + v13.10; v13.11)
 
 Los registros sirven para entender qué pasa, pero también cuestan rendimiento. Por eso hay tres niveles. Se elige uno en
 la Vita con el archivo `ux0:data/gepresent/registro` (contenido `minimo`, `mediano` o `extremo`; **sin archivo: mediano**).
@@ -40,6 +40,11 @@ todas), `sin_memoria`, `captura_sin_lectores`, `off`.
 | `sin_libre` | sin el hilo de CPU libre del PSP |
 | `sin_captura` | la Vita no recorre nada: marca las listas como capturadas (casi GePatch solo) |
 | `compuerta_sync` | (v13.10) la espera a la Vita se queda en el sync, como antes de dev66 (para comparar); ver `etapa2_fase2_compuerta.md` |
+
+## Memoria de sublistas (v13.11)
+Cada sublista guardada suma solo sus estadísticas distintas de 0 (hasta 48; con más no se guarda y el log lo avisa). En el
+nivel mínimo, al aplicar una sublista solo se suman comandos y draws: lo demás de su línea no lo usa. Detalle en
+`etapa2_fase2_estadisticas.md`.
 
 ## Compuerta (dev66 + v13.10, todos los niveles)
 - `ge_patch.log`, cada 10 s: `stats compuerta (dev66): <modo> | esperas antes de encolar=N (us c/u, max) |

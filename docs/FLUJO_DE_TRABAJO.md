@@ -1,8 +1,8 @@
 # Flujo de trabajo (leer al empezar cada conversación)
 
 Cómo se trabaja en NativePatch con Claude: dónde está todo, cómo actualizar el repo, compilar, mandar a la Vita, pedir
-pruebas y guardar resultados. Actualizado el 2026-10-29 (GePatch 0.2-dev66, gepresent v13.10, etapa 2 de la
-arquitectura B, fase 2: `etapa2_fase2_compuerta.md`; análisis en `etapa2_fase1_impacto.md`). Lo técnico del plugin está en `CONTEXTO_IA.md` (desactualizado desde dev49) y en los documentos de cada
+pruebas y guardar resultados. Actualizado el 2026-10-29 (GePatch 0.2-dev66, gepresent v13.11, etapa 2 de la
+arquitectura B, fase 2: `etapa2_fase2_compuerta.md`, `etapa2_fase2_estadisticas.md`; análisis en `etapa2_fase1_impacto.md`). Lo técnico del plugin está en `CONTEXTO_IA.md` (desactualizado desde dev49) y en los documentos de cada
 etapa (`arquitectura_dibujo_en_vita.md` §6 es la hoja de ruta).
 
 ## 1. Al empezar una conversación
@@ -82,6 +82,12 @@ Lo pone en marcha el usuario (§1). Claude solo trabaja con archivos en la carpe
 - Respaldo de cada versión de prueba: `vitabridge/respaldo/ge_patch_<versión>.prx`,
   `vitabridge/gepresent/gepresent_<versión>.suprx` y el parche `vitabridge/<...>_<versión>.patch`.
 - **Verificar** lo subido: un `bajar_verif.txt` que lo baje a `vitabridge/<etapa>_<versión>/verif/` y comparar md5.
+  `device_commit_files` puede entregar una copia vieja si se recompila con el mismo nombre de archivo (pasó con
+  v13.11.2): al recompilar, mandar una copia con otro nombre (p. ej. `gepresent_<versión>b.suprx`) y comparar el md5 del
+  respaldo en el PC antes de pedir la prueba.
+- El relevo a veces se queda pegado sin marcar errores (el latido de `estado.txt` deja de avanzar): pedir al usuario que
+  cierre la ventana y vuelva a abrir `vitabridge.cmd`. Si la Vita se cuelga, el log muestra "timed out" seguido.
+- 2026-10-29: la VM de Windows **sí llegó a GitHub** (`git ls-remote` funcionó); probar el pull directo antes del paquete.
 - Interruptores en `ux0:data/gepresent/` (el relevo no borra: se apagan subiendo el archivo con otro contenido):
   `banco_nucleos` (v13.7: banco de núcleos; contenido = segundos de espera, `no` lo apaga), `banco_v12` (banco de la
   etapa 1), `medir_ge` (T6), `off` (gepresent no engancha nada). Desde v13.9: `registro` (nivel de registro: `minimo`,

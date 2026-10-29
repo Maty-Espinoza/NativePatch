@@ -32,6 +32,7 @@
 // v13.7 (etapa 2): banco de nucleos en banco.c (grabar en GXM desde 1, 2 o 3 nucleos), con ux0:data/gepresent/banco_nucleos.
 // v13.9 (fase de analisis): registros de por que todavia le cuesta al juego (captura.c, con GePatch dev65).
 // v13.10 (fase 2): la compuerta de GePatch dev66 pasa a "antes de encolar la lista siguiente" (captura.c).
+// v13.11 (fase 2): las sublistas guardadas suman solo las estadisticas distintas de 0 (captura.c).
 //
 // v6 (plan A, paso 1): la Vita escribe el log de GePatch y sus volcados. GePatch deja el texto o un pedazo del
 // volcado en su RAM y un pedido en el descriptor; este plugin lo escribe en ux0:pspemu/ y lo marca hecho. El PSP no
@@ -328,7 +329,7 @@ static SceUID hookCT(const char *name, SceKernelThreadEntry entry, int prio, int
 
 void _start() __attribute__((weak, alias("module_start")));
 int module_start(SceSize args, void *argp) {
-  alog("gepresent v13.10 (v11.3 + banco de nucleos + capturador de la etapa 2 con registros de la fase de analisis y compuerta antes de encolar, memoria de sublistas, espejo doble de la VRAM, T4/T6 y vida de los datos, activo con GePatch en modo sombra) compilado %s %s (dato %d)\n", __DATE__, __TIME__, dato);
+  alog("gepresent v13.11 (v11.3 + banco de nucleos + capturador de la etapa 2 con registros de la fase de analisis y compuerta antes de encolar, memoria de sublistas con estadisticas compactas, espejo doble de la VRAM, T4/T6 y vida de los datos, activo con GePatch en modo sombra) compilado %s %s (dato %d)\n", __DATE__, __TIME__, dato);
   SceIoStat bst;  // v11.2: con el banco no se reserva el anillo de volcados (24 MB que el banco necesita)
   if (sceIoGetstat("ux0:data/gepresent/banco_v12", &bst) < 0 && sceIoGetstat("ux0:data/gepresent/banco_nucleos", &bst) < 0)
     ringInit();  // (v13.7: tampoco con el banco de nucleos)
