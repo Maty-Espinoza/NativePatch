@@ -23,6 +23,11 @@
 // "vida de los datos" (ver smpAdd): cuantos vertices, indices, texturas y paletas cambian 1 y 2 frames despues de leerlos.
 // v13.6: con GePatch dev64, espejo doble (ver "Espejo de la VRAM"): cada lista lee una copia que el GE no esta
 // sobrescribiendo; los destinos de copias de bloque (TRANSFER) en la VRAM cuentan como destinos de dibujo.
+// v13.9 (fase de analisis, con GePatch dev65): por que todavia le cuesta al juego. ge_patch_frames.log: una linea por
+// frame con lo que le costo al PSP (EV_FRAME: compuerta, espera al GE, CPU libre, espejo, ganchos) y lo que hizo la Vita.
+// ge_patch_tarde.log: cada sync en que la Vita iba atrasada, con los tiempos de la lista esperada (ver "Atrasos").
+// Interruptores (ux0:data/gepresent/, se apagan con "no" adentro): sin_compuerta, sin_espejo, sin_libre (los aplica GePatch,
+// SB[0x4A]) y sin_captura (la Vita no recorre nada: solo marca las listas como capturadas).
 #include <psp2/kernel/threadmgr.h>
 #include <psp2/kernel/clib.h>
 #include <psp2/kernel/processmgr.h>
@@ -37,7 +42,7 @@
 #define SB_MAGIC 0x424D4F53u
 #define SB_N 4096
 #define LOGC "ux0:pspemu/ge_patch_captura.log"
-enum { EV_ENQ = 1, EV_HEAD, EV_STALL, EV_DSYNC, EV_LSYNC, EV_FLIP, EV_GEFIN, EV_SYNCEND, EV_CPU, EV_CPUSUM };  // (7-10: GePatch dev63)
+enum { EV_ENQ = 1, EV_HEAD, EV_STALL, EV_DSYNC, EV_LSYNC, EV_FLIP, EV_GEFIN, EV_SYNCEND, EV_CPU, EV_CPUSUM, EV_FRAME, EV_VIDA };  // (7-10: GePatch dev63; 11: dev65; 12: dev65.2)
 static inline uint32_t now(void) { return sceKernelGetProcessTimeLow(); }
 
 // --- Estadisticas (por segundo) ---
@@ -54,10 +59,19 @@ typedef struct {
   uint32_t memo_pre, lv_lines, lv_ok, lv_bad, lv_late;  // v13.4: aplicadas con la comprobacion de los lectores; lo que hicieron los lectores
   uint32_t ge_us, ge_runs, ge_max, ge_stall, ge_n, sy_n, sy_us, sy_wait, sy_busy;  // v13.5, T6: GE del PSP y esperas del juego al GE
   uint32_t dc_n, dc_kb, dm_n, dm_kb, cpu_drop, cpu_vram, dc_all;                   // v13.5, T4: escrituras de la CPU del juego
+  uint32_t pf_n, pf_us, pf_gate, pf_gate_n, pf_nowait, pf_sync, pf_spin, pf_esp, pf_pg, pf_post, pf_late, pf_late_us;  // v13.9: EV_FRAME y atrasos
+  uint32_t rd_us, rd_n;  // v13.9: lecturas propias del capturador cronometradas (1 de 16)
+  uint32_t hit_us, hit_n;  // v13.9.4: lineas de la cache compartida cronometradas (1 de 8)
   uint32_t chg[256];  // cambios reales de cada registro "otro" (que impide juntar draws)
 } Stats;
 static Stats acc, rep;
 static volatile int rep_ready;
+// v13.9.5: nivel de registro (ux0:data/gepresent/registro: "minimo", "mediano" o "extremo"; sin archivo: mediano). GePatch lo
+// lee en SB[0x4E]. minimo (para publicar): una linea cada 10 s, sin revision de la memoria de sublistas. mediano (desarrollo):
+// lo de siempre por segundo + revision 1/32 + costo por frame para el juego (EV_FRAME, CPU libre del PSP). extremo (analisis):
+// ademas ge_patch_frames.log, ge_patch_tarde.log, vida de la lista y de los datos, tiempos de lectura y de la memoria,
+// muestreo del espejo y escrituras de la CPU del juego (T4). Ver docs/registros.md.
+static uint32_t nivel = 1;
 static uint32_t f_cmds, f_draws, f_us;  // del frame en curso
 
 // --- Lectura de la RAM del PSP ---
@@ -125,6 +139,9 @@ static void markRt(uint32_t a, uint32_t n) {  // destino de dibujo: no se pide c
 
 typedef struct { uint32_t buf[64] __attribute__((aligned(16))); uint32_t a, n, own, hits; } Rd;  // ultimos bytes leidos
 static Rd R0, RR[2];  // capturador y lectores
+static uint32_t tm_memo, tm_apply;  // (v13.9.4) us del frame en memoTry (todo) y en aplicar lo guardado
+static uint32_t runClk(SceUID t);
+static SceUID cap_uid;
 #define CL_N 8192     // lineas de 64 bytes en la cache compartida (512 KB)
 #define CL_BUSY 0xFFFFFFFEu
 static uint32_t *cl_data;
@@ -172,9 +189,12 @@ static uint32_t rdc(Rd *r, uint32_t a, uint32_t ord) {
   if (a - r->a < r->n) return r->buf[(a - r->a) >> 2];
   uint32_t b = a & ~63u, e = ramEnd(a);
   if (b + 64 > e) return *(volatile uint32_t *)PSP(a);  // (final de un tramo)
-  if (clGet(b, ord, r->buf)) { r->a = b; r->n = 64; r->hits++; return r->buf[(a - b) >> 2]; }
+  uint32_t th = nivel >= 2 && r == &R0 && !(r->hits & 7) ? now() : 0;  // (v13.9.4) 1 de cada 8 lineas de la cache compartida, cronometrada
+  if (clGet(b, ord, r->buf)) { r->a = b; r->n = 64; r->hits++; if (th) { acc.hit_us += now() - th; acc.hit_n++; } return r->buf[(a - b) >> 2]; }
   uint32_t n = b + 256 <= e ? 256 : 64;
+  uint32_t t = nivel >= 2 && r == &R0 && !(r->own & 15) ? now() : 0;  // (v13.9) 1 de cada 16 lecturas del capturador, cronometrada
   if (n == 256) neon256(r->buf, b); else neon64(r->buf, b);
+  if (t) { acc.rd_us += now() - t; acc.rd_n++; }
   r->a = b; r->n = n; r->own++;
   for (uint32_t k = 0; k < n; k += 64) clPut(b + k, ord, r->buf + k / 4);
   return r->buf[(a - b) >> 2];
@@ -242,7 +262,7 @@ static const uint8_t smp_rate[4] = { 63, 63, 7, 15 }, smp_max[4] = { 8, 4, 4, 4 
 static uint32_t smpHash(uint32_t a, uint32_t n);
 static void ltFlip(void);
 static void smpAdd(uint32_t a, uint32_t n, uint32_t kind) {  // 0 vertices, 1 indices, 2 textura, 3 paleta
-  if ((++smp_k[kind] & smp_rate[kind]) || !n || smp_f[kind] >= smp_max[kind] || isVram(a) ||
+  if (nivel < 2 || (++smp_k[kind] & smp_rate[kind]) || !n || smp_f[kind] >= smp_max[kind] || isVram(a) ||
       ramEnd(a) < a + (n > 256 ? 256 : n) || smp_w - smp_r >= SMP_N) return;
   Smp *x = &smp[smp_w & (SMP_N - 1)];
   x->a = a; x->n = n > 256 ? 256 : n; x->kind = kind; x->g = gen; x->t0 = now(); x->h0 = smpHash(x->a, x->n); x->st = 0;
@@ -314,13 +334,15 @@ static void draw(uint32_t d) {
 }
 
 // --- Listas en cola (como el GE: una a la vez, en orden) ---
-typedef struct { uint32_t pc, stall, qid, ord, off, sp, stk[32][2], prev, n, ncall; } List;
+typedef struct { uint32_t pc, stall, qid, ord, off, sp, stk[32][2], prev, n, ncall, t_enq, t_stall, t_seen, t_start, work, own0, hit0, memo0, ahead, lo, hi, nsub, subs[16], cpu0; } List;  // (v13.9: t_enq/t_stall hora del PSP, t_seen/t_start de la Vita)
 #define LIST_MAX 400000  // comandos: mas que eso es una lista que el juego ya reescribio (la Vita iba atrasada)
 static List q[64];
 static uint32_t qh, qt;  // la primera sin terminar y la siguiente libre
 static inline uint32_t rel(List *l, uint32_t d) { return ((((reg[0x10] & 0x0F0000) << 8) | d) + l->off) & 0x0FFFFFFF; }
 
 static void clog(const char *fmt, ...);
+static void rput(int k, const char *fmt, ...);  // (v13.9) 0: ge_patch_frames.log, 1: ge_patch_tarde.log
+static uint32_t sin_captura, gp_flags;           // (v13.9) interruptores
 typedef struct { uint32_t reg[256], mtx[5][96], mi[5], v[8]; } GeState;
 static GeState g_tmp;
 static void stSave(GeState *g) {
@@ -428,6 +450,8 @@ static void recEnd(List *l) {
   d->memo_pre = d->lv_lines = d->lv_ok = d->lv_bad = d->lv_late = 0;
   d->ge_us = d->ge_runs = d->ge_max = d->ge_stall = d->ge_n = d->sy_n = d->sy_us = d->sy_wait = d->sy_busy = 0;
   d->dc_n = d->dc_kb = d->dm_n = d->dm_kb = d->cpu_drop = d->cpu_vram = d->dc_all = 0;
+  d->hit_us = d->hit_n = 0;
+  d->pf_n = d->pf_us = d->pf_gate = d->pf_gate_n = d->pf_nowait = d->pf_sync = d->pf_spin = d->pf_esp = d->pf_pg = d->pf_post = d->pf_late = d->pf_late_us = d->rd_us = d->rd_n = 0;
   for (int c = 0; c < 256; c++)
     if (rec_touch[c >> 5] >> (c & 31) & 1) {
       if (e->nreg >= MRG) { e->state = 2; e->fail_gen = gen; return; }
@@ -538,11 +562,12 @@ static int memoTry(List *l, uint32_t t) {
   TM();
 ok:;
   static uint32_t nchk;
-  if (memo_chk || !(++nchk & 31)) {  // revision (1 de cada 32, o todas): se calcula lo guardado y se recorre igual para comparar
+  if (memo_chk || (nivel && !(++nchk & 31))) {  // revision (1 de cada 32, o todas): se calcula lo guardado y se recorre igual para comparar
     stSave(&g_tmp); memoApply(e); stSave(&g_memo); stLoad(&g_tmp);
     chk = e; acc.memo_chk++;
     return -1;
   }
+  uint32_t ta = nivel >= 2 ? now() : 0;  // (v13.9.4)
   if (e->sv_n) smpAdd(e->sv_rel ? vaddr + e->sv_a : e->sv_a, e->sv_n, 0);  // (antes de memoApply: vaddr de entrada)
   memoApply(e);
   for (uint32_t i = 0; i < e->ntex; i++) if (texAdd(e->tex[i])) { acc.textures++; if (isVram(e->tex[i])) acc.tex_vram++; else smpAdd(e->tex[i], 256, 2); }
@@ -551,6 +576,7 @@ ok:;
   Stats *d = (Stats *)e->d;
   f_cmds += d->cmds; f_draws += d->draws; l->n += d->cmds;
   acc.memo_hit++; acc.memo_cmds += d->cmds;
+  if (ta) tm_apply += now() - ta;
   return 1;
 }
 static void chkEnd(void) {  // revision: el recorrido debe dejar lo mismo que lo guardado
@@ -607,6 +633,7 @@ static int walkList(List *l) {
     }
     uint32_t op = rdc(&R0, ra, l->ord), c = op >> 24, d = op & 0xFFFFFF, prev = l->prev;
     if (++l->n > LIST_MAX) { acc.aborted++; return 1; }
+    if (!l->sp && !isVram(pc)) { if (pc < l->lo) l->lo = pc; if (pc > l->hi) l->hi = pc; }  // (v13.9.2) memoria del nivel de arriba
     l->pc += 4; l->prev = op; acc.cmds++; f_cmds++;
     if (rec && (ra & ~63u) != rec_last) recLine(ra & ~63u);
 #define TOUCH(c) if (rec) rec_touch[(c) >> 5] |= 1u << ((c) & 31)
@@ -630,9 +657,12 @@ static int walkList(List *l) {
       if (c == 0x0A) {
         if (l->sp >= 32) { acc.bad++; return 1; }
         acc.calls_ram++;
+        if (!l->sp && l->nsub < 16 && !(l->ncall & 7) && !isVram(t)) l->subs[l->nsub++] = t;  // (v13.9.2) muestra para la vida de la lista
         if (!l->sp) claimSet(l->ncall++, l->ord);
         if (!l->sp && memo_on && !rec && !chk) {  // sublista del nivel de arriba: memoria (v12.12)
+          uint32_t tq = nivel >= 2 ? now() : 0;
           int r = memoTry(l, t);
+          if (tq) tm_memo += now() - tq;
           if (r > 0) break;  // aplicada: se sigue despues del CALL
           if (r == 0) recBegin(l, t);
         }
@@ -689,7 +719,110 @@ static int walkList(List *l) {
 }
 
 static uint32_t capt;  // numero de orden de la ultima lista capturada
+
+// --- Atrasos (v13.9) ---
+// Cada sync en que la Vita iba atrasada (la lista que el juego espera termino de capturarse despues de que el juego llego
+// al sync) va a ge_patch_tarde.log con de donde salio la demora: cuando el juego encolo la lista y cuando la termino de
+// escribir (ultimo stall), cuando la Vita empezo a recorrerla, cuanto tardo y cuanto de eso trabajo. Las horas de la Vita
+// se pasan a horas del PSP con off: la diferencia minima (en el ultimo segundo) entre la hora de la Vita al leer un evento
+// y la que le puso el PSP (lo que tarda un evento en llegar con el capturador libre, decenas de us).
+typedef struct { uint32_t ord, qid, cmds, t_enq, t_stall, t_start, t_end, work, own, hit, memo, ahead, cpu; } Done;
+static Done done[64];
+static uint32_t off, off_min = ~0u, off_ok;
+static struct { uint32_t ord, t0, w, kind; } pend[16];
+static uint32_t npend;
+static inline uint32_t v2p(uint32_t t) { return t - off; }  // hora de la Vita -> hora del PSP
+static void lateRec(uint32_t t0, uint32_t w, uint32_t kind, Done *d) {
+  int late = (int)(v2p(d->t_end) - t0);
+  if (late <= 0 && !w) return;  // llego a tiempo
+  acc.pf_late++; if (late > 0) acc.pf_late_us += late;
+  rput(1, "%u,%c,%u,%u,%d,%u,%u,%d,%d,%d,%d,%u,%u,%u,%u,%u\n", now() / 1000, kind, w, d->ord, late, d->cmds, d->ahead, (int)(t0 - d->t_enq),
+       (int)(t0 - d->t_stall), (int)(v2p(d->t_start) - d->t_enq), (int)(d->t_end - d->t_start), d->work, d->own, d->hit, d->memo, d->cpu);
+}
+static void syncSeen(uint32_t ord, uint32_t t0, uint32_t w, uint32_t kind) {  // el juego llamo al sync esperando la lista ord
+  if (nivel < 2 || !ord || sin_captura || !off_ok) return;
+  if ((int)(capt - ord) >= 0) { if (done[ord & 63].ord == ord) lateRec(t0, w, kind, &done[ord & 63]); return; }
+  if (npend < 16) { pend[npend].ord = ord; pend[npend].t0 = t0; pend[npend].w = w; pend[npend++].kind = kind; }
+}
+// (v13.9.2) Vida de la lista: hoy la compuerta hace esperar al juego hasta que la Vita leyo la lista del frame. Si el
+// juego no reescribe esa memoria durante el frame siguiente (listas en dos bufferes), la Vita podria tener un frame mas.
+// Muestra: 16 lineas repartidas en la memoria del nivel de arriba de la lista mas grande del frame y la primera linea de
+// hasta 16 de sus sublistas (1 de cada 8 CALL); huella al terminar de capturarla y otra vez en el flip de su frame y en el
+// siguiente (si no cambio en el siguiente, la Vita podria leerla hasta el sync del frame que viene).
+typedef struct { uint32_t a[32], h[32], n, ntop, g, st, sq, ord, seen; } Life;
+static Life life[4];
+static uint32_t lf_ord_cmds, lf_n[2], lf_top[2], lf_sub[2];  // (acumulados) muestras revisadas 1 y 2 flips despues, con cambios
+static uint32_t lineHash(uint32_t a) {
+  uint32_t b[16] __attribute__((aligned(16))), h = 2166136261u;
+  neon64(b, a);
+  for (int i = 0; i < 16; i++) h = (h ^ b[i]) * 16777619u;
+  return h;
+}
+static void lifeTake(List *l) {  // al terminar de capturar la lista mas grande del frame
+  Life *x = &life[gen & 3];
+  if (x->g == gen && l->n < lf_ord_cmds) return;
+  lf_ord_cmds = l->n;
+  x->n = x->ntop = 0; x->g = gen; x->st = 0;
+  if (l->lo < l->hi && ramEnd(l->lo) >= l->hi + 64)
+    for (int k = 0; k < 16; k++) x->a[x->n++] = (l->lo + (l->hi - l->lo) / 15 * k) & ~63u;
+  x->ntop = x->n;
+  for (uint32_t k = 0; k < l->nsub; k++) if (ramEnd(l->subs[k]) >= (l->subs[k] & ~63u) + 64) x->a[x->n++] = l->subs[k] & ~63u;
+  for (uint32_t k = 0; k < x->n; k++) x->h[k] = lineHash(x->a[k]);
+  if (SB[1] >= 5) {  // (v13.9.3) la muestra para GePatch dev65.2: la revisa antes de cada encolado y en cada sync (EV_VIDA)
+    static uint32_t vseq;
+    SB[0x50] = 0; __sync_synchronize();
+    for (uint32_t k = 0; k < x->n; k++) { SB[0x60 + k] = x->a[k]; SB[0x80 + k] = x->h[k]; }
+    SB[0x51] = x->n; SB[0x52] = x->ntop; __sync_synchronize();
+    x->sq = ++vseq; x->ord = l->ord; x->seen = 0;
+    SB[0x50] = x->sq;
+  }
+}
+// (v13.9.3) respuestas de GePatch: por tipo (0 antes de encolar, 1 drawsync, 2 listsync) y por cuantas listas se encolaron
+// despues de la de la muestra (0, 1, 2; el chequeo del encolado es antes de encolar: 0 = antes de encolar la siguiente): revisadas y con cambios en el nivel de arriba / en las sublistas (la primera de cada una)
+static uint32_t vd[3][3][3];
+static struct { uint32_t n, sum, max, t_sync; } gap;  // del sync al encolado siguiente (hora del PSP)
+static void vidaEv(uint32_t kind, uint32_t sq, uint32_t b, uint32_t ord) {
+  for (int j = 0; j < 4; j++) {
+    Life *x = &life[j];
+    if (x->sq != sq || kind > 2) continue;
+    uint32_t d = ord - x->ord, bit = 1u << (kind * 3 + d);
+    if (d > 2 || x->seen & bit) return;
+    x->seen |= bit;
+    vd[kind][d][0]++; vd[kind][d][1] += (b & 0xFF) != 0; vd[kind][d][2] += (b >> 8) != 0;
+    return;
+  }
+}
+static void lifeFlip(void) {  // en cada flip (antes de gen++): las muestras de 1 y 2 frames atras
+  for (int j = 0; j < 4; j++) {
+    Life *x = &life[j];
+    uint32_t df = gen - x->g;
+    if (!x->n || (df != 0 && df != 1) || x->st > df) continue;  // (df 0: el flip que cierra su frame = "1 frame despues" del sync)
+    int top = 0, sub = 0;
+    for (uint32_t k = 0; k < x->n; k++) if (lineHash(x->a[k]) != x->h[k]) { if (k < x->ntop) top = 1; else sub = 1; }
+    lf_n[df]++; lf_top[df] += top; lf_sub[df] += sub; x->st = df + 1;
+  }
+}
+static void listDone(List *l) {
+  if (nivel >= 2) lifeTake(l);
+  Done *d = &done[l->ord & 63];
+  d->ord = l->ord; d->qid = l->qid; d->cmds = l->n; d->t_enq = l->t_enq; d->t_stall = l->t_stall; d->t_start = l->t_start;
+  d->t_end = now(); d->work = l->work; d->own = R0.own - l->own0; d->hit = R0.hits - l->hit0; d->ahead = l->ahead;
+  d->memo = acc.memo_hit >= l->memo0 ? acc.memo_hit - l->memo0 : acc.memo_hit; d->cpu = nivel >= 2 ? runClk(cap_uid) - l->cpu0 : 0;
+  for (uint32_t i = 0; i < npend;)
+    if ((int)(pend[i].ord - l->ord) <= 0) {
+      if (pend[i].ord == l->ord) lateRec(pend[i].t0, pend[i].w, pend[i].kind, d);
+      pend[i] = pend[--npend];
+    } else i++;
+}
+static uint32_t lastOrdOf(uint32_t qid) {  // la ultima lista encolada con ese qid (lo que espera sceGeListSync)
+  uint32_t o = 0;
+  for (int i = 0; i < 64; i++) if (done[i].qid == qid && (int)(done[i].ord - o) > 0) o = done[i].ord;
+  for (uint32_t i = qh; i != qt; i++) if (q[i & 63].qid == qid && (int)(q[i & 63].ord - o) > 0) o = q[i & 63].ord;
+  return o;
+}
+
 static void walk(void) {
+  if (sin_captura) { while (qh != qt) { capt = q[qh & 63].ord; qh++; acc.lists++; } SB[3] = capt; return; }  // (v13.9)
   while (qh != qt) {
     List *l = &q[qh & 63];
     R0.n = 0;  // lo que se leyo despues del stall anterior puede haber cambiado
@@ -703,9 +836,14 @@ static void walk(void) {
       pub_ord = l->ord;
       recAbort(); chk = NULL;  // (lo que quedo a medias de la lista anterior)
     }
-    if (!walkList(l)) return;
+    if (!l->t_start) { l->t_start = now() | 1; l->own0 = R0.own; l->hit0 = R0.hits; l->memo0 = acc.memo_hit; l->cpu0 = nivel >= 2 ? runClk(cap_uid) : 0; }
+    uint32_t tw = now();
+    int fin = walkList(l);
+    l->work += now() - tw;
+    if (!fin) return;
     recAbort(); chk = NULL;  // la lista termino dentro de una sublista (END, salto a la VRAM...): no se guarda
     capt = l->ord; SB[3] = capt; qh++; acc.lists++;
+    listDone(l);
   }
 }
 
@@ -715,6 +853,7 @@ static void resetQueue(void) {
 }
 
 static uint32_t tail, beat, sec_t0;
+static uint32_t pfr[8], lc, s_own, s_hit, s_memo, s_pre, s_late;  // (v13.9) EV_FRAME del frame en curso; ultimos valores de la linea por frame
 // v12.10: tiempo de procesador de cada hilo (runClocks, us) para separar "nucleo compartido" de "trabajo por comando"
 #define EMU_N 256
 extern SceUID emu_th[EMU_N]; extern int emu_aff[EMU_N], emu_n;  // hilos del emulador (gepresent.c, gancho de CreateThread)
@@ -737,27 +876,34 @@ static void cpuSample(void) {  // diferencias desde el segundo anterior
   }
 }
 static void event(volatile uint32_t *e) {
-  uint32_t t = e[0] & 0xFF, a = e[1], b = e[2], c = e[3];
+  uint32_t t = e[0] & 0xFF, a = e[1], b = e[2], c = e[3], d0 = now() - e[4];
   acc.events++;
+  if (d0 < off_min) off_min = d0;  // (v13.9) diferencia de relojes Vita - PSP
+  if (!off_ok) { off = d0; off_ok = 1; }
   if (t == EV_ENQ || t == EV_HEAD) {
     if (qt - qh >= 64) { acc.resyncs++; resetQueue(); }
     if (t == EV_HEAD) qh--;
     List *l = &q[(t == EV_HEAD ? qh : qt++) & 63];
     sceClibMemset(l, 0, sizeof *l);
     l->pc = a & 0x0FFFFFFC; l->stall = b & 0x0FFFFFFF; l->qid = c; l->ord = e[5];
+    l->t_enq = l->t_stall = e[4]; l->t_seen = now(); l->ahead = qt - qh - 1; l->lo = ~0u;
+    if (gap.t_sync) { uint32_t g = e[4] - gap.t_sync; if (g < 100000) { gap.n++; gap.sum += g; if (g > gap.max) gap.max = g; } gap.t_sync = 0; }
   } else if (t == EV_STALL) {
     acc.stalls++;
     for (uint32_t i = qt; i != qh; i--)
       if (q[(i - 1) & 63].qid == a) {
-        q[(i - 1) & 63].stall = b & 0x0FFFFFFF;
+        q[(i - 1) & 63].stall = b & 0x0FFFFFFF; q[(i - 1) & 63].t_stall = e[4];
         if (q[(i - 1) & 63].ord == pub_ord) pub_stall = b & 0x0FFFFFFF;
         break;
       }
   } else if (t == EV_DSYNC) {
+    syncSeen(c, e[4] - (a & ~1u), a & ~1u, 'd');
+    gap.t_sync = e[4];  // (v13.9.3) despues de la compuerta; la espera al GE va despues  // (v13.9) c: la ultima lista encolada; e[4]: despues de la compuerta
     acc.syncs++;
     if (a) { acc.syncs_waited++; acc.sync_wait_us += a & ~1u; }
     if (qh != qt) acc.behind++;
   } else if (t == EV_LSYNC) {
+    syncSeen(lastOrdOf(a), e[4] - (b & ~1u), b & ~1u, 'l');
     acc.lsyncs++;
   } else if (t == EV_GEFIN) {  // T6: tramo ocupado del GE del PSP (a = inicio, hora del evento = fin)
     uint32_t dt = e[4] - a;
@@ -775,16 +921,36 @@ static void event(volatile uint32_t *e) {
     }
   } else if (t == EV_CPUSUM) {  // T4: totales del frame
     acc.dc_n += b; acc.dc_kb += c; acc.dm_n += e[3] & 0xFFFF; acc.dm_kb += e[3] >> 16; acc.cpu_drop += e[0] >> 8;
+  } else if (t == EV_VIDA) {  // (v13.9.3)
+    vidaEv(e[0] >> 8 & 0xFF, a, b, c);
+  } else if (t == EV_FRAME) {  // (v13.9, GePatch dev65) lo que le costo el frame al juego
+    uint32_t x[7] = { a, b, e[0] >> 8 & 0xFF, e[0] >> 16 & 0xFF, c, e[5], e[7] };
+    sceClibMemcpy(pfr, x, sizeof x); pfr[7] = e[6];
+    acc.pf_n++; acc.pf_us += a; acc.pf_gate += b; acc.pf_gate_n += x[2]; acc.pf_nowait += x[3]; acc.pf_sync += c; acc.pf_spin += e[5];
+    acc.pf_esp += e[6] & 0xFFFF; acc.pf_pg += e[6] >> 16; acc.pf_post += e[7];
   } else if (t == EV_FLIP) {
     uint32_t t0 = now(), c0 = acc.cmds;  // lo encolado antes del flip se recorre antes de cerrar el frame
     walk();
     if (acc.cmds != c0) { uint32_t dt = now() - t0; acc.us += dt; f_us += dt; }
+    if (nivel >= 2) {  // (v13.9) una linea por frame en ge_patch_frames.log (extremo)
+      uint32_t cc = runClk(cap_uid), cal = SB[0x4D], fus = pfr[0] ? pfr[0] : 1;
+      uint32_t lib = cal ? (uint32_t)((unsigned long long)pfr[5] * 1000000 / cal / fus) : 0;  // CPU libre del PSP, por mil
+      rput(0, "%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%08x,%u,%u,%u\n", now() / 1000, pfr[0], pfr[1], pfr[2], pfr[3], pfr[4], lib,
+           pfr[7] & 0xFFFF, pfr[7] >> 16, pfr[6], f_cmds, f_draws, f_us, cc - lc, acc.memo_hit - s_memo, acc.memo_pre - s_pre,
+           R0.own - s_own, R0.hits - s_hit, qt - qh, acc.pf_late - s_late, life[gen & 3].g == gen ? life[gen & 3].a[0] : 0,
+           life[gen & 3].g == gen && life[gen & 3].ntop ? (life[gen & 3].a[15] - life[gen & 3].a[0]) >> 10 : 0, tm_memo, tm_apply);
+      tm_memo = tm_apply = 0;
+      lc = cc; s_own = R0.own; s_hit = R0.hits; s_memo = acc.memo_hit; s_pre = acc.memo_pre; s_late = acc.pf_late;
+    }
+    sceClibMemset(pfr, 0, sizeof pfr);
     acc.frames++;
     if (qh != qt) acc.flips_behind++;
     if (f_cmds > acc.cmds_max) acc.cmds_max = f_cmds;
     if (f_draws > acc.draws_max) acc.draws_max = f_draws;
     if (f_us > acc.us_max) acc.us_max = f_us;
     f_cmds = f_draws = f_us = 0;
+    if (nivel >= 2) lifeFlip();
+    lf_ord_cmds = 0;
     gen++; ntex = 0;
     for (int k = 0; k < 4; k++) smp_f[k] = 0;
     ltFlip();
@@ -796,10 +962,12 @@ static void event(volatile uint32_t *e) {
       acc.lv_lines = cur[4] - last[4]; acc.lv_ok = cur[5] - last[5]; acc.lv_bad = cur[6] - last[6]; acc.lv_late = cur[7] - last[7];
       for (int k = 0; k < 8; k++) last[k] = cur[k];
       acc.t0 = n - sec_t0;
-      cpuSample();
+      if (nivel) cpuSample();
+      if (off_min != ~0u) { off = off_min; off_min = ~0u; }  // (v13.9) reloj: el minimo del ultimo segundo
       if (!rep_ready) { rep = acc; rep_ready = 1; }
       if (rec) { uint32_t *a = (uint32_t *)&acc; for (int i = 0; i < SW; i++) rec_acc0[i] -= a[i]; }  // (v12.13) grabando: que la diferencia siga valiendo
       sceClibMemset(&acc, 0, sizeof acc);
+      s_memo = s_pre = s_late = 0;  // (v13.9: acc empieza de nuevo)
       sec_t0 = n;
     }
   }
@@ -850,16 +1018,45 @@ static void clog(const char *fmt, ...) {
   if (lpos + n > sizeof lbuf) return;
   sceClibMemcpy(lbuf + lpos, b, n); lpos += n;
 }
+// (v13.9) ge_patch_frames.log y ge_patch_tarde.log: anillos de un solo escritor (el capturador); el hilo del log los vacia
+static char rb0[65536], rb1[16384];
+static struct { char *b; uint32_t n; volatile uint32_t w, r; const char *path; } RG[2] = {
+  { rb0, sizeof rb0, 0, 0, "ux0:pspemu/ge_patch_frames.log" }, { rb1, sizeof rb1, 0, 0, "ux0:pspemu/ge_patch_tarde.log" } };
+static void rput(int k, const char *fmt, ...) {
+  char b[384];
+  va_list ap; va_start(ap, fmt);
+  int n = sceClibVsnprintf(b, sizeof b, fmt, ap); va_end(ap);
+  if (n > (int)sizeof b - 1) n = sizeof b - 1;
+  if (n <= 0 || RG[k].w - RG[k].r + n > RG[k].n) return;  // (lleno: se pierde la linea)
+  for (int i = 0; i < n; i++) RG[k].b[(RG[k].w + i) % RG[k].n] = b[i];
+  __sync_synchronize();
+  RG[k].w += n;
+}
+static void rflush(int k) {
+  uint32_t w = RG[k].w, r = RG[k].r;
+  if (w == r) return;
+  SceUID fd = sceIoOpen(RG[k].path, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_APPEND, 0666);
+  if (fd >= 0) {
+    uint32_t a = r % RG[k].n, n = w - r, m = RG[k].n - a < n ? RG[k].n - a : n;
+    sceIoWrite(fd, RG[k].b + a, m);
+    if (n > m) sceIoWrite(fd, RG[k].b, n - m);
+    sceIoClose(fd);
+  }
+  RG[k].r = w;
+}
 #define PF(x) (r->x / f)
 static int repThread(SceSize args, void *argp) {
   uint32_t last_write = 0;
   for (;;) {
     sceKernelDelayThread(200000);
+    static uint32_t nrep;
+    if (rep_ready && !nivel && ++nrep % 10) rep_ready = 0;  // (v13.9.5) minimo: 1 de cada 10 segundos
     if (rep_ready) {
       Stats *r = &rep;
       uint32_t f = r->frames ? r->frames : 1, d = r->draws ? r->draws : 1;
       clog("seg: frames=%u listas/f=%u comandos/f=%u (max %u) draws/f=%u (max %u) | ARM us/f=%u (max %u) ns/comando=%u | lecturas/f propias=%u de_lectores=%u (lectores leyeron %u+%u) eventos/f=%u\n",
            r->frames, PF(lists), PF(cmds), r->cmds_max, PF(draws), r->draws_max, PF(us), r->us_max, r->cmds ? (uint32_t)((unsigned long long)r->us * 1000 / r->cmds) : 0, PF(own), PF(hits), PF(rown[0]), PF(rown[1]), PF(events));
+      if (!nivel) goto sync;  // (minimo: solo esta linea y la de vram y sync)
       clog("  draws/f: 3d=%u 2d=%u clear=%u vacios=%u | tri=%u tira=%u abanico=%u rect=%u lineas=%u puntos=%u curvas=%u | vertices/f=%u\n",
            PF(d3d), PF(dthr), PF(dclear), PF(dempty), PF(prim[3]), PF(prim[4]), PF(prim[5]), PF(prim[6]), PF(prim[1]) + PF(prim[2]),
            PF(prim[0]), PF(curves), PF(verts));
@@ -880,9 +1077,11 @@ static int repThread(SceSize args, void *argp) {
       clog("  memoria/f: texturas=%u (en vram %u) draws_tex_vram=%u draws_vert_vram=%u | vertices=%u KB indices=%u KB | paletas=%u (vram %u) copias=%u (vram %u)\n",
            PF(textures), PF(tex_vram), PF(dtex_vram), PF(dvert_vram), PF(vbytes) >> 10, PF(ibytes) >> 10, PF(cluts), PF(clut_vram),
            PF(transfers), PF(tr_vram));
+    sync:
       clog("  vram y sync (por seg): sublistas_vram=%u saltos_vram=%u listas_perdidas=%u abortadas=%u invalidas=%u signal=%u bjump=%u | drawsync=%u esperaron=%u (%u us c/u) atrasada_al_sync=%u atrasada_al_flip=%u listsync=%u reinicios=%u pausas=%u\n",
            r->vcalls, r->vjumps, r->lost, r->aborted, r->bad, r->signals, r->bjumps, r->syncs, r->syncs_waited,
            r->syncs_waited ? r->sync_wait_us / r->syncs_waited : 0, r->behind, r->flips_behind, r->lsyncs, r->resyncs, r->yields);
+      if (!nivel) goto fin;
       {  // espejo: paginas pedidas / validas (ahora) y lo del ultimo segundo
         static uint32_t lc, lp, lb, lv, le[8];
         uint32_t pl = 0, pd = 0, po0 = 0, po1 = 0, pr = 0, c = SB[0x44], pg = SB[0x45], bz = SB[0x46], vu = SB[0x49];
@@ -895,7 +1094,7 @@ static int repThread(SceSize args, void *argp) {
         if (esp_on) {
           clog("  espejo: paginas pedidas listas=%u datos=%u validas=%u/%u en_destinos=%u | por seg: copias=%u paginas_copiadas=%u (KB/f %u) ocupado=%u vita_usando=%u | sublistas_vram/f recorridas=%u cortadas=%u texturas_en_destino/f=%u\n",
                pl, pd, po0, po1, pr, c - lc, pg - lp, (pg - lp) * 4 / f, bz - lb, vu - lv, PF(v_ok), PF(v_cut), PF(tex_rt));
-          clog("  espejo (por seg): listas=%u con_la_copia_anterior=%u | muestreo: revisadas=%u nuevas=%u cambiaron listas=%u datos=%u hilo_us=%u\n",
+          if (nivel >= 2) clog("  espejo (por seg): listas=%u con_la_copia_anterior=%u | muestreo: revisadas=%u nuevas=%u cambiaron listas=%u datos=%u hilo_us=%u\n",
                x[5], x[6], x[0], x[1], x[2], x[3], x[4]);
         }
         lc = c; lp = pg; lb = bz; lv = vu;
@@ -910,7 +1109,7 @@ static int repThread(SceSize args, void *argp) {
       }
       top[k] = 0;
       clog("  cambios \"otro\" mas frecuentes (comando:por frame):%s\n", top);
-      if (SB[1] >= 3) {
+      if (SB[1] >= 3 && nivel >= 2) {
         clog("  T6 GE del PSP (por frame): ocupado=%u us en %u tramos (el mas largo %u us) en_stall=%u%% | sync/f=%u esperas_al_GE=%u (%u us c/u) GE_ocupado_al_llamar=%u | T4 CPU del juego (por frame): cache=%u (%u KB) dma=%u (%u KB) a_la_vram/seg=%u vaciar_todo/seg=%u sin_anotar/seg=%u\n",
              PF(ge_us), PF(ge_runs), r->ge_max, r->ge_n ? r->ge_stall * 100 / r->ge_n : 0, PF(sy_n), PF(sy_wait),
              r->sy_wait ? r->sy_us / r->sy_wait : 0, PF(sy_busy), PF(dc_n), PF(dc_kb), PF(dm_n), PF(dm_kb), r->cpu_vram, r->dc_all, r->cpu_drop);
@@ -924,8 +1123,26 @@ static int repThread(SceSize args, void *argp) {
              x[0], x[4], x[8], x[12], x[16], x[1], x[5], x[9], x[13], x[17], x[2], x[6], x[10], x[14], x[18], x[3], x[7], x[11], x[15], x[19],
              x[20] / nn / 10, x[21] / nn / 10, LT.ch2[0], LT.n[0], LT.ch2[2], LT.n[2]);
       }
+      if (r->pf_n) {  // (v13.9) lo que le costo cada frame al juego (GePatch dev65) y los syncs en que la Vita iba atrasada
+        uint32_t g = r->pf_n, cal = SB[0x4D], ms = r->pf_us / 1000 + 1;
+        clog("  impacto en el PSP (por frame del juego): frames=%u frame_us=%u CPU_libre=%u%% compuerta_us=%u (esperas/seg=%u sin_esperar/seg=%u) sync_GE_us=%u ganchos_us=%u espejo_us=%u paginas=%u | Vita atrasada: syncs/seg=%u atraso_us=%u c/u | lectura propia: %u us (%u cronometradas) | linea de la cache compartida: %u ns (%u)\n",
+             g, r->pf_us / g, cal ? r->pf_spin / cal * 100 / ms : 0, r->pf_gate / g, r->pf_gate_n, r->pf_nowait, r->pf_sync / g, r->pf_post / g,
+             r->pf_esp / g, r->pf_pg / g, r->pf_late, r->pf_late ? r->pf_late_us / r->pf_late : 0, r->rd_n ? r->rd_us / r->rd_n : 0, r->rd_n, r->hit_n ? r->hit_us * 1000 / r->hit_n : 0, r->hit_n);
+      }
+      if (nivel >= 2) {  // (v13.9.2) vida de la lista (acumulado desde el inicio)
+        clog("  vida de la lista (acumulado): revisadas en el flip de su frame=%u (cambio el nivel de arriba %u, sublistas %u) | en el flip siguiente=%u (%u, %u)\n",
+             lf_n[0], lf_top[0], lf_sub[0], lf_n[1], lf_top[1], lf_sub[1]);
+        clog("  vida de la lista segun GePatch (acumulado; revisadas, cambio arriba, cambio sublistas): drawsync de su frame %u %u %u | antes de encolar la siguiente %u %u %u | drawsync siguiente %u %u %u | antes de encolar la subsiguiente %u %u %u | listsync %u %u %u / %u %u %u | del drawsync al encolado siguiente: %u us (max %u)\n",
+             vd[1][0][0], vd[1][0][1], vd[1][0][2], vd[0][0][0], vd[0][0][1], vd[0][0][2], vd[1][1][0], vd[1][1][1], vd[1][1][2],
+             vd[0][1][0], vd[0][1][1], vd[0][1][2], vd[2][0][0], vd[2][0][1], vd[2][0][2], vd[2][1][0], vd[2][1][1], vd[2][1][2],
+             gap.n ? gap.sum / gap.n : 0, gap.max);
+        gap.n = gap.sum = gap.max = 0;
+      }
+    fin:
       rep_ready = 0;
     }
+    static uint32_t rg_t;  // (v13.9) los anillos: cada 2 s o si van por la mitad
+    if (RG[0].w - RG[0].r > RG[0].n / 2 || RG[1].w - RG[1].r > RG[1].n / 2 || now() - rg_t > 2000000) { rflush(0); rflush(1); rg_t = now(); }
     if (lpos && (now() - last_write > 5000000 || lpos > sizeof lbuf / 2)) {
       SceUID fd = sceIoOpen(LOGC, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_APPEND, 0666);
       uint32_t n = lpos;
@@ -957,6 +1174,7 @@ static int cwCovers(uint32_t a, uint32_t n, uint32_t t0) {  // escritura conocid
   return cw_all_t && (int)(cw_all_t - t0) >= 0 ? 2 : 0;
 }
 static void ltFlip(void) {  // (capturador, en cada flip) revisa las muestras de 1 y 2 frames atras
+  if (nivel < 2) return;
   for (uint32_t i = smp_r; i != smp_w; i++) {
     Smp *x = &smp[i & (SMP_N - 1)];
     uint32_t df = gen - x->g;
@@ -977,10 +1195,12 @@ static int espThread(SceSize args, void *argp) {  // (v13.6) huella de 4 paginas
   for (;;) {
     sceKernelDelayThread(5000);
     if (SB[0] == SB_MAGIC && SB[1] >= 3 && SB[0x47] != medir_ge) SB[0x47] = medir_ge;
+    if (SB[0] == SB_MAGIC && SB[1] >= 5 && SB[0x4A] != gp_flags) SB[0x4A] = gp_flags;  // (v13.9) interruptores para GePatch
+    if (SB[0] == SB_MAGIC && SB[1] >= 5 && SB[0x4E] != nivel) SB[0x4E] = nivel;         // (v13.9.5) nivel de registro
     if (esp_reset) { sceClibMemset(seen, 0, sizeof seen); sceClibMemset(hs, 0, sizeof hs); esp_reset = 0; }
     if (!esp_on) continue;
     uint32_t t0 = now(), done = SB[0x40];
-    for (uint32_t k = 0, m = 0; k < 512 && m < 4; k++) {
+    for (uint32_t k = 0, m = 0; k < 512 && m < 4 && nivel >= 2; k++) {  // (v13.9.5: solo en extremo)
       uint32_t p = rr = (rr + 1) & 511, w = p >> 5, b = 1u << (p & 31);
       if (!((want_l[w] | want_d[w]) & b)) continue;
       uint32_t s0 = CPY(0, p), s1 = CPY(1, p), sq = (int)(s1 - s0) > 0 && (int)(done - s1) >= 0 ? s1 : s0;  // la ultima terminada
@@ -1048,13 +1268,39 @@ static int lectorThread(SceSize args, void *argp) {
   return 0;
 }
 
+static int swOn(const char *p) {  // (v13.9) interruptor: el archivo existe y no empieza con "no" (el relevo no puede borrar)
+  char b[2] = { 0, 0 };
+  SceUID fd = sceIoOpen(p, SCE_O_RDONLY, 0);
+  if (fd < 0) return 0;
+  sceIoRead(fd, b, 2); sceIoClose(fd);
+  return !(b[0] == 'n' && b[1] == 'o');
+}
 void capturaStart(void) {
   SceIoStat st;
   sceIoRemove("ux0:pspemu/ge_patch_captura_prev.log");
   sceIoRename(LOGC, "ux0:pspemu/ge_patch_captura_prev.log");
   SceUID r = sceKernelCreateThread("gepresent_captura_log", repThread, 0xB0, 0x2000, 0, 0, NULL);  // primero: que
   if (r >= 0) sceKernelStartThread(r, 0, NULL);                                                      // quede el log
-  clog("gepresent v13.5: capturador de la etapa 2 con memoria de sublistas (comprobada por los lectores) y espejo de la VRAM\n");
+  {  // (v13.9.5) nivel de registro
+    char b[8] = { 0 };
+    SceUID fd = sceIoOpen("ux0:data/gepresent/registro", SCE_O_RDONLY, 0);
+    if (fd >= 0) { sceIoRead(fd, b, 7); sceIoClose(fd); nivel = b[0] == 'e' ? 2 : b[0] == 'm' && b[1] == 'i' ? 0 : 1; }
+  }
+  if (nivel >= 2) { uint32_t t0 = now(), x = 0; for (int i = 0; i < 10000; i++) x += now(); clog("(v13.9.4) costo de leer la hora: %u ns (%u)\n", (now() - t0) / 10, x & 1); }
+  clog("gepresent v13.9: capturador de la etapa 2 (memoria de sublistas, espejo de la VRAM) con registros de la fase de analisis\n");
+  static const char *rot[2][2] = { { "ux0:pspemu/ge_patch_frames.log", "ux0:pspemu/ge_patch_frames_prev.log" },
+                                   { "ux0:pspemu/ge_patch_tarde.log", "ux0:pspemu/ge_patch_tarde_prev.log" } };
+  for (int k = 0; k < 2; k++) { sceIoRemove(rot[k][1]); sceIoRename(rot[k][0], rot[k][1]); }
+  if (nivel >= 2) rput(0, "t_ms,frame_us,compuerta_us,esperas,sin_esperar,sync_GE_us,cpu_libre_x1000,espejo_us,espejo_paginas,ganchos_us,"
+          "comandos,draws,captura_us,captura_cpu_us,aplicadas,comprobadas_lectores,lecturas_propias,de_lectores,listas_pendientes,syncs_atrasados,"
+          "lista_dir,lista_kb,memoria_us,aplicar_us\n");
+  if (nivel >= 2) rput(1, "t_ms,tipo,espera_us,lista,atraso_us,comandos,listas_antes,encolada_hace_us,ultimo_stall_hace_us,vita_empezo_tras_us,"
+          "vita_recorrio_us,trabajo_us,lecturas_propias,de_lectores,aplicadas,procesador_us\n");
+  static const char *sw[3] = { "ux0:data/gepresent/sin_compuerta", "ux0:data/gepresent/sin_espejo", "ux0:data/gepresent/sin_libre" };
+  for (int k = 0; k < 3; k++) if (swOn(sw[k])) gp_flags |= 1u << k;
+  sin_captura = swOn("ux0:data/gepresent/sin_captura");
+  clog("registro: %s (ux0:data/gepresent/registro: minimo, mediano o extremo) | interruptores%s%s%s%s%s\n", nivel == 2 ? "extremo" : nivel ? "mediano" : "minimo", gp_flags & 1 ? " sin_compuerta" : "", gp_flags & 2 ? " sin_espejo" : "",
+       gp_flags & 4 ? " sin_libre" : "", sin_captura ? " sin_captura" : "", gp_flags || sin_captura ? "" : ": ninguno (todo normal)");
   for (uint32_t a = 0x08000000u; a < 0x0C000000u && nr < 4;) {  // tramos de la RAM del PSP mapeados en este proceso
     SceKernelMemBlockInfo in; in.size = sizeof in;
     int e = sceKernelGetMemBlockInfoByAddr((void *)PSP(a), &in);

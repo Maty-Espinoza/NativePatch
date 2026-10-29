@@ -8,6 +8,9 @@
 // mismas columnas que sin lectores; pre= cuenta las aplicadas con la comprobacion de un lector. Con 2 los lectores pasan
 // despues del capturador: se saltan todos los CALL del nivel de arriba (tarde=) sin leer lineas.
 // v13.5.2: VIDA=1 ./prueba 1 0 0 prueba la vida de los datos (muestras que cambian 1 o 2 flips despues; lineas "vida:").
+// v13.9.5: NIVEL=0|1|2 elige el nivel de registro (por defecto 2, extremo: vida de la lista y TARDE lo necesitan).
+// v13.9.2: al final, la vida de la lista (la lista principal cambia una textura en cada frame).
+// v13.9: TARDE=1 ./prueba 0 simula un sync atrasado (linea de ge_patch_tarde.log).
 // v13.6: espejo doble. El "GE" copia al final de cada frame f la copia f + 1 al espejo (f + 1) & 1; el frame siguiente la
 // usa (como el evento del flip). La sublista se escribe en los dos espejos.
 #include "captura.c"
@@ -76,6 +79,7 @@ static uint32_t stateSum(void) { uint32_t h = 0; for (int i = 0; i < 256; i++) h
 int main(int argc, char **argv) {
   setvbuf(stdout, NULL, _IONBF, 0); int mode = atoi(argv[1]);  // 0 sin memoria, 1 con memoria, 2 revisando todas
   vram = argc > 2 ? atoi(argv[2]) : 0; int lec = argc > 3 ? atoi(argv[3]) : 0;
+  nivel = getenv("NIVEL") ? atoi(getenv("NIVEL")) : 2;  // (v13.9.5) nivel de registro: extremo salvo NIVEL=0/1
   if (vram) { SUBS = 0x04100000u; esp_on = 1; }
   if (mmap((void *)0x70000000, 0x2000000, PROT_READ | PROT_WRITE, MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0) == MAP_FAILED) { perror("mmap"); return 1; }
   if (mmap((void *)0x72C00000, 0x200000, PROT_READ | PROT_WRITE, MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0) == MAP_FAILED) { perror("mmap3"); return 1; }
@@ -86,7 +90,7 @@ int main(int argc, char **argv) {
     build(f);
     esp_u = f;  // (v13.6) la copia hecha al final del frame anterior (en la Vita: la ultima terminada, al empezar la lista)
     sceClibMemset(&acc, 0, sizeof acc);
-    List *l = &q[qt++ & 63]; memset(l, 0, sizeof *l); l->pc = MAIN; l->ord = f + 1;
+    List *l = &q[qt++ & 63]; memset(l, 0, sizeof *l); l->pc = MAIN; l->ord = f + 1; l->lo = ~0u;
     if (lec == 1) {  // los lectores van adelante: recorren toda la lista (y comprueban lo guardado) antes que el capturador
       pub_stall = 0; pub_pc = MAIN; pub_base = reg[0x10]; pub_ord = l->ord;
       for (int id = 0; id < 2; id++) { Lec s; lecStart(&s, &RR[id]); while (!s.done) lecWalk(id, &s, 2000); }
@@ -110,7 +114,22 @@ int main(int argc, char **argv) {
            f, acc.cmds, acc.draws, acc.verts, acc.vbytes, acc.textures, acc.prim[3], acc.prim[4], acc.calls_ram, stateSum(),
            acc.memo_hit, acc.memo_miss, acc.memo_dep, acc.memo_fail, acc.memo_no, acc.memo_chk, acc.memo_bad, acc.memo_lines, acc.memo_cmds, acc.memo_pre,
            lv_lines[0] + lv_lines[1], lv_ok[0] + lv_ok[1], lv_bad[0] + lv_bad[1]); lv_lines[0] = lv_lines[1] = lv_ok[0] = lv_ok[1] = lv_bad[0] = lv_bad[1] = lv_late[0] = lv_late[1] = 0;
+    lifeFlip(); lf_ord_cmds = 0;  // (v13.9.2) como en el flip
     gen++; ntex = 0;
+  }
+  printf("vida de la lista: flip de su frame %u (arriba %u, sublistas %u) | flip siguiente %u (%u, %u) (esperado 8 (0, 0) | 7 (7, 0))\n", lf_n[0], lf_top[0], lf_sub[0], lf_n[1], lf_top[1], lf_sub[1]);
+  if (getenv("TARDE")) {  // v13.9: un sync que llega 100 us despues de encolar: la Vita va atrasada (linea en ge_patch_tarde)
+    build(0); qh = qt = 0; capt = 0;
+    uint32_t t = now() - 50, ev[8] = { EV_ENQ, MAIN, 0, 7, t, 99, 0, 0 };
+    event(ev);
+    uint32_t sy[8] = { EV_DSYNC, 0, 0, 99, t + 100, 0, 0, 0 };
+    event(sy);
+    printf("tarde: pendientes=%u (esperado 1)\n", npend);
+    walk();
+    printf("tarde: pendientes=%u capt=%u (esperado 0 99) atrasados=%u\n", npend, capt, acc.pf_late);
+    uint32_t sy2[8] = { EV_DSYNC, 0, 0, 99, now() + 5000, 0, 0, 0 };  // otro sync despues: a tiempo, sin linea
+    event(sy2);
+    RG[1].b[RG[1].w % RG[1].n] = 0; printf("tarde (log):\n%s", RG[1].b);
   }
   if (getenv("VIDA")) {  // v13.5.2: vida de los datos por frames. 8 muestras de vertices por frame (el tope)
     smp_r = smp_w; sceClibMemset((void *)&LT, 0, sizeof LT);  // (sin las muestras de los frames de arriba)
