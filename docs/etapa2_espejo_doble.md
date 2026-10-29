@@ -92,6 +92,15 @@ Logs: `vitabridge/etapa2_dev64.1/gt1`, `etapa2_dev64.2/gt1`, `etapa2_dev64.3/gt1
 - **DISTINTAS** (revisión de la memoria de sublistas, 1 de cada 32): 0 con dev64.1 (sin espejo), 1 / 4 / 7 con
   dev64.2 / .3 / .4 en ~50 000 revisadas por corrida (≈0,01 %); con v13.5 siempre 0. Causa sin investigar (`TODO.md`).
 
+### Confirmación con dev64 + v13.6 (2026-10-29, Windows) [medido]
+Logs `vitabridge/etapa2_dev64/gt1` y `sh1` (en el PC con Windows). Mismo código que dev64.5 + v13.6.5.
+- **GT** (una vuelta, con ~10 min de pausa en medio): 59,7–60 fps casi toda la vuelta; 55–58 fps ~3 s al comenzar
+  (~75 000 comandos, 15 000 draws por frame) y **48–56 fps los últimos ~12 s** (~80 000 comandos, 16 500 draws por
+  frame): la captura tarda ~17–19 ms por frame (ARM) y el juego la espera en el sync. Durante la pausa el espejo sigue
+  copiando ~548 KB por frame sin bajar los fps. DISTINTAS: 2 de 175 172 revisadas.
+- **SH:** el juego **nunca esperó a la Vita** (0 µs por sync); captura 4–15 ms por frame, 0 copias. Los fps (26–59
+  según la zona) son los del juego original. DISTINTAS: 0.
+
 ## Lo que falta / ideas
 1. Entender las pocas DISTINTAS con el espejo doble antes de dibujar (etapa 3).
 2. La Vita tendrá que repetir las copias de bloque (TRANSFER) a la VRAM y guardar el resultado (su propia VRAM): lo que se

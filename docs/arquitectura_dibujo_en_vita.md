@@ -21,6 +21,9 @@ descartada solo por complejidad) y la pone como arquitectura objetivo. GePatch a
   ~30 µs), la GPU leyendo la RAM del PSP (funciona, misma velocidad) y el presentador (funciona). Actualizó §5, §6 y §8.
 - Etapa 2 **en curso** (2026-10-28) → **`etapa2_avance.md`**: modo sombra (GePatch dev61, por defecto) + capturador en la
   Vita (gepresent v12.9). SH a velocidad original; GT a 55–60 fps salvo el puente (~30 ms de captura por frame).
+  Después: memoria de sublistas, espejo de la VRAM (doble desde v13.6), T4/T6 (`etapa2_*.md`). 2026-10-29 (v13.7):
+  grabación en varios núcleos medida con GT en carrera (`etapa2_nucleos.md`): **GT no entra grabando draw por draw**
+  (ver §5). Falta T2 (caja negra).
 
 ---
 
@@ -332,7 +335,10 @@ reproducir un frame paso a paso y conocer las reglas exactas del GE.
 - El trabajo se reparte en 2 hilos del ARM (captura y traducción) + la GPU, en tubería con 1 frame de atraso.
 - **Juntar draws** (draws consecutivos con el mismo estado/textura en un solo draw; reordenar opacos con z por textura)
   es la palanca más grande que midió la etapa 1: baja la CPU y la GPU a la vez. **Grabar en varios hilos** no escaló en
-  el banco (hilos sin afinidad fija) [verificar en la etapa 2 con núcleos fijos].
+  el banco (hilos sin afinidad fija). **Etapa 2 (`etapa2_nucleos.md`, con GT en carrera):** grabar sí se reparte
+  entre núcleos (sin bloqueo), pero queda ~1,5 núcleo libre (el 1 es de la captura, el 2 del sonido) y 9000 draws
+  necesitan ~24 ms de procesador (mejor caso ~26 ms de reloj con 2–3 hilos) y ~16 ms de GPU: **GT no entra grabando
+  draw por draw**; necesita reusar listas grabadas de sublistas estables y/o juntar draws desde el principio.
 - Juegos livianos (RR, SH, la mayoría del catálogo) deberían ir sobrados. **GT es el peor caso** por la cantidad de
   draws y por depender del espejo de VRAM; la advertencia de arriba se confirma o se descarta con sus listas reales.
 - Batería y temperatura: el ARM sondeando y la GPU trabajando gastan más que hoy.

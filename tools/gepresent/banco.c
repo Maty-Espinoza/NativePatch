@@ -21,6 +21,7 @@
 // entregar esa misma memoria para otro anillo y la GPU leia comandos pisados. v11.3: el pozo nunca se reusa (12 + 4 MB,
 // pedidos antes que el resto) y una lista grabada sin memoria no se ejecuta.
 // Resultados: ux0:pspemu/ge_patch_banco.log (el relevo lo baja solo). Tiempos con sceKernelGetProcessTimeLow (us).
+// v13.7 (etapa 2): "banco de nucleos" (ver mas abajo), activo con ux0:data/gepresent/banco_nucleos en vez de banco_v12.
 #include <psp2/kernel/threadmgr.h>
 #include <psp2/kernel/clib.h>
 #include <psp2/kernel/processmgr.h>
@@ -243,7 +244,7 @@ static void draws(SceGxmContext *c, int k, int n0, int n) {
     else if (k == P) sceGxmSetFragmentTexture(c, 0, &ptex[i & (NTEX - 1)]);
     else if (k == C) sceGxmSetFragmentProgram(c, fp[i & 1]);
     if (k == U || k == T) setXf(c, 0, 0);
-    sceGxmSetVertexStream(c, 0, vb + i * 4);  // B: cada draw trae sus propios vertices
+    sceGxmSetVertexStream(c, 0, vb + (i % N) * 4);  // B: cada draw trae sus propios vertices (v13.7: mas de N draws)
     if (k != S) sceGxmSetVertexStream(c, 1, cb);  // S: el color quedo puesto una vez (en inicio)
     sceGxmDraw(c, SCE_GXM_PRIMITIVE_TRIANGLE_STRIP, SCE_GXM_INDEX_FORMAT_U16, ib, 4);
   }
@@ -290,27 +291,30 @@ static void *dmem(void *args, SceSize req, SceSize *size) {
   z->pos += n; *size = n;
   return z->p + z->pos - n;
 }
-static char dhost[2][0x4000] __attribute__((aligned(16)));
+static char dhost[5][0x4000] __attribute__((aligned(16)));  // 0-1 banco v11, 2-4 banco de nucleos
+static int ctxNuevo(SceGxmContext **c, Pozo *z, void *host) {
+  SceGxmDeferredContextParams dp;
+  memset(&dp, 0, sizeof dp);
+  dp.hostMem = host; dp.hostMemSize = sizeof dhost[0];
+  dp.vdmCallback = dp.vertexCallback = dp.fragmentCallback = dmem;
+  dp.callbackData = z;
+  int r = sceGxmCreateDeferredContext(&dp, c);  // primero sin anillos iniciales (los pide a dmem)
+  if (r < 0) {
+    blog("contexto diferido sin anillos iniciales: %08x; probando con anillos\n", r);
+    SceSize n;
+    dp.vdmRingBufferMem = dmem(z, 0x10000, &n); dp.vdmRingBufferMemSize = n;
+    dp.vertexRingBufferMem = dmem(z, 0x40000, &n); dp.vertexRingBufferMemSize = n;
+    dp.fragmentRingBufferMem = dmem(z, 0x40000, &n); dp.fragmentRingBufferMemSize = n;
+    r = sceGxmCreateDeferredContext(&dp, c);
+  }
+  return r;
+}
 static int diferido(int i) {
   Pozo *z = &pozo[i];
   z->cap = (i ? 4 : 12) << 20;  // v11.2: 2000 draws grabados = 320 KB (A); 21 grabaciones en el 0, 3 medias en el 1
   z->p = gmem(UNC, z->cap, RW);
   if (!z->p) return -7;
-  SceGxmDeferredContextParams dp;
-  memset(&dp, 0, sizeof dp);
-  dp.hostMem = dhost[i]; dp.hostMemSize = sizeof dhost[i];
-  dp.vdmCallback = dp.vertexCallback = dp.fragmentCallback = dmem;
-  dp.callbackData = z;
-  int r = sceGxmCreateDeferredContext(&dp, &dctx[i]);  // primero sin anillos iniciales (los pide a dmem)
-  if (r < 0) {
-    blog("contexto diferido %d sin anillos iniciales: %08x; probando con anillos\n", i, r);
-    SceSize n;
-    dp.vdmRingBufferMem = dmem(z, 0x10000, &n); dp.vdmRingBufferMemSize = n;
-    dp.vertexRingBufferMem = dmem(z, 0x40000, &n); dp.vertexRingBufferMemSize = n;
-    dp.fragmentRingBufferMem = dmem(z, 0x40000, &n); dp.fragmentRingBufferMemSize = n;
-    r = sceGxmCreateDeferredContext(&dp, &dctx[i]);
-  }
-  return r;
+  return ctxNuevo(&dctx[i], z, dhost[i]);
 }
 static SceGxmCommandList lista[2];
 static volatile int dk = -1, drep, dlisto, drec_us, drec_r, dn, d2_us[2], d2_r[2], d2_go;  // dlisto: 1 grabada, 0 ejecutada
@@ -423,10 +427,16 @@ static void presentar(SceGxmContext *c) {  // dibuja la imagen del juego y la ma
   pres_us += now() - t0;
 }
 
+static int nmodo;                       // v13.7: banco de nucleos (en vez de las fases del banco v11)
+static void ejecutarN(SceGxmContext *c);
 static int hookEnd(SceGxmContext *c, const SceGxmNotification *v, const SceGxmNotification *f) {
   int r = TAI_CONTINUE(int, ref_end, c, v, f);
   frames++;
   if (!listo) return r;
+  if (nmodo) {
+    if (dlisto) { ejecutarN(c); dlisto = 0; }
+    return r;
+  }
   if (fase == 0) {
     if (frames < espera) return r;
     blog("empieza: frame %d de Adrenaline, textura del juego (512x272) %s\n", frames, psp_tex ? "vista" : "NO vista");
@@ -511,7 +521,169 @@ static int bancoThread(SceSize args, void *argp) {
   return sceKernelExitDeleteThread(0);
 }
 
+// --- v13.7 (etapa 2): banco de nucleos ---
+// Pregunta (arquitectura_dibujo_en_vita.md §5): GT tiene ~9000 draws por frame (hasta 16 500); grabarlos en GXM desde
+// un solo hilo serian ~30 ms. ¿Grabar en 2 o 3 hilos fijos a nucleos distintos lo reparte? En la etapa 1 (sin nucleo
+// fijo) 2 hilos no escalaron. Aca, con el juego corriendo en modo sombra (el capturador y el emulador usando sus
+// nucleos, como sera de verdad):
+//   - cada grabacion son ND draws del caso T (textura + uniformes, el de GT) repartidos entre 1, 2 o 3 hilos, cada uno
+//     con su contexto diferido; las listas se ejecutan en la escena del hilo de Adrenaline (comprueba que sirven);
+//   - configuraciones: 1 hilo sin nucleo fijo / en el 0 / en el 1 / en el 2; 2 hilos sin fijo / 0+2 / 1+2 / 0+1;
+//     3 hilos sin fijo / 0+1+2. Los grabadores tienen prioridad 0xA0: debajo del capturador (0x61) y sobre los lectores
+//     (0xB0), solo lo que el nucleo les deje (lo mismo que tendria el traductor);
+//   - una ronda = cada configuracion 3 veces (un frame cada una). Rondas cada 15 s, 20 en total, desde la espera
+//     (contenido del archivo, en s; 30 si esta vacio; "no" lo apaga): asi se mide en menus, carga y carrera, y el log de la captura
+//     dice que hacia el juego en cada ronda (mismas horas).
+//   - el contexto diferido se crea de nuevo antes de cada grabacion, sobre su pozo vacio: la GPU ya termino con lo
+//     anterior (sceGxmFinish), asi el pozo se reusa sin pisar nada (v11.2 lo vaciaba con el contexto vivo).
+// Log: por grabacion, reloj total (desde que empieza el primer hilo hasta que termina el ultimo), us/draw, cada hilo
+// (reloj y procesador que de verdad recibio: runClocks), demora en despertar, ejecutar y GPU.
+#define ND 9000
+#define RONDAS 20
+static SceGxmContext *nctx[3];
+static Pozo npozo[3];
+static SceGxmCommandList nlista[3];
+typedef struct { SceUID th, go; volatile int ctx, n0, n, r; volatile uint32_t t0, t1, cpu; } Grab;
+static Grab gw[6];  // 0-2 sin nucleo fijo; 3, 4, 5 en los nucleos 0, 1, 2
+static SceUID nfin;
+static const struct { const char *nom; int k, m[3]; } conf[] = {  // m: 0 sin nucleo fijo, 1-3 nucleo 0-2
+  { "1 hilo sin nucleo fijo", 1, { 0 } }, { "1 hilo en el nucleo 0", 1, { 1 } }, { "1 hilo en el nucleo 1", 1, { 2 } },
+  { "1 hilo en el nucleo 2", 1, { 3 } }, { "2 hilos sin nucleo fijo", 2, { 0, 0 } }, { "2 hilos nucleos 0+2", 2, { 1, 3 } },
+  { "2 hilos nucleos 1+2", 2, { 2, 3 } }, { "2 hilos nucleos 0+1", 2, { 1, 2 } }, { "3 hilos sin nucleo fijo", 3, { 0, 0, 0 } },
+  { "3 hilos nucleos 0+1+2", 3, { 1, 2, 3 } } };
+#define NCONF (int)(sizeof conf / sizeof conf[0])
+static volatile int nc, nrep, nronda, nwall, nwake, nok;
+static int nw[3];  // grabadores de la grabacion que se va a ejecutar
+
+static uint32_t runClk(SceUID t) {  // us de procesador que recibio el hilo
+  SceKernelThreadInfo in; memset(&in, 0, sizeof in); in.size = sizeof in;
+  return t >= 0 && sceKernelGetThreadInfo(t, &in) >= 0 ? (uint32_t)in.runClocks : 0;
+}
+static int grabador(SceSize args, void *argp) {
+  Grab *g = *(Grab **)argp;
+  for (;;) {
+    sceKernelWaitSema(g->go, 1, 0);
+    uint32_t c0 = runClk(g->th);
+    g->t0 = now();
+    SceGxmContext *c = nctx[g->ctx];
+    int r = sceGxmBeginCommandList(c);
+    if (r >= 0) {
+      inicio(c);
+      draws(c, T, g->n0, g->n);
+      r = sceGxmEndCommandList(c, &nlista[g->ctx]);
+    }
+    g->r = r;
+    g->t1 = now();
+    g->cpu = runClk(g->th) - c0;
+    sceKernelSignalSema(nfin, 1);
+  }
+  return 0;
+}
+static void ejecutarN(SceGxmContext *c) {  // en el hilo de Adrenaline, despues de su escena
+  int k = conf[nc].k, r = nok;
+  sceGxmFinish(c);
+  uint32_t t0 = now();
+  escena(c, 0);
+  for (int i = 0; i < k && r >= 0; i++) r = sceGxmExecuteCommandList(c, &nlista[i]);
+  uint32_t t1 = now();
+  sceGxmEndScene(c, 0, 0);
+  sceGxmFinish(c);
+  uint32_t t3 = now();
+  char a[16], g[16], h[96];
+  dec(a, nwall * 100 / ND); dec(g, (t3 - t1) / 10);
+  int n = 0;
+  for (int i = 0; i < k; i++) {
+    Grab *w = &gw[nw[i]];
+    n += sceClibSnprintf(h + n, sizeof h - n, "%s%u/%u", i ? " " : "", w->t1 - w->t0, w->cpu);
+  }
+  blog("nucleos ronda %d %-24s rep %d: grabar %u us (%s us/draw) | hilos reloj/procesador %s us | despertar %u us | ejecutar %u us, GPU %s ms [%08x, pozos %u+%u+%u KB]\n",
+       nronda, conf[nc].nom, nrep, nwall, a, h, nwake, t1 - t0, g, r, npozo[0].pos >> 10, npozo[1].pos >> 10, npozo[2].pos >> 10);
+}
+static int nucleosThread(SceSize args, void *argp) {
+  while (frames < 30) sceKernelDelayThread(100000);  // GXM ya iniciado por Adrenaline
+  blog("relojes MHz: ARM %d, bus %d, GPU %d | memoria (MB, bloque mas grande/total): CDRAM %u/%u, LPDDR %u/%u, fisica %u/%u\n",
+       scePowerGetArmClockFrequency(), scePowerGetBusClockFrequency(), scePowerGetGpuClockFrequency(),
+       probe(CDRAM), total(CDRAM), probe(UNC), total(UNC), probe(PHY), total(PHY));
+  int r1 = programas(), r2 = r1 >= 0 ? destino() : 0;
+  for (int i = 0; i < 3; i++) {  // 9000 draws T grabados = ~2,9 MB (etapa 1: ~640 KB cada 2000)
+    npozo[i].cap = (i ? 3 : 5) << 20;
+    npozo[i].p = gmem(UNC, npozo[i].cap, RW);
+  }
+  nfin = sceKernelCreateSema("gepresent_nfin", 0, 0, 3, 0);
+  int nh = 0;
+  for (int i = 0; i < 6; i++) {
+    gw[i].go = sceKernelCreateSema("gepresent_ngo", 0, 0, 1, 0);
+    gw[i].th = sceKernelCreateThread("gepresent_grabador", grabador, 0xA0, 0x4000, 0, i < 3 ? 0 : 0x10000 << (i - 3), 0);
+    Grab *p = &gw[i];
+    if (gw[i].th >= 0 && sceKernelStartThread(gw[i].th, sizeof p, &p) >= 0) nh++;
+  }
+  blog("banco de nucleos: programas %08x, destino %08x, pozos %s/%s/%s, grabadores %d de 6, semaforo %08x; memoria libre: LPDDR %u MB, CDRAM %u MB\n",
+       r1, r2, tipo(npozo[0].p), tipo(npozo[1].p), tipo(npozo[2].p), nh, nfin, total(UNC), total(CDRAM));
+  if (r1 < 0 || r2 < 0 || !npozo[0].p || !npozo[1].p || !npozo[2].p || nh < 6 || nfin < 0) return sceKernelExitDeleteThread(0);
+  listo = 1;
+  for (int ronda = 1; ronda <= RONDAS; ronda++) {
+    while (frames < espera + (ronda - 1) * 15 * 60) sceKernelDelayThread(100000);
+    blog("ronda %d (frame %d de Adrenaline)\n", ronda, frames);
+    for (int j = 0; j < NCONF; j++)
+      for (int rep = 0; rep < REP; rep++) {
+        while (dlisto) sceKernelDelayThread(1000);
+        int k = conf[j].k, r = 0;
+        for (int i = 0; i < k && r >= 0; i++) {  // contexto nuevo sobre el pozo vacio (la GPU ya termino)
+          if (nctx[i]) sceGxmDestroyDeferredContext(nctx[i]);
+          nctx[i] = 0; npozo[i].pos = npozo[i].falta = 0;
+          r = ctxNuevo(&nctx[i], &npozo[i], dhost[2 + i]);
+        }
+        if (r < 0) { blog("ronda %d %s: contexto diferido %08x, se salta\n", ronda, conf[j].nom, r); continue; }
+        for (int i = 0; i < k; i++) {
+          Grab *w = &gw[nw[i] = conf[j].m[i] ? 2 + conf[j].m[i] : i];
+          w->ctx = i; w->n0 = i * ND / k; w->n = (i + 1) * ND / k - w->n0;
+        }
+        uint32_t ts = now();
+        for (int i = 0; i < k; i++) sceKernelSignalSema(gw[nw[i]].go, 1);
+        for (int i = 0; i < k; i++) sceKernelWaitSema(nfin, 1, 0);
+        uint32_t a = ~0u, b = 0;
+        r = 0;
+        for (int i = 0; i < k; i++) {
+          Grab *w = &gw[nw[i]];
+          if (w->t0 < a) a = w->t0;
+          if (w->t1 > b) b = w->t1;
+          if (w->r < 0 && r >= 0) r = w->r;
+          if (npozo[i].falta) r = -8;  // grabada sin memoria: no se ejecuta
+        }
+        nwall = b - a; nwake = a - ts; nok = r; nc = j; nrep = rep; nronda = ronda;
+        __sync_synchronize();
+        dlisto = 1;
+      }
+  }
+  while (dlisto) sceKernelDelayThread(1000);
+  blog("fin del banco de nucleos\n");
+  return sceKernelExitDeleteThread(0);
+}
+
+static int leerEspera(const char *f, int def) {  // segundos escritos en el archivo (def si esta vacio); -1 si no existe
+  // o si dice "no" (el relevo solo sube archivos: para apagarlo se sube el archivo con "no")
+  SceUID fd = sceIoOpen(f, SCE_O_RDONLY, 0);
+  if (fd < 0) return -1;
+  char b[8] = { 0 };
+  sceIoRead(fd, b, 7);
+  sceIoClose(fd);
+  if (b[0] == 'n') return -1;
+  int s = 0;
+  for (int i = 0; b[i] >= '0' && b[i] <= '9'; i++) s = s * 10 + b[i] - '0';
+  return s ? s : def;
+}
+
 void bancoStart(void) {  // desde el hilo de gepresent, con AdrenalineUser ya cargado
+  int sn = leerEspera("ux0:data/gepresent/banco_nucleos", 30);
+  if (sn >= 0) {  // v13.7
+    nmodo = 1; espera = sn * 60;
+    hk_end = taiHookFunctionImport(&ref_end, "AdrenalineUser", 0xF76B66BD, 0xFE300E2F, hookEnd);
+    blog("gepresent v13.7 banco de nucleos (etapa 2), compilado %s %s: espera %d s, %d draws por grabacion, gancho EndScene %08x\n",
+         __DATE__, __TIME__, sn, ND, hk_end);
+    SceUID th = hk_end >= 0 ? sceKernelCreateThread("gepresent_nucleos", nucleosThread, 0xA0, 0x4000, 0, 0, 0) : -1;
+    if (th >= 0) sceKernelStartThread(th, 0, 0);
+    return;
+  }
   SceUID fd = sceIoOpen("ux0:data/gepresent/banco_v12", SCE_O_RDONLY, 0);
   if (fd < 0) return;
   char b[8] = { 0 };

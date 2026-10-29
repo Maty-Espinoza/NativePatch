@@ -1,5 +1,7 @@
 # Contexto para continuar GePatch (traspaso a otra IA)
 
+**Para trabajar (dónde está el repo, pull, compilar, relevo, pruebas): `FLUJO_DE_TRABAJO.md`.**
+
 Actualizado el 2026-10-24 (GePatch 0.2-dev49, rama `dev`). Léelo
 entero antes de tocar código; los demás documentos de `docs/` amplían cada tema.
 
