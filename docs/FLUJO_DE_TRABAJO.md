@@ -1,8 +1,8 @@
 # Flujo de trabajo (leer al empezar cada conversación)
 
 Cómo se trabaja en NativePatch con Claude: dónde está todo, cómo actualizar el repo, compilar, mandar a la Vita, pedir
-pruebas y guardar resultados. Actualizado el 2026-10-29 (GePatch 0.2-dev65, gepresent v13.9, etapa 2 de la
-arquitectura B, fase de análisis cerrada: `etapa2_fase1_impacto.md`). Lo técnico del plugin está en `CONTEXTO_IA.md` (desactualizado desde dev49) y en los documentos de cada
+pruebas y guardar resultados. Actualizado el 2026-10-29 (GePatch 0.2-dev66, gepresent v13.10, etapa 2 de la
+arquitectura B, fase 2: `etapa2_fase2_compuerta.md`; análisis en `etapa2_fase1_impacto.md`). Lo técnico del plugin está en `CONTEXTO_IA.md` (desactualizado desde dev49) y en los documentos de cada
 etapa (`arquitectura_dibujo_en_vita.md` §6 es la hoja de ruta).
 
 ## 1. Al empezar una conversación
@@ -86,7 +86,8 @@ Lo pone en marcha el usuario (§1). Claude solo trabaja con archivos en la carpe
   `banco_nucleos` (v13.7: banco de núcleos; contenido = segundos de espera, `no` lo apaga), `banco_v12` (banco de la
   etapa 1), `medir_ge` (T6), `off` (gepresent no engancha nada). Desde v13.9: `registro` (nivel de registro: `minimo`,
   `mediano` (por defecto) o `extremo`) y los de la fase de análisis `sin_compuerta`, `sin_espejo`, `sin_libre`,
-  `sin_captura` (se apagan con `no` adentro). Detalle en `registros.md`.
+  `sin_captura` (se apagan con `no` adentro). Desde v13.10: `compuerta_sync` (la espera a la Vita vuelve al sync, como
+  antes de dev66). Detalle en `registros.md`.
 - La VM de Claude no llega a la red de la casa (la Vita está en 192.168.0.10): todo pasa por el relevo.
 
 ## 5. Pedir pruebas al usuario

@@ -2804,9 +2804,10 @@ static void sbPost(u32 type, u32 aux, u32 a, u32 b, u32 c) {
   fr.post_us += sceKernelGetSystemTimeLow() - e[4]; // (dev65) costo de anotar
   pspSdkEnableInterrupts(intr);
 }
-static void vidaCheck(u32 kind) {
+static u32 vidaHash(u32 *ptop, u32 *psub) { // rehace las huellas de la muestra; devuelve su numero (0: no hay o cambio)
   u32 sq = SB[0x50], n = SB[0x51], nt = SB[0x52], k, i, top = 0, sub = 0;
-  if (!sombra || SB[0x4E] < 2 || !sq || n > 32) return;
+  *ptop = *psub = 0;
+  if (!sq || n > 32) return 0;
   for (k = 0; k < n; k++) {
     u32 a = SB[0x60 + k], h = 2166136261u;
     if (a < 0x08000000 || a >= 0x0A000000) continue;
@@ -2814,14 +2815,19 @@ static void vidaCheck(u32 kind) {
     for (i = 0; i < 16; i++) h = (h ^ w[i]) * 16777619u;
     if (h != SB[0x80 + k]) { if (k < nt) top++; else sub++; }
   }
-  if (SB[0x50] == sq) sbPost(EV_VIDA, kind, sq, top | sub << 8, sb_ord); // (si la Vita cambio la muestra mientras tanto, no vale)
+  *ptop = top; *psub = sub;
+  return SB[0x50] == sq ? sq : 0; // (si la Vita cambio la muestra mientras tanto, no vale)
+}
+static void vidaCheck(u32 kind) {
+  u32 top, sub, sq;
+  if (sombra && SB[0x4E] >= 2 && (sq = vidaHash(&top, &sub))) sbPost(EV_VIDA, kind, sq, top | sub << 8, sb_ord);
 }
 static void sbInit(void) {
   int i;
   for (i = 0; i < 0x50; i++) SB[i] = 0;
   for (i = 0x200; i < 0x400; i++) SB[i] = SB[0x8200 + i] = 0; // (ultima copia de cada pagina en los dos espejos)
   SB[1] = 5; SB[6] = sb_ord; // version 2: con espejo de la VRAM (dev62); 3: con T4/T6 (eventos 7-10, dev63); 4: espejo doble (dev64); 5: EV_FRAME (dev65)
-  SB[0x4D] = spin_cal;
+  SB[0x4D] = spin_cal; SB[0x54] = 0;
   SB[0] = SB_MAGIC;
 }
 
@@ -2848,13 +2854,55 @@ static u32 sbGate(u32 ord) {
   fr.gate_us += w; fr.gate_n++;
   return w | 1;
 }
+// --- dev66 (fase 2): compuerta antes de encolar la lista siguiente ---
+// En GT la lista de un frame no cambia hasta que el juego encola la siguiente (fase 1: 0 de 11 436). Entonces el juego
+// no tiene que esperar a la Vita en el sync: puede esperar recien antes de encolar la lista siguiente, y la Vita gana
+// ~2,4 ms por frame (lo que va del sync al encolado). En el sync solo se anota hasta que lista hay que esperar.
+// Autocomprobacion (para cualquier juego): gepresent deja una muestra de huellas de la ultima lista que capturo
+// (SB[0x50..], SB[0x53] = su numero de orden). Antes de cada encolado, si esa lista ya paso por un sync, GePatch rehace
+// las huellas: si cambiaron, el juego reescribe la lista antes de encolar la siguiente y la Vita podria leer algo que el
+// GE no dibujo -> la compuerta vuelve al sync. Empieza en el sync y pasa a "antes de encolar" despues de 60
+// comprobaciones limpias seguidas; un cambio la devuelve al sync hasta juntar otras 60 (dev66.2: en GT cambia una vez al
+// pasar de la presentacion a la carrera, en la pantalla de carga) y con 10 cambios se queda en el sync hasta cerrar el juego. Interruptor de gepresent compuerta_sync (SB[0x4A] & 8): siempre en el
+// sync (las comprobaciones siguen, para comparar). SB[0x54] = modo (0 probando, 1 antes de encolar, 2 la lista cambio 10 veces).
+// dev66.3: solo vale la muestra de una lista encolada despues del sync anterior (sync_lo, sync_ord]: la de una lista mas vieja
+// puede estar en la zona que el juego ya reusa (GT alterna dos zonas) y daba falsos cambios (dev66.2: 10 en una carrera).
+static u32 sync_ord, sync_lo, gate_ord, gate_sq, gate_ok; // ultima lista que paso por un sync (y la del sync anterior); la que espera el proximo encolado
+static int gate_mode;
+static struct { u32 checks, bad, n, us, max; } gts; // (log, 10 s)
+static int gateEnq(void) { return gate_mode == 1 && !(SB[0x4A] & 8); }
+static void gateSync(u32 ord) { // en el sync: hasta que lista hay que esperar
+  if ((int)(ord - sync_ord) > 0) { sync_lo = sync_ord; sync_ord = ord; }
+  if (gateEnq()) gate_ord = sync_ord;
+}
+static u32 gateBeforeEnq(void) { // antes de encolar: espera (si toca) y autocomprobacion; devuelve la espera (us | 1)
+  u32 w = 0, sq = SB[0x50], top, sub;
+  if (gate_ord) { w = gateEnq() ? sbGate(gate_ord) : 0; gate_ord = 0; }
+  if (w) { gts.n++; gts.us += w; if (w > gts.max) gts.max = w; }
+  u32 so = SB[0x53];
+  if (!sq || sq == gate_sq || !sync_ord || (int)(so - sync_ord) > 0 || (int)(so - sync_lo) <= 0 || !sbAlive()) return w; // ya revisada / no es del ultimo sync
+  if (!(sq = vidaHash(&top, &sub))) return w;
+  gate_sq = sq; gts.checks++;
+  if (top | sub) {
+    static u32 bad_total;
+    if (gate_mode != 2) LOG("compuerta: la lista %lu cambio antes de encolar la siguiente (%lu lineas arriba, %lu de sublistas; %lu cambios) -> en el sync%s\n",
+                            SB[0x53], top, sub, bad_total + 1, bad_total + 1 >= 10 ? " hasta cerrar el juego" : "");
+    gts.bad++; gate_ok = 0; gate_mode = ++bad_total >= 10 ? 2 : 0;
+  } else if (!gate_mode && ++gate_ok >= 60) {
+    gate_mode = 1;
+    LOG("compuerta: 60 comprobaciones limpias seguidas -> antes de encolar la lista siguiente\n");
+  }
+  SB[0x54] = gate_mode;
+  return w;
+}
 int (*_sceGeDrawSync)(int mode);
 int (*_sceGeListSync)(int qid, int mode);
 int sceGeDrawSyncPatched(int mode) {
   if (!sombra || mode)
     return _sceGeDrawSync(mode);
   vidaCheck(1);
-  u32 w = sbGate(sb_ord), t0;
+  u32 w = gateEnq() ? 0 : sbGate(sb_ord), t0; // (dev66) antes de encolar: aqui solo se anota
+  gateSync(sb_ord);
   sbs.syncs++;
   sbs.late += !!w;
   sbPost(EV_DSYNC, mode, w, SB[3], sb_ord);
@@ -2874,7 +2922,8 @@ int sceGeListSyncPatched(int qid, int mode) {
     for (i = 0; i < 16; i++)
       if (sb_q[i].qid == (u32)qid && (int)(sb_q[i].ord - ord) > 0)
         ord = sb_q[i].ord;
-    w = ord ? sbGate(ord) : 0;
+    w = ord && !gateEnq() ? sbGate(ord) : 0;
+    if (ord) gateSync(ord);
     sbs.lsyncs++;
     sbs.llate += !!w;
     sbPost(EV_LSYNC, mode, qid, w, SB[3]);
@@ -3238,6 +3287,7 @@ int sceGeListEnQueuePatched(const void *list, void *stall, int cbid, PspGeListAr
     copyFrameBuffer(menu_shown);
     st.enq_copies++;
   }
+  u32 gw = sombra ? gateBeforeEnq() : 0; // (dev66)
   vidaCheck(0); // (dev65.2) antes de encolar: la lista anterior sigue intacta?
   u32 t0 = sceKernelGetSystemTimeLow();
   resetGeState();
@@ -3246,7 +3296,7 @@ int sceGeListEnQueuePatched(const void *list, void *stall, int cbid, PspGeListAr
   patch_us_frame += sceKernelGetSystemTimeLow() - t0;
   int r = _sceGeListEnQueue(list, stall, cbid, arg);
   if (sombra && r >= 0) {
-    sbPost(EV_ENQ, 0, (u32)list, (u32)stall, r);
+    sbPost(EV_ENQ, gw, (u32)list, (u32)stall, r); // (dev66: dato = espera antes de encolar, us | 1)
     if (!ge_kick) ge_kick = sceKernelGetSystemTimeLow() | 1;
   }
   return r;
@@ -3257,6 +3307,7 @@ int sceGeListEnQueueHeadPatched(const void *list, void *stall, int cbid, PspGeLi
     scaleDecide();
   st.heads++;
   swap_done = 0;
+  u32 gw = sombra ? gateBeforeEnq() : 0; // (dev66)
   u32 t0 = sceKernelGetSystemTimeLow();
   resetGeState();
   if (dumpOnList((u32)list, (u32)stall, 1) || walk_now)
@@ -3264,7 +3315,7 @@ int sceGeListEnQueueHeadPatched(const void *list, void *stall, int cbid, PspGeLi
   patch_us_frame += sceKernelGetSystemTimeLow() - t0;
   int r = _sceGeListEnQueueHead(list, stall, cbid, arg);
   if (sombra && r >= 0) {
-    sbPost(EV_HEAD, 0, (u32)list, (u32)stall, r);
+    sbPost(EV_HEAD, gw, (u32)list, (u32)stall, r);
     if (!ge_kick) ge_kick = sceKernelGetSystemTimeLow() | 1;
   }
   return r;
@@ -3690,6 +3741,10 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
       LOG("stats sombra sync: drawsync=%lu atrasados=%lu (>5 ms: %lu) espera=%lu us/sync (max %lu) listsync=%lu atrasados=%lu\n",
           sbs.syncs, sbs.late, sbs.timeouts, sbs.wait_us / s, sbs.wait_max, sbs.lsyncs, sbs.llate);
       LOG("stats sombra GE: el juego espera al GE en drawsync %lu us/sync\n", sbs.in_sync_us / s);
+      LOG("stats compuerta (dev66): %s%s | esperas antes de encolar=%lu (%lu us c/u, max %lu) | autocomprobaciones=%lu cambiaron=%lu\n",
+          gate_mode == 1 ? "antes de encolar" : gate_mode ? "en el sync (la lista cambio 10 veces)" : "en el sync (probando)", SB[0x4A] & 8 ? " [compuerta_sync]" : "",
+          gts.n, gts.n ? gts.us / gts.n : 0, gts.max, gts.checks, gts.bad);
+      memset(&gts, 0, sizeof(gts));
       if (frs.frames) { // (dev65) impacto en el juego, por frame
         u32 f = frs.frames, ms = frs.frame_us / 1000 + 1;
         LOG("stats impacto (por frame): frame=%lu us CPU_libre=%lu%% compuerta=%lu us (%lu esperas en 10 s, %lu sin esperar) sync_GE=%lu us ganchos=%lu us espejo=%lu us (%lu paginas)\n",

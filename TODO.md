@@ -2,16 +2,44 @@
 
 Cosas que no bloquean el trabajo actual pero pueden servir más adelante. Cada una dice de dónde salió (documento en
 `docs/` o en el proyecto). Lo que sí falta para cerrar la etapa 2 está en `docs/arquitectura_dibujo_en_vita.md` §6, no
-aquí. Actualizado: 2026-10-28 (GePatch 0.2-dev64 + gepresent v13.6).
+aquí. Actualizado: 2026-10-29 (GePatch 0.2-dev66 + gepresent v13.10, fase 2 en curso). Cómo se trabaja:
+`docs/FLUJO_DE_TRABAJO.md`.
+
+## Fase 2: quitar la espera del juego a la Vita (de `etapa2_fase1_impacto.md`, 2026-10-29)
+- [x] ~~Mover la compuerta a "antes de encolar la lista siguiente"~~: hecho en dev66 + v13.10 con autocomprobación
+      (huellas de la lista). GT: 3 veces menos esperas en la carrera, casi ninguna en la mitad de la vuelta; SH sin
+      cambios en la lista. (`etapa2_fase2_compuerta.md`)
+- [ ] **Arranque y final de la vuelta de GT** siguen esperando (la Vita necesita más de 16,7 ms por frame). El final quedó
+      en 54,7 fps (contra 56,0 con la espera en el sync, una sola corrida): confirmar si es variación.
+- [ ] Capturador: leer directo de a 256 B (3,0 µs = 0,75 µs/línea) en vez de tomar líneas de la caché compartida
+      (1,13 µs/línea); los lectores quedarían solo para comprobar sublistas por adelantado.
+- [ ] Aplicar una sublista guardada cuesta ~7 µs (sumar ~200 contadores de estadística y copiar registros): ~1,7 ms por
+      frame. Sumar solo lo necesario (el resto según el nivel de registro).
+- [ ] Revisar sublistas guardadas: ~5,5 ms por frame en carrera. Que los lectores lleguen antes a más sublistas.
+- [ ] El capturador pierde ~17 % de su núcleo (el 1, con el audio): probar prioridad / núcleo con cuidado del audio.
+- [ ] Corrida `sin_captura` en GT para saber si los frames lentos del final de la vuelta son del juego solo.
+- [ ] Probar la compuerta nueva en Ridge Racer y LocoRoco (la autocomprobación solo se vio en GT y SH).
+
+## Rendimiento para dibujar GT (de `etapa2_nucleos.md`, 2026-10-29)
+- [ ] **Grabar una vez cada sublista estable y reusar la lista GXM grabada.** Grabar draw por draw no entra para GT ni
+      en 3 núcleos (~24 ms de procesador y ~16 ms de GPU por 9000 draws; queda ~1,5 núcleo libre). En GT ~85 % de los
+      comandos vienen de sublistas que la captura ya reconoce iguales. A resolver: el estado de entrada que hereda la
+      sublista (`otra_entrada`). Probablemente hay que adelantarlo de la etapa 6 a la 3/4 para GT.
+- [ ] **Juntar draws** con el mismo estado (etapa 1: 2000 cuadros en 1 draw = 0,02 µs/cuadro, GPU a la mitad).
+- [ ] El traductor/grabador tiene que ir en el núcleo 0 (y lo que sobre del 2): el 1 es de la captura (~10–15 % libre).
+- [ ] **Final de la vuelta de GT a 40–48 fps** (últimos ~7 s): aparecen ~300 RECTANGLES por frame y ~50 sublistas por
+      frame entran con otro estado; la memoria de sublistas se salta 70 % en vez de 85 % y la captura sube a 20–25 ms por
+      frame. Ver qué pantalla es (¿llegada?) y si la memoria puede guardar varias entradas por sublista.
 
 ## Rendimiento de la captura (gepresent, lado Vita)
 - [ ] **Comprobar al empezar cada cuadro las sublistas estables.** Hoy un ayudante las comprueba cuando la lista llega
       al CALL, y solo ~40 % llega a tiempo. Comprobarlas al empezar la lista daría más tiempo, con un riesgo: si el juego
       cambia la sublista en ese cuadro, se usa la vieja (la revisión de 1 de cada 32 lo vería). Solo para sublistas
       estables hace muchos cuadros. Decidido dejarlo para después. (`etapa2_comparar_menos.md`)
-- [ ] **Leer menos de la RAM del PSP.** Lo caro es la lectura sin caché (~6,5 µs cada 256 bytes). Ideas: una vista con
-      caché (necesitaría un plugin de kernel y limpiar la caché a mano), o huellas calculadas en otro lado. Rinde más que
-      comparar más rápido. (`etapa2_comparar_menos.md`)
+- [x] ~~Leer menos de la RAM del PSP~~: probado en v13.8.1/v13.8.2 (no releer líneas ya comprobadas, leer de a 64–256 B):
+      ~45 % menos lecturas sin bajar el tiempo; descartado. Medido después: 256 B cuestan 3,0 µs (no 6,5). Ideas
+      pendientes si vuelve a importar: vista con caché o DMA (KBENCH: 1,7–4 veces más rápido en bloques grandes).
+      (`etapa2_fase1_impacto.md`)
 - [ ] **Acortar el bucle de interpretación** (~360 ns por comando): revisar el tramo de RAM una vez por línea y no por
       comando, y usar menos contadores. Bajaría lo que la memoria de sublistas no se salta. (`etapa2_memoria_sublistas.md`)
 - [ ] Comparar directo desde la caché compartida, sin copiar la línea a `R0.buf` (ganancia chica).
@@ -21,7 +49,11 @@ aquí. Actualizado: 2026-10-28 (GePatch 0.2-dev64 + gepresent v13.6).
 
 ## Espejo de la VRAM
 - [ ] **DISTINTAS con el espejo doble:** la revisión de la memoria de sublistas encontró 1–7 por corrida de GT (≈0,01 %
-      de ~50 000 revisadas) desde v13.6; con v13.5 siempre 0. Entender por qué antes de dibujar (etapa 3).
+      de ~50 000 revisadas) desde v13.6; con v13.5 siempre 0. 2026-10-29: 2 de 175 172 (dev64), 13 de 134 312 (v13.7.1
+      con el banco), 7 de 49 211 (dev65), 1 de 50 536 (dev66.3). **Todas son sublistas en la VRAM (0x041xxxxx).**
+      Hipótesis: la memoria guarda las líneas con la dirección del espejo en que se grabó (MIRROR o MIRROR2) y en los
+      frames que usan el otro espejo compara contra una copia vieja (que el GE puede estar sobrescribiendo). Arreglo
+      posible: guardar la dirección de la VRAM y traducirla con `vtr` al comparar. Arreglar antes de dibujar (etapa 3).
       (`etapa2_espejo_doble.md`)
 - [ ] Registrar MIRROR2 (0x0AC00000–0x0AE00000) para la GPU de la Vita antes de dibujar desde el espejo (`mapZonas` en
       gepresent.c registra 0x0A000000–0x0A400000, donde está MIRROR). (`etapa2_espejo_doble.md`)
@@ -34,7 +66,7 @@ aquí. Actualizado: 2026-10-28 (GePatch 0.2-dev64 + gepresent v13.6).
 ## Telemetría (T4/T6, dev63)
 - [ ] **T4: no se encontraron las funciones de DMA** (`sceDmacMemcpy`/`sceDmacTryMemcpy`, biblioteca `sceDmac`) con
       ninguno de los nombres de módulo probados: falta el nombre correcto en Adrenaline 8. GT y SH igual se pudieron
-      medir sin eso. (`etapa2_t4_t6_vida_datos.md`)
+      medir sin eso. (`etapa2_t4_t6_vida_datos.md`). Desde dev65 los eventos T4 solo van con registro extremo.
 - [ ] T6: "GE ocupado al llamar" al sync sale siempre 0, aunque el juego espera ~0,7 ms (GT) o ~3,7 ms (SH) dentro de
       `sceGeDrawSync`. Entender qué espera ahí (¿el fin de la lista con el GE ya detenido, o los callbacks?).
 - [ ] T6 apagado por defecto (le quitaba ~2–3 fps a GT): encender con `ux0:data/gepresent/medir_ge`. Si se quiere
@@ -46,6 +78,11 @@ aquí. Actualizado: 2026-10-28 (GePatch 0.2-dev64 + gepresent v13.6).
 - [ ] En el contenedor, `gcc-multilib` (pruebas del PSP) desinstala `gcc-arm-linux-gnueabihf` (prueba de qemu de
       gepresent): no instalarlos a la vez, o buscar cómo tener los dos. (`resumen_conversacion_2026-10-28_etapa2c.md`)
 - [ ] Probar Ridge Racer con el modo sombra y el espejo. Usa texturas en la VRAM, y en la etapa 2 solo se probaron GT y SH.
+- [ ] La VM de Claude en el PC con Windows no llega a GitHub (proxy 403): pull y push van por paquetes de git
+      (`FLUJO_DE_TRABAJO.md` §2). Ver si en el Mac `git pull` funciona directo. 2026-10-29: el push desde el contenedor
+      (`add_repo` con push) funcionó con permiso del usuario; los commits subidos así quedan a nombre de Claude.
+- [ ] `resumen_corrida.py` todavía no muestra las líneas de la compuerta de dev66 (modo y esperas antes de encolar):
+      hoy se sacan con `grep "stats compuerta" ge_patch.log`.
 
 ## Mediciones poco confiables
 - [ ] El núcleo 0 de la línea `procesador` del log sale casi vacío: el gancho de CreateThread no ve los hilos que
@@ -54,6 +91,7 @@ aquí. Actualizado: 2026-10-28 (GePatch 0.2-dev64 + gepresent v13.6).
       dependen del estado de entrada; `chg[]` no suma las sublistas aplicadas. (`etapa2_memoria_sublistas.md`)
 - [ ] vpjuego: "GE en stall" siempre da 0 %. Para los tiempos del GE usar las horas de encolado y FINISH (T6).
       (`arquitectura_dibujo_en_vita.md` §7)
+- [ ] Leer la hora en la Vita cuesta 390 ns: el registro extremo completo altera lo que mide (corrida 5 de la fase 1).
 
 ## Pendientes heredados
 - [ ] Pantalla negra durante la presentación del banco de la etapa 1: la textura del juego llegó negra en esos 10 s.
@@ -66,6 +104,10 @@ aquí. Actualizado: 2026-10-28 (GePatch 0.2-dev64 + gepresent v13.6).
       depender de enganchar su hilo de dibujo. (`arquitectura_dibujo_en_vita.md` §8)
 
 ## Limpieza
+- [ ] La Vita queda con `ux0:data/gepresent/banco_nucleos`, `sin_compuerta` y `compuerta_sync` = "no" (apagados); se
+      pueden borrar con VitaShell.
+- [ ] Paquetes de git sueltos en `Descargas\vitabridge` (`*.bundle`) y los parches de prueba (`*_v13.8.*.patch`,
+      `fase1_*.patch`, `fase2_*.patch`): se pueden borrar.
 - [ ] Borrar en la Vita `ux0:data/gepresent/banco` (con VitaShell: el relevo solo sube archivos) y los ~100 volcados
       `.gpd` viejos de `ux0:/pspemu` (el relevo los vuelve a bajar en su primera corrida).
 - [ ] Borrar a mano las carpetas vacías `C:\Users\spect\GePatch` y `Documents\ambientepsp` del PC con Windows.
@@ -75,4 +117,7 @@ aquí. Actualizado: 2026-10-28 (GePatch 0.2-dev64 + gepresent v13.6).
 - [ ] `ambientes_de_prueba.md` sigue describiendo dev56 y gepresent v6–v9 en varias tablas.
 - [ ] `errores_conocidos.md` describe GePatch actual (arquitectura A, dev56.8). Cuando la Vita dibuje (etapa 3 en
       adelante), marcar cuáles desaparecen con B (ver la tabla de `arquitectura_dibujo_en_vita.md` §3.7).
-- [ ] Subir a GitHub el commit de dev64 + v13.6 (hecho desde el Mac).
+- [ ] `CONTEXTO_IA.md` está desactualizado desde dev49 (lo vigente para trabajar está en `FLUJO_DE_TRABAJO.md`).
+- [x] Subir a GitHub el commit de dev64 + v13.6 (hecho desde el Mac).
+- [x] Subir a GitHub el commit de dev65 + v13.9 (`6193d07`, desde el contenedor, a nombre de Claude).
+- [x] Subir a GitHub el commit de dev66 + v13.10 (desde el contenedor).

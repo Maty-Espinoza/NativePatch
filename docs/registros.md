@@ -1,4 +1,4 @@
-# Niveles de registro (GePatch dev65 + gepresent v13.9, 2026-10-29)
+# Niveles de registro (GePatch dev65 + gepresent v13.9, 2026-10-29; compuerta de dev66 + v13.10)
 
 Los registros sirven para entender qué pasa, pero también cuestan rendimiento. Por eso hay tres niveles. Se elige uno en
 la Vita con el archivo `ux0:data/gepresent/registro` (contenido `minimo`, `mediano` o `extremo`; **sin archivo: mediano**).
@@ -39,6 +39,15 @@ todas), `sin_memoria`, `captura_sin_lectores`, `off`.
 | `sin_espejo` | GePatch no copia la VRAM al espejo |
 | `sin_libre` | sin el hilo de CPU libre del PSP |
 | `sin_captura` | la Vita no recorre nada: marca las listas como capturadas (casi GePatch solo) |
+| `compuerta_sync` | (v13.10) la espera a la Vita se queda en el sync, como antes de dev66 (para comparar); ver `etapa2_fase2_compuerta.md` |
+
+## Compuerta (dev66 + v13.10, todos los niveles)
+- `ge_patch.log`, cada 10 s: `stats compuerta (dev66): <modo> | esperas antes de encolar=N (us c/u, max) |
+  autocomprobaciones=N cambiaron=N`, y una línea `compuerta: ...` cada vez que cambia de modo (60 comprobaciones limpias
+  → antes de encolar; la lista cambió → en el sync).
+- `ge_patch_captura.log`, línea "impacto en el PSP" (mediano y extremo): al final `compuerta (v13.10): <modo>, esperas
+  antes de encolar/seg=N (us c/u)`. La espera total por frame sigue en `compuerta_us` (en el sync o antes de encolar).
+- Extremo: `ge_patch_tarde.log` anota también las esperas antes de encolar, con tipo `e`.
 
 ## Archivos del nivel extremo
 - `ge_patch_frames.log` (CSV, una línea por frame del juego): `frame_us`, `compuerta_us` (espera a la Vita), `esperas`,

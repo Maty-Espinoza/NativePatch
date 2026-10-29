@@ -80,7 +80,8 @@ Resumen: `python3 tools/analisis_fase1.py gt1 gt2_sin_compuerta gt3_vida_lista g
 ## Propuesta para la fase 2 (por orden: ganancia / costo)
 1. **Mover la compuerta a "antes de encolar la lista siguiente"** (GePatch): +2,4 ms para la Vita, seguro según la vida
    de la lista. Para otros juegos: comprobarlo solo (revisar unas líneas de la lista anterior antes de encolar, ~10 µs en
-   el PSP) y volver al sync si cambian.
+   el PSP) y volver al sync si cambian. **Hecho en dev66 + v13.10 (`etapa2_fase2_compuerta.md`): 3 veces menos esperas
+   en la carrera de GT, casi ninguna en la mitad de la vuelta.**
 2. Capturador: leer directo de a 256 bytes en vez de tomar líneas de la caché compartida (~0,8 ms); los lectores solo
    comprueban sublistas por adelantado.
 3. Aplicar sublistas sin sumar todas las estadísticas (solo lo necesario; el resto según el nivel de registro): ~1,5 ms.
