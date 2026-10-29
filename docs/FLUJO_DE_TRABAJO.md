@@ -1,8 +1,8 @@
 # Flujo de trabajo (leer al empezar cada conversación)
 
 Cómo se trabaja en NativePatch con Claude: dónde está todo, cómo actualizar el repo, compilar, mandar a la Vita, pedir
-pruebas y guardar resultados. Actualizado el 2026-10-29 (GePatch 0.2-dev66, gepresent v13.12: **etapa 2 de la
-arquitectura B cerrada**; la fase 2 en `etapa2_fase2_compuerta.md`, `etapa2_fase2_estadisticas.md` y
+pruebas y guardar resultados. Actualizado el 2026-10-29 (GePatch 0.2-dev66, gepresent v13.13: **etapa 2 de la
+arquitectura B cerrada**, después Ridge Racer a 60 fps en `etapa2_ridge_racer.md`; la fase 2 en `etapa2_fase2_compuerta.md`, `etapa2_fase2_estadisticas.md` y
 `etapa2_fase2_adelanto.md`; análisis en `etapa2_fase1_impacto.md`). Lo que sigue antes de la etapa 3 (nombres NativeLink /
 NativeDraw, versiones 0.0.x, README, instalación y limpieza) está en `TODO.md`, sección "Preparación para la etapa 3". Lo
 técnico del plugin está en `CONTEXTO_IA.md` (desactualizado desde dev49) y en los documentos de cada etapa
@@ -97,15 +97,17 @@ Lo pone en marcha el usuario (§1). Claude solo trabaja con archivos en la carpe
   etapa 1), `medir_ge` (T6), `off` (gepresent no engancha nada). Desde v13.9: `registro` (nivel de registro: `minimo`,
   `mediano` (por defecto) o `extremo`) y los de la fase de análisis `sin_compuerta`, `sin_espejo`, `sin_libre`,
   `sin_captura` (se apagan con `no` adentro). Desde v13.10: `compuerta_sync` (la espera a la Vita vuelve al sync, como
-  antes de dev66). Desde v13.12: `sin_adelanto` (sin la comprobación por adelantado de sublistas). Detalle en
-  `registros.md`.
+  antes de dev66). Desde v13.12: `sin_adelanto` (sin la comprobación por adelantado de sublistas). Desde v13.13:
+  `nucleo_captura` (fija el núcleo del capturador; la Vita quedó con `libre`, que es lo mismo que sin archivo). Detalle
+  en `registros.md`.
 - La VM de Claude no llega a la red de la casa (la Vita está en 192.168.0.10): todo pasa por el relevo.
 
 ## 5. Pedir pruebas al usuario
 - Decir **qué juego, qué hacer y en qué fijarse**, con las opciones **con el nombre que tienen en el menú del plugin**
   (L+R+START), y al final un resumen de qué juego va con qué opción.
 - Juegos: Gran Turismo (UCUS-98632; la carrera y el puente son lo más pesado), Silent Hill Shattered Memories
-  (ULUS-10450; exterior), Ridge Racer (ULJS-00001), LocoRoco (NPEG-00024). L al abrir el juego = GePatch apagado.
+  (ULUS-10450; exterior), Ridge Racer (ULJS-00001; lo más pesado es la curva antes de la zona con público, una vez por
+  vuelta), LocoRoco (NPEG-00024). L al abrir el juego = GePatch apagado.
   El modo sombra viene activado por defecto (no hay que tocar el menú).
 - Después de cada cambio: un resumen simple (qué se intenta, qué hace cada componente), sin detalles técnicos.
 

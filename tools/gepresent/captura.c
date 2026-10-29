@@ -41,6 +41,8 @@
 // espejo, que podia tener una copia vieja (las DISTINTAS, todas de la VRAM). 2) Comprobacion por adelantado: el capturador
 // anota en orden las sublistas que aplico (estables: racha >= pv_min); al empezar la lista siguiente los lectores las
 // comprueban primero, sin esperar a llegar a su CALL (plan pv). Interruptor sin_adelanto. Ver docs/etapa2_fase2_adelanto.md
+// v13.13 (Ridge Racer, que no repite sublistas: todo se interpreta): walkList de a linea de 64 bytes (~1 070 -> ~800 ns por
+// comando) y el capturador en cualquier nucleo (nucleo_captura). Ver docs/etapa2_ridge_racer.md
 #include <psp2/kernel/threadmgr.h>
 #include <psp2/kernel/clib.h>
 #include <psp2/kernel/processmgr.h>
@@ -306,8 +308,10 @@ static void draw(uint32_t d) {
     if (reg[0x23] & 1) markRt(reg[0x9E] & 0xFFFFF0, (reg[0x9F] & 0x7FF) * h * 2);  // z (con prueba de z)
   }
   if (isVram(vaddr)) acc.dvert_vram++;
-  uint32_t vs = vsize(vt), vstart = vaddr;
-  if (idx) smpAdd(iaddr, n * (idx == 1 ? 1 : idx == 2 ? 2 : 4), 1); else smpAdd(vaddr, n * vs, 0);
+  static uint32_t vs_vt = ~0u, vs_sz;  // (v13.13) el tamano del vertice cambia poco: se recuerda
+  if (vt != vs_vt) { vs_vt = vt; vs_sz = vsize(vt); }
+  uint32_t vs = vs_sz, vstart = vaddr;
+  if (nivel >= 2) { if (idx) smpAdd(iaddr, n * (idx == 1 ? 1 : idx == 2 ? 2 : 4), 1); else smpAdd(vaddr, n * vs, 0); }
   if (rec && !idx) recVert(vstart, n * vs);
   if (idx) { acc.ibytes += n * (idx == 1 ? 1 : idx == 2 ? 2 : 4); iaddr += n * (idx == 1 ? 1 : idx == 2 ? 2 : 4); }
   else { acc.vbytes += n * vs; vaddr += n * vs; }
@@ -318,7 +322,7 @@ static void draw(uint32_t d) {
       static const uint8_t bp[16] = { 16, 16, 16, 32, 4, 8, 16, 32, 4, 8, 8, 8, 8, 8, 8, 8 };
       uint32_t w = reg[0xA8] & 0x7FF, h = 1u << ((reg[0xB8] >> 8) & 0xF);
       if (!w) w = 1u << (reg[0xB8] & 0xF);
-      smpAdd(ta, w * h * bp[reg[0xC3] & 0xF] / 8, 2);
+      if (nivel >= 2) smpAdd(ta, w * h * bp[reg[0xC3] & 0xF] / 8, 2);
     }
     if (isVram(ta)) {
       acc.dtex_vram++;
@@ -686,21 +690,35 @@ static void recTex(uint32_t ta) {
 
 // Recorre la lista hasta su stall o su fin (1: termino), con un tope de comandos por llamada
 #define UNWIND() (l->sp = 0, l->pc = l->stk[0][0], l->off = l->stk[0][1], recAbort(), chk = NULL)
-static int walkList(List *l) {
-  for (int budget = 8000; budget--;) {  // ~3 ms: despues se vuelve al bucle (eventos y pausa)
+// v13.13 (Ridge Racer: sin sublistas que saltar, todo se interpreta, ~1 us por comando): funcion aparte (noinline:
+// dentro de walk el compilador se quedaba sin registros y en cada comando recalculaba &q[...] y usaba la pila) y de a
+// linea de 64 bytes: el stall, la traduccion (vtr), la lectura (rdc), el tope de la lista, recLine y lo/hi se miran una
+// vez por linea; dentro de la linea se sigue mientras el recorrido sea seguido (sin saltos) y el bufer de R0 sea el mismo
+// (memoTry lo puede reemplazar al comparar una sublista).
+static int __attribute__((noinline)) walkList(List *l) {
+  uint32_t lpc = 1, lra = 0;  // linea actual (direccion del juego) y donde se lee (la VRAM: en el espejo del frame)
+  for (int budget = 8000; budget > 0;) {  // ~3 ms: despues se vuelve al bucle (eventos y pausa)
     if (l->stall && l->pc == l->stall) return 0;
-    uint32_t pc = l->pc, ra = vtr(pc);  // (ra: donde se lee; la VRAM, en el espejo)
+    uint32_t pc = l->pc, ra;  // (ra: donde se lee; la VRAM, en el espejo)
+    if ((pc & ~63u) == lpc) ra = lra | (pc & 63);
+    else if ((ra = vtr(pc))) { lpc = pc & ~63u; lra = ra & ~63u; }
     if (!ra) {
       if (!isVram(pc)) { acc.bad++; return 1; }
       want(pc, 4, 1);
       if (!l->sp) { acc.lost++; return 1; }
       acc.v_cut++; UNWIND(); continue;  // sublista que sigue en una pagina sin copia: se vuelve al nivel de arriba
     }
-    uint32_t op = rdc(&R0, ra, l->ord), c = op >> 24, d = op & 0xFFFFFF, prev = l->prev;
-    if (++l->n > LIST_MAX) { acc.aborted++; return 1; }
-    if (!l->sp && !isVram(pc)) { if (pc < l->lo) l->lo = pc; if (pc > l->hi) l->hi = pc; }  // (v13.9.2) memoria del nivel de arriba
-    l->pc += 4; l->prev = op; acc.cmds++; f_cmds++;
+    uint32_t op = rdc(&R0, ra, l->ord), ba = R0.a, bn = R0.n, i = (ra - ba) >> 2;
+    uint32_t k = ra - ba < bn ? (64 - (pc & 63)) >> 2 : 1;  // comandos seguidos que quedan en la linea (1: palabra suelta)
+    if (l->stall && l->stall - pc < k * 4) k = (l->stall - pc) >> 2;  // (el stall dentro de la linea)
+    if (l->n + k > LIST_MAX) { acc.aborted++; return 1; }
     if (rec && (pc & ~63u) != rec_last) recLine(pc & ~63u, ra & ~63u);
+    uint32_t sp0 = l->sp, top = !sp0 && !isVram(pc);  // (v13.9.2) memoria del nivel de arriba
+    if (top && pc < l->lo) l->lo = pc;
+    for (;;) {
+    uint32_t c = op >> 24, d = op & 0xFFFFFF, prev = l->prev;
+    if (top && pc > l->hi) l->hi = pc;
+    l->n++; l->pc = pc + 4; l->prev = op; acc.cmds++; f_cmds++; budget--;
 #define TOUCH(c) if (rec) rec_touch[(c) >> 5] |= 1u << ((c) & 31)
     switch (c) {
     case 0x00: break;
@@ -778,6 +796,9 @@ static int walkList(List *l) {
     default:
       if (cls[c] && reg[c] != d) { dirty |= cls[c]; if (cls[c] & (C_OTHER | C_TL)) acc.chg[c]++; }
       reg[c] = d; TOUCH(c);
+    }
+    if (--k == 0 || l->pc != pc + 4 || l->sp != sp0 || R0.a != ba || R0.n != bn) break;  // fin de la linea o salto
+    pc += 4; op = R0.buf[++i];
     }
   }
   return 0;  // tope: se sigue en la proxima vuelta
@@ -1364,7 +1385,7 @@ void capturaStart(void) {
     if (fd >= 0) { sceIoRead(fd, b, 7); sceIoClose(fd); nivel = b[0] == 'e' ? 2 : b[0] == 'm' && b[1] == 'i' ? 0 : 1; }
   }
   if (nivel >= 2) { uint32_t t0 = now(), x = 0; for (int i = 0; i < 10000; i++) x += now(); clog("(v13.9.4) costo de leer la hora: %u ns (%u)\n", (now() - t0) / 10, x & 1); }
-  clog("gepresent v13.12: capturador de la etapa 2 (memoria de sublistas, espejo de la VRAM) con registros de la fase de analisis\n");
+  clog("gepresent v13.13: capturador de la etapa 2 (memoria de sublistas, espejo de la VRAM) con registros de la fase de analisis\n");
   static const char *rot[2][2] = { { "ux0:pspemu/ge_patch_frames.log", "ux0:pspemu/ge_patch_frames_prev.log" },
                                    { "ux0:pspemu/ge_patch_tarde.log", "ux0:pspemu/ge_patch_tarde_prev.log" } };
   for (int k = 0; k < 2; k++) { sceIoRemove(rot[k][1]); sceIoRename(rot[k][0], rot[k][1]); }
@@ -1415,7 +1436,15 @@ void capturaStart(void) {
            memo_chk ? "; REVISION de todas (memo_revisar)" : "; revision de 1 de cada 32");
     }
   }
-  SceUID t = sceKernelCreateThread("gepresent_captura", capThread, 0x61, 0x4000, 0, 0x20000 /* nucleo 1 */, NULL);
+  // v13.13: el capturador puede correr en cualquiera de los 3 nucleos (antes fijo en el 1, con los hilos de audio: en
+  // Ridge Racer el audio usa ~30 % de ese nucleo y el capturador recibia ~65 %; ahora ~100 %). RR: 30 -> 60 fps en el
+  // tramo del publico; GT: 58,2 -> 60 en lo mas pesado; sin cortes de audio. Interruptor nucleo_captura ("0", "1" o "2")
+  // para fijarlo a un nucleo si algun juego lo necesita (sin archivo o "libre": cualquiera).
+  char nc[8] = { 0 }; uint32_t cmask = 0x70000; const char *cname = "libre (0, 1 o 2)";
+  SceUID nf = sceIoOpen("ux0:data/gepresent/nucleo_captura", SCE_O_RDONLY, 0);
+  if (nf >= 0) { sceIoRead(nf, nc, 7); sceIoClose(nf); }
+  if (nc[0] >= '0' && nc[0] <= '2') { cmask = 0x10000 << (nc[0] - '0'); nc[1] = 0; cname = nc; }
+  SceUID t = sceKernelCreateThread("gepresent_captura", capThread, 0x61, 0x4000, 0, cmask, NULL);
   // Prioridad (v12.7): en el nucleo 2 el emulador tiene ScePspemuRemoteMe (Media Engine: decodifica el audio del juego),
   // TitleInfo y AvcAuInput con 0x60. Con 0x40 (v12.4/v12.6) el capturador los tapaba y el audio se cortaba; con 0xA0
   // (v12.5) recibia un tercio del nucleo (~1000 ns por comando). 0x61: justo debajo de ellos. (Audio: nucleo 1, 0x40-0x43;
@@ -1424,7 +1453,7 @@ void capturaStart(void) {
   // en el 1 solo estan los hilos de salida de audio (0x40-0x43, trabajos cortos), que siguen pasando antes.
   if (t >= 0) sceKernelStartThread(t, 0, NULL);
   cap_uid = t;
-  clog("hilos: captura %08x (nucleo 1, prioridad 0x61, debajo de los hilos de audio) log %08x; hilos del emulador vistos: %d\n", t, r, emu_n);
+  clog("hilos: captura %08x (nucleo %s, prioridad 0x61, debajo de los hilos de audio; ux0:data/gepresent/nucleo_captura) log %08x; hilos del emulador vistos: %d\n", t, cname, r, emu_n);
   SceUID et = sceKernelCreateThread("gepresent_espejo", espThread, 0xBE, 0x2000, 0, 0x10000 /* nucleo 0 */, NULL);  // (v13.6: debajo de los lectores)
   if (et >= 0) sceKernelStartThread(et, 0, NULL);
   clog("espejo de la VRAM: hilo %08x (nucleo 0, prioridad 0xBE); copias en %08x y %08x\n", et, MIRROR, MIRROR2);

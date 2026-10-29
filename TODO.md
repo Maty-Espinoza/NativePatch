@@ -1,7 +1,7 @@
 # TODO: pendientes que no son urgentes
 
 Cosas que no bloquean el trabajo actual pero pueden servir más adelante. Cada una dice de dónde salió (documento en
-`docs/` o en el proyecto). Actualizado: 2026-10-29 (GePatch 0.2-dev66 + gepresent v13.12: **etapa 2 cerrada**). Lo que
+`docs/` o en el proyecto). Actualizado: 2026-10-29 (GePatch 0.2-dev66 + gepresent v13.13: **etapa 2 cerrada**; después, Ridge Racer a 60 fps). Lo que
 sigue es la preparación para la etapa 3 (abajo) y después la etapa 3 de `docs/arquitectura_dibujo_en_vita.md` §6.
 Cómo se trabaja: `docs/FLUJO_DE_TRABAJO.md`.
 
@@ -38,15 +38,18 @@ sugerido: 1 y 4 juntos (nombre y versión), después 5 y 6 (limpieza), 2 (README
       que limita la revisión de sublistas: ~2 µs por línea para el capturador y los lectores; el capturador sigue
       comparando ~5,5 ms por frame en lo más pesado de GT. Ideas: vista con caché o DMA (KBENCH: 1,7–4 veces más rápido
       en bloques grandes). Medir primero. (`etapa2_fase2_adelanto.md`, `etapa2_fase1_impacto.md`)
-- [ ] **Arranque y final de la vuelta de GT** siguen esperando a la Vita (necesita más de 16,7 ms por frame): 58,2 fps
-      en lo más pesado con v13.12.
-- [ ] El capturador pierde ~17 % de su núcleo (el 1, con el audio): probar prioridad / núcleo con cuidado del audio.
-      (punto 5 de la fase 2, no se hizo)
+- [x] ~~Arranque y final de la vuelta de GT esperando a la Vita~~: con v13.13 GT va a 60,2 fps en lo más pesado
+      (13,4 ms de Vita por frame), 0 segundos de carrera bajo 58. (`etapa2_ridge_racer.md`)
+- [x] ~~El capturador pierde ~17 % de su núcleo (el 1, con el audio)~~: v13.13, el capturador puede correr en cualquiera
+      de los 3 núcleos (interruptor `nucleo_captura` para fijarlo): recibe ~100 %, sin cortes de audio en RR ni en GT.
 - [ ] Aplicar una sublista todavía copia sus registros (hasta 64) y matrices: medir cuánto queda con el registro extremo
       (`aplicar_us`) antes de tocarlo.
 - [ ] Corrida `sin_captura` en GT para saber si los frames lentos del final de la vuelta son del juego solo.
-- [ ] **Acortar el bucle de interpretación** (~360 ns por comando): revisar el tramo de RAM una vez por línea y no por
-      comando, y usar menos contadores. Bajaría lo que la memoria de sublistas no se salta. (`etapa2_memoria_sublistas.md`)
+- [x] ~~Acortar el bucle de interpretación: revisar el tramo de RAM una vez por línea~~: v13.13, `walkList` de a línea
+      de 64 bytes (RR: ~1 070 → ~800 ns por comando). (`etapa2_ridge_racer.md`)
+- [ ] Bucle de interpretación, lo que queda: todavía cuenta por comando `l->n`, `acc.cmds`, `f_cmds`, `l->pc`, `l->prev`
+      y `l->hi`; se podrían sumar una vez por línea (cuidando los `return` dentro del `switch`). Las estadísticas de
+      `draw` (lotes, cambios de estado) podrían pasar al registro extremo ahora que la etapa 2 terminó.
 - [ ] Comparar directo desde la caché compartida, sin copiar la línea a `R0.buf` (ganancia chica).
       (`etapa2_espejo_vram.md`)
 - [ ] Idea chica si vuelve a importar: sacar la línea de la caché compartida con NEON y menos barreras en `clGet`.
@@ -60,22 +63,19 @@ sugerido: 1 y 4 juntos (nombre y versión), después 5 y 6 (limpieza), 2 (README
 - [x] ~~Leer menos de la RAM del PSP (no releer líneas, de a 64–256 B)~~: v13.8.1/v13.8.2, descartado.
 
 ## Probar en otros juegos (después de la etapa 2)
-- [ ] Probar gepresent v13.12 en los otros juegos instalados del usuario, en Silent Hill, Ridge Racer y LocoRoco: la
-      compuerta nueva (dev66), la comprobación por adelantado y las sublistas de la VRAM solo se vieron en GT (y SH).
+- [ ] Probar gepresent v13.13 en los otros juegos instalados del usuario y en Silent Hill (y LocoRoco con el núcleo
+      libre): la compuerta nueva (dev66), la comprobación por adelantado, las sublistas de la VRAM y el capturador en
+      cualquier núcleo solo se vieron en GT, RR y LocoRoco.
 - [ ] Desde v13.12 una línea de una sublista de la VRAM sin copia válida en el espejo del frame se regraba en vez de
       compararse con la copia vieja: si en otros juegos aparecen muchas "cambiaron" en sublistas de la VRAM, mirar esto.
 - [x] ~~LocoRoco~~ (2026-10-29, v13.12, `vitabridge/etapa2_v13.12/locoroco1`): 59,9 fps casi siempre, 0 DISTINTAS en 65 330;
       cambia una sublista antes de encolar la siguiente → la compuerta se queda en el sync (correcto). ~4–8 ms de Vita.
-- [ ] **Ridge Racer** (2026-10-29, v13.12, `vitabridge/etapa2_v13.12/rr1`): cae a **~30 fps en dos tramos de ~10 s**
-      (uno por vuelta, el mismo lugar de la pista: 17–19 mil comandos y 3 300–3 700 draws por frame, el doble de lo normal)
-      y a ~40–48 fps en tramos cortos (15–17 mil comandos). Hasta ~12 mil comandos va a 59,5–60. 0 DISTINTAS.
-      Por qué: RR no usa sublistas (la memoria se salta ~1 % de los comandos; en GT ~85 %), así que la Vita interpreta
-      todo: ~1,05 µs por comando → 20 ms por frame en lo pesado. Además RR reescribe 16 líneas de su lista antes de encolar
-      la siguiente, así que la compuerta queda en el sync (menos tiempo para la Vita), y RR espera la Vita con vsync: si no
-      llega a 16,7 ms baja directo a 30 fps (la espera llega al tope de 5 ms). El PSP tiene ~70 % de CPU libre: sin la
-      espera iría a 60. El capturador recibe ~65 % del núcleo 1 (el audio de RR usa ~30 %, en GT ~19 %).
-      Arreglos posibles: acortar el bucle de interpretación (ver "Rendimiento de la captura"); más núcleo para el
-      capturador; ver qué cambian esas 16 líneas (¿se puede capturar antes de que cambien?).
+- [x] ~~**Ridge Racer** a ~30 fps en el tramo del público~~ (v13.12: 17–21 mil comandos y ~3 700 draws por frame; sin
+      sublistas que saltar, ~1 µs por comando, capturador con ~65 % de su núcleo): **60 fps con v13.13** (de a línea +
+      capturador en cualquier núcleo), 1 segundo a 55 en toda la carrera. (`etapa2_ridge_racer.md`)
+- [ ] Ridge Racer reescribe 16 líneas de su lista antes de encolar la siguiente, así que la compuerta se queda en el sync
+      (menos margen para la Vita). Ver qué cambian: si es algo que la Vita ya leyó, se podría usar la compuerta antes de
+      encolar. Va a importar cuando la Vita además dibuje (etapa 3).
 - [ ] **Cuelgue de la Vita** en la primera corrida de GT con v13.11.1 (~10 s después de largar). No volvió a pasar con
       v13.12.1 ni v13.12.2. Si vuelve, anotar versión y momento.
 

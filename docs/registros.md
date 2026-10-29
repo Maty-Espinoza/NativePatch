@@ -41,6 +41,7 @@ todas), `sin_memoria`, `captura_sin_lectores`, `off`.
 | `sin_captura` | la Vita no recorre nada: marca las listas como capturadas (casi GePatch solo) |
 | `compuerta_sync` | (v13.10) la espera a la Vita se queda en el sync, como antes de dev66 (para comparar); ver `etapa2_fase2_compuerta.md` |
 | `sin_adelanto` | (v13.12) los lectores no comprueban el plan por adelantado (solo al llegar a cada CALL, como antes); ver `etapa2_fase2_adelanto.md` |
+| `nucleo_captura` | (v13.13) `0`, `1` o `2` fija el capturador a ese núcleo (antes de v13.13 siempre el 1); sin archivo o `libre`: cualquiera de los 3. La línea `hilos: captura` del log dice cuál se usó; ver `etapa2_ridge_racer.md` |
 
 ## Memoria de sublistas (v13.11)
 Cada sublista guardada suma solo sus estadísticas distintas de 0 (hasta 48; con más no se guarda y el log lo avisa). En el
