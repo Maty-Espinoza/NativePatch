@@ -7,6 +7,7 @@
 // v13.4: ./prueba <modo> <vram> 1 hace pasar a los dos lectores (comprobacion por adelantado) antes que el capturador:
 // mismas columnas que sin lectores; pre= cuenta las aplicadas con la comprobacion de un lector. Con 2 los lectores pasan
 // despues del capturador: se saltan todos los CALL del nivel de arriba (tarde=) sin leer lineas.
+// v13.5.2: VIDA=1 ./prueba 1 0 0 prueba la vida de los datos (muestras que cambian 1 o 2 flips despues; lineas "vida:").
 #include "captura.c"
 #include <stdio.h>
 #include <string.h>
@@ -98,6 +99,24 @@ int main(int argc, char **argv) {
            acc.memo_hit, acc.memo_miss, acc.memo_dep, acc.memo_fail, acc.memo_no, acc.memo_chk, acc.memo_bad, acc.memo_lines, acc.memo_cmds, acc.memo_pre,
            lv_lines[0] + lv_lines[1], lv_ok[0] + lv_ok[1], lv_bad[0] + lv_bad[1]); lv_lines[0] = lv_lines[1] = lv_ok[0] = lv_ok[1] = lv_bad[0] = lv_bad[1] = lv_late[0] = lv_late[1] = 0;
     gen++; ntex = 0;
+  }
+  if (getenv("VIDA")) {  // v13.5.2: vida de los datos por frames. 8 muestras de vertices por frame (el tope)
+    smp_r = smp_w; sceClibMemset((void *)&LT, 0, sizeof LT);  // (sin las muestras de los frames de arriba)
+    for (int k = 0; k < 4; k++) smp_f[k] = smp_k[k] = 0;
+    for (int k = 0; k < 8 * 64; k++) smpAdd(0x08C00000u + (k / 64) * 0x100, 64, 0);  // frame A: grupos 0-7
+    for (int g = 2; g < 5; g++) *W(0x08C00000u + g * 0x100) ^= 1;                    // 3 cambian antes del flip 1
+    gen++; for (int k = 0; k < 4; k++) smp_f[k] = 0; ltFlip();
+    for (int g = 5; g < 8; g++) *W(0x08C00000u + g * 0x100 + 8) ^= 1;                // 3 cambian antes del flip 2...
+    cw[0].lo = 0x08C00000u + 5 * 0x100; cw[0].hi = cw[0].lo + 0x100; cw[0].t = now(); cw_n = 1;  // ...1 con aviso de rango
+    cw_all_t = 0;
+    gen++; ltFlip();
+    printf("vida: n=%u cambiaron_1f=%u 2f=%u aviso_rango=%u aviso_todo=%u (esperado 8 / 3 / 6 / 1 / 0)\n", LT.n[0], LT.ch1[0], LT.ch2[0], LT.warn[0], LT.wall[0]);
+    cw_all_t = now() + 1;  // vaciar toda la cache: cubre a los demas
+    for (int k = 0; k < 8 * 64; k++) smpAdd(0x08C10000u + (k / 64) * 0x100, 64, 0);
+    for (int g = 0; g < 4; g++) *W(0x08C10000u + g * 0x100) ^= 1;
+    cw_all_t = now() | 1;
+    gen++; for (int k = 0; k < 4; k++) smp_f[k] = 0; ltFlip(); gen++; ltFlip();
+    printf("vida: n=%u cambiaron_2f=%u aviso_todo=%u (esperado 16 / 10 / 4)\n", LT.n[0], LT.ch2[0], LT.wall[0]);
   }
   lbuf[lpos] = 0; printf("%s", lbuf);
   return 0;

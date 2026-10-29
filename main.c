@@ -2756,8 +2756,16 @@ int (* _sceDisplaySetFrameBuf)(void *topaddr, int bufferwidth, int pixelformat, 
 #define SB ((volatile u32 *)(0x0A000000 | 0x40000000))
 #define SB_MAGIC 0x424D4F53 // "SOMB"
 #define SB_N 4096
-enum { EV_ENQ = 1, EV_HEAD, EV_STALL, EV_DSYNC, EV_LSYNC, EV_FLIP };
+enum { EV_ENQ = 1, EV_HEAD, EV_STALL, EV_DSYNC, EV_LSYNC, EV_FLIP, EV_GEFIN, EV_SYNCEND, EV_CPU, EV_CPUSUM }; // (7-10: dev63)
 static int sombra, mode_done;
+static int (*_sceGeGetReg)(int); // (T6, dev63)
+static u32 geBusy(void) { // 1 si el GE tiene una lista en curso (desde un gancho: con k1 = 0, dev63.2)
+  if (!_sceGeGetReg) return 2;
+  int k1 = pspSdkSetK1(0);
+  u32 e = _sceGeGetReg(3) & 1;
+  pspSdkSetK1(k1);
+  return e;
+}
 static u32 sb_ord; // numero de orden de la ultima lista encolada
 static struct { u32 qid, ord; } sb_q[16]; // ultimas listas, para la compuerta de sceGeListSync
 static struct { u32 ev, syncs, late, wait_us, wait_max, timeouts, in_sync_us, lsyncs, llate; } sbs;
@@ -2782,7 +2790,7 @@ static void sbInit(void) {
   for (i = 0; i < 0x50; i++) SB[i] = 0;
   for (i = 0x200; i < 0x400; i++) SB[i] = 0;
   for (i = 0; i < 16; i++) esp_have[i] = 0;
-  SB[1] = 2; SB[6] = sb_ord; // version 2: con espejo de la VRAM (dev62)
+  SB[1] = 3; SB[6] = sb_ord; // version 2: con espejo de la VRAM (dev62); 3: con T4/T6 (eventos 7-10, dev63)
   SB[0] = SB_MAGIC;
 }
 
@@ -2814,9 +2822,12 @@ int sceGeDrawSyncPatched(int mode) {
   sbs.syncs++;
   sbs.late += !!w;
   sbPost(EV_DSYNC, mode, w, SB[3], sb_ord);
+  u32 busy = geBusy();
   t0 = sceKernelGetSystemTimeLow();
   int r = _sceGeDrawSync(mode);
-  sbs.in_sync_us += sceKernelGetSystemTimeLow() - t0;
+  u32 dt = sceKernelGetSystemTimeLow() - t0;
+  sbs.in_sync_us += dt;
+  sbPost(EV_SYNCEND, 0, dt, busy, 0); // T6 (dev63): cuanto espero de verdad al GE, y si el GE estaba trabajando
   return r;
 }
 int sceGeListSyncPatched(int qid, int mode) {
@@ -2830,8 +2841,102 @@ int sceGeListSyncPatched(int qid, int mode) {
     sbs.lsyncs++;
     sbs.llate += !!w;
     sbPost(EV_LSYNC, mode, qid, w, SB[3]);
+    u32 busy = geBusy(), t0 = sceKernelGetSystemTimeLow();
+    int r = _sceGeListSync(qid, mode);
+    sbPost(EV_SYNCEND, 0, sceKernelGetSystemTimeLow() - t0, busy, 1);
+    return r;
   }
   return _sceGeListSync(qid, mode);
+}
+
+// --- T6 y T4 (dev63, etapa 2): cuando trabaja el GE y que escribe la CPU del juego ---
+// T6: un hilo mira el GE cada ~250 us con sceGeGetReg (como vpjuego) solo mientras tiene trabajo; sin listas duerme
+// 2 ms. dev63.3: apagado salvo que gepresent lo pida (SB[0x47] = 1, archivo ux0:data/gepresent/medir_ge): despertar
+// cada 250 us le quitaba ~2-3 fps a GT en el puente. Por cada tramo en que el GE estuvo ocupado sin pausa anota EV_GEFIN: a = inicio (hora del encolado si el GE
+// estaba libre), b = muestras detenido en el stall, c = muestras; la hora del evento es el fin (+-250 us).
+// T4: ganchos de las funciones con que el juego deja datos listos para el GE (vaciar la cache de un rango, DMA):
+// EV_CPU (dato: 0 WritebackRange, 1 WritebackInvalidateRange, 2 InvalidateRange, 3 WritebackAll, 4
+// WritebackInvalidateAll, 5 sceDmacMemcpy, 6 sceDmacTryMemcpy; a = direccion o destino, b = tamano o origen, c =
+// tamano del DMA). Hasta 96 por frame (el resto solo se cuenta); en el flip EV_CPUSUM con los totales del frame.
+static volatile u32 ge_kick; // hora del ultimo encolado (0: ya visto)
+static struct { u32 busy_us, runs, run_max, stall_n, n; } ges;  // (para el log de GePatch)
+static int geThread(SceSize args, void *argp) {
+  u32 busy0 = 0, n = 0, nst = 0;
+  for (;;) {
+    if (!sombra || !_sceGeGetReg || SB[0x47] != 1) { // (dev63.3) solo si gepresent lo pide: le quitaba ~2-3 fps a GT
+      busy0 = ge_kick = 0;
+      sceKernelDelayThread(100000);
+      continue;
+    }
+    sceKernelDelayThread(busy0 || ge_kick ? 250 : 2000);
+    u32 e = _sceGeGetReg(3), t = sceKernelGetSystemTimeLow();
+    if (e & 1) {
+      if (!busy0) { busy0 = ge_kick && (int)(t - ge_kick) >= 0 ? ge_kick : t; n = nst = 0; } // (dev63.2: el encolado pudo ser despues de leer t)
+      u32 la = _sceGeGetReg(5), st = _sceGeGetReg(6);
+      n++;
+      if (st && (la & 0x0FFFFFFF) == (st & 0x0FFFFFFF)) nst++;
+      ge_kick = 0;
+    } else if (busy0 || ge_kick) { // termino (o era tan corta que no se vio: n = 0)
+      u32 b0 = busy0 ? busy0 : ge_kick;
+      if ((int)(t - b0) < 0) b0 = t;
+      sbPost(EV_GEFIN, 0, b0, nst, n);
+      ges.busy_us += t - b0; ges.runs++; ges.stall_n += nst; ges.n += n;
+      if (t - b0 > ges.run_max) ges.run_max = t - b0;
+      busy0 = ge_kick = 0;
+    }
+  }
+  return 0;
+}
+static struct { u32 n, kb, dn, dkb, posted, dropped; } t4;  // del frame
+static struct { u32 n, kb, dn, dkb; } t4s;                  // (para el log de GePatch)
+static void t4Post(u32 kind, u32 a, u32 b, u32 c) {
+  if (t4.posted < 96) { t4.posted++; sbPost(EV_CPU, kind, a, b, c); } else t4.dropped++;
+}
+static void (*_dcWbR)(const void *, unsigned int), (*_dcWbIR)(const void *, unsigned int), (*_dcIR)(const void *, unsigned int);
+static void (*_dcWbA)(void), (*_dcWbIA)(void);
+static int (*_dmac)(void *, const void *, unsigned int), (*_dmacTry)(void *, const void *, unsigned int);
+static void dcRange(int kind, const void *p, unsigned int n) { if (sombra) { t4.n++; t4.kb += n >> 10; t4Post(kind, (u32)p, n, 0); } }
+void dcWbRPatched(const void *p, unsigned int n) { _dcWbR(p, n); dcRange(0, p, n); }
+void dcWbIRPatched(const void *p, unsigned int n) { _dcWbIR(p, n); dcRange(1, p, n); }
+void dcIRPatched(const void *p, unsigned int n) { _dcIR(p, n); dcRange(2, p, n); }
+void dcWbAPatched(void) { _dcWbA(); if (sombra) { t4.n++; t4Post(3, 0, 0, 0); } }
+void dcWbIAPatched(void) { _dcWbIA(); if (sombra) { t4.n++; t4Post(4, 0, 0, 0); } }
+static void dmacNote(int kind, void *d, const void *s, unsigned int n) { if (sombra) { t4.dn++; t4.dkb += n >> 10; t4Post(kind, (u32)d, (u32)s, n); } }
+int dmacPatched(void *d, const void *s, unsigned int n) { int r = _dmac(d, s, n); dmacNote(5, d, s, n); return r; }
+int dmacTryPatched(void *d, const void *s, unsigned int n) { int r = _dmacTry(d, s, n); dmacNote(6, d, s, n); return r; }
+static void t4Flip(void) { // en el flip: totales del frame
+  sbPost(EV_CPUSUM, t4.dropped > 0xFFFFFF ? 0xFFFFFF : t4.dropped, t4.n, t4.kb, (t4.dn & 0xFFFF) | (t4.dkb > 0xFFFF ? 0xFFFF : t4.dkb) << 16);
+  t4s.n += t4.n; t4s.kb += t4.kb; t4s.dn += t4.dn; t4s.dkb += t4.dkb;
+  memset(&t4, 0, sizeof(t4));
+}
+static void t4t6Install(void) {
+  static const char *um[2] = { "sceSystemMemoryManager", "sceKernelUtils" };
+  int i, nd = 0, nm = 0;
+  _sceGeGetReg = (void *)FindProc("sceGE_Manager", "sceGe_driver", 0xB415364D);
+  for (i = 0; i < 2 && !_dcWbR; i++) {
+    _dcWbR = (void *)FindProc(um[i], "UtilsForUser", 0x3EE30821);
+    _dcWbIR = (void *)FindProc(um[i], "UtilsForUser", 0x34B9FA9E);
+    _dcIR = (void *)FindProc(um[i], "UtilsForUser", 0xBFA98062);
+    _dcWbA = (void *)FindProc(um[i], "UtilsForUser", 0x79D1C3FA);
+    _dcWbIA = (void *)FindProc(um[i], "UtilsForUser", 0xB435DEC5);
+  }
+  if (_dcWbR) { sctrlHENPatchSyscall((u32)_dcWbR, dcWbRPatched); nd++; }
+  if (_dcWbIR) { sctrlHENPatchSyscall((u32)_dcWbIR, dcWbIRPatched); nd++; }
+  if (_dcIR) { sctrlHENPatchSyscall((u32)_dcIR, dcIRPatched); nd++; }
+  if (_dcWbA) { sctrlHENPatchSyscall((u32)_dcWbA, dcWbAPatched); nd++; }
+  if (_dcWbIA) { sctrlHENPatchSyscall((u32)_dcWbIA, dcWbIAPatched); nd++; }
+  static const char *dm[4] = { "sceDMAManager", "sceDMACManager", "sceDmacManager", "sceDMAC_Driver" }; // (dev63.2: con
+  for (i = 0; i < 4 && !_dmac; i++) {                                                                // el primero no se encontro)
+    _dmac = (void *)FindProc(dm[i], "sceDmac", 0x617F3FE6);
+    _dmacTry = (void *)FindProc(dm[i], "sceDmac", 0xD97F94D8);
+    if (_dmac) LOG("T4: sceDmac en %s\n", dm[i]);
+  }
+  if (_dmac) { sctrlHENPatchSyscall((u32)_dmac, dmacPatched); nm++; }
+  if (_dmacTry) { sctrlHENPatchSyscall((u32)_dmacTry, dmacTryPatched); nm++; }
+  SceUID th = _sceGeGetReg ? sceKernelCreateThread("GePatchGE", geThread, 0x11, 0x800, 0, NULL) : -1;
+  if (th >= 0) sceKernelStartThread(th, 0, NULL);
+  LOG("T4/T6: sceGeGetReg %s, hilo del GE %08lx | ganchos de la cache %d de 5, del DMA %d de 2\n", _sceGeGetReg ? "si" : "NO",
+      (u32)th, nd, nm);
 }
 
 // --- Espejo de la VRAM (dev62, etapa 2) ---
@@ -3073,8 +3178,10 @@ int sceGeListEnQueuePatched(const void *list, void *stall, int cbid, PspGeListAr
     patchGeList((u32 *)((u32)list & 0x0fffffff), (u32 *)((u32)stall & 0x0fffffff));
   patch_us_frame += sceKernelGetSystemTimeLow() - t0;
   int r = _sceGeListEnQueue(list, stall, cbid, arg);
-  if (sombra && r >= 0)
+  if (sombra && r >= 0) {
     sbPost(EV_ENQ, 0, (u32)list, (u32)stall, r);
+    if (!ge_kick) ge_kick = sceKernelGetSystemTimeLow() | 1;
+  }
   return r;
 }
 
@@ -3089,8 +3196,10 @@ int sceGeListEnQueueHeadPatched(const void *list, void *stall, int cbid, PspGeLi
     patchGeList((u32 *)((u32)list & 0x0fffffff), (u32 *)((u32)stall & 0x0fffffff));
   patch_us_frame += sceKernelGetSystemTimeLow() - t0;
   int r = _sceGeListEnQueueHead(list, stall, cbid, arg);
-  if (sombra && r >= 0)
+  if (sombra && r >= 0) {
     sbPost(EV_HEAD, 0, (u32)list, (u32)stall, r);
+    if (!ge_kick) ge_kick = sceKernelGetSystemTimeLow() | 1;
+  }
   return r;
 }
 
@@ -3303,6 +3412,7 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
     if (pres[0] != 0x31565047) // el log y los volcados los escribe gepresent (buzones del descriptor)
       pres[0] = 0x31565047;
     sbPost(EV_FLIP, 0, (u32)topaddr, bufferwidth | pixelformat << 16, log_frame);
+    t4Flip();
     int k1e = pspSdkSetK1(0);
     espejoFlip(); // copia de la VRAM pedida por la Vita (dev62)
     pspSdkSetK1(k1e);
@@ -3497,6 +3607,10 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
       LOG("stats sombra sync: drawsync=%lu atrasados=%lu (>5 ms: %lu) espera=%lu us/sync (max %lu) listsync=%lu atrasados=%lu\n",
           sbs.syncs, sbs.late, sbs.timeouts, sbs.wait_us / s, sbs.wait_max, sbs.lsyncs, sbs.llate);
       LOG("stats sombra GE: el juego espera al GE en drawsync %lu us/sync\n", sbs.in_sync_us / s);
+      LOG("stats T6 (por frame): GE ocupado %lu us en %lu tramos (el mas largo %lu us), en stall %lu%% | T4 (por frame): cache %lu (%lu KB) dma %lu (%lu KB)\n",
+          ges.busy_us / STATS_EVERY, ges.runs / STATS_EVERY, ges.run_max, ges.n ? ges.stall_n * 100 / ges.n : 0,
+          t4s.n / STATS_EVERY, t4s.kb / STATS_EVERY, t4s.dn / STATS_EVERY, t4s.dkb / STATS_EVERY);
+      memset(&ges, 0, sizeof(ges)); memset(&t4s, 0, sizeof(t4s));
       u32 pl = 0, pd = 0, i;
       for (i = 0; i < 512; i++) pl += SB[0x20 + (i >> 5)] >> (i & 31) & 1, pd += SB[0x30 + (i >> 5)] >> (i & 31) & 1;
       LOG("stats espejo: paginas pedidas listas=%lu datos=%lu (KB: %lu) | copias=%lu paginas_copiadas=%lu (KB/frame %lu) tramos_max=%lu ocupado=%lu terminada=%lu/%lu\n",
@@ -3613,6 +3727,7 @@ int module_start(SceSize args, void *argp) {
   if (!passive)
     probeVram();
 
+  t4t6Install(); // (los ganchos solo anotan en modo sombra)
   _sceDisplaySetFrameBuf = (void *)FindProc("sceDisplay_Service", "sceDisplay_driver", 0x289D82FE);
   if (!_sceDisplaySetFrameBuf)
     LOG("ERROR: no se encontro sceDisplaySetFrameBuf\n");

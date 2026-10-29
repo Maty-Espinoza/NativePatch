@@ -19,6 +19,8 @@
 // saltando); comparacion de lineas con NEON y tiempo de la comparacion en el log.
 // v13.4: los lectores comprueban por adelantado las sublistas guardadas (ver memoVerify): el capturador ya no lee ni
 // compara sus lineas (en el puente de GT eso era ~9 de los ~18 ms por frame) y los lectores dejan de recorrerlas.
+// v13.5: con GePatch dev63, T6 (cuando trabaja el GE del PSP), T4 (que escribe la CPU del juego: cache y DMA) y la
+// "vida de los datos" (ver smpAdd): cuantos vertices, indices, texturas y paletas cambian 1 y 2 frames despues de leerlos.
 #include <psp2/kernel/threadmgr.h>
 #include <psp2/kernel/clib.h>
 #include <psp2/kernel/processmgr.h>
@@ -33,7 +35,7 @@
 #define SB_MAGIC 0x424D4F53u
 #define SB_N 4096
 #define LOGC "ux0:pspemu/ge_patch_captura.log"
-enum { EV_ENQ = 1, EV_HEAD, EV_STALL, EV_DSYNC, EV_LSYNC, EV_FLIP };
+enum { EV_ENQ = 1, EV_HEAD, EV_STALL, EV_DSYNC, EV_LSYNC, EV_FLIP, EV_GEFIN, EV_SYNCEND, EV_CPU, EV_CPUSUM };  // (7-10: GePatch dev63)
 static inline uint32_t now(void) { return sceKernelGetProcessTimeLow(); }
 
 // --- Estadisticas (por segundo) ---
@@ -48,6 +50,8 @@ typedef struct {
   uint32_t calls_ram, memo_hit, memo_miss, memo_fail, memo_no, memo_cmds, memo_lines, memo_bad, memo_chk, memo_reset, memo_dep;  // v12.12
   uint32_t v_ok, v_cut, tex_rt, memo_us;  // v13.1: sublistas de la VRAM recorridas desde el espejo, cortadas (pagina sin copia), texturas en un destino
   uint32_t memo_pre, lv_lines, lv_ok, lv_bad, lv_late;  // v13.4: aplicadas con la comprobacion de los lectores; lo que hicieron los lectores
+  uint32_t ge_us, ge_runs, ge_max, ge_stall, ge_n, sy_n, sy_us, sy_wait, sy_busy;  // v13.5, T6: GE del PSP y esperas del juego al GE
+  uint32_t dc_n, dc_kb, dm_n, dm_kb, cpu_drop, cpu_vram, dc_all;                   // v13.5, T4: escrituras de la CPU del juego
   uint32_t chg[256];  // cambios reales de cada registro "otro" (que impide juntar draws)
 } Stats;
 static Stats acc, rep;
@@ -171,7 +175,7 @@ static uint32_t rdc(Rd *r, uint32_t a, uint32_t ord) {
 // --- Estado del GE (sombra) ---
 typedef struct Memo Memo;
 static Memo *rec;  // sublista que se esta grabando (memoria de sublistas, v12.12)
-static void recDraw(int idx, int tex), recTex(uint32_t ta), recRead(uint32_t c);
+static void recDraw(int idx, int tex), recTex(uint32_t ta), recRead(uint32_t c), recVert(uint32_t a, uint32_t n);
 static uint32_t reg[256], mtx[5][96], mi[5];
 static uint8_t cls[256];  // 0 no es estado, 1 textura, 2 matriz, 3 destino (rt), 4 otro
 enum { C_TEX = 1, C_MTX = 2, C_RT = 4, C_OTHER = 8, C_TL = 16 };  // C_TL: TEXLEVEL (0xC8), un "otro" aparte
@@ -211,6 +215,36 @@ static uint32_t vsize(uint32_t vt) {  // bytes por vertice (reglas del GE, como 
 #define TEXADDR() ((reg[0xA0] & 0xFFFFF0) | ((reg[0xA8] << 8) & 0x0F000000))
 #define CLUTADDR() ((reg[0xB0] & 0xFFFFF0) | ((reg[0xB1] << 8) & 0x0F000000))
 
+// --- Vida de los datos (v13.5) ---
+// La Vita va a dibujar 1 frame despues de leer la lista, y su GPU leera vertices, texturas y paletas directo de la RAM
+// del PSP. Si el juego los reescribe antes, dibujaria otra cosa. Muestra: 1 de cada 64 draws (sus vertices o indices),
+// 1 de cada 8 texturas nuevas del frame y 1 de cada 16 cargas de paleta (hasta 8 vertices y 4 de lo demas por frame,
+// solo en la RAM). El capturador calcula la huella de los primeros 256 bytes al anotarla y otra vez en los 2 flips
+// siguientes (ltFlip: "1 y 2 frames despues", cuando la Vita los estaria dibujando), y cuenta cuantas cambiaron y si
+// alguna escritura conocida de la CPU (T4) las cubria: un rango, o "vaciar toda la cache". Las sublistas aplicadas por
+// la memoria cuentan con los vertices de su primer draw (sv_a).
+// v13.5.2: antes lo revisaba el hilo del espejo a los 17/33 ms: recibia poco tiempo (casi todas llegaban tarde) y le
+// quitaba tiempo al lector del nucleo 0 (el puente de GT bajo a 49-56 fps).
+typedef struct { uint32_t a, n, kind, g, h0, t0, st, ch1; } Smp;
+#define SMP_N 1024
+static Smp smp[SMP_N];
+static volatile uint32_t smp_w, smp_r;
+static uint32_t smp_k[4], smp_f[4];
+static const uint8_t smp_rate[4] = { 63, 63, 7, 15 }, smp_max[4] = { 8, 4, 4, 4 };  // (mascaras: 1 de cada 64, 64, 8, 16)
+static uint32_t smpHash(uint32_t a, uint32_t n);
+static void ltFlip(void);
+static void smpAdd(uint32_t a, uint32_t n, uint32_t kind) {  // 0 vertices, 1 indices, 2 textura, 3 paleta
+  if ((++smp_k[kind] & smp_rate[kind]) || !n || smp_f[kind] >= smp_max[kind] || isVram(a) ||
+      ramEnd(a) < a + (n > 256 ? 256 : n) || smp_w - smp_r >= SMP_N) return;
+  Smp *x = &smp[smp_w & (SMP_N - 1)];
+  x->a = a; x->n = n > 256 ? 256 : n; x->kind = kind; x->g = gen; x->t0 = now(); x->h0 = smpHash(x->a, x->n); x->st = 0;
+  smp_w++; smp_f[kind]++;
+}
+#define CW_N 256  // ultimas escrituras conocidas de la CPU del juego (T4): [lo, hi) y hora de la Vita al leer el evento
+static struct { uint32_t lo, hi, t; } cw[CW_N];
+static volatile uint32_t cw_n, cw_all_t;  // (cw_all_t: ultimo "vaciar toda la cache")
+static struct { volatile uint32_t n[4], ch1[4], ch2[4], warn[4], wall[4], ms1, ms2; } LT;  // vida de los datos (acumulados)
+
 static void draw(uint32_t d) {
   uint32_t n = d & 0xFFFF, type = (d >> 16) & 7, vt = reg[0x12], idx = (vt >> 11) & 3;
   if (!n) { acc.dempty++; return; }
@@ -230,11 +264,19 @@ static void draw(uint32_t d) {
   }
   if (isVram(vaddr)) acc.dvert_vram++;
   uint32_t vs = vsize(vt), vstart = vaddr;
+  if (idx) smpAdd(iaddr, n * (idx == 1 ? 1 : idx == 2 ? 2 : 4), 1); else smpAdd(vaddr, n * vs, 0);
+  if (rec && !idx) recVert(vstart, n * vs);
   if (idx) { acc.ibytes += n * (idx == 1 ? 1 : idx == 2 ? 2 : 4); iaddr += n * (idx == 1 ? 1 : idx == 2 ? 2 : 4); }
   else { acc.vbytes += n * vs; vaddr += n * vs; }
   if (tex) {
     uint32_t ta = TEXADDR();
-    if (texAdd(ta)) { acc.textures++; if (isVram(ta)) acc.tex_vram++; }
+    if (texAdd(ta)) {
+      acc.textures++; if (isVram(ta)) acc.tex_vram++;
+      static const uint8_t bp[16] = { 16, 16, 16, 32, 4, 8, 16, 32, 4, 8, 8, 8, 8, 8, 8, 8 };
+      uint32_t w = reg[0xA8] & 0x7FF, h = 1u << ((reg[0xB8] >> 8) & 0xF);
+      if (!w) w = 1u << (reg[0xB8] & 0xF);
+      smpAdd(ta, w * h * bp[reg[0xC3] & 0xF] / 8, 2);
+    }
     if (isVram(ta)) {
       acc.dtex_vram++;
       uint32_t p = (ta & 0x1FFFFF) >> 12;
@@ -310,6 +352,7 @@ struct Memo {
   uint32_t mmask, mi[5], mtx[148];                 // matrices tocadas
   uint32_t flags, vaddr, iaddr, vset, dirty, last_prim, last_fb, clut[2], ntex, tex[32];
   uint32_t v_in, i_in, ndep, dv[16]; uint8_t dc[16];  // estado de entrada que usa (registros que lee antes de escribirlos)
+  uint32_t sv_a, sv_n, sv_rel;  // (v13.5) vertices del primer draw sin indices: para la muestra de la vida de los datos
   volatile uint32_t ver, vok;  // (al final: recBegin no los borra) version (sube al regrabar) y comprobacion de un lector (vokOf)
 };
 static Memo *memo;
@@ -375,6 +418,8 @@ static void recEnd(List *l) {
   for (int k = 0; k < 4; k++) d->cpu_core[k] = 0;
   d->memo_hit = d->memo_miss = d->memo_fail = d->memo_no = d->memo_cmds = d->memo_lines = d->memo_bad = d->memo_chk = d->memo_reset = d->memo_dep = d->memo_us = 0;
   d->memo_pre = d->lv_lines = d->lv_ok = d->lv_bad = d->lv_late = 0;
+  d->ge_us = d->ge_runs = d->ge_max = d->ge_stall = d->ge_n = d->sy_n = d->sy_us = d->sy_wait = d->sy_busy = 0;
+  d->dc_n = d->dc_kb = d->dm_n = d->dm_kb = d->cpu_drop = d->cpu_vram = d->dc_all = 0;
   for (int c = 0; c < 256; c++)
     if (rec_touch[c >> 5] >> (c & 31) & 1) {
       if (e->nreg >= MRG) { e->state = 2; e->fail_gen = gen; return; }
@@ -490,8 +535,9 @@ ok:;
     chk = e; acc.memo_chk++;
     return -1;
   }
+  if (e->sv_n) smpAdd(e->sv_rel ? vaddr + e->sv_a : e->sv_a, e->sv_n, 0);  // (antes de memoApply: vaddr de entrada)
   memoApply(e);
-  for (uint32_t i = 0; i < e->ntex; i++) if (texAdd(e->tex[i])) { acc.textures++; if (isVram(e->tex[i])) acc.tex_vram++; }
+  for (uint32_t i = 0; i < e->ntex; i++) if (texAdd(e->tex[i])) { acc.textures++; if (isVram(e->tex[i])) acc.tex_vram++; else smpAdd(e->tex[i], 256, 2); }
   uint32_t *a = (uint32_t *)&acc;
   for (int i = 0; i < SW; i++) a[i] += e->d[i];
   Stats *d = (Stats *)e->d;
@@ -528,6 +574,10 @@ static void recDraw(int idx, int tex) {
   static const uint8_t r1[] = { 0x12, 0xD3, 0x1E, 0x9C, 0x9D }, r2[] = { 0xA0, 0xA8 };
   for (unsigned i = 0; i < sizeof r1 && rec; i++) recRead(r1[i]);
   for (unsigned i = 0; i < sizeof r2 && rec && tex; i++) recRead(r2[i]);
+}
+static void recVert(uint32_t a, uint32_t n) {  // (v13.5) vertices del primer draw: muestra de la vida de los datos
+  if (rec->sv_n || !n) return;
+  rec->sv_rel = !(rec->flags & M_VABS); rec->sv_a = rec->sv_rel ? a - rec_v0 : a; rec->sv_n = n;
 }
 static void recTex(uint32_t ta) {
   for (uint32_t i = 0; i < rec->ntex; i++) if (rec->tex[i] == ta) return;
@@ -606,7 +656,7 @@ static int walkList(List *l) {
     case 0xC4: {  // carga de paleta: cambio solo si es otra paleta u otro tamano
       if (rec) { recRead(0xB0); recRead(0xB1); }
       uint32_t ca = CLUTADDR();
-      acc.cluts++; if (isVram(ca)) { acc.clut_vram++; want(ca, (d & 0x3F) * 32, 0); } if (rec) rec->flags |= M_CLUT;
+      acc.cluts++; if (isVram(ca)) { acc.clut_vram++; want(ca, (d & 0x3F) * 32, 0); } else smpAdd(ca, (d & 0x3F) * 32, 3); if (rec) rec->flags |= M_CLUT;
       if (ca != last_clut[0] || d != last_clut[1]) { last_clut[0] = ca; last_clut[1] = d; dirty |= C_TEX; }
       break;
     }
@@ -692,6 +742,22 @@ static void event(volatile uint32_t *e) {
     if (qh != qt) acc.behind++;
   } else if (t == EV_LSYNC) {
     acc.lsyncs++;
+  } else if (t == EV_GEFIN) {  // T6: tramo ocupado del GE del PSP (a = inicio, hora del evento = fin)
+    uint32_t dt = e[4] - a;
+    acc.ge_us += dt; acc.ge_runs++; acc.ge_stall += b; acc.ge_n += c;
+    if (dt > acc.ge_max) acc.ge_max = dt;
+  } else if (t == EV_SYNCEND) {  // T6: cuanto espero el juego al GE en el sync (a us), si el GE estaba ocupado (b)
+    acc.sy_n++; acc.sy_us += a; if (a > 200) acc.sy_wait++; if (b == 1) acc.sy_busy++;
+  } else if (t == EV_CPU) {  // T4: escritura de la CPU (dato: tipo)
+    uint32_t k = e[0] >> 8 & 0xFF, lo = a & 0x0FFFFFFF, n = k >= 5 ? c : b;
+    if (k == 3 || k == 4) { acc.dc_all++; cw_all_t = now(); }
+    else {
+      if (isVram(lo)) acc.cpu_vram++;
+      uint32_t i = cw_n % CW_N;
+      cw[i].lo = lo; cw[i].hi = lo + n; cw[i].t = now(); __sync_synchronize(); cw_n++;
+    }
+  } else if (t == EV_CPUSUM) {  // T4: totales del frame
+    acc.dc_n += b; acc.dc_kb += c; acc.dm_n += e[3] & 0xFFFF; acc.dm_kb += e[3] >> 16; acc.cpu_drop += e[0] >> 8;
   } else if (t == EV_FLIP) {
     uint32_t t0 = now(), c0 = acc.cmds;  // lo encolado antes del flip se recorre antes de cerrar el frame
     walk();
@@ -703,6 +769,8 @@ static void event(volatile uint32_t *e) {
     if (f_us > acc.us_max) acc.us_max = f_us;
     f_cmds = f_draws = f_us = 0;
     gen++; ntex = 0;
+    for (int k = 0; k < 4; k++) smp_f[k] = 0;
+    ltFlip();
     uint32_t n = now();
     if (n - sec_t0 >= 1000000) {  // cada segundo: a la linea del log
       static uint32_t last[8];  // contadores de lecturas y de los lectores (acumulados) al segundo anterior
@@ -819,6 +887,20 @@ static int repThread(SceSize args, void *argp) {
       }
       top[k] = 0;
       clog("  cambios \"otro\" mas frecuentes (comando:por frame):%s\n", top);
+      if (SB[1] >= 3) {
+        clog("  T6 GE del PSP (por frame): ocupado=%u us en %u tramos (el mas largo %u us) en_stall=%u%% | sync/f=%u esperas_al_GE=%u (%u us c/u) GE_ocupado_al_llamar=%u | T4 CPU del juego (por frame): cache=%u (%u KB) dma=%u (%u KB) a_la_vram/seg=%u vaciar_todo/seg=%u sin_anotar/seg=%u\n",
+             PF(ge_us), PF(ge_runs), r->ge_max, r->ge_n ? r->ge_stall * 100 / r->ge_n : 0, PF(sy_n), PF(sy_wait),
+             r->sy_wait ? r->sy_us / r->sy_wait : 0, PF(sy_busy), PF(dc_n), PF(dc_kb), PF(dm_n), PF(dm_kb), r->cpu_vram, r->dc_all, r->cpu_drop);
+        static uint32_t l[22];  // vida de los datos: lo del ultimo segundo (acumulados en LT)
+        uint32_t c[22];
+        for (int k = 0; k < 4; k++) { c[k] = LT.n[k]; c[4 + k] = LT.ch1[k]; c[8 + k] = LT.ch2[k]; c[12 + k] = LT.warn[k]; c[16 + k] = LT.wall[k]; }
+        c[20] = LT.ms1; c[21] = LT.ms2;
+        uint32_t x[22]; for (int k = 0; k < 22; k++) { x[k] = c[k] - l[k]; l[k] = c[k]; }
+        uint32_t nn = x[0] + x[1] + x[2] + x[3] ? x[0] + x[1] + x[2] + x[3] : 1;
+        clog("  vida de los datos (por seg; cambiaron 1 / 2 frames despues; aviso: rango / vaciar_todo): vertices=%u (%u / %u, aviso %u / %u) indices=%u (%u / %u, %u / %u) texturas=%u (%u / %u, %u / %u) paletas=%u (%u / %u, %u / %u) | revisadas a los %u / %u ms | total: vertices %u de %u, texturas %u de %u\n",
+             x[0], x[4], x[8], x[12], x[16], x[1], x[5], x[9], x[13], x[17], x[2], x[6], x[10], x[14], x[18], x[3], x[7], x[11], x[15], x[19],
+             x[20] / nn / 10, x[21] / nn / 10, LT.ch2[0], LT.n[0], LT.ch2[2], LT.n[2]);
+      }
       rep_ready = 0;
     }
     if (lpos && (now() - last_write > 5000000 || lpos > sizeof lbuf / 2)) {
@@ -833,11 +915,45 @@ static int repThread(SceSize args, void *argp) {
 }
 
 // Hilo del espejo: marca como validas las paginas que el GE ya copio y cuenta las que cambiaron de una copia a otra
+static uint32_t smpHash(uint32_t a, uint32_t n) {  // huella de [a, a + n) (n <= 256) leyendo las lineas que lo cubren
+  static uint32_t buf[96] __attribute__((aligned(16)));
+  uint32_t b = a & ~63u, e = (a + n + 63) & ~63u, h = 2166136261u;
+  if (e > ramEnd(a)) e = ramEnd(a);
+  for (uint32_t x = b; x < e; x += 64) neon64(buf + (x - b) / 4, x);
+  const uint8_t *p = (const uint8_t *)buf + (a - b);
+  for (uint32_t i = 0; i < n && a + i < e; i++) h = (h ^ p[i]) * 16777619u;
+  return h;
+}
+static int cwCovers(uint32_t a, uint32_t n, uint32_t t0) {  // escritura conocida de la CPU desde t0: 1 un rango, 2 vaciar todo
+  uint32_t m = cw_n;
+  for (uint32_t k = 0; k < CW_N && k < m; k++) {
+    uint32_t i = (m - 1 - k) % CW_N;
+    if ((int)(cw[i].t - t0) < 0) break;
+    if (cw[i].lo < a + n && a < cw[i].hi) return 1;
+  }
+  return cw_all_t && (int)(cw_all_t - t0) >= 0 ? 2 : 0;
+}
+static void ltFlip(void) {  // (capturador, en cada flip) revisa las muestras de 1 y 2 frames atras
+  for (uint32_t i = smp_r; i != smp_w; i++) {
+    Smp *x = &smp[i & (SMP_N - 1)];
+    uint32_t df = gen - x->g;
+    if (x->st == 0 && df >= 1) { x->ch1 = smpHash(x->a, x->n) != x->h0; x->st = 1; LT.ms1 += (now() - x->t0) / 100; }
+    else if (x->st == 1 && df >= 2) {
+      uint32_t ch2 = smpHash(x->a, x->n) != x->h0, k = x->kind, w;
+      LT.n[k]++; LT.ch1[k] += x->ch1; LT.ch2[k] += ch2; LT.ms2 += (now() - x->t0) / 100;
+      if ((x->ch1 || ch2) && (w = cwCovers(x->a, x->n, x->t0))) { if (w == 1) LT.warn[k]++; else LT.wall[k]++; }
+      x->st = 2;
+    }
+  }
+  while (smp_r != smp_w && smp[smp_r & (SMP_N - 1)].st == 2) smp_r++;
+}
+static uint32_t medir_ge;  // (v13.5.3) pedirle a GePatch el hilo que mira el GE (T6): ux0:data/gepresent/medir_ge
 static int espThread(SceSize args, void *argp) {
   static uint32_t seen[512], hs[512], buf[64] __attribute__((aligned(16)));
   uint32_t n = 0;
   for (;;) {
     sceKernelDelayThread(5000);
+    if (SB[0] == SB_MAGIC && SB[1] >= 3 && SB[0x47] != medir_ge) SB[0x47] = medir_ge;
     if (esp_reset) { sceClibMemset(seen, 0, sizeof seen); sceClibMemset(hs, 0, sizeof hs); esp_reset = 0; }
     if (!esp_on) continue;
     uint32_t t0 = now(), done = SB[0x40];
@@ -919,7 +1035,7 @@ void capturaStart(void) {
   sceIoRename(LOGC, "ux0:pspemu/ge_patch_captura_prev.log");
   SceUID r = sceKernelCreateThread("gepresent_captura_log", repThread, 0xB0, 0x2000, 0, 0, NULL);  // primero: que
   if (r >= 0) sceKernelStartThread(r, 0, NULL);                                                      // quede el log
-  clog("gepresent v13.4: capturador de la etapa 2 con memoria de sublistas (comprobada por los lectores) y espejo de la VRAM\n");
+  clog("gepresent v13.5: capturador de la etapa 2 con memoria de sublistas (comprobada por los lectores) y espejo de la VRAM\n");
   for (uint32_t a = 0x08000000u; a < 0x0C000000u && nr < 4;) {  // tramos de la RAM del PSP mapeados en este proceso
     SceKernelMemBlockInfo in; in.size = sizeof in;
     int e = sceKernelGetMemBlockInfoByAddr((void *)PSP(a), &in);
@@ -969,6 +1085,8 @@ void capturaStart(void) {
   SceUID et = sceKernelCreateThread("gepresent_espejo", espThread, 0xB0, 0x2000, 0, 0x10000 /* nucleo 0 */, NULL);
   if (et >= 0) sceKernelStartThread(et, 0, NULL);
   clog("espejo de la VRAM: hilo %08x (nucleo 0, prioridad 0xB0); copia en %08x\n", et, MIRROR);
+  medir_ge = sceIoGetstat("ux0:data/gepresent/medir_ge", &st) >= 0;
+  clog("T6 (hilo de GePatch que mira el GE): %s\n", medir_ge ? "pedido (medir_ge)" : "apagado (crear ux0:data/gepresent/medir_ge para medir)");
   if (sceIoGetstat("ux0:data/gepresent/captura_sin_lectores", &st) >= 0) { clog("lectores: apagados (captura_sin_lectores)\n"); return; }
   void *m = NULL;
   SceUID blk = sceKernelAllocMemBlock("gepresent_lineas", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, (CL_N * 68 + 0xFFF) & ~0xFFF, NULL);
