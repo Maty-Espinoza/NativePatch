@@ -1,18 +1,12 @@
-# Ruta al codigo de Adrenaline (para systemctrl.h y libpspsystemctrl_kernel.a).
-# Por defecto se espera clonado al lado de este repo: git clone https://github.com/TheOfficialFloW/Adrenaline
-ADRENALINE ?= ../Adrenaline/cef
+# NativeLink (lado PSP). Normalmente se compila con tools/compilar.sh, que deja nativelink.prx en build/.
+# Ruta al codigo de Adrenaline (para systemctrl.h y libpspsystemctrl_kernel.a). Por defecto, clonado al lado del repo:
+# git clone https://github.com/TheOfficialFloW/Adrenaline
+ADRENALINE ?= ../../Adrenaline/cef
 INCDIR = $(ADRENALINE)/include
 LIBDIR = $(ADRENALINE)/lib
 
-# make DEST=/Volumes/VITA/pspemu/seplugins copia el plugin ahi al terminar
-all:
-ifdef DEST
-	cp $(TARGET).prx $(DEST)/$(TARGET).prx
-endif
-
 TARGET = nativelink
-OBJS = main.o log.o menu.o dump.o gu.o exports.o
-main.o log.o menu.o dump.o: log.h menu.h font.h dump.h
+OBJS = main.o log.o gu.o exports.o
 
 # Optimizacion: make OPT=-Os para probar la version optimizada para tamano
 OPT ?= -O2
@@ -30,3 +24,5 @@ LIBS = -lpspsystemctrl_kernel
 
 PSPSDK = $(shell psp-config --pspsdk-path)
 include $(PSPSDK)/lib/build_prx.mak
+
+main.o log.o: log.h

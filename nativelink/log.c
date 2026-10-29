@@ -13,16 +13,13 @@
 #define LOG_MAX  (1024 * 1024) // tope del archivo, para no llenar la tarjeta
 
 u32 log_frame;
-u32 log_us; // tiempo escribiendo el log (perfil de main.c)
 
 // --- Canal con NativeDraw (ver log.h) ---
-u32 log_io_psp; // escrituras del log hechas por el PSP (sceIo); las de la Vita no cuentan
 static int vita_dead; // no respondio: hasta reiniciar el juego se escribe con sceIo
-int vitaIo(void) {
+static int vitaIo(void) { // 1 si NativeDraw escribe el log
   return !vita_dead && VDESC[0] == 0x31565047 && VDESC[8] == 0x56474F4C; // "GPV1" y "LOGV"
 }
-u32 vita_wait_us; // tiempo esperando a NativeDraw (el volcado lo pone en 0 al empezar)
-int vitaWait(int box) {
+static int vitaWait(int box) { // espera a que NativeDraw termine el pedido anterior (0 si no responde en 2 s)
   u32 t0 = sceKernelGetSystemTimeLow();
   while (VDESC[box] != VDESC[box + 1]) {
     if (sceKernelGetSystemTimeLow() - t0 > 2000000) {
@@ -31,10 +28,9 @@ int vitaWait(int box) {
     }
     sceKernelDelayThread(1000);
   }
-  vita_wait_us += sceKernelGetSystemTimeLow() - t0;
   return 1;
 }
-void vitaPost(int box) {
+static void vitaPost(int box) { // deja el pedido (los datos ya escritos)
 #ifdef __mips__
   asm volatile("sync"); // los datos antes que el numero de pedido
 #endif
@@ -42,14 +38,11 @@ void vitaPost(int box) {
 }
 
 static char buf[2][8192]; // doble buffer: se llena uno mientras se escribe el otro
-static int cur, len, dropped, written, sync_mode, eager;
-static int flushing; // un solo volcado a la vez (el hilo del log y el modo captura podian chocar)
+static int cur, len, dropped, written, sync_mode;
+static int flushing; // un solo volcado a la vez (el hilo del log y el modo sincrono podian chocar)
 static u32 seen[256];     // keys ya vistas por logOnce
 
-void (*log_tap)(const char *s, int n);
 void logWrite(const char *s, int n) {
-  if (log_tap)
-    log_tap(s, n);
   int intr = sceKernelCpuSuspendIntr();
   if (len + n <= (int)sizeof(buf[0])) {
     memcpy(buf[cur] + len, s, n);
@@ -59,14 +52,7 @@ void logWrite(const char *s, int n) {
   }
   sceKernelCpuResumeIntr(intr);
 
-  if (sync_mode || (eager && len > (int)sizeof(buf[0]) / 2))
-    logFlush();
-}
-
-// Durante una captura se escriben muchas lineas: volcar apenas el buffer va por la mitad
-void logEager(int on) {
-  eager = on;
-  if (!on)
+  if (sync_mode)
     logFlush();
 }
 
@@ -88,7 +74,6 @@ void logFlush(void) {
     return;
   }
 
-  u32 t0 = sceKernelGetSystemTimeLow();
   if (vitaIo() && vitaWait(VLOG)) { // lo escribe la Vita: aqui solo se copia el texto
     char *q = (char *)(VLOG_BUF | 0x40000000);
     int k = d ? sprintf(q, "-- %d lineas perdidas (buffer lleno)\n", d) : 0;
@@ -99,7 +84,6 @@ void logFlush(void) {
       k += sprintf(q + k, "-- log detenido: llego a %d KB\n", LOG_MAX / 1024);
     VDESC[VLOG + 2] = k;
     vitaPost(VLOG);
-    log_us += sceKernelGetSystemTimeLow() - t0;
     flushing = 0;
     return;
   }
@@ -116,15 +100,8 @@ void logFlush(void) {
       sceIoWrite(fd, t, sprintf(t, "-- log detenido: llego a %d KB\n", LOG_MAX / 1024));
     sceIoClose(fd);
   }
-  log_us += sceKernelGetSystemTimeLow() - t0;
-  log_io_psp++;
   pspSdkSetK1(k1);
   flushing = 0;
-}
-
-// Olvida los eventos ya registrados: vuelven a aparecer en el log (tests, o tras cambiar opciones)
-void logResetOnce(void) {
-  memset(seen, 0, sizeof(seen));
 }
 
 int logOnce(u32 key) {
