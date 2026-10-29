@@ -1,9 +1,0 @@
-*.o
-*.elf
-*.prx
-*.SFO
-corredor/EBOOT.PBP
-corredor/*.elf
-corredor/*.o
-corredor/PARAM.SFO
-corredor/*.prx

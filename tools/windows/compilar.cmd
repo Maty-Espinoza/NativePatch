@@ -1,18 +1,12 @@
 @echo off
-rem Compila NativePatch en WSL y copia ge_patch.prx a Descargas, a la Vita (vitabridge\enviar) y al laboratorio.
-rem Va en Documents\GitHub\gepatch-lab (lo copia instalar.cmd); el repo esta al lado, en ..\NativePatch
-set R=%~dp0..\NativePatch
-wsl --cd "%R%" -e bash -c "export PATH=$PATH:$HOME/pspdev/bin; make -s" || goto fallo
-copy /y "%R%\ge_patch.prx" "%USERPROFILE%\Downloads\" >nul
-set V=%USERPROFILE%\Downloads\vitabridge\enviar\ux0\pspemu\seplugins
-if not exist "%V%" mkdir "%V%"
-copy /y "%R%\ge_patch.prx" "%V%\" >nul
-copy /y "%R%\ge_patch.prx" "%~dp0memstick\seplugins\" >nul
-certutil -hashfile "%R%\ge_patch.prx" MD5 | findstr /v ":"
-echo listo: Descargas, vitabridge\enviar (sube solo si el relevo esta abierto) y laboratorio
+rem Compila NativeLink y NativeDraw en WSL (tools/compilar.sh) y los deja en Descargas y en vitabridge\enviar (el relevo
+rem los sube a la Vita si esta abierto). Doble clic, o: compilar.cmd 0.0.3.1 (version de prueba: copias de respaldo).
+set R=%~dp0..\..
+wsl --cd "%R%" -e bash -c "V=$(wslpath '%USERPROFILE%\Downloads\vitabridge') sh tools/compilar.sh %1" || goto fallo
+echo listo: Descargas y vitabridge\enviar
 pause
 exit /b 0
 :fallo
-echo == fallo la compilacion (ver el error arriba)
+echo == fallo la compilacion (ver el error arriba; la primera vez: instalar.cmd)
 pause
 exit /b 1
