@@ -89,9 +89,15 @@ Resumen: `python3 tools/analisis_fase1.py gt1 gt2_sin_compuerta gt3_vida_lista g
    **Hecho en v13.11 (estadísticas compactas): ~2 ms menos de Vita por frame en lo más pesado de GT (19,1 → 17,0 ms),
    54,3 → 57,3 fps en ese tramo. `etapa2_fase2_estadisticas.md`.**
 4. Revisar sublistas más barato o por adelantado (hoy ~5,5–6,8 ms): que los lectores lleguen antes a más sublistas.
+   **Hecho en v13.12 (por adelantado, desde el final): 57,3 → 58,2 fps en lo más pesado de GT; el capturador sigue
+   comparando ~5,5 ms porque leer la memoria del PSP cuesta ~2 µs por línea. Leer más barato queda para el futuro.
+   `etapa2_fase2_adelanto.md`.**
 5. Núcleo / prioridad del capturador (pierde ~17 %), con cuidado del audio.
 6. Pendiente de la fase 1: corrida `sin_captura` para el final de la vuelta; DISTINTAS de las sublistas en la VRAM
-   (la memoria compara con el espejo de cuando se guardó, no con el del frame: ver `TODO.md`).
+   (la memoria compara con el espejo de cuando se guardó, no con el del frame) **→ arregladas en v13.12**.
+
+**Etapa 2 cerrada el 2026-10-29** con GePatch 0.2-dev66 + gepresent v13.12 (decisión del usuario: 58 fps mínimo en lo
+más pesado de GT alcanza). Los puntos 5 y 6 quedan en `TODO.md`.
 
 ## Versiones
 | Versión | Qué | md5 |

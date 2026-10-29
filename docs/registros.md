@@ -40,11 +40,14 @@ todas), `sin_memoria`, `captura_sin_lectores`, `off`.
 | `sin_libre` | sin el hilo de CPU libre del PSP |
 | `sin_captura` | la Vita no recorre nada: marca las listas como capturadas (casi GePatch solo) |
 | `compuerta_sync` | (v13.10) la espera a la Vita se queda en el sync, como antes de dev66 (para comparar); ver `etapa2_fase2_compuerta.md` |
+| `sin_adelanto` | (v13.12) los lectores no comprueban el plan por adelantado (solo al llegar a cada CALL, como antes); ver `etapa2_fase2_adelanto.md` |
 
 ## Memoria de sublistas (v13.11)
 Cada sublista guardada suma solo sus estadísticas distintas de 0 (hasta 48; con más no se guarda y el log lo avisa). En el
 nivel mínimo, al aplicar una sublista solo se suman comandos y draws: lo demás de su línea no lo usa. Detalle en
 `etapa2_fase2_estadisticas.md`.
+v13.12: la línea de la memoria agrega `| adelanto/f: plan= comprobadas= no_iguales= tarde=` (comprobación por adelantado
+de los lectores; `tarde` = veces que un lector se encontró con el capturador). Ver `etapa2_fase2_adelanto.md`.
 
 ## Compuerta (dev66 + v13.10, todos los niveles)
 - `ge_patch.log`, cada 10 s: `stats compuerta (dev66): <modo> | esperas antes de encolar=N (us c/u, max) |

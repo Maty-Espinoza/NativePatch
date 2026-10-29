@@ -1,9 +1,12 @@
 # Flujo de trabajo (leer al empezar cada conversación)
 
 Cómo se trabaja en NativePatch con Claude: dónde está todo, cómo actualizar el repo, compilar, mandar a la Vita, pedir
-pruebas y guardar resultados. Actualizado el 2026-10-29 (GePatch 0.2-dev66, gepresent v13.11, etapa 2 de la
-arquitectura B, fase 2: `etapa2_fase2_compuerta.md`, `etapa2_fase2_estadisticas.md`; análisis en `etapa2_fase1_impacto.md`). Lo técnico del plugin está en `CONTEXTO_IA.md` (desactualizado desde dev49) y en los documentos de cada
-etapa (`arquitectura_dibujo_en_vita.md` §6 es la hoja de ruta).
+pruebas y guardar resultados. Actualizado el 2026-10-29 (GePatch 0.2-dev66, gepresent v13.12: **etapa 2 de la
+arquitectura B cerrada**; la fase 2 en `etapa2_fase2_compuerta.md`, `etapa2_fase2_estadisticas.md` y
+`etapa2_fase2_adelanto.md`; análisis en `etapa2_fase1_impacto.md`). Lo que sigue antes de la etapa 3 (nombres NativeLink /
+NativeDraw, versiones 0.0.x, README, instalación y limpieza) está en `TODO.md`, sección "Preparación para la etapa 3". Lo
+técnico del plugin está en `CONTEXTO_IA.md` (desactualizado desde dev49) y en los documentos de cada etapa
+(`arquitectura_dibujo_en_vita.md` §6 es la hoja de ruta).
 
 ## 1. Al empezar una conversación
 1. Leer el último `claude/resumen_conversacion_*.md` del proyecto de claude.ai: dice dónde quedó todo y qué sigue. Después,
@@ -87,13 +90,15 @@ Lo pone en marcha el usuario (§1). Claude solo trabaja con archivos en la carpe
   respaldo en el PC antes de pedir la prueba.
 - El relevo a veces se queda pegado sin marcar errores (el latido de `estado.txt` deja de avanzar): pedir al usuario que
   cierre la ventana y vuelva a abrir `vitabridge.cmd`. Si la Vita se cuelga, el log muestra "timed out" seguido.
-- 2026-10-29: la VM de Windows **sí llegó a GitHub** (`git ls-remote` funcionó); probar el pull directo antes del paquete.
+- La VM de Windows a veces llega a GitHub y a veces no (2026-10-29: una conversación sí, la siguiente 403): probar el pull
+  directo y, si falla, usar el paquete de git (§2).
 - Interruptores en `ux0:data/gepresent/` (el relevo no borra: se apagan subiendo el archivo con otro contenido):
   `banco_nucleos` (v13.7: banco de núcleos; contenido = segundos de espera, `no` lo apaga), `banco_v12` (banco de la
   etapa 1), `medir_ge` (T6), `off` (gepresent no engancha nada). Desde v13.9: `registro` (nivel de registro: `minimo`,
   `mediano` (por defecto) o `extremo`) y los de la fase de análisis `sin_compuerta`, `sin_espejo`, `sin_libre`,
   `sin_captura` (se apagan con `no` adentro). Desde v13.10: `compuerta_sync` (la espera a la Vita vuelve al sync, como
-  antes de dev66). Detalle en `registros.md`.
+  antes de dev66). Desde v13.12: `sin_adelanto` (sin la comprobación por adelantado de sublistas). Detalle en
+  `registros.md`.
 - La VM de Claude no llega a la red de la casa (la Vita está en 192.168.0.10): todo pasa por el relevo.
 
 ## 5. Pedir pruebas al usuario

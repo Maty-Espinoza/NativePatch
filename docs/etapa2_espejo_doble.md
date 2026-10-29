@@ -90,7 +90,9 @@ Logs: `vitabridge/etapa2_dev64.1/gt1`, `etapa2_dev64.2/gt1`, `etapa2_dev64.3/gt1
   frame leídas del espejo, 0 cortadas; GE: el juego espera ~0,65 ms por drawsync.
 - SH con dev64.5: 0 páginas pedidas, 0 copias; `en_destinos=512`. ARM del capturador ~4 ms por frame.
 - **DISTINTAS** (revisión de la memoria de sublistas, 1 de cada 32): 0 con dev64.1 (sin espejo), 1 / 4 / 7 con
-  dev64.2 / .3 / .4 en ~50 000 revisadas por corrida (≈0,01 %); con v13.5 siempre 0. Causa sin investigar (`TODO.md`).
+  dev64.2 / .3 / .4 en ~50 000 revisadas por corrida (≈0,01 %); con v13.5 siempre 0. **Causa encontrada y arreglada en
+  v13.12** (`etapa2_fase2_adelanto.md`): la memoria comparaba contra el espejo en que se grabó la sublista, que en los
+  frames del otro espejo tenía una copia de un frame atrás. 0 DISTINTAS en ~100 000 revisiones.
 
 ### Confirmación con dev64 + v13.6 (2026-10-29, Windows) [medido]
 Logs `vitabridge/etapa2_dev64/gt1` y `sh1` (en el PC con Windows). Mismo código que dev64.5 + v13.6.5.
@@ -102,7 +104,7 @@ Logs `vitabridge/etapa2_dev64/gt1` y `sh1` (en el PC con Windows). Mismo código
   según la zona) son los del juego original. DISTINTAS: 0.
 
 ## Lo que falta / ideas
-1. Entender las pocas DISTINTAS con el espejo doble antes de dibujar (etapa 3).
+1. ~~Entender las pocas DISTINTAS con el espejo doble antes de dibujar~~: arreglado en v13.12 (`etapa2_fase2_adelanto.md`).
 2. La Vita tendrá que repetir las copias de bloque (TRANSFER) a la VRAM y guardar el resultado (su propia VRAM): lo que se
    marca como destino ya no está en el espejo. Si el juego hizo la copia antes de que empezara la captura, la Vita no la
    tiene (en la práctica el capturador arranca con el juego).

@@ -13,6 +13,10 @@
 // v13.9: TARDE=1 ./prueba 0 simula un sync atrasado (linea de ge_patch_tarde.log).
 // v13.6: espejo doble. El "GE" copia al final de cada frame f la copia f + 1 al espejo (f + 1) & 1; el frame siguiente la
 // usa (como el evento del flip). La sublista se escribe en los dos espejos.
+// v13.12: ./prueba <modo> 3: cada frame escribe sus sublistas de la VRAM solo en el espejo de ese frame (el otro queda con
+// la copia anterior) y la sublista 10 cambia en el frame 4: con la memoria comparando en el espejo en que se grabo, la
+// revision (modo 2) da BAD (las DISTINTAS de GT). ./prueba <modo> <vram> 3: los lectores solo hacen el plan (comprobacion
+// por adelantado de lo aplicado en la lista anterior) antes que el capturador; PVMIN=n la racha minima (por defecto 1).
 #include "captura.c"
 #include <stdio.h>
 #include <string.h>
@@ -41,16 +45,18 @@ int sceKernelGetMemBlockInfoByAddr(void *a, SceKernelMemBlockInfo *i) { return -
 SceUID emu_th[EMU_N]; int emu_aff[EMU_N], emu_n;
 
 static uint32_t *W(uint32_t a) { return (uint32_t *)PSP(isVram(a) ? MIRROR + (a & 0x1FFFFF) : a); }
-static uint32_t pc_;
+static uint32_t pc_, cur_f, vram;
 static void E(uint32_t c, uint32_t d) {
-  *W(pc_) = c << 24 | (d & 0xFFFFFF);
-  if (isVram(pc_)) *(uint32_t *)PSP(MIRROR2 + (pc_ & 0x1FFFFF)) = c << 24 | (d & 0xFFFFFF);
+  if (vram == 3 && isVram(pc_)) *(uint32_t *)PSP((cur_f & 1 ? MIRROR2 : MIRROR) + (pc_ & 0x1FFFFF)) = c << 24 | (d & 0xFFFFFF);  // (v13.12)
+  else *W(pc_) = c << 24 | (d & 0xFFFFFF);
+  if (isVram(pc_) && vram != 3) *(uint32_t *)PSP(MIRROR2 + (pc_ & 0x1FFFFF)) = c << 24 | (d & 0xFFFFFF);
   pc_ += 4;
 }
 #define MAIN 0x08800000u
-static uint32_t SUBS = 0x08900000u, vram;
+static uint32_t SUBS = 0x08900000u;
 #define SHARED 0x08A00000u
 static void build(int frame) {
+  cur_f = frame;
   // sublista compartida (anidada): fija color/alpha y dibuja 1 tira con vertices propios
   pc_ = SHARED; E(0x10, 0x080000); E(0x01, 0xB00000); E(0x22, 0x123); E(0x04, 4 << 16 | 8); E(0x0B, 0);
   for (int k = 0; k < 40; k++) {
@@ -61,7 +67,7 @@ static void build(int frame) {
     if (k % 5 == 0) { E(0x10, 0x080000); E(0x0A, SHARED & 0xFFFFFF); }  // (BASE 0x08: la compartida esta en la RAM)
     if (k % 7 == 0) { E(0x10, 0x090000); }      // cambia BASE (se filtra a la salida)
     E(0x04, 3 << 16 | 3);
-    if (k == 10 && frame >= 3) E(0xC8, 2);       // esta cambia desde el frame 3
+    if (k == 10 && frame >= (vram == 3 ? 4 : 3)) E(0xC8, 3);  // esta cambia desde el frame 3 (4 con vram 3; TEXLEVEL distinto)
     E(0x0B, 0);
   }
   pc_ = MAIN;
@@ -81,6 +87,7 @@ int main(int argc, char **argv) {
   vram = argc > 2 ? atoi(argv[2]) : 0; int lec = argc > 3 ? atoi(argv[3]) : 0;
   nivel = getenv("NIVEL") ? atoi(getenv("NIVEL")) : 2;  // (v13.9.5) nivel de registro: extremo salvo NIVEL=0/1
   if (vram) { SUBS = 0x04100000u; esp_on = 1; }
+  pv_on = lec == 3; pv_min = getenv("PVMIN") ? atoi(getenv("PVMIN")) : 1;  // (v13.12)
   if (mmap((void *)0x70000000, 0x2000000, PROT_READ | PROT_WRITE, MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0) == MAP_FAILED) { perror("mmap"); return 1; }
   if (mmap((void *)0x72C00000, 0x200000, PROT_READ | PROT_WRITE, MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0) == MAP_FAILED) { perror("mmap3"); return 1; }
   if (mmap((void *)0x72000000, 0x400000, PROT_READ | PROT_WRITE, MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0) == MAP_FAILED) { perror("mmap2"); return 1; }
@@ -91,10 +98,11 @@ int main(int argc, char **argv) {
     esp_u = f;  // (v13.6) la copia hecha al final del frame anterior (en la Vita: la ultima terminada, al empezar la lista)
     sceClibMemset(&acc, 0, sizeof acc);
     List *l = &q[qt++ & 63]; memset(l, 0, sizeof *l); l->pc = MAIN; l->ord = f + 1; l->lo = ~0u;
-    if (lec == 1) {  // los lectores van adelante: recorren toda la lista (y comprueban lo guardado) antes que el capturador
-      pub_stall = 0; pub_pc = MAIN; pub_base = reg[0x10]; pub_ord = l->ord;
+    if (lec == 1 || lec == 3) pubList(l);
+    if (lec == 1)  // los lectores van adelante: recorren toda la lista (y comprueban lo guardado) antes que el capturador
       for (int id = 0; id < 2; id++) { Lec s; lecStart(&s, &RR[id]); while (!s.done) lecWalk(id, &s, 2000); }
-    }
+    if (lec == 3)  // (v13.12) solo el plan: lo aplicado en la lista anterior, antes que el capturador
+      for (int id = 0; id < 2; id++) { Lec s; lecStart(&s, &RR[id]); pvRun(id, &RR[id], s.ord); }
     walk();
     if (lec == 2) {  // los lectores llegan despues (atrasados): deben saltarse todo lo que el capturador ya alcanzo
       for (int id = 0; id < 2; id++) { Lec s; lecStart(&s, &RR[id]); while (!s.done) lecWalk(id, &s, 2000); }
@@ -110,10 +118,10 @@ int main(int argc, char **argv) {
       SB[0x40] = f + 1;
       printf("   espejo: pedidas listas=%d datos=%d recorridas=%u saltadas=%u cortadas=%u\n", pl, pd, acc.v_ok, acc.vcalls, acc.v_cut);
     }
-    printf("f%d cmds=%u draws=%u verts=%u vbytes=%u tex=%u prim3=%u prim4=%u calls=%u estado=%08x | hit=%u miss=%u dep=%u fail=%u no=%u chk=%u BAD=%u lines=%u saltados=%u pre=%u lv=%u/%u/%u\n",
+    printf("f%d cmds=%u draws=%u verts=%u vbytes=%u tex=%u prim3=%u prim4=%u calls=%u estado=%08x | hit=%u miss=%u dep=%u fail=%u no=%u chk=%u BAD=%u lines=%u saltados=%u pre=%u lv=%u/%u/%u pv=%u/%u/%u\n",
            f, acc.cmds, acc.draws, acc.verts, acc.vbytes, acc.textures, acc.prim[3], acc.prim[4], acc.calls_ram, stateSum(),
            acc.memo_hit, acc.memo_miss, acc.memo_dep, acc.memo_fail, acc.memo_no, acc.memo_chk, acc.memo_bad, acc.memo_lines, acc.memo_cmds, acc.memo_pre,
-           lv_lines[0] + lv_lines[1], lv_ok[0] + lv_ok[1], lv_bad[0] + lv_bad[1]); lv_lines[0] = lv_lines[1] = lv_ok[0] = lv_ok[1] = lv_bad[0] = lv_bad[1] = lv_late[0] = lv_late[1] = 0;
+           lv_lines[0] + lv_lines[1], lv_ok[0] + lv_ok[1], lv_bad[0] + lv_bad[1], pv_pn, pv_ok[0] + pv_ok[1], pv_bad[0] + pv_bad[1]); pv_ok[0] = pv_ok[1] = pv_bad[0] = pv_bad[1] = 0; lv_lines[0] = lv_lines[1] = lv_ok[0] = lv_ok[1] = lv_bad[0] = lv_bad[1] = lv_late[0] = lv_late[1] = 0;
     lifeFlip(); lf_ord_cmds = 0;  // (v13.9.2) como en el flip
     gen++; ntex = 0;
   }

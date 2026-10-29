@@ -36,6 +36,11 @@
 // hasta SN) en vez de las 127 palabras: aplicarla suma unas pocas y lee mucha menos memoria (antes ~7 us por sublista).
 // En el nivel minimo solo se suman comandos y draws. (v13.11.1, el capturador leyendo directo sin la cache compartida,
 // se descarto: en GT casi 3 veces mas esperas. Ver docs/etapa2_fase2_estadisticas.md)
+// v13.12 (fase 2, punto 4): 1) las lineas guardadas de una sublista de la VRAM llevan su direccion de la VRAM (no la del
+// espejo en que se grabo) y se traducen al espejo del frame al compararlas (mline): antes se comparaba contra el otro
+// espejo, que podia tener una copia vieja (las DISTINTAS, todas de la VRAM). 2) Comprobacion por adelantado: el capturador
+// anota en orden las sublistas que aplico (estables: racha >= pv_min); al empezar la lista siguiente los lectores las
+// comprueban primero, sin esperar a llegar a su CALL (plan pv). Interruptor sin_adelanto. Ver docs/etapa2_fase2_adelanto.md
 #include <psp2/kernel/threadmgr.h>
 #include <psp2/kernel/clib.h>
 #include <psp2/kernel/processmgr.h>
@@ -71,6 +76,7 @@ typedef struct {
   uint32_t eg_n, eg_us;  // v13.10: esperas del juego antes de encolar (compuerta de GePatch dev66)
   uint32_t rd_us, rd_n;  // v13.9: lecturas propias del capturador cronometradas (1 de 16)
   uint32_t hit_us, hit_n;  // v13.9.4: lineas de la cache compartida cronometradas (1 de 8)
+  uint32_t pv_ok, pv_bad, pv_late, pv_plan;  // v13.12: comprobacion por adelantado (lectores) y sublistas del plan
   uint32_t chg[256];  // cambios reales de cada registro "otro" (que impide juntar draws)
 } Stats;
 static Stats acc, rep;
@@ -393,6 +399,7 @@ struct Memo {
   uint32_t flags, vaddr, iaddr, vset, dirty, last_prim, last_fb, clut[2], ntex, tex[32];
   uint32_t v_in, i_in, ndep, dv[16]; uint8_t dc[16];  // estado de entrada que usa (registros que lee antes de escribirlos)
   uint32_t sv_a, sv_n, sv_rel;  // (v13.5) vertices del primer draw sin indices: para la muestra de la vida de los datos
+  uint32_t racha;               // (v13.12) veces seguidas que se aplico sin cambios (recBegin la deja en 0)
   volatile uint32_t ver, vok;  // (al final: recBegin no los borra) version (sube al regrabar) y comprobacion de un lector (vokOf)
 };
 static Memo *memo;
@@ -426,12 +433,14 @@ static void recBegin(List *l, uint32_t t) {
   sceClibMemset(rec_touch, 0, sizeof rec_touch); sceClibMemset(rec_dep, 0, sizeof rec_dep);
   sceClibMemcpy(rec_acc0, &acc, sizeof rec_acc0);
 }
-static void recLine(uint32_t b) {  // linea nueva de la sublista: se copia al deposito (R0 la tiene: es la del comando)
+// (v13.12) donde se lee hoy la linea guardada b: la de la VRAM, en el espejo del frame (0: sin copia)
+static inline uint32_t mline(uint32_t b) { return isVram(b) ? vtr(b) : b; }
+static void recLine(uint32_t b, uint32_t rb) {  // linea nueva de la sublista (b; rb donde se leyo): al deposito (R0 la tiene)
   Memo *e = rec;
   rec_last = b;
   for (uint32_t i = 0; i < e->nr; i++) if (b - e->ra[i] < e->rn[i] * 64) return;  // ya guardada (sublista llamada 2 veces)
-  if (b < R0.a || b + 64 > R0.a + R0.n || pool_top >= POOL_N) { if (pool_top >= POOL_N) pool_reset = 1; recAbort(); return; }
-  sceClibMemcpy(pool + pool_top * 16, R0.buf + (b - R0.a) / 4, 64);
+  if (rb < R0.a || rb + 64 > R0.a + R0.n || pool_top >= POOL_N) { if (pool_top >= POOL_N) pool_reset = 1; recAbort(); return; }
+  sceClibMemcpy(pool + pool_top * 16, R0.buf + (rb - R0.a) / 4, 64);
   uint32_t n = e->nr - 1;
   if (e->nr && e->ra[n] + e->rn[n] * 64 == b && e->rp[n] + e->rn[n] == pool_top) e->rn[n]++;
   else if (e->nr < MR) { e->ra[e->nr] = b; e->rn[e->nr] = 1; e->rp[e->nr] = pool_top; e->nr++; }
@@ -462,6 +471,7 @@ static void recEnd(List *l) {
   d->ge_us = d->ge_runs = d->ge_max = d->ge_stall = d->ge_n = d->sy_n = d->sy_us = d->sy_wait = d->sy_busy = 0;
   d->dc_n = d->dc_kb = d->dm_n = d->dm_kb = d->cpu_drop = d->cpu_vram = d->dc_all = 0;
   d->hit_us = d->hit_n = 0;
+  d->pv_ok = d->pv_bad = d->pv_late = d->pv_plan = 0;
   d->pf_n = d->pf_us = d->pf_gate = d->pf_gate_n = d->pf_nowait = d->pf_sync = d->pf_spin = d->pf_esp = d->pf_pg = d->pf_post = d->pf_late = d->pf_late_us = d->rd_us = d->rd_n = d->eg_n = d->eg_us = 0;
   e->cmds = d->cmds; e->draws = d->draws;
   for (int i = 0; i < SW; i++)
@@ -519,31 +529,67 @@ static int claimTake(uint32_t n, uint32_t ord, int id) {  // 1: este lector se e
   return __sync_bool_compare_and_swap(&claim[n], o, ord << 2 | (id + 1));
 }
 static inline uint32_t vokOf(uint32_t ord, uint32_t ver) { return ord << 16 | (ver & 0xFFFF); }
+// (v13.12) compara las lineas guardadas de e con las de hoy: 1 iguales, 0 distintas, -1 no se puede (cerca del stall o
+// una pagina de la VRAM sin copia en el espejo del frame)
+static int memoLines(int id, Rd *r, Memo *e, uint32_t ord) {
+  uint32_t nr = e->nr, st = pub_stall;
+  if (nr > MR) return -1;
+  for (uint32_t j = 0; j < nr; j++) {
+    uint32_t a = e->ra[j], n = e->rn[j], p = e->rp[j];
+    if (p + n > POOL_N || (st && !(a + n * 64 <= st || a >= st + 0x40000))) return -1;  // (cerca del stall: lo ve el capturador)
+    for (uint32_t m = 0; m < n; m++) {
+      uint32_t b = mline(a + m * 64);
+      if (!b || ramEnd(b) < b + 64) return -1;
+      rdc(r, b, ord); lv_lines[id]++;
+      if (!lineEq(r->buf + (b - r->a) / 4, pool + (p + m) * 16)) return 0;
+    }
+  }
+  return 1;
+}
+// Comprueba e para la lista ord y deja la marca (vok): 1 iguales, 0 distintas, 2 ya estaba comprobada, -1 nada
+static int memoMark(int id, Rd *r, Memo *e, uint32_t ord) {
+  uint32_t pg = pool_gen, v = e->ver;
+  __sync_synchronize();
+  if (e->pgen != pg || e->state != 1) return -1;
+  if (e->vok == vokOf(ord, v)) return 2;
+  int g = memoLines(id, r, e, ord);
+  __sync_synchronize();
+  if (g < 0 || e->ver != v || pool_gen != pg || pub_ord != ord) return -1;  // el capturador la cambio, o ya es otra lista
+  e->vok = g ? vokOf(ord, v) : 0;
+  return g;
+}
 static int memoVerify(int id, Rd *r, uint32_t t, uint32_t base, uint32_t off, uint32_t ord) {  // 1: alguna version comprobada
   int ok = 0;
   uint32_t i = memoHash(t, base, off);
   for (int k = 0; k < 8; k++, i = (i + 1) & (MEMO_N - 1)) {
     Memo *e = &memo[i];
-    uint32_t pg = pool_gen, v = e->ver;
-    __sync_synchronize();
-    if (e->pgen != pg || e->state != 1 || e->t != t || e->base != base || e->off != off) continue;
-    uint32_t nr = e->nr, good = nr <= MR, st = pub_stall;
-    for (uint32_t j = 0; j < nr && good; j++) {
-      uint32_t a = e->ra[j], n = e->rn[j], p = e->rp[j];
-      if (p + n > POOL_N || (st && !(a + n * 64 <= st || a >= st + 0x40000))) good = 0;  // (cerca del stall: lo ve el capturador)
-      for (uint32_t m = 0; m < n && good; m++) {
-        uint32_t b = a + m * 64;
-        if (ramEnd(b) < b + 64) { good = 0; break; }
-        rdc(r, b, ord); lv_lines[id]++;
-        good = lineEq(r->buf + (b - r->a) / 4, pool + (p + m) * 16);
-      }
-    }
-    __sync_synchronize();
-    if (e->ver != v || pool_gen != pg) continue;  // el capturador la cambio mientras tanto
-    e->vok = good ? vokOf(ord, v) : 0;
-    if (good) { ok = 1; lv_ok[id]++; } else lv_bad[id]++;
+    if (e->t != t || e->base != base || e->off != off) continue;
+    int g = memoMark(id, r, e, ord);
+    if (g > 0) { ok = 1; if (g == 1) lv_ok[id]++; } else if (!g) lv_bad[id]++;
   }
   return ok;
+}
+// v13.12: comprobacion por adelantado. El capturador anota en pv[pv_c] las sublistas que aplica (en orden, solo las que ya
+// salieron iguales pv_min veces seguidas); al empezar la lista siguiente ese es el plan (pv_plan) y los lectores lo
+// comprueban antes de recorrer nada, tomando la siguiente libre (pv_i) DESDE EL FINAL (v13.12.2): en orden iban a la par
+// del capturador (no son mas rapidos que el) y comparaban las mismas sublistas que el estaba por usar. Desde el final
+// comprueban primero lo que el capturador necesita mas tarde y se detienen al encontrarse con el (pv_pos: lo que ya paso).
+// Riesgo: si el juego cambia una sublista despues de comprobada y antes de que el capturador llegue, se usa la vieja (GT
+// encola la lista completa y no la toca; la revision 1/32 lo veria como DISTINTAS). Interruptor sin_adelanto.
+#define PV_N 1024
+static Memo *pv[2][PV_N], **pv_plan;
+static uint32_t pv_n[2], pv_c, pv_min = 8, pv_on = 1;
+static volatile uint32_t pv_pn, pv_i, pv_pos, pv_ok[2], pv_bad[2], pv_late[2];
+static void pvRun(int id, Rd *r, uint32_t ord) {  // (lector) el plan de la lista ord
+  r->n = 0;
+  for (;;) {
+    uint32_t i = __sync_fetch_and_add(&pv_i, 1);
+    if (i >= pv_pn || pub_ord != ord) return;
+    uint32_t k = pv_pn - 1 - i;  // (v13.12.2) desde el final
+    if (k < pv_pos) { pv_late[id]++; return; }  // se encontro con el capturador: lo que queda ya lo paso el
+    int g = memoMark(id, r, pv_plan[k], ord);
+    if (g == 1) pv_ok[id]++; else if (!g) pv_bad[id]++;
+  }
 }
 static int memoTry(List *l, uint32_t t) {
   Memo *e = NULL;
@@ -568,8 +614,8 @@ static int memoTry(List *l, uint32_t t) {
 #define TM() if (tm) acc.memo_us += (now() - tm) * 8
   for (uint32_t i = 0; i < e->nr; i++)
     for (uint32_t k = 0; k < e->rn[i]; k++) {
-      uint32_t b = e->ra[i] + k * 64, *p = pool + (e->rp[i] + k) * 16;
-      if (ramEnd(b) < b + 64) { acc.memo_fail++; victim = e; TM(); return 0; }
+      uint32_t b = mline(e->ra[i] + k * 64), *p = pool + (e->rp[i] + k) * 16;
+      if (!b || ramEnd(b) < b + 64) { acc.memo_fail++; victim = e; TM(); return 0; }
       rdc(&R0, b, l->ord);
       const uint32_t *s = R0.buf + (b - R0.a) / 4;
       lines++;
@@ -578,6 +624,8 @@ static int memoTry(List *l, uint32_t t) {
   acc.memo_lines += lines;
   TM();
 ok:;
+  if (e->racha < 255) e->racha++;
+  if (pv_on && e->racha >= pv_min && pv_n[pv_c] < PV_N) { pv[pv_c][pv_n[pv_c]++] = e; pv_pos = pv_n[pv_c]; }  // (v13.12) plan de la lista siguiente
   static uint32_t nchk;
   if (memo_chk || (nivel && !(++nchk & 31))) {  // revision (1 de cada 32, o todas): se calcula lo guardado y se recorre igual para comparar
     stSave(&g_tmp); memoApply(e); stSave(&g_memo); stLoad(&g_tmp);
@@ -652,7 +700,7 @@ static int walkList(List *l) {
     if (++l->n > LIST_MAX) { acc.aborted++; return 1; }
     if (!l->sp && !isVram(pc)) { if (pc < l->lo) l->lo = pc; if (pc > l->hi) l->hi = pc; }  // (v13.9.2) memoria del nivel de arriba
     l->pc += 4; l->prev = op; acc.cmds++; f_cmds++;
-    if (rec && (ra & ~63u) != rec_last) recLine(ra & ~63u);
+    if (rec && (pc & ~63u) != rec_last) recLine(pc & ~63u, ra & ~63u);
 #define TOUCH(c) if (rec) rec_touch[(c) >> 5] |= 1u << ((c) & 31)
     switch (c) {
     case 0x00: break;
@@ -838,21 +886,22 @@ static uint32_t lastOrdOf(uint32_t qid) {  // la ultima lista encolada con ese q
   return o;
 }
 
+static void pubList(List *l) {  // lista nueva para los lectores
+  pub_stall = l->stall; pub_pc = l->pc; pub_base = reg[0x10];
+  if (esp_on) {  // (v13.6.3) la ultima copia terminada del espejo, para toda la lista (y para el GE: no pisarla)
+    uint32_t d = SB[0x40]; ES.listas++; if (d != SB[0x44]) ES.ant++;
+    esp_u = d; SB[0x48] = d;
+  }
+  pv_plan = pv[pv_c]; pv_pn = pv_n[pv_c]; acc.pv_plan += pv_pn; pv_c ^= 1; pv_n[pv_c] = 0; pv_pos = 0; pv_i = 0;  // (v13.12) lo aplicado en la anterior
+  __sync_synchronize();
+  pub_ord = l->ord;
+}
 static void walk(void) {
   if (sin_captura) { while (qh != qt) { capt = q[qh & 63].ord; qh++; acc.lists++; } SB[3] = capt; return; }  // (v13.9)
   while (qh != qt) {
     List *l = &q[qh & 63];
     R0.n = 0;  // lo que se leyo despues del stall anterior puede haber cambiado
-    if (l->ord != pub_ord) {  // los lectores empiezan esta lista
-      pub_stall = l->stall; pub_pc = l->pc; pub_base = reg[0x10];
-      if (esp_on) {  // (v13.6.3) la ultima copia terminada del espejo, para toda la lista (y para el GE: no pisarla)
-        uint32_t d = SB[0x40]; ES.listas++; if (d != SB[0x44]) ES.ant++;
-        esp_u = d; SB[0x48] = d;
-      }
-      __sync_synchronize();
-      pub_ord = l->ord;
-      recAbort(); chk = NULL;  // (lo que quedo a medias de la lista anterior)
-    }
+    if (l->ord != pub_ord) { pubList(l); recAbort(); chk = NULL; }  // los lectores empiezan esta lista (y lo que quedo a medias de la anterior)
     if (!l->t_start) { l->t_start = now() | 1; l->own0 = R0.own; l->hit0 = R0.hits; l->memo0 = acc.memo_hit; l->cpu0 = nivel >= 2 ? runClk(cap_uid) : 0; }
     uint32_t tw = now();
     int fin = walkList(l);
@@ -982,6 +1031,10 @@ static void event(volatile uint32_t *e) {
       acc.own = cur[0] - last[0]; acc.hits = cur[1] - last[1]; acc.rown[0] = cur[2] - last[2]; acc.rown[1] = cur[3] - last[3];
       acc.lv_lines = cur[4] - last[4]; acc.lv_ok = cur[5] - last[5]; acc.lv_bad = cur[6] - last[6]; acc.lv_late = cur[7] - last[7];
       for (int k = 0; k < 8; k++) last[k] = cur[k];
+      static uint32_t lp[3];  // (v13.12) adelanto
+      uint32_t cp[3] = { pv_ok[0] + pv_ok[1], pv_bad[0] + pv_bad[1], pv_late[0] + pv_late[1] };
+      acc.pv_ok = cp[0] - lp[0]; acc.pv_bad = cp[1] - lp[1]; acc.pv_late = cp[2] - lp[2];
+      for (int k = 0; k < 3; k++) lp[k] = cp[k];
       acc.t0 = n - sec_t0;
       if (nivel) cpuSample();
       if (off_min != ~0u) { off = off_min; off_min = ~0u; }  // (v13.9) reloj: el minimo del ultimo segundo
@@ -1092,9 +1145,10 @@ static int repThread(SceSize args, void *argp) {
            r->cmds ? (uint32_t)((unsigned long long)r->us * r->cpu_cap / awake * 1000 / r->cmds) : 0,
            r->cpu_lec[0] / 1000, r->cpu_lec[1] / 1000, r->cpu_core[0] / 1000, r->cpu_core[1] / 1000, r->cpu_core[2] / 1000,
            r->cpu_core[3] / 1000);
-      clog("  memoria de sublistas (por frame): aplicadas=%u (comprobadas_por_lectores=%u) comandos_sin_recorrer=%u (%u%% de todos) lineas_comprobadas=%u comparar_us=%u | nuevas=%u cambiaron=%u otra_entrada=%u sin_guardar=%u | lectores/f: lineas=%u comprobadas=%u no_iguales=%u tarde=%u | por seg: deposito_vaciado=%u revisadas=%u DISTINTAS=%u\n",
+      clog("  memoria de sublistas (por frame): aplicadas=%u (comprobadas_por_lectores=%u) comandos_sin_recorrer=%u (%u%% de todos) lineas_comprobadas=%u comparar_us=%u | nuevas=%u cambiaron=%u otra_entrada=%u sin_guardar=%u | lectores/f: lineas=%u comprobadas=%u no_iguales=%u tarde=%u | adelanto/f: plan=%u comprobadas=%u no_iguales=%u tarde=%u | por seg: deposito_vaciado=%u revisadas=%u DISTINTAS=%u\n",
            PF(memo_hit), PF(memo_pre), PF(memo_cmds), r->cmds ? (uint32_t)((unsigned long long)r->memo_cmds * 100 / r->cmds) : 0, PF(memo_lines), PF(memo_us),
-           PF(memo_miss), PF(memo_fail), PF(memo_dep), PF(memo_no), PF(lv_lines), PF(lv_ok), PF(lv_bad), PF(lv_late), r->memo_reset, r->memo_chk, r->memo_bad);
+           PF(memo_miss), PF(memo_fail), PF(memo_dep), PF(memo_no), PF(lv_lines), PF(lv_ok), PF(lv_bad), PF(lv_late), PF(pv_plan), PF(pv_ok), PF(pv_bad), PF(pv_late),
+           r->memo_reset, r->memo_chk, r->memo_bad);
       clog("  memoria/f: texturas=%u (en vram %u) draws_tex_vram=%u draws_vert_vram=%u | vertices=%u KB indices=%u KB | paletas=%u (vram %u) copias=%u (vram %u)\n",
            PF(textures), PF(tex_vram), PF(dtex_vram), PF(dvert_vram), PF(vbytes) >> 10, PF(ibytes) >> 10, PF(cluts), PF(clut_vram),
            PF(transfers), PF(tr_vram));
@@ -1283,7 +1337,7 @@ static int lectorThread(SceSize args, void *argp) {
   int id = *(int *)argp;
   Lec s; s.ord = 0; s.done = 1;
   for (;;) {
-    if (pub_ord != s.ord) lecStart(&s, &RR[id]);
+    if (pub_ord != s.ord) { lecStart(&s, &RR[id]); if (pv_on) pvRun(id, &RR[id], s.ord); }  // (v13.12) primero el plan
     uint32_t st = pub_stall;
     if (s.done || (st && s.pc == st)) { sceKernelDelayThread(100); continue; }
     lecWalk(id, &s, 2000);
@@ -1310,7 +1364,7 @@ void capturaStart(void) {
     if (fd >= 0) { sceIoRead(fd, b, 7); sceIoClose(fd); nivel = b[0] == 'e' ? 2 : b[0] == 'm' && b[1] == 'i' ? 0 : 1; }
   }
   if (nivel >= 2) { uint32_t t0 = now(), x = 0; for (int i = 0; i < 10000; i++) x += now(); clog("(v13.9.4) costo de leer la hora: %u ns (%u)\n", (now() - t0) / 10, x & 1); }
-  clog("gepresent v13.11: capturador de la etapa 2 (memoria de sublistas, espejo de la VRAM) con registros de la fase de analisis\n");
+  clog("gepresent v13.12: capturador de la etapa 2 (memoria de sublistas, espejo de la VRAM) con registros de la fase de analisis\n");
   static const char *rot[2][2] = { { "ux0:pspemu/ge_patch_frames.log", "ux0:pspemu/ge_patch_frames_prev.log" },
                                    { "ux0:pspemu/ge_patch_tarde.log", "ux0:pspemu/ge_patch_tarde_prev.log" } };
   for (int k = 0; k < 2; k++) { sceIoRemove(rot[k][1]); sceIoRename(rot[k][0], rot[k][1]); }
@@ -1322,8 +1376,9 @@ void capturaStart(void) {
   static const char *sw[4] = { "ux0:data/gepresent/sin_compuerta", "ux0:data/gepresent/sin_espejo", "ux0:data/gepresent/sin_libre", "ux0:data/gepresent/compuerta_sync" };
   for (int k = 0; k < 4; k++) if (swOn(sw[k])) gp_flags |= 1u << k;
   sin_captura = swOn("ux0:data/gepresent/sin_captura");
-  clog("registro: %s (ux0:data/gepresent/registro: minimo, mediano o extremo) | interruptores%s%s%s%s%s%s\n", nivel == 2 ? "extremo" : nivel ? "mediano" : "minimo", gp_flags & 1 ? " sin_compuerta" : "", gp_flags & 2 ? " sin_espejo" : "",
-       gp_flags & 4 ? " sin_libre" : "", gp_flags & 8 ? " compuerta_sync" : "", sin_captura ? " sin_captura" : "", gp_flags || sin_captura ? "" : ": ninguno (todo normal)");
+  pv_on = !swOn("ux0:data/gepresent/sin_adelanto");  // (v13.12)
+  clog("registro: %s (ux0:data/gepresent/registro: minimo, mediano o extremo) | interruptores%s%s%s%s%s%s%s\n", nivel == 2 ? "extremo" : nivel ? "mediano" : "minimo", gp_flags & 1 ? " sin_compuerta" : "", gp_flags & 2 ? " sin_espejo" : "",
+       gp_flags & 4 ? " sin_libre" : "", gp_flags & 8 ? " compuerta_sync" : "", sin_captura ? " sin_captura" : "", pv_on ? "" : " sin_adelanto", gp_flags || sin_captura || !pv_on ? "" : ": ninguno (todo normal)");
   for (uint32_t a = 0x08000000u; a < 0x0C000000u && nr < 4;) {  // tramos de la RAM del PSP mapeados en este proceso
     SceKernelMemBlockInfo in; in.size = sizeof in;
     int e = sceKernelGetMemBlockInfoByAddr((void *)PSP(a), &in);
