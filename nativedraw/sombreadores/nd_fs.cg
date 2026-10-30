@@ -1,0 +1,27 @@
+// (0.0.8) Como nd_ft, con la textura tal como esta en el PSP con swizzle (bloques de 16 bytes x 8 filas): la GPU busca
+// el texel (sw.x ancho y sw.y alto en texels, sw.z texels por 16 bytes) en vez de que la CPU ordene la textura. Solo
+// sin filtro (el texel mas cercano). La textura se lee como si fuera lineal, del mismo ancho y alto.
+float4 main(float2 uv : TEXCOORD0, float4 col : COLOR, uniform sampler2D tex, uniform float4 tf, uniform float4 at,
+            uniform float4 sw) : COLOR
+{
+  float2 p = floor(frac(uv) * sw.xy);                   // texel (u, v) pedido (repetido)
+  float g = floor((p.y + 0.5) / 8.0), r = p.y - g * 8.0;  // grupo de 8 filas y fila dentro del bloque
+  float bx = floor((p.x + 0.5) / sw.z), cx = p.x - bx * sw.z;
+  float L = (bx * 8.0 + r) * sw.z + cx;                 // texel dentro del grupo, en el orden de la memoria
+  float fy = floor((L + 0.5) / sw.x);
+  float4 t = tex2D(tex, (float2(L - fy * sw.x, g * 8.0 + fy) + 0.5) / sw.xy);
+  float4 c;
+  if (tf.x > 0.5) c = float4(t.rgb, tf.y > 0.5 ? t.a : col.a);
+  else c = float4(t.rgb * col.rgb, tf.y > 0.5 ? t.a * col.a : col.a);
+  if (tf.z > 0.5) c.rgb = min(c.rgb * 2.0, 1.0);
+  float a = floor(c.a * 255.0 + 0.5);
+  if (at.x < 0.5) discard;
+  else if (at.x < 1.5) {}
+  else if (at.x < 2.5) { if (a != at.y) discard; }
+  else if (at.x < 3.5) { if (a == at.y) discard; }
+  else if (at.x < 4.5) { if (a >= at.y) discard; }
+  else if (at.x < 5.5) { if (a > at.y) discard; }
+  else if (at.x < 6.5) { if (a <= at.y) discard; }
+  else { if (a < at.y) discard; }
+  return c;
+}

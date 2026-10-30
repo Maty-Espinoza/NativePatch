@@ -11,7 +11,7 @@
 // instante (mas lento, pero no se pierde nada si el juego se cuelga).
 // Cada linea parte con el numero de frame (cuantas veces se llamo sceDisplaySetFrameBuf).
 
-#define NATIVELINK_VERSION "0.0.2" // antes GePatch 0.2-devNN (docs/dev/versiones.md)
+#define NATIVELINK_VERSION "0.0.3.2" // antes GePatch 0.2-devNN (docs/dev/versiones.md)
 
 extern u32 log_frame;
 

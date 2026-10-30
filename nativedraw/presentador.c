@@ -125,8 +125,9 @@ static SceGxmRenderTarget *rt;
 static SceGxmColorSurface cs[2];
 static SceGxmDepthStencilSurface ds;
 static SceGxmTexture sup[2];
-static void *surf[2], *zbuf, *img[2];  // img: copias de la imagen del PSP (512x272 8888), alternadas
-static SceGxmTexture itex[2];
+static void *surf[2], *zbuf, *img[4];  // img: copias de la imagen del PSP (512x272 8888), alternadas
+static SceGxmTexture itex[4];
+static uint32_t n_img = 2;  // (0.0.8.8) 4 con el volcado automatico: las ultimas imagenes del PSP para comparar (volcado.c)
 static float *vb;  // cuadro de pantalla completa: x, y, z, u, v (y desde vb + 20 el del menu)
 #define MW 256     // cuadro del menu: textura de 256x128, se dibuja al doble centrado (512x256 de los 960x544)
 #define MH 128
@@ -134,24 +135,39 @@ static uint32_t *mpix;
 static SceGxmTexture mtex;
 static uint16_t *ib;
 
+// (0.0.8.10) Cuando termina la GPU: cada escena nuestra, al terminar sus pixeles, escribe su numero (gq) en una palabra de la
+// region de notificaciones de GXM (gq_fin). Antes de reescribir algo que lee la GPU (vertices y paletas traducidos, la copia
+// de la imagen del PSP, las texturas del registro) se compara con el numero de la ultima escena que lo leyo: si la GPU no
+// llego, se cuenta (solo medicion: los mosaicos de un frame entero en las peleas de KOF 96; ver docs/dev/etapa3_plan.md).
+static volatile uint32_t *gq_fin;
+static uint32_t gq, gq_slot;
+static SceGxmNotification gq_n;
+static volatile uint32_t g_an, g_asum, g_amax, g_f1, g_f2, g_psup, g_pimg, g_ev;  // (por 10 s; g_ev: eventos anotados)
+static uint32_t img_q[4];
+static inline int gOcupada(uint32_t q) { return gq_fin && (int)(*gq_fin - q) < 0; }
+static const SceGxmNotification *gFin(void) { if (!gq_fin) return 0; gq_n.address = gq_fin; gq_n.value = ++gq; return &gq_n; }
+static void gEv(const char *que, uint32_t q) {  // (los primeros 60) cuando paso y cuantas escenas le faltaban a la GPU
+  if (g_ev++ < 60) alog("gpu: %s con la GPU sin terminar (le faltaban %u escenas)\n", que, q - *gq_fin);
+}
+
 static int destino(void) {
   SceGxmRenderTargetParams rp;
   sceClibMemset(&rp, 0, sizeof rp);
-  rp.width = W; rp.height = H; rp.scenesPerFrame = 1; rp.driverMemBlock = -1;
+  rp.width = LINE; rp.height = H; rp.scenesPerFrame = 8; rp.driverMemBlock = -1;  // (0.0.7.2: 1024 de ancho y varias escenas: imagenes intermedias)
   int r = sceGxmCreateRenderTarget(&rp, &rt);
   if (r < 0) return r;
   for (int i = 0; i < 2; i++) {
     if (!(surf[i] = gmem1(PHY, LINE * H * 4, RW))) return -3;
     sceClibMemset(surf[i], 0, LINE * H * 4);
     sceGxmColorSurfaceInit(&cs[i], SCE_GXM_COLOR_FORMAT_A8B8G8R8, SCE_GXM_COLOR_SURFACE_LINEAR, SCE_GXM_COLOR_SURFACE_SCALE_NONE,
-                           SCE_GXM_OUTPUT_REGISTER_SIZE_32BIT, W, H, LINE, surf[i]);
+                           SCE_GXM_OUTPUT_REGISTER_SIZE_32BIT, LINE, H, LINE, surf[i]);
     sceGxmTextureInitLinear(&sup[i], surf[i], SCE_GXM_TEXTURE_FORMAT_A8B8G8R8, LINE, H, 0);
   }
-  if (!(zbuf = gmem1(PHY, W * H * 4, RW))) return -4;  // (como el banco de la etapa 1 y 0.0.3.2, que funcionaron)
-  sceGxmDepthStencilSurfaceInit(&ds, SCE_GXM_DEPTH_STENCIL_FORMAT_S8D24, SCE_GXM_DEPTH_STENCIL_SURFACE_TILED, W, zbuf, 0);
+  if (!(zbuf = gmem1(PHY, LINE * H * 4, RW))) return -4;  // (como el banco de la etapa 1 y 0.0.3.2, que funcionaron)
+  sceGxmDepthStencilSurfaceInit(&ds, SCE_GXM_DEPTH_STENCIL_FORMAT_S8D24, SCE_GXM_DEPTH_STENCIL_SURFACE_TILED, LINE, zbuf, 0);
   sceGxmDepthStencilSurfaceSetBackgroundDepth(&ds, 1.0f);
-  for (int i = 0; i < 2; i++) {
-    if (!(img[i] = gmem1(PHY, 512 * 272 * 4, RD))) return -6;
+  for (int i = 0; i < (int)n_img; i++) {
+    if (!(img[i] = gmem1(i < 2 ? PHY : UNC, 512 * 272 * 4, RD))) return -6;
     sceGxmTextureInitLinear(&itex[i], img[i], SCE_GXM_TEXTURE_FORMAT_A8B8G8R8, 512, 272, 0);
   }
   if (!(mpix = gmem(MW * MH * 4, RD))) return -7;
@@ -176,6 +192,7 @@ static const SceGxmTexture *psp_tex;    // la textura de 512x272 de Adrenaline (
 static volatile uint32_t fr, listo;     // fr: escenas de Adrenaline terminadas
 static uint32_t usada, dibujada, cur;   // escena en que Adrenaline uso psp_tex / en que se dibujo sup[cur]
 static volatile uint32_t n_pres, n_camb, n_neg_j, n_neg_p, us_sum, us_max;  // (se leen en el hilo del registro)
+static volatile uint32_t n_rev, n_mal;  // (0.0.8.3) frames de la Vita revisados y distintos de la imagen normal
 static volatile uint32_t solo_mal, falla;
 static int dib, t_on;                    // interruptor dibujar (t_on: traductor listo): reemplazar la imagen siempre (si no, solo con el menu)
 static volatile uint32_t menu, pintado;  // menu abierto; su textura ya tiene el texto
@@ -187,7 +204,8 @@ static volatile uint32_t n_dma;
 void *sceDmacMemcpy(void *dst, const void *src, SceSize size);
 static void *hookDma(void *dst, const void *src, SceSize size) {
   if (ACTIVO && dst && dst == psp_data && size == 512 * 272 * 4) {  // la copia de la imagen del PSP: a img[ki]
-    ki ^= 1; copia = fr; n_dma++;
+    ki = (ki + 1) % n_img; copia = fr; n_dma++;
+    if (gOcupada(img_q[ki])) { g_pimg++; gEv("imagen normal reescrita", img_q[ki]); }  // (0.0.8.10)
     TAI_CONTINUE(void *, ref_dma, img[ki], src, size);
     return dst;
   }
@@ -229,10 +247,25 @@ static int hookTex(SceGxmContext *c, unsigned int i, const SceGxmTexture *t) {
   return TAI_CONTINUE(int, ref_tex, c, i, t);
 }
 
+#include "volcado.c"  // (0.0.7.4) L+R+SELECT
+#include "reproduccion.c"  // (0.0.8.5) dibujar otra vez un frame volcado
+
+static uint32_t g_adr[16];  // (0.0.8.10) palabras de la region de notificaciones que usa Adrenaline (para no usar la misma)
+static void gAdr(const SceGxmNotification *n) {
+  volatile uint32_t *nr = sceGxmGetNotificationRegion();
+  uint32_t i = n && nr ? (uint32_t)(n->address - nr) : 512;
+  if (i < 512) g_adr[i >> 5] |= 1u << (i & 31);
+}
 static int hookEnd(SceGxmContext *c, const SceGxmNotification *v, const SceGxmNotification *f) {
+  gAdr(v); gAdr(f);
   int r = TAI_CONTINUE(int, ref_end, c, v, f);
+  static uint32_t fq[2];  // (0.0.8.10) ultima escena nuestra del frame anterior y del de antes
   if (ACTIVO && usada == fr + 1) {  // en esta escena Adrenaline dibujo la imagen del PSP: la pasamos por la superficie
     uint32_t t0 = now();
+    if (gq_fin) {
+      uint32_t a = gq - *gq_fin; g_an++; g_asum += a; if (a > g_amax) g_amax = a;
+      g_f1 += gOcupada(fq[0]); g_f2 += gOcupada(fq[1]);
+    }
     const SceGxmTexture *src = psp_tex;  // la imagen de este frame: la copia propia si la hubo, si no psp_tex
     if (copia == fr) {
       src = &itex[ki];
@@ -240,6 +273,7 @@ static int hookEnd(SceGxmContext *c, const SceGxmNotification *v, const SceGxmNo
       sceGxmTextureSetMagFilter(&itex[ki], sceGxmTextureGetMagFilter(psp_tex));
     }
     const uint32_t *pj = sceGxmTextureGetData(src);
+    if (vol_on == 1 || vol_on == 3) volFrame(c, pj, dibujada == fr && !(tapado && copia == fr));  // (volcado: este frame)
     int nj = negro(pj, 512, 480, 272), np = dibujada == fr && negro(surf[cur], LINE, W, H);  // (np: la del frame anterior)
     n_neg_j += nj; n_neg_p += np;
     solo_mal = np && !nj ? solo_mal + 1 : 0;
@@ -249,15 +283,28 @@ static int hookEnd(SceGxmContext *c, const SceGxmNotification *v, const SceGxmNo
       if (k >= 32) { sup_ok = 0; if (++sup_dif >= 6 && !tapado) { tapado = 1; n_tap++; } }
       else { sup_dif = 0; if (k <= 10 && tapado && ++sup_ok >= 10) tapado = 0; }
     }
+    if (t_on && dib && dibujada == fr && cur_hd && !tapado && !(fr & 3)) {  // (0.0.8.3) cuantos frames de la Vita difieren de la
+      int n = vol_auto ? volMalos(surf[cur], 0) : volDistintos(pj, surf[cur]);  // imagen normal (1 de cada 4; bloques >= 8, ver volcado.c)
+      if (n >= (vol_auto ? 6 : 8) && n < 255) { sceGxmFinish(c); n = vol_auto ? volMalos(surf[cur], 0) : volDistintos(pj, surf[cur]); }
+      n_rev++; if (n >= (vol_auto ? 6 : 8) && n < 255) n_mal++;
+    }
     int s = cur ^ 1, hd = 0;
-    if (dib && t_on && !menu) {  // (0.0.6) el ultimo frame completo del registro, dibujado por la Vita
+    if (dib && t_on && !menu && rep_on == 2 && repDibujar(c, s, src)) { hd = 1; t_frame = ~0u; }  // (0.0.8.5) reproduccion
+    else if (dib && t_on && !menu) {  // (0.0.6) el ultimo frame completo del registro, dibujado por la Vita
       RFrame *rg = regTomar();
+      int mot = T_NUEVO;
       if (!rg) t_cnt[T_NUEVO]++;
       else if (rg->frame == t_frame) {  // el mismo frame: se deja la superficie, como mucho 2 veces (30 fps); si no, normal
-        if (t_ok && t_rep < 2) { t_rep++; hd = 2; } else t_cnt[T_NUEVO]++;
-      } else { int r = trFrame(c, rg, s); t_cnt[r]++; t_frame = rg->frame; t_ok = !r; hd = !r; t_rep = 0; }
+        if (t_ok && t_rep < 2) { t_rep++; hd = 2; mot = 0; t_salto[0]++; } else t_cnt[T_NUEVO]++;
+      } else {
+        if (t_frame != ~0u && rg->frame > t_frame) { uint32_t g = rg->frame - t_frame; t_salto[g < 5 ? g : 5]++; }  // (0.0.8.9) ritmo
+        int r = trFrame(c, rg, s, src); t_cnt[r]++; t_frame = rg->frame; t_ok = !r; hd = !r; t_rep = 0; mot = r;
+        regGpu(gq, gq_fin);  // (0.0.8.10) la escena que lee las texturas de este registro
+      }
+      if (vol_on == 1 || vol_on == 3) volTexto(rg, hd == 2 ? "repite el dibujo de la Vita del frame anterior" : hd ? "dibujo de la Vita" :
+                                "imagen normal (copia de la imagen del PSP)", mot);
       regSoltar();
-    }
+    } else if (vol_on == 1 || vol_on == 3) volTexto(0, menu ? "imagen normal con el menu" : "imagen normal (sin dibujar o sin traductor)", -1);
     if (hd == 2) { dibujada = fr + 1; t_hd++; goto fin; }
     if (hd) { t_hd++; cur_hd = 1; goto listo_hd; }
     t_nat++; cur_hd = 0;
@@ -268,7 +315,7 @@ static int hookEnd(SceGxmContext *c, const SceGxmNotification *v, const SceGxmNo
     sceGxmReserveVertexDefaultUniformBuffer(c, &u);
     // Ortografica de pixeles a pantalla, guardada como la de vita2d (matrix_init_orthographic: por columnas, el
     // desplazamiento en [12] y [13]; el sombreador hace mul(pos, wvp)). 0.0.3.1 la tenia por filas: un trapecio de un color.
-    static const float wvp[16] = { 2.0f / W, 0, 0, 0, 0, -2.0f / H, 0, 0, 0, 0, -2, 0, -1, 1, 1, 1 };
+    static const float wvp[16] = { 2.0f / LINE, 0, 0, 0, 0, -2.0f / H, 0, 0, 0, 0, -2, 0, -1, 1, 1, 1 };
     sceGxmSetUniformDataF(u, p_wvp, 0, 16, wvp);
     sceGxmSetFragmentTexture(c, 0, src);
     sceGxmSetVertexStream(c, 0, vb);
@@ -279,8 +326,10 @@ static int hookEnd(SceGxmContext *c, const SceGxmNotification *v, const SceGxmNo
       sceGxmSetVertexStream(c, 0, vb + 20);
       sceGxmDraw(c, SCE_GXM_PRIMITIVE_TRIANGLE_STRIP, SCE_GXM_INDEX_FORMAT_U16, ib, 4);
     }
-    sceGxmEndScene(c, 0, 0);
+    sceGxmEndScene(c, 0, gFin());
   listo_hd:
+    if (src == &itex[ki]) img_q[ki] = gq;  // (0.0.8.10)
+    fq[1] = fq[0]; fq[0] = gq;
     cur = s; dibujada = fr + 1; n_pres++;
     uint32_t d = now() - t0;
     us_sum += d;
@@ -297,6 +346,11 @@ static SceUID hk_ctrl = -1;
 static uint32_t combo0;
 static int hookCtrl(SceCtrlDataPsp *p) {  // botones de la Vita hacia el PSP
   if (p && listo && !falla) {
+    static uint32_t cv0;  // (0.0.7.4) L+R+SELECT: volcado
+    uint32_t cv = (p->Buttons & 0x301) == 0x301;
+    if (cv && !cv0 && (!vol_on || vol_on == 3) && !vol_req) vol_req = 1;
+    cv0 = cv;
+    if (cv) { p->Buttons = 0; p->Lx = p->Ly = p->Rx = p->Ry = 128; }
     uint32_t combo = (p->Buttons & 0x308) == 0x308;  // L (0x100) + R (0x200) + START (0x8)
     if (combo && !combo0 && (menu || usada + 10 > fr)) { menu ^= 1; pintado = 0; }  // (solo si se ve la imagen del PSP)
     combo0 = combo;
@@ -343,10 +397,19 @@ static int presThread(SceSize args, void *argp) {
   alog("presentador: programas %08x, destino %08x (superficies en %s y %s) | libre despues (MB de una vez): CDRAM %u, "
        "LPDDR fisica %u, LPDDR %u\n", r1, r2, tipo(surf[0]), tipo(surf[1]), probe(CDRAM), probe(PHY), probe(UNC));
   if (r1 < 0 || r2 < 0) return sceKernelExitDeleteThread(0);
+  volatile uint32_t *nr = sceGxmGetNotificationRegion();  // (0.0.8.10) la ultima palabra (si Adrenaline no la usa)
+  char ua[80]; int ka = 0;
+  for (uint32_t i = 0; i < 512; i++) if (g_adr[i >> 5] >> (i & 31) & 1 && ka < 70) ka += sceClibSnprintf(ua + ka, sizeof ua - ka, " %u", i);
+  ua[ka] = 0;
+  for (gq_slot = 511; gq_slot > 400 && (g_adr[gq_slot >> 5] >> (gq_slot & 31) & 1); gq_slot--) {}
+  if (nr) { gq_fin = nr + gq_slot; *gq_fin = 0; gq = 0; }
+  alog("gpu: fin de escenas en la notificacion %u (%p); Adrenaline usa:%s\n", gq_slot, gq_fin, ka ? ua : " ninguna");
   listo = 1;
   for (uint32_t t = now(), seen = 0, k = 0, aviso = 0, m0 = 0;;) {  // cada 10 s: cuantos frames y cuanto costo
     sceKernelDelayThread(50000);
     if (menu && !pintado) { pintar(); __sync_synchronize(); pintado = 1; }
+    volHilo();
+    repHilo();
     if (menu != m0) { m0 = menu; alog("presentador: menu %s\n", m0 ? "abierto" : "cerrado"); }
     static uint32_t tp0;
     if (tapado != tp0) { tp0 = tapado; alog("traductor: %s\n", tp0 ? "algo tapa la imagen (no esta en el registro): imagen normal" : "vuelve el dibujo de la Vita"); }
@@ -355,8 +418,8 @@ static int presThread(SceSize args, void *argp) {
                                       "imagen normal hasta cerrar Adrenaline\n"); }
     if (++k < 200) continue;
     k = 0;
-    uint32_t p = n_pres, m = us_max, s = us_sum, dt = (now() - t) / 1000, nd = n_dma;
-    n_pres = 0; n_dma = 0; us_sum = 0; us_max = 0; t = now();
+    uint32_t p = n_pres, m = us_max, s = us_sum, dt = (now() - t) / 1000, nd = n_dma, nr = n_rev, nm = n_mal;
+    n_pres = 0; n_dma = 0; us_sum = 0; us_max = 0; t = now(); n_rev = n_mal = 0;
     if (psp_tex && !seen++)
       alog("presentador: textura del juego %p (512x272, formato %08x, filtros %x/%x)\n", psp_tex,
            sceGxmTextureGetFormat(psp_tex), sceGxmTextureGetMinFilter(psp_tex), sceGxmTextureGetMagFilter(psp_tex));
@@ -366,9 +429,22 @@ static int presThread(SceSize args, void *argp) {
       for (int i = 1; i < TN; i++) if (t_cnt[i]) { k += sceClibSnprintf(b + k, sizeof b - k, " %s=%u", tnom[i], t_cnt[i]); t_cnt[i] = 0; }
       b[k] = 0;
       alog("traductor: frames HD %u, con la imagen normal %u%s%s | draws dibujados %u\n", h, nn, k ? " | motivos:" : "", b, dr);
+      // (0.0.8.9) ritmo: cada frame de Adrenaline que dibujo la Vita, cuantos frames del PSP avanzo desde el anterior
+      // (1 = ninguno saltado; 0 = repitio el anterior). Los juegos de Neo Geo hacen transparencias dibujando algo un frame
+      // si y otro no: con saltos o repeticiones eso destella (el cuadro de HOW TO PLAY de KOF 96).
+      alog("traductor: ritmo (frames del PSP que avanzo cada frame dibujado): 0 (repetido) %u, 1 %u, 2 %u, 3 %u, 4 %u, 5 o mas %u\n",
+           t_salto[0], t_salto[1], t_salto[2], t_salto[3], t_salto[4], t_salto[5]);
+      sceClibMemset((void *)t_salto, 0, sizeof t_salto);
+    }
+    if (gq_fin) {  // (0.0.8.10)
+      uint32_t an = g_an, as = g_asum, am = g_amax, f1 = g_f1, f2 = g_f2, ps = g_psup, pi = g_pimg;
+      g_an = g_asum = g_amax = g_f1 = g_f2 = g_psup = g_pimg = 0;
+      alog("gpu: al empezar cada frame, escenas nuestras sin terminar: promedio %u.%u, max %u | sin terminar: el frame anterior %u, "
+           "el de hace 2 %u | reescritos con la GPU sin terminar: vertices y paletas %u, imagen normal %u (texturas del registro: "
+           "en nativedraw_captura.log)\n", an ? as / an : 0, an ? as * 10 / an % 10 : 0, am, f1, f2, ps, pi);
     }
     alog("presentador: %u frames en %u ms por la superficie (cambios %u en total, %u con copia propia), CPU %u us/frame (max %u) | "
-         "casi negros: juego %u, superficie %u%s\n", p, dt, n_camb, nd, p ? s / p : 0, m, n_neg_j, n_neg_p,
+         "casi negros: juego %u, superficie %u | revisados %u, distintos de la imagen normal %u%s\n", p, dt, n_camb, nd, p ? s / p : 0, m, n_neg_j, n_neg_p, nr, nm,
          p ? "" : psp_tex ? " (Adrenaline no uso la imagen del PSP: menu, PS1 o filtro Original)" : " (todavia sin la textura del juego)");
   }
   return 0;
@@ -384,6 +460,12 @@ static int swOn(const char *p) {  // el archivo existe y no empieza con "no" (co
 
 void presStart(void) {
   dib = swOn("ux0:data/nativedraw/dibujar");
+  repInicio();
+  vol_nivel = volNivel();  // (0.0.8.5) volcados: desactivado, pantallazo, frame, secuencia o auto
+  if (vol_nivel == 4 && !dib) vol_nivel = 3;  // (auto compara el dibujo de la Vita: sin dibujar no hay que comparar)
+  vol_auto = vol_nivel == 4; vol_nf = vol_nivel <= 2 ? 1 : VN;
+  n_img = vol_auto ? 4 : 2;
+  alog("volcado: nivel %s (ux0:data/nativedraw/volcado: desactivado, pantallazo, frame, secuencia o auto)\n", vol_nom[vol_nivel]);
   alog("presentador: %s; menu con L+R+START\n", dib ? "reemplaza la imagen siempre (dibujar)" :
        "reemplaza la imagen solo con el menu abierto (crear ux0:data/nativedraw/dibujar para siempre)");
   SceUID th = sceKernelCreateThread("nativedraw_presentador", presThread, 0xA0, 0x2000, 0, 0, 0);

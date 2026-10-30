@@ -1,0 +1,14 @@
+// Sin textura (y los borrados): el color del vertice, con alfa test (como nd_ft).
+float4 main(float2 uv : TEXCOORD0, float4 col : COLOR, uniform float4 at) : COLOR
+{
+  float a = floor(col.a * 255.0 + 0.5);
+  if (at.x < 0.5) discard;
+  else if (at.x < 1.5) {}
+  else if (at.x < 2.5) { if (a != at.y) discard; }
+  else if (at.x < 3.5) { if (a == at.y) discard; }
+  else if (at.x < 4.5) { if (a >= at.y) discard; }
+  else if (at.x < 5.5) { if (a > at.y) discard; }
+  else if (at.x < 6.5) { if (a <= at.y) discard; }
+  else { if (a < at.y) discard; }
+  return col;
+}

@@ -112,6 +112,18 @@ Lo pone en marcha el usuario (§1). Claude solo trabaja con archivos en la carpe
   vuelta), LocoRoco (NPEG-00024). L al abrir el juego = NativeLink apagado.
 - Después de cada cambio: un resumen simple (qué se intenta, qué hace cada componente), sin detalles técnicos.
 
+## 5.1 Antes de cambiar: el origen tiene que estar claro (regla del usuario, 2026-10-30)
+**Nunca se hace un cambio si no está claro el origen del problema.** Cuando lo que dejó una prueba (logs, volcados, lo
+que contó el usuario) no alcanza para explicarlo:
+1. **Evaluar qué información faltó** para saber la causa (y decirlo).
+2. **Revisar si se puede obtener.** Si se puede, se agrega primero (una línea o un log extra, un contador, un volcado
+   con más datos) y se vuelve a probar, sin arreglar nada todavía.
+3. **Si no se puede obtener así, investigar cómo**: documentación y código de referencia (Adrenaline, PPSSPP, vitasdk) y,
+   si hace falta, **programas chicos que hagan la prueba** (en el PC con qemu, como `prueba_memoria.c`, o un banco en la
+   Vita, como `tools/kbench`).
+4. **Recién con el origen claro se hace el cambio**, y la prueba siguiente confirma que era eso.
+Una sospecha razonable no basta: se dice como sospecha y se confirma con datos antes de cambiar el código.
+
 ## 6. Guardar y leer resultados
 - Al terminar cada corrida, **antes de que abra otro juego** (los logs se reemplazan): esperar a que el relevo los baje
   (15–30 s después de cerrar) y copiar de `recibidos/` `nativelink.log`, `nativelink_prev.log`, `nativedraw_captura.log`,
@@ -123,6 +135,10 @@ Lo pone en marcha el usuario (§1). Claude solo trabaja con archivos en la carpe
 - Para comparar corridas, el usuario hace siempre la misma carrera con el mismo auto en GT; las diferencias chicas pueden
   ser de cómo maneja. No tiene contador de fps: salen del log. Si no menciona el audio, estuvo bien.
 - Los logs se pueden leer desde la VM (`device_bash`, grep/python3) o traerlos al contenedor con `device_stage_files`.
+- Errores visuales: volcados (`volcados.md`; nivel en `ux0:data/nativedraw/volcado`, L+R+SELECT o `auto`) y
+  `tools/volcado.py` para dibujar el frame en el PC y saber si el error está en los datos o en el dibujo de la Vita.
+- Los pedidos al relevo (`bajar_*.txt`, `cmd_*.txt`...) se escriben con otro nombre (p. ej. en `vitabridge/tmp_claude/`)
+  y se renombran al final: el relevo puede tomar un archivo a medio escribir.
 
 ## 7. Reglas del usuario
 - Versiones (`versiones.md`): cambio de un plugin = sube su PARCHE; cambio que necesita a los dos = sube el MENOR de los

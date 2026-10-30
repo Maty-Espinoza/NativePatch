@@ -55,7 +55,8 @@ static int activo, mode_done; // activo: el juego no se abrio con L o SELECT y l
 // b = espera en la compuerta (us), c = espera al GE dentro de sceGeDrawSync/ListSync (us); e[5] = vueltas del hilo de CPU
 // libre (SB[0x4D]: vueltas por ms = 100 %), e[6] = espejo: CPU del flip (us) | paginas << 16, e[7] = ganchos (us en sbPost).
 // Interruptores que pone NativeDraw en SB[0x4A]: 1 sin compuerta (no se espera a la Vita, solo se cuenta), 2 sin espejo, 4
-// sin hilo de CPU libre. Mientras la compuerta espera: SB[0x4B] = lista esperada, SB[0x4C] = hora de inicio.
+// sin hilo de CPU libre, 16 (0.0.3) espejo completo: todas las paginas de datos pedidas en cada flip, 32 (0.0.3.2,
+// prueba) el flip espera a que termine la copia del espejo. Mientras la compuerta espera: SB[0x4B] = lista esperada, SB[0x4C] = hora de inicio.
 // dev65.3: nivel de registro de NativeDraw en SB[0x4E] (0 minimo, 1 mediano, 2 extremo; docs/dev/registros.md): EV_FRAME y el hilo
 // de CPU libre desde mediano; la vida de la lista (EV_VIDA) y los eventos de la CPU del juego (T4: EV_CPU, EV_CPUSUM) solo en extremo.
 static volatile u32 spin, spin_cal;  // hilo de CPU libre (como vpjuego): vueltas y calibracion (vueltas por ms)
@@ -352,6 +353,8 @@ static void t4t6Install(void) {
 #define MIRROR2 0x0AC00000
 #define ESP_LIST 0x0A100000 // dos listas de 8 KB, alternadas (en la zona reservada)
 #define ESP_DATOS 64 // paginas de datos por copia (256 KB; dev64.3 las copiaba todas: ~730 KB por frame bajaban GT a ~57 fps)
+// 0.0.3: con SB[0x4A] & 16 (lo pone NativeDraw cuando la Vita dibuja frames 2D: KOF 96) se copian todas las pedidas en cada
+// flip; de a 64 por turnos, KOF 96 (256 paginas de sprites) veia cada pagina cada 4 frames: sprites con pedazos viejos.
 void guStart(int cid, void *list); // gu.c
 static int esp_qid[2] = { -1, -1 };
 static u32 esp_seq, esp_rr, esp_pages, esp_busy, esp_vita; // (los tres ultimos: totales, para la Vita)
@@ -364,7 +367,7 @@ static void espejoFlip(void) {
   for (i = 0; i < 512; i++) { // listas: todas; datos: los que entren, empezando donde quedo la ultima vez que no entraron todos
     p = (esp_rr + i) & 511; w = p >> 5; b = 1u << (p & 31);
     if (!(wd[w] & b)) continue;
-    if (n >= ESP_DATOS) { esp_rr = p; esps.over++; break; }
+    if (n >= (SB[0x4A] & 16 ? 512 : ESP_DATOS)) { esp_rr = p; esps.over++; break; }
     cp[w] |= b; n++;
   }
   u32 seq = esp_seq + 1, s = seq & 1, u = SB[0x48];
@@ -392,7 +395,8 @@ static void espejoFlip(void) {
   sceGuCopyImage(GU_PSM_8888, 0, 0, 4, 1, 64, (void *)(rl + 0x1FF0), 0, 0, 64, (void *)0x0A000100);
   sceGuFinish();
   esp_qid[s] = _sceGeListEnQueue((void *)rl, NULL, -1, NULL);
-  esps.copies++;
+  if (SB[0x4A] & 32 && esp_qid[s] >= 0) _sceGeListSync(esp_qid[s], 0);  // (0.0.3.2, prueba) el juego espera la copia: que no
+  esps.copies++;                                                         // alcance a cambiar la VRAM mientras se copia
   SB[0x44] = seq; SB[0x45] = esp_pages;
 }
 

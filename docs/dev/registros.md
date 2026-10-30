@@ -37,6 +37,10 @@ Siguen aparte, con su propio archivo: `dibujar` (presentador de la etapa 3: con 
 L+R+START abierto; además activa el registro del frame y su línea `registro:` en `nativedraw_captura.log`; ver `etapa3_plan.md`), T6 (`medir_ge`), `memo_revisar` (revisar todas), `sin_memoria`,
 `captura_sin_lectores`, `off`. (Los bancos `banco_nucleos` y `banco_v12` se quitaron en NativeDraw 0.0.2.)
 
+## Volcados (NativeDraw 0.0.8.5)
+Niveles de volcado en `ux0:data/nativedraw/volcado`: `desactivado`, `pantallazo`, `frame`, `secuencia` (sin el archivo)
+o `auto`. Qué guarda cada uno, cuánto cuesta y cómo se leen con `tools/volcado.py`: `volcados.md`.
+
 ## Interruptores de la fase de análisis (`ux0:data/nativedraw/`; se apagan con `no` adentro, el relevo no borra)
 | Archivo | Qué hace |
 |---|---|

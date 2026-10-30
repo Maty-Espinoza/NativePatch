@@ -122,7 +122,7 @@ static inline int isVram(uint32_t a) { return (a & 0x0F000000u) == 0x04000000u; 
 #define MIRROR 0x0A200000u
 #define MIRROR2 0x0AC00000u
 #define CPY(b, p) SB[((b) ? 0x8400 : 0x200) + (p)]  // ultima copia de la pagina p en el espejo b (la escribe NativeLink)
-static uint32_t esp_on, want_l[16], want_d[16], rt_pg[16];  // (del capturador)
+static uint32_t esp_on, want_l[16], want_d[16], rt_pg[16], want_fb[16];  // (del capturador; want_fb: 0.0.8.4, la imagen que se muestra, para los volcados)
 static volatile uint32_t esp_ok[2][16], esp_reset;           // paginas con copia valida en cada espejo
 static volatile uint32_t esp_u;                               // copia con la que se lee la lista actual (0: ninguna todavia)
 static struct { uint32_t chk, nuevas, ch_l, ch_d, us, listas, ant; } ES;  // estadisticas del espejo
@@ -143,7 +143,7 @@ static void want(uint32_t a, uint32_t n, int list) {  // pide las paginas de la 
   for (; p <= e && p < 512; p++) {
     uint32_t w = p >> 5, b = 1u << (p & 31);
     if (list) { if (!(want_l[w] & b)) { want_l[w] |= b; SB[0x20 + w] = want_l[w]; } }
-    else if (!(rt_pg[w] & b) && !(want_d[w] & b)) { want_d[w] |= b; SB[0x30 + w] = want_d[w]; }
+    else if (!(rt_pg[w] & b) && !(want_d[w] & b)) { want_d[w] |= b; SB[0x30 + w] = want_d[w] | want_fb[w]; }
   }
 }
 static void markRt(uint32_t a, uint32_t n) {  // destino de dibujo: no se pide como dato (se deja de pedir si ya estaba)
@@ -151,7 +151,7 @@ static void markRt(uint32_t a, uint32_t n) {  // destino de dibujo: no se pide c
   for (; p <= e && p < 512; p++) {
     uint32_t w = p >> 5, b = 1u << (p & 31);
     rt_pg[w] |= b;
-    if (want_d[w] & b) { want_d[w] &= ~b; if (esp_on) SB[0x30 + w] = want_d[w]; }
+    if (want_d[w] & b) { want_d[w] &= ~b; if (esp_on) SB[0x30 + w] = want_d[w] | want_fb[w]; }
   }
 }
 
@@ -291,7 +291,9 @@ static struct { uint32_t lo, hi, t; } cw[CW_N];
 static volatile uint32_t cw_n, cw_all_t;  // (cw_all_t: ultimo "vaciar toda la cache")
 static struct { volatile uint32_t n[4], ch1[4], ch2[4], warn[4], wall[4], ms1, ms2; } LT;  // vida de los datos (acumulados)
 
-static int reg_on;
+static int reg_on, reg_diag;
+volatile uint32_t nd_exacta_hasta;  // (0.0.8.7) el presentador la pide por un rato para un volcado con L+R+SELECT (ver registro.c)
+int volNivel(void);
 static void regDraw(uint32_t n, uint32_t type, uint32_t vt, uint32_t idx), regClut(uint32_t d), regMemo(uint32_t draws);
 static void draw(uint32_t d) {
   uint32_t n = d & 0xFFFF, type = (d >> 16) & 7, vt = reg[0x12], idx = (vt >> 11) & 3;
@@ -1069,6 +1071,9 @@ static void event(volatile uint32_t *e) {
       if (nivel) cpuSample();
       if (off_min != ~0u) { off = off_min; off_min = ~0u; }  // (v13.9) reloj: el minimo del ultimo segundo
       if (!rep_ready) { rep = acc; gr = ga; rep_ready = 1; }
+      if (reg_on) {  // (0.0.7.6) el registro da frames 2D completos (los dibuja la Vita): NativeLink copia toda la VRAM pedida en cada flip
+        if (ga.ok * 2 > ga.fr && ga.d3 * 10 < (ga.draws ? ga.draws : 1)) gp_flags |= 16; else gp_flags &= ~16u;
+      }
       sceClibMemset(&ga, 0, sizeof ga);
       if (rec) { uint32_t *a = (uint32_t *)&acc; for (int i = 0; i < SW; i++) rec_acc0[i] -= a[i]; }  // (v12.13) grabando: que la diferencia siga valiendo
       sceClibMemset(&acc, 0, sizeof acc);
@@ -1092,8 +1097,10 @@ static int capThread(SceSize args, void *argp) {
       esp_u = 0; esp_reset = 1; esp_on = SB[1] >= 4;
       clog("buzon de NativeLink (modo sombra) encontrado: eventos=%u listas=%u -> captura activa%s\n", tail, SB[6],
            esp_on ? ", con espejo de la VRAM" : " (NativeLink sin espejo doble de la VRAM: hace falta dev64)");
+      if (reg_on) regBanco();  // (0.0.7.9)
     }
     SB[4] = ++beat;
+    if (reg_on) regPend();  // (0.0.8) texturas de la VRAM de un frame que espera la copia del espejo de su flip
     uint32_t h = SB[2], work = 0;
     if ((int)(h - tail) < 0 || h - tail > SB_N) {  // se perdieron eventos (o NativeLink reinicio el buzon)
       acc.resyncs++; tail = h; resetQueue();
@@ -1164,8 +1171,9 @@ static int repThread(SceSize args, void *argp) {
       if (!nivel) goto sync;  // (minimo: solo esta linea y la de vram y sync)
       if (reg_on) {  // (0.0.5) registro del frame
         uint32_t g = gr.fr ? gr.fr : 1, dd = gr.draws ? gr.draws : 1;
-        clog("  registro: frames=%u completos=%u incompletos: memoria=%u no_leido=%u tope=%u curvas=%u | por frame: draws=%u estados=%u KB=%u paletas=%u us=%u | de los draws: 3d=%u%% clear=%u%% mezcla=%u%% alfa_test=%u%% swizzle=%u%% | draws por seg con textura 5650/5551/4444/8888/T4/T8/T16/T32/DXT1/3/5: %u %u %u %u %u %u %u %u %u %u %u\n",
+        clog("  registro: frames=%u completos=%u incompletos: memoria=%u no_leido=%u tope=%u curvas=%u | por frame: draws=%u estados=%u KB=%u paletas=%u us=%u (estados %u vertices %u texturas %u [copiadas %u KB por DMA en %u us; pendientes perdidos %u, sin la copia de su flip %u, reusados con la GPU leyendo %u, con la GPU sin terminar (medido) %u] paletas %u) | de los draws: 3d=%u%% clear=%u%% mezcla=%u%% alfa_test=%u%% swizzle=%u%% | draws por seg con textura 5650/5551/4444/8888/T4/T8/T16/T32/DXT1/3/5: %u %u %u %u %u %u %u %u %u %u %u\n",
              gr.fr, gr.ok, gr.memo, gr.leer, gr.tope, gr.curva, gr.draws / g, gr.st / g, gr.kb / g >> 10, gr.cl / g, gr.us / g,
+             gr.us_e / g, gr.us_v / g, gr.us_t / g, gr.t_b / g >> 10, gr.us_l / g, gr.pis, gr.tarde, gr.reuso, gr.gpu, gr.us_p / g,
              gr.d3 * 100 / dd, gr.clear * 100 / dd, gr.blend * 100 / dd, gr.atest * 100 / dd, gr.swz * 100 / dd,
              gr.fmt[0], gr.fmt[1], gr.fmt[2], gr.fmt[3], gr.fmt[4], gr.fmt[5], gr.fmt[6], gr.fmt[7], gr.fmt[8], gr.fmt[9], gr.fmt[10]);
       }
@@ -1329,7 +1337,7 @@ static int espThread(SceSize args, void *argp) {  // (v13.6) huella de 4 paginas
     }
     ES.us += now() - t0;
     if (++n % 20 == 0)  // (por si NativeLink reinicio el buzon sin que el capturador lo notara)
-      for (int w = 0; w < 16; w++) { if (SB[0x20 + w] != want_l[w]) SB[0x20 + w] = want_l[w]; if (SB[0x30 + w] != want_d[w]) SB[0x30 + w] = want_d[w]; }
+      for (int w = 0; w < 16; w++) { if (SB[0x20 + w] != want_l[w]) SB[0x20 + w] = want_l[w]; if (SB[0x30 + w] != (want_d[w] | want_fb[w])) SB[0x30 + w] = want_d[w] | want_fb[w]; }
   }
   return 0;
 }
@@ -1413,12 +1421,14 @@ void capturaStart(void) {
           "vita_recorrio_us,trabajo_us,lecturas_propias,de_lectores,aplicadas,procesador_us\n");
   static const char *sw[4] = { "ux0:data/nativedraw/sin_compuerta", "ux0:data/nativedraw/sin_espejo", "ux0:data/nativedraw/sin_libre", "ux0:data/nativedraw/compuerta_sync" };
   for (int k = 0; k < 4; k++) if (swOn(sw[k])) gp_flags |= 1u << k;
+  if (swOn("ux0:data/nativedraw/espejo_espera")) gp_flags |= 32;  // (0.0.8.2, prueba) el flip del PSP espera la copia del espejo
   sin_captura = swOn("ux0:data/nativedraw/sin_captura");
   pv_on = !swOn("ux0:data/nativedraw/sin_adelanto");  // (v13.12)
   reg_on = swOn("ux0:data/nativedraw/dibujar");  // (0.0.5) registro del frame
+  reg_diag = 0;  // (0.0.8.4-0.0.8.7: con volcado auto cada frame llevaba su imagen del PSP exacta; desde 0.0.8.8 solo con L+R+SELECT, nd_exacta_hasta)
   if (reg_on) regInit();
-  clog("registro: %s (ux0:data/nativedraw/registro: minimo, mediano o extremo) | interruptores%s%s%s%s%s%s%s\n", nivel == 2 ? "extremo" : nivel ? "mediano" : "minimo", gp_flags & 1 ? " sin_compuerta" : "", gp_flags & 2 ? " sin_espejo" : "",
-       gp_flags & 4 ? " sin_libre" : "", gp_flags & 8 ? " compuerta_sync" : "", sin_captura ? " sin_captura" : "", pv_on ? "" : " sin_adelanto", gp_flags || sin_captura || !pv_on ? "" : ": ninguno (todo normal)");
+  clog("registro: %s (ux0:data/nativedraw/registro: minimo, mediano o extremo) | interruptores%s%s%s%s%s%s%s%s\n", nivel == 2 ? "extremo" : nivel ? "mediano" : "minimo", gp_flags & 1 ? " sin_compuerta" : "", gp_flags & 2 ? " sin_espejo" : "",
+       gp_flags & 4 ? " sin_libre" : "", gp_flags & 8 ? " compuerta_sync" : "", gp_flags & 32 ? " espejo_espera" : "", sin_captura ? " sin_captura" : "", pv_on ? "" : " sin_adelanto", gp_flags || sin_captura || !pv_on ? "" : ": ninguno (todo normal)");
   for (uint32_t a = 0x08000000u; a < 0x0C000000u && nr < 4;) {  // tramos de la RAM del PSP mapeados en este proceso
     SceKernelMemBlockInfo in; in.size = sizeof in;
     int e = sceKernelGetMemBlockInfoByAddr((void *)PSP(a), &in);

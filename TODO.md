@@ -148,6 +148,22 @@ Los números viejos (devNN, vNN) se explican en `docs/dev/versiones.md`. Los `et
       (`arquitectura_dibujo_en_vita.md` §7)
 - [ ] Leer la hora en la Vita cuesta 390 ns: el registro extremo completo altera lo que mide (corrida 5 de la fase 1).
 
+## Menú (L+R+START)
+- [ ] **Volcados desde el menú** (pedido del usuario, 2026-10-30): hoy el nivel se elige con el archivo
+      `ux0:data/nativedraw/volcado` (`docs/dev/volcados.md`). Para el release tiene que estar en el menú, de manera que
+      un usuario pueda activar el volcado automático, jugar y entregarnos la carpeta `volcados/` (y explicar en el
+      README cómo hacerlo). Lo mismo para los otros interruptores (`registros.md`).
+
+## Baja prioridad
+- [ ] **Juegos de PS1 en alta resolución** (pedido del usuario, 2026-10-30). Hoy NativeDraw no los toca: en Adrenaline 8
+      la imagen de PS1 sale del emulador de PS1 de Sony que trae la Vita (`pops_tex`, `user/menu.c`), no del chip
+      gráfico del PSP, así que NativeLink no tiene nada que capturar; Adrenaline solo la estira y filtra. Es posible en
+      teoría, pero sería casi otro proyecto: encontrar dentro de ese emulador (código cerrado de Sony) dónde dibuja los
+      comandos de la GPU del PS1, engancharlo y escribir un traductor nuevo para esa GPU (otra forma de dibujar que la
+      del PSP). VitaGrafix no sirve: sube la resolución de juegos nativos de Vita, uno por uno.
+      [verificar] con Castlevania SOTN de PS1: con NativeDraw activo el log de captura debe mostrar 0 listas y 0 draws y
+      el juego verse igual que sin el plugin (prueba de control, no de escalado).
+
 ## Pendientes heredados
 - [x] ~~Pantalla negra durante la presentación del banco de la etapa 1~~: era la CDRAM que tomaba el banco (la usan
       los videos de la Vita). Resuelto en NativeDraw 0.0.3 (`docs/dev/etapa3_plan.md`).
