@@ -31,7 +31,8 @@ NativeLink (lado PSP) y NativeDraw (lado Vita) son proyectos hermanos: cada uno 
 | | 0.0.2 | `6992890` | NativeDraw: se quita la presentación vieja, el banco de GXM y los volcados |
 | | 0.0.3 | `34dee77` | Etapa 3, paso 3.0: presentador transparente, apagado por defecto (`docs/dev/etapa3_plan.md`) |
 | | 0.0.4 | `a0d85da` | Etapa 3, paso 3.1: menú L+R+START dibujado por NativeDraw (por ahora, las versiones) |
-| | 0.0.5 | (este commit) | Etapa 3, paso 3.2: registro del frame (con `dibujar`) |
+| | 0.0.5 | `1ae7191` | Etapa 3, paso 3.2: registro del frame (con `dibujar`) |
+| | 0.0.6 | (este commit) | Etapa 3, paso 3.3 (primera versión): la Vita dibuja el registro (Retro City); "tapado" |
 
 Probadas en la Vita con Gran Turismo: `docs/changelog/etapa3_preparacion.md`.
 

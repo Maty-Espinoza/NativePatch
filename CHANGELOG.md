@@ -3,6 +3,12 @@
 Versiones: `docs/dev/versiones.md`. El detalle de cada paso está en `docs/changelog/` (antes del primer release se quitan
 de ahí los resúmenes de conversación; este archivo queda como el resumen).
 
+## NativeDraw 0.0.6 (2026-10-30)
+- **Etapa 3, paso 3.3 (primera versión):** con `dibujar`, la Vita dibuja el frame con su GPU a partir del registro, al
+  doble (2D simple: rectángulos y triángulos con textura, sin transparencias). Retro City Rampage se dibuja entero así.
+  Lo que todavía no sabe dibujar se muestra con la imagen normal.
+- Si algo que no está en el registro tapa la imagen (el diálogo del botón PS del PSP), se muestra la imagen normal.
+
 ## NativeDraw 0.0.5 (2026-10-29)
 - **Etapa 3, paso 3.2: registro del frame.** Con `dibujar`, el capturador guarda cada draw del frame (vértices copiados,
   estado del GE, paletas) para que la Vita lo dibuje en el paso 3.3. Retro City y KOF 96: ~99 % de frames completos;

@@ -1,7 +1,7 @@
 # TODO: pendientes
 
 Cosas pendientes, de lo más próximo a lo que puede esperar. Cada una dice de dónde salió (documento en `docs/dev/`,
-`docs/changelog/` o en el proyecto de claude.ai). Actualizado: 2026-10-29 (**NativeDraw 0.0.5**: pasos 3.0 a 3.2 de la etapa 3; antes **NativeLink 0.0.2 + NativeDraw 0.0.2**:
+`docs/changelog/` o en el proyecto de claude.ai). Actualizado: 2026-10-30 (**NativeDraw 0.0.6**: pasos 3.0 a 3.3 (primera versión) de la etapa 3; antes **NativeLink 0.0.2 + NativeDraw 0.0.2**:
 nombres nuevos, limpieza, instalador; antes GePatch 0.2-dev66 + gepresent v13.13 con la **etapa 2 cerrada**). Lo que
 sigue es la etapa 3 de `docs/dev/arquitectura_dibujo_en_vita.md` §6. Cómo se trabaja: `docs/dev/FLUJO_DE_TRABAJO.md`.
 Los números viejos (devNN, vNN) se explican en `docs/dev/versiones.md`. Los `etapaN_*.md` citados están en
@@ -27,6 +27,8 @@ Los números viejos (devNN, vNN) se explican en `docs/dev/versiones.md`. Los `et
 - [x] ~~Etapa 3, paso 3.1: menú L+R+START~~ (NativeDraw 0.0.4): por ahora solo versiones; falta poner opciones.
 - [x] ~~Etapa 3, paso 3.2: registro del frame~~ (NativeDraw 0.0.5). Pendiente menor: 7 frames de KOF 96 llegaron al tope
       en una transición; copiar de la RAM del PSP cuesta ~6 µs por draw (KOF, ~2,4 ms por frame): abaratar si molesta.
+- [x] ~~Etapa 3, paso 3.3, primera versión~~ (NativeDraw 0.0.6): Retro City dibujado por la Vita. Sigue KOF 96:
+      borrados, color por vértice, mezcla, alfa test, swizzle (sombreadores propios).
 - [ ] Línea de puntos fija sobre la fecha del menú de Adrenaline con el presentador (solo en el menú). Ver si sale con
       `dibujar` en `no`.
 - [ ] Correr **Ridge Racer** con NativeDraw 0.0.2 (solo se probó GT; la captura no cambió).

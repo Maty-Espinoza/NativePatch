@@ -112,10 +112,27 @@ Lección (0.0.5.1): el registro en memoria sin caché costaba 23–30 ms por fra
 caché: copiar de la RAM del PSP sin caché). Con caché y dejando de copiar un frame ya incompleto, GT vuelve a 60 fps.
 Retro City no gana resolución (su imagen ya viene terminada en 480x272): sirve como primera prueba del dibujo (1 draw).
 
+## Paso 3.3, primera versión: traductor 2D (NativeDraw 0.0.6, probado el 2026-10-30) [medido]
+`nativedraw/traductor.c` (incluido en `presentador.c`): en el hilo de Adrenaline, en vez de copiar la imagen del PSP,
+dibuja el último frame completo del registro al doble. Esta versión: modo through, rectángulos/triángulos/tiras, textura
+5650/5551/4444/8888/T4/T8 sin swizzle, sin mezcla ni alfa test, sin color. Si un frame trae algo más, imagen normal.
+- Las texturas de la RAM se copian en el registro al momento (DMA, LPDDR sin caché registrada para la GPU): leerlas de la
+  RAM del PSP un frame después mezclaba dos frames (líneas en el título y el HUD de Retro City, 0.0.6.1).
+- Un frame del registro se repite como mucho 2 veces (juego a 30 fps); si no llega otro, imagen normal (0.0.6.1 repetía
+  el último para siempre y con el juego en pausa no se veía el diálogo del botón PS).
+- **"Tapado"** (0.0.6.3): el diálogo del botón PS lo dibuja el sistema del PSP encima de los frames del juego, que siguen
+  llegando: cada frame se comparan 64 puntos de la imagen normal con el dibujo de la Vita; con más de la mitad distintos 6
+  frames seguidos se muestra la imagen normal hasta 10 frames iguales. En Retro City se activó solo con el diálogo. Las
+  notificaciones y el volumen los dibuja la Vita encima de todo (no afectan).
+- Retro City (pantalla de título y juego): 100 % de los frames dibujados por la Vita, 0,23 ms por frame, "perfecto".
+  KOF 96: 0 % (cada frame empieza con un borrado: siguiente versión).
+- Lección: registrar la RAM del PSP con `sceGxmMapMemory` (0x70000000, 32 MB) funciona; 0x72000000 da 805b0017.
+
 ## Estado
 | Paso | Estado |
 |---|---|
 | 3.0 | **hecho** (NativeDraw 0.0.3) |
 | 3.1 | **hecho** (NativeDraw 0.0.4) |
 | 3.2 | **hecho** (NativeDraw 0.0.5) |
-| 3.3–3.4 | pendientes. 3.3 empieza por Retro City (1 rectángulo T8) y sigue con KOF 96 (sprites T4 swizzle + 5650, mezcla, alfa test) |
+| 3.3 | **primera versión** (NativeDraw 0.0.6): Retro City dibujado por la Vita. Sigue KOF 96 |
+| 3.4 | adelantado en parte: comparación con la imagen normal (detecta lo que el sistema dibuja encima) |

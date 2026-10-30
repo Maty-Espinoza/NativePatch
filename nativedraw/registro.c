@@ -10,26 +10,24 @@
 // Las matrices (3D) todavia no se guardan: paso 4.
 // 0.0.5.2: el registro en memoria con cache (0.0.5.1 sin cache: 23-30 ms por frame en GT, el capturador se atraso y GT bajo
 // a 56-59 fps) y un frame que ya quedo incompleto deja de copiarse (GT casi nunca queda completo: memoria de sublistas).
+// 0.0.6.2: tambien las texturas que estan en la RAM se copian al momento (por DMA, a memoria sin cache que lee la GPU):
+// la Vita dibuja un frame despues y Retro City ya estaba escribiendo el siguiente en la misma imagen (lineas en lo que
+// cambia: el titulo, el texto que parpadea, el HUD).
 static void clog(const char *fmt, ...);
-static const uint8_t RS[] = { 0x1E, 0x21, 0x22, 0x23, 0x24, 0x27, 0x28, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49,
-  0x4A, 0x4B, 0x4C, 0x4D, 0x50, 0x55, 0x56, 0x9C, 0x9D, 0x9E, 0x9F, 0xA0, 0xA8, 0xB8, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9,
-  0xCA, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0xD7, 0xD8, 0xD9, 0xDA, 0xDB, 0xDC, 0xDD, 0xDE, 0xDF, 0xE0, 0xE1, 0xE6, 0xE7, 0xE8, 0xE9 };
-#define NRS ((int)sizeof RS)
-#define RD_N 4096         // draws por frame
-#define RE_N 1024         // estados por frame
-#define RA_N (512 << 10)  // vertices, indices y paletas por frame
-typedef struct { uint16_t st, prim; uint32_t n, vt, voff, vlen, ioff, clut; } RDraw;  // ioff/clut: desplazamiento + 1 (0: no hay)
-typedef struct {
-  uint32_t frame, fb, fbw, nd, ne, na, flags, draws_vistos;  // flags: motivos de incompleto (R_*)
-  RDraw d[RD_N];
-  uint32_t e[RE_N][NRS];
-  uint8_t a[RA_N] __attribute__((aligned(16)));
-} RFrame;
+#include "registro.h"
 enum { R_MEMO = 1, R_LEER = 2, R_TOPE = 4, R_CURVA = 8 };
 static struct { uint32_t fr, ok, memo, leer, tope, curva, draws, st, kb, cl, us, d3, clear, blend, atest, swz, fmt[16]; } ga, gr;  // por seg
 static RFrame *rf[3];                        // (LPDDR con cache, ~2,5 MB)
-static volatile int rg_pub = -1, rg_usando = -1;  // ultimo completo; el que esta leyendo el dibujo (paso 3.3)
 static int rg_w;
+static volatile int rg_pub = -1, rg_usando = -1;  // ultimo completo; el que esta leyendo el dibujo (paso 3.3)
+RFrame *regTomar(void) {  // (presentador) el ultimo frame completo, reservado hasta regSoltar; 0 si no hay
+  int u = rg_pub;
+  if (u < 0) return 0;
+  rg_usando = u; __sync_synchronize();
+  if (rg_w == u || rg_pub != u) { rg_usando = -1; return 0; }  // (el capturador lo eligio justo antes: se deja)
+  return rf[u];
+}
+void regSoltar(void) { rg_usando = -1; }
 static uint32_t rg_clut, rg_clut_b, rg_t;   // paleta cargada (desplazamiento + 1) y su tamano; us de este frame
 
 static void regInit(void) {
@@ -38,7 +36,10 @@ static void regInit(void) {
     SceUID b = sceKernelAllocMemBlock("nativedraw_registro", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW,
                                       (sizeof(RFrame) + 0x3FFFF) & ~0x3FFFFu, 0);
     if (b < 0 || sceKernelGetMemBlockBase(b, &p) < 0) { reg_on = 0; clog("registro del frame: sin memoria (%08x)\n", b); return; }
-    rf[i] = p; rf[i]->nd = rf[i]->ne = rf[i]->na = rf[i]->flags = 0;
+    rf[i] = p; rf[i]->nd = rf[i]->ne = rf[i]->na = rf[i]->flags = rf[i]->nt = rf[i]->ntx = 0;
+    SceUID t = sceKernelAllocMemBlock("nativedraw_registro_tex", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW_UNCACHE, TX_N, 0);
+    if (t < 0 || sceKernelGetMemBlockBase(t, &p) < 0) { reg_on = 0; clog("registro del frame: sin memoria para texturas (%08x)\n", t); return; }
+    rf[i]->tx = p;
   }
   clog("registro del frame: activo (dibujar), 3 x %u KB\n", (unsigned)(sizeof(RFrame) >> 10));
 }
@@ -56,6 +57,26 @@ static uint32_t rgCopy(uint32_t a, uint32_t n) {  // copia [a, a + n) de la memo
   f->na = o + n;
   return o + 1;
 }
+void *sceDmacMemcpy(void *dst, const void *src, SceSize size);
+int sceGxmMapMemory(void *base, SceSize size, int attr);
+int regMapGpu(void) {
+  int r = 0;
+  for (int i = 0; i < 3 && rf[i] && r >= 0; i++) r = sceGxmMapMemory(rf[i]->tx, TX_N, 1);  // (1: lectura)
+  return r;
+}
+static uint32_t rgTex(void) {  // copia la textura del draw (si esta en la RAM): desplazamiento + 1 en tx, 0 si no
+  RFrame *f = rf[rg_w];
+  static const uint8_t bp[6] = { 16, 16, 16, 32, 4, 8 };
+  uint32_t fmt = reg[0xC3] & 15, ta = TEXADDR(), tbw = reg[0xA8] & 0x7FF, th = 1u << ((reg[0xB8] >> 8) & 15);
+  if (fmt > 5 || isVram(ta) || !tbw) return 0;
+  uint32_t n = tbw * th * bp[fmt] / 8;
+  for (uint32_t i = 0; i < f->nt; i++) if (f->ta[i] == ta && f->tn[i] >= n) return f->to[i] + 1;
+  if (f->nt >= 64 || f->ntx + n > TX_N || ramEnd(ta) < ta + n) { f->flags |= R_TOPE; return 0; }
+  sceDmacMemcpy(f->tx + f->ntx, (const void *)PSP(ta), n);
+  f->ta[f->nt] = ta; f->tn[f->nt] = n; f->to[f->nt++] = f->ntx;
+  f->ntx += (n + 63) & ~63u;
+  return f->to[f->nt - 1] + 1;
+}
 static void regDraw(uint32_t n, uint32_t type, uint32_t vt, uint32_t idx) {  // antes de que avancen vaddr/iaddr
   RFrame *f = rf[rg_w];
   f->draws_vistos++;
@@ -68,7 +89,8 @@ static void regDraw(uint32_t n, uint32_t type, uint32_t vt, uint32_t idx) {  // 
     sceClibMemcpy(f->e[f->ne++], v, sizeof v);
   }
   RDraw *d = &f->d[f->nd];
-  d->st = f->ne - 1; d->prim = type; d->n = n; d->vt = vt; d->ioff = 0; d->clut = rg_clut;
+  d->st = f->ne - 1; d->prim = type; d->n = n; d->vt = vt; d->ioff = 0; d->clut = rg_clut; d->clen = rg_clut ? rg_clut_b : 0;
+  d->toff = (reg[0x1E] & 1) && !(reg[0xD3] & 1) ? rgTex() : 0;
   uint32_t vs = vsize(vt), nv = n;
   if (idx) {  // con indices: se copian y los vertices hasta el mayor indice
     uint32_t ib = idx == 1 ? 1 : idx == 2 ? 2 : 4;
@@ -118,7 +140,7 @@ static void regFlip(uint32_t fb, uint32_t fbw, uint32_t draws_contados) {  // ci
     for (int i = 0; i < 3; i++) if (i != rg_pub && i != rg_usando) { rg_w = i; break; }
   }
   f = rf[rg_w];
-  f->nd = f->ne = f->na = f->flags = f->draws_vistos = 0;
+  f->nd = f->ne = f->na = f->flags = f->draws_vistos = f->nt = f->ntx = 0;
   rg_t = 0;  // la paleta cargada sigue valiendo en el GE: se vuelve a copiar en el registro nuevo (como esta ahora en memoria)
   rg_clut = rg_clut_b ? rgCopy(last_clut[0], rg_clut_b) : 0;
 }
