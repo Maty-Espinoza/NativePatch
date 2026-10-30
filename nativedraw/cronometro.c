@@ -8,7 +8,7 @@
 // presentador anota los totales por tipo y, en detalle, las escenas que siguen al informe.
 enum { C_ADR, C_NORMAL, C_TR, C_INT, CN };
 static const char *cnom[CN] = { "Adrenaline (pantalla)", "imagen normal al doble", "traductor (superficie)", "traductor (intermedia)" };
-typedef struct { volatile uint32_t *a; uint32_t v, t, tipo, dr; } CEsc;
+typedef struct { volatile uint32_t *a; uint32_t v, t, tipo, dr, px, sw; } CEsc;  // px: miles de pixeles; sw: draws con swizzle
 #define CQ 64
 static CEsc cq[CQ];
 static volatile uint32_t c_in, c_out, c_on, c_lleno, c_vueltas, c_ocio;
@@ -16,18 +16,25 @@ static SceGxmNotification c_adr;  // la notificacion que se le pone a las escena
 static uint32_t c_slot, c_av;
 // por tipo: escenas, us de GPU, maximo, draws, us en cola (enviada y la GPU ocupada con otra), histograma de ms
 // (<5, 5-10, 10-15, 15-20, 20-30, 30 o mas)
-static volatile uint32_t c_n[CN], c_us[CN], c_max[CN], c_dr[CN], c_cola[CN], c_h[CN][6];
+static volatile uint32_t c_n[CN], c_us[CN], c_max[CN], c_dr[CN], c_cola[CN], c_h[CN][6], c_px[CN], c_sw[CN];
 #define CD 16
 static struct { uint8_t tipo; uint16_t dr; uint32_t cola, us; } c_det[CD];  // detalle: las escenas que siguen al informe
 static volatile uint32_t c_dn = CD;  // escenas ya anotadas en c_det (CD: lleno, esperando que el informe lo imprima)
 
-// anota en la cola una escena recien mandada (n: su notificacion de fin; dr: draws)
-static void cAnota(int tipo, const SceGxmNotification *n, uint32_t dr) {
+// Prueba de la GPU (interruptor ux0:data/nativedraw/prueba_gpu, con medir_gpu): cada 10 s el traductor cambia de modo
+// para separar lo que cuesta cada parte del dibujo. Los modos 1 y 2 se ven mal a proposito.
+// 0 normal; 1 sin texturas (cada draw de un color: sin leer texturas ni paletas); 2 sin la imagen normal debajo; 3 la
+// imagen intermedia en CDRAM (memoria de video) en vez de LPDDR
+static uint32_t p_on, p_modo;
+static const char *p_nom[4] = { "normal", "sin texturas", "sin la imagen normal debajo", "imagen intermedia en CDRAM" };
+// anota en la cola una escena recien mandada (n: su notificacion de fin; dr: draws; px: miles de pixeles dibujados,
+// sumando cada draw; sw: draws con texturas con swizzle)
+static void cAnota(int tipo, const SceGxmNotification *n, uint32_t dr, uint32_t px, uint32_t sw) {
   if (!c_on || !n) return;
   uint32_t i = c_in;
   if (i - c_out >= CQ) { c_lleno++; return; }  // (la escena siguiente se lleva su tiempo)
   CEsc *e = &cq[i % CQ];
-  e->a = n->address; e->v = n->value; e->tipo = tipo; e->dr = dr; e->t = now();
+  e->a = n->address; e->v = n->value; e->tipo = tipo; e->dr = dr; e->px = px; e->sw = sw; e->t = now();
   __sync_synchronize();
   c_in = i + 1;
 }
@@ -49,7 +56,7 @@ static int cHilo(SceSize args, void *argp) {
       uint32_t t = now(), ini = prev;
       if ((int)(e->t - prev) > 0) { c_ocio += e->t - prev; ini = e->t; }  // la GPU no tenia nada: hueco ocioso
       uint32_t us = t - ini, k = e->tipo, ms = us / 1000;
-      c_n[k]++; c_us[k] += us; c_dr[k] += e->dr; c_cola[k] += ini - e->t;
+      c_n[k]++; c_us[k] += us; c_dr[k] += e->dr; c_cola[k] += ini - e->t; c_px[k] += e->px; c_sw[k] += e->sw;
       if (us > c_max[k]) c_max[k] = us;
       c_h[k][ms < 20 ? ms / 5 : ms < 30 ? 4 : 5]++;
       if (c_dn < CD) { c_det[c_dn].tipo = k; c_det[c_dn].dr = e->dr; c_det[c_dn].cola = ini - e->t; c_det[c_dn].us = us; c_dn++; }
@@ -72,15 +79,17 @@ static void cInicio(volatile uint32_t *nr, const uint32_t *adr) {
 static void cInforme(uint32_t dt) {
   uint32_t tot = 0, oc = c_ocio, vu = c_vueltas, ll = c_lleno;
   c_ocio = c_vueltas = c_lleno = 0;
+  if (p_on) alog("gpu tiempos: modo de prueba de estos 10 s: %s\n", p_nom[p_modo]);
   for (int k = 0; k < CN; k++) {
-    uint32_t n = c_n[k], us = c_us[k], mx = c_max[k], dr = c_dr[k], co = c_cola[k], h[6];
+    uint32_t n = c_n[k], us = c_us[k], mx = c_max[k], dr = c_dr[k], co = c_cola[k], px = c_px[k], sw = c_sw[k], h[6];
     for (int j = 0; j < 6; j++) { h[j] = c_h[k][j]; c_h[k][j] = 0; }
-    c_n[k] = c_us[k] = c_max[k] = c_dr[k] = c_cola[k] = 0;
+    c_n[k] = c_us[k] = c_max[k] = c_dr[k] = c_cola[k] = c_px[k] = c_sw[k] = 0;
     tot += us;
     if (!n) continue;
-    alog("gpu tiempos: %s: escenas %u, GPU %u ms (promedio %u.%02u ms, max %u.%u) | draws por escena %u | en cola promedio %u.%u ms | "
-         "ms: <5 %u, 5-10 %u, 10-15 %u, 15-20 %u, 20-30 %u, 30+ %u\n", cnom[k], n, us / 1000, us / n / 1000, us / n / 10 % 100,
-         mx / 1000, mx / 100 % 10, dr / n, co / n / 1000, co / n / 100 % 10, h[0], h[1], h[2], h[3], h[4], h[5]);
+    alog("gpu tiempos: %s: escenas %u, GPU %u ms (promedio %u.%02u ms, max %u.%u) | draws por escena %u (con swizzle %u), miles "
+         "de pixeles por escena %u | en cola promedio %u.%u ms | ms: <5 %u, 5-10 %u, 10-15 %u, 15-20 %u, 20-30 %u, 30+ %u\n",
+         cnom[k], n, us / 1000, us / n / 1000, us / n / 10 % 100, mx / 1000, mx / 100 % 10, dr / n, sw / n, px / n,
+         co / n / 1000, co / n / 100 % 10, h[0], h[1], h[2], h[3], h[4], h[5]);
   }
   alog("gpu tiempos: ocupada %u ms de %u (%u %%), ociosa %u ms | cola llena %u | vueltas del hilo %u (una cada %u us)\n",
        tot / 1000, dt, dt ? tot / 10 / dt : 0, oc / 1000, ll, vu, vu ? dt * 1000 / vu : 0);
@@ -94,4 +103,5 @@ static void cInforme(uint32_t dt) {
     alog("gpu tiempos: detalle (tipo y draws: ms de GPU / ms en cola; A Adrenaline, N imagen normal, T traductor, I intermedia):%s\n", b);
   }
   c_dn = 0;
+  if (p_on) p_modo = (p_modo + 1) & 3;  // (los 10 s que siguen, el modo siguiente)
 }
