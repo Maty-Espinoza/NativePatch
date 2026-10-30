@@ -94,9 +94,28 @@ si también sale sin NativeDraw (`dibujar` con `no`).
   que NativeDraw atienda el log: para saber la versión se lee el archivo.
 - Probado en el menú de Adrenaline, Retro City Rampage y Gran Turismo: abre, cierra, bloquea los botones, sin saltos.
 
+## Paso 3.2: registro del frame (NativeDraw 0.0.5, probado el 2026-10-29) [medido]
+`nativedraw/registro.c` (incluido en `captura.c`), activo con `dibujar`. Por draw: tipo, cantidad, tipo de vértice,
+vértices (e índices) copiados al momento, el estado (56 registros del GE, `RS`) solo cuando cambia y la paleta cargada
+(copiada en cada C4). Frames cerrados en el flip, 3 registros que se turnan (`rg_pub` = último completo). Completo =
+todos los draws contados pasaron por el registro (la memoria de sublistas, las curvas y lo que no se pudo leer lo dejan
+incompleto); un frame incompleto deja de copiarse. Línea `registro:` por segundo en `nativedraw_captura.log`.
+Prueba fuera de la Vita: `REG=1 ./prueba 0` (todos completos) y `REG=1 ./prueba 1` (incompletos por la memoria).
+
+| Juego | Completos | Draws por frame | Lo que usa | Costo |
+|---|---|---|---|---|
+| Retro City Rampage (NPUH-10199) | 4 142 de 4 143 | **1**: un rectángulo de pantalla completa con textura T8 (paleta de 256) | el juego arma la imagen con la CPU | 5 µs |
+| KOF 96 (NeoGeo Station, NPUH-10119) | 8 032 de 8 118 (7 por tope, en una transición) | ~400 en la pelea | rectángulos (sprites) T4 con swizzle (~98 %), mezcla y alfa test (~99 %), 2 fondos 5650 | ~2,4 ms; 59,9 fps |
+| Gran Turismo (UCUS-98632) | 16 569 de 23 567 (menús sí; la carrera no: memoria de sublistas y 3D) | — | carrera: T4 con swizzle, alfa test 96 % | 59,8–59,9 fps en carrera |
+
+Lección (0.0.5.1): el registro en memoria sin caché costaba 23–30 ms por frame en GT (6 µs por draw en KOF incluso con
+caché: copiar de la RAM del PSP sin caché). Con caché y dejando de copiar un frame ya incompleto, GT vuelve a 60 fps.
+Retro City no gana resolución (su imagen ya viene terminada en 480x272): sirve como primera prueba del dibujo (1 draw).
+
 ## Estado
 | Paso | Estado |
 |---|---|
 | 3.0 | **hecho** (NativeDraw 0.0.3) |
 | 3.1 | **hecho** (NativeDraw 0.0.4) |
-| 3.2–3.4 | pendientes |
+| 3.2 | **hecho** (NativeDraw 0.0.5) |
+| 3.3–3.4 | pendientes. 3.3 empieza por Retro City (1 rectángulo T8) y sigue con KOF 96 (sprites T4 swizzle + 5650, mezcla, alfa test) |

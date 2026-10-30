@@ -3,6 +3,11 @@
 Versiones: `docs/dev/versiones.md`. El detalle de cada paso está en `docs/changelog/` (antes del primer release se quitan
 de ahí los resúmenes de conversación; este archivo queda como el resumen).
 
+## NativeDraw 0.0.5 (2026-10-29)
+- **Etapa 3, paso 3.2: registro del frame.** Con `dibujar`, el capturador guarda cada draw del frame (vértices copiados,
+  estado del GE, paletas) para que la Vita lo dibuje en el paso 3.3. Retro City y KOF 96: ~99 % de frames completos;
+  GT sigue a 60 fps. La línea `registro:` del log dice qué usa cada juego.
+
 ## NativeDraw 0.0.4 (2026-10-29)
 - **Etapa 3, paso 3.1: menú L+R+START** dibujado por NativeDraw encima del juego; mientras está abierto el juego no
   recibe botones. Por ahora muestra las versiones de NativeLink y NativeDraw (las opciones que hoy son archivos se

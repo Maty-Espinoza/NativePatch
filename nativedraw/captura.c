@@ -291,9 +291,12 @@ static struct { uint32_t lo, hi, t; } cw[CW_N];
 static volatile uint32_t cw_n, cw_all_t;  // (cw_all_t: ultimo "vaciar toda la cache")
 static struct { volatile uint32_t n[4], ch1[4], ch2[4], warn[4], wall[4], ms1, ms2; } LT;  // vida de los datos (acumulados)
 
+static int reg_on;
+static void regDraw(uint32_t n, uint32_t type, uint32_t vt, uint32_t idx), regClut(uint32_t d), regMemo(uint32_t draws);
 static void draw(uint32_t d) {
   uint32_t n = d & 0xFFFF, type = (d >> 16) & 7, vt = reg[0x12], idx = (vt >> 11) & 3;
   if (!n) { acc.dempty++; return; }
+  if (reg_on) regDraw(n, type, vt, idx);  // (0.0.5) registro del frame
   acc.draws++; f_draws++; acc.prim[type]++; acc.verts += n;
   int clear = reg[0xD3] & 1, tex = (reg[0x1E] & 1) && !clear;
   if (rec) recDraw(idx, tex);  // (antes de que cambien vaddr/iaddr)
@@ -352,6 +355,8 @@ static void draw(uint32_t d) {
   if (!same || idx || (vset && vstart != last_vend)) acc.batches_cont++;
   last_prim = type; last_vend = vaddr; dirty = vset = 0;
 }
+
+#include "registro.c"  // (0.0.5) registro del frame: usa lo de arriba
 
 // --- Listas en cola (como el GE: una a la vez, en orden) ---
 typedef struct { uint32_t pc, stall, qid, ord, off, sp, stk[32][2], prev, n, ncall, t_enq, t_stall, t_seen, t_start, work, own0, hit0, memo0, ahead, lo, hi, nsub, subs[16], cpu0; } List;  // (v13.9: t_enq/t_stall hora del PSP, t_seen/t_start de la Vita)
@@ -640,6 +645,7 @@ ok:;
   uint32_t ta = nivel >= 2 ? now() : 0;  // (v13.9.4)
   if (e->sv_n) smpAdd(e->sv_rel ? vaddr + e->sv_a : e->sv_a, e->sv_n, 0);  // (antes de memoApply: vaddr de entrada)
   memoApply(e);
+  if (reg_on) regMemo(e->draws);  // (0.0.5) sus draws no pasan por el registro: el frame queda incompleto
   for (uint32_t i = 0; i < e->ntex; i++) if (texAdd(e->tex[i])) { acc.textures++; if (isVram(e->tex[i])) acc.tex_vram++; else smpAdd(e->tex[i], 256, 2); }
   uint32_t *a = (uint32_t *)&acc;
   if (nivel) for (uint32_t i = 0; i < e->sn; i++) a[e->si[i]] += e->sv[i];
@@ -726,7 +732,7 @@ static int __attribute__((noinline)) walkList(List *l) {
     case 0x01: vaddr = rel(l, d); vset = 1; if (rec) rec->flags |= M_VABS; break;
     case 0x02: iaddr = rel(l, d); if (rec) rec->flags |= M_IABS; break;
     case 0x04: draw(d); break;
-    case 0x05: case 0x06: acc.curves++; acc.draws++; f_draws++; dirty = 0; last_prim = 99; if (rec) recDraw(0, 0); break;
+    case 0x05: case 0x06: acc.curves++; acc.draws++; f_draws++; dirty = 0; last_prim = 99; if (rec) recDraw(0, 0); if (reg_on) regCurva(); break;
     case 0x08: case 0x0A: {
       uint32_t t = rel(l, d & 0xFFFFFC);
       if (!vtr(t)) {  // en la VRAM sin copia en el espejo (todavia) o invalido
@@ -780,6 +786,7 @@ static int __attribute__((noinline)) walkList(List *l) {
       uint32_t ca = CLUTADDR();
       acc.cluts++; if (isVram(ca)) { acc.clut_vram++; want(ca, (d & 0x3F) * 32, 0); } else smpAdd(ca, (d & 0x3F) * 32, 3); if (rec) rec->flags |= M_CLUT;
       if (ca != last_clut[0] || d != last_clut[1]) { last_clut[0] = ca; last_clut[1] = d; dirty |= C_TEX; }
+      if (reg_on) regClut(d);
       break;
     }
     case 0xEA: {
@@ -1035,6 +1042,7 @@ static void event(volatile uint32_t *e) {
       lc = cc; s_own = R0.own; s_hit = R0.hits; s_memo = acc.memo_hit; s_pre = acc.memo_pre; s_late = acc.pf_late;
     }
     sceClibMemset(pfr, 0, sizeof pfr);
+    if (reg_on) regFlip(a, b, f_draws);  // (0.0.5) cierra el registro del frame (a: imagen que se muestra, b: ancho | formato << 16)
     acc.frames++;
     if (qh != qt) acc.flips_behind++;
     if (f_cmds > acc.cmds_max) acc.cmds_max = f_cmds;
@@ -1060,7 +1068,8 @@ static void event(volatile uint32_t *e) {
       acc.t0 = n - sec_t0;
       if (nivel) cpuSample();
       if (off_min != ~0u) { off = off_min; off_min = ~0u; }  // (v13.9) reloj: el minimo del ultimo segundo
-      if (!rep_ready) { rep = acc; rep_ready = 1; }
+      if (!rep_ready) { rep = acc; gr = ga; rep_ready = 1; }
+      sceClibMemset(&ga, 0, sizeof ga);
       if (rec) { uint32_t *a = (uint32_t *)&acc; for (int i = 0; i < SW; i++) rec_acc0[i] -= a[i]; }  // (v12.13) grabando: que la diferencia siga valiendo
       sceClibMemset(&acc, 0, sizeof acc);
       s_memo = s_pre = s_late = 0;  // (v13.9: acc empieza de nuevo)
@@ -1153,6 +1162,13 @@ static int repThread(SceSize args, void *argp) {
       clog("seg: frames=%u listas/f=%u comandos/f=%u (max %u) draws/f=%u (max %u) | ARM us/f=%u (max %u) ns/comando=%u | lecturas/f propias=%u de_lectores=%u (lectores leyeron %u+%u) eventos/f=%u\n",
            r->frames, PF(lists), PF(cmds), r->cmds_max, PF(draws), r->draws_max, PF(us), r->us_max, r->cmds ? (uint32_t)((unsigned long long)r->us * 1000 / r->cmds) : 0, PF(own), PF(hits), PF(rown[0]), PF(rown[1]), PF(events));
       if (!nivel) goto sync;  // (minimo: solo esta linea y la de vram y sync)
+      if (reg_on) {  // (0.0.5) registro del frame
+        uint32_t g = gr.fr ? gr.fr : 1, dd = gr.draws ? gr.draws : 1;
+        clog("  registro: frames=%u completos=%u incompletos: memoria=%u no_leido=%u tope=%u curvas=%u | por frame: draws=%u estados=%u KB=%u paletas=%u us=%u | de los draws: 3d=%u%% clear=%u%% mezcla=%u%% alfa_test=%u%% swizzle=%u%% | draws por seg con textura 5650/5551/4444/8888/T4/T8/T16/T32/DXT1/3/5: %u %u %u %u %u %u %u %u %u %u %u\n",
+             gr.fr, gr.ok, gr.memo, gr.leer, gr.tope, gr.curva, gr.draws / g, gr.st / g, gr.kb / g >> 10, gr.cl / g, gr.us / g,
+             gr.d3 * 100 / dd, gr.clear * 100 / dd, gr.blend * 100 / dd, gr.atest * 100 / dd, gr.swz * 100 / dd,
+             gr.fmt[0], gr.fmt[1], gr.fmt[2], gr.fmt[3], gr.fmt[4], gr.fmt[5], gr.fmt[6], gr.fmt[7], gr.fmt[8], gr.fmt[9], gr.fmt[10]);
+      }
       clog("  draws/f: 3d=%u 2d=%u clear=%u vacios=%u | tri=%u tira=%u abanico=%u rect=%u lineas=%u puntos=%u curvas=%u | vertices/f=%u\n",
            PF(d3d), PF(dthr), PF(dclear), PF(dempty), PF(prim[3]), PF(prim[4]), PF(prim[5]), PF(prim[6]), PF(prim[1]) + PF(prim[2]),
            PF(prim[0]), PF(curves), PF(verts));
@@ -1399,6 +1415,8 @@ void capturaStart(void) {
   for (int k = 0; k < 4; k++) if (swOn(sw[k])) gp_flags |= 1u << k;
   sin_captura = swOn("ux0:data/nativedraw/sin_captura");
   pv_on = !swOn("ux0:data/nativedraw/sin_adelanto");  // (v13.12)
+  reg_on = swOn("ux0:data/nativedraw/dibujar");  // (0.0.5) registro del frame
+  if (reg_on) regInit();
   clog("registro: %s (ux0:data/nativedraw/registro: minimo, mediano o extremo) | interruptores%s%s%s%s%s%s%s\n", nivel == 2 ? "extremo" : nivel ? "mediano" : "minimo", gp_flags & 1 ? " sin_compuerta" : "", gp_flags & 2 ? " sin_espejo" : "",
        gp_flags & 4 ? " sin_libre" : "", gp_flags & 8 ? " compuerta_sync" : "", sin_captura ? " sin_captura" : "", pv_on ? "" : " sin_adelanto", gp_flags || sin_captura || !pv_on ? "" : ": ninguno (todo normal)");
   for (uint32_t a = 0x08000000u; a < 0x0C000000u && nr < 4;) {  // tramos de la RAM del PSP mapeados en este proceso

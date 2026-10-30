@@ -13,6 +13,8 @@
 // v13.9: TARDE=1 ./prueba 0 simula un sync atrasado (linea de nativedraw_tarde.log).
 // v13.6: espejo doble. El "GE" copia al final de cada frame f la copia f + 1 al espejo (f + 1) & 1; el frame siguiente la
 // usa (como el evento del flip). La sublista se escribe en los dos espejos.
+// 0.0.5: REG=1 activa el registro del frame (registro.c) y revisa cada frame: draws registrados = contados (sin memoria:
+// completo; con memoria: incompleto por las sublistas aplicadas).
 // v13.12: ./prueba <modo> 3: cada frame escribe sus sublistas de la VRAM solo en el espejo de ese frame (el otro queda con
 // la copia anterior) y la sublista 10 cambia en el frame 4: con la memoria comparando en el espejo en que se grabo, la
 // revision (modo 2) da BAD (las DISTINTAS de GT). ./prueba <modo> <vram> 3: los lectores solo hacen el plan (comprobacion
@@ -39,8 +41,9 @@ SceUID sceKernelCreateThread(const char *n, SceKernelThreadEntry e, int p, SceSi
 int sceKernelStartThread(SceUID t, SceSize a, void *p) { return 0; }
 int sceKernelDelayThread(SceUInt d) { return 0; }
 int sceKernelGetThreadInfo(SceUID t, SceKernelThreadInfo *i) { return -1; }
-SceUID sceKernelAllocMemBlock(const char *n, SceKernelMemBlockType t, SceSize s, SceKernelAllocMemBlockOpt *o) { return -1; }
-int sceKernelGetMemBlockBase(SceUID u, void **b) { return -1; }
+static void *blk[8]; static int nblk;  // (0.0.5) bloques para el registro del frame
+SceUID sceKernelAllocMemBlock(const char *n, SceKernelMemBlockType t, SceSize s, SceKernelAllocMemBlockOpt *o) { return nblk < 8 && (blk[nblk] = calloc(1, s)) ? nblk++ : -1; }
+int sceKernelGetMemBlockBase(SceUID u, void **b) { if (u < 0 || u >= nblk) return -1; *b = blk[u]; return 0; }
 int sceKernelGetMemBlockInfoByAddr(void *a, SceKernelMemBlockInfo *i) { return -1; }
 SceUID emu_th[EMU_N]; int emu_aff[EMU_N], emu_n;
 
@@ -92,6 +95,7 @@ int main(int argc, char **argv) {
   if (mmap((void *)0x72C00000, 0x200000, PROT_READ | PROT_WRITE, MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0) == MAP_FAILED) { perror("mmap3"); return 1; }
   if (mmap((void *)0x72000000, 0x400000, PROT_READ | PROT_WRITE, MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0) == MAP_FAILED) { perror("mmap2"); return 1; }
   rlo[0] = 0x08000000; rhi[0] = 0x0B000000; nr = 1; initCls();
+  if (getenv("REG")) { reg_on = 1; regInit(); }
   if (mode) { MEMO_N = 512; POOL_N = 8192; memo_sh = 23; memo = calloc(MEMO_N, sizeof(Memo)); pool = calloc(POOL_N, 64); memo_on = 1; memo_chk = mode == 2; }
   for (int f = 0; f < 8; f++) {
     build(f);
@@ -122,6 +126,13 @@ int main(int argc, char **argv) {
            f, acc.cmds, acc.draws, acc.verts, acc.vbytes, acc.textures, acc.prim[3], acc.prim[4], acc.calls_ram, stateSum(),
            acc.memo_hit, acc.memo_miss, acc.memo_dep, acc.memo_fail, acc.memo_no, acc.memo_chk, acc.memo_bad, acc.memo_lines, acc.memo_cmds, acc.memo_pre,
            lv_lines[0] + lv_lines[1], lv_ok[0] + lv_ok[1], lv_bad[0] + lv_bad[1], pv_pn, pv_ok[0] + pv_ok[1], pv_bad[0] + pv_bad[1]); pv_ok[0] = pv_ok[1] = pv_bad[0] = pv_bad[1] = 0; lv_lines[0] = lv_lines[1] = lv_ok[0] = lv_ok[1] = lv_bad[0] = lv_bad[1] = lv_late[0] = lv_late[1] = 0;
+    if (reg_on) {  // (0.0.5) cerrar el registro como en el flip y revisarlo
+      int w = rg_w; RFrame *g = rf[w];
+      uint32_t nd = g->nd, ne = g->ne, na = g->na, fl = g->flags, vis = g->draws_vistos;
+      regFlip(0x04000000, 512, acc.draws);
+      printf("   registro: draws=%u (contados %u, vistos %u) estados=%u bytes=%u flags=%x %s publicado=%d\n", nd, acc.draws, vis, ne, na, fl,
+             !fl && nd == acc.draws ? "COMPLETO" : "incompleto", rg_pub);
+    }
     lifeFlip(); lf_ord_cmds = 0;  // (v13.9.2) como en el flip
     gen++; ntex = 0;
   }
