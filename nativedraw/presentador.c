@@ -419,6 +419,34 @@ static void pantalla(void) {
        menu ? ", menu L+R+START" : "", falla ? ", falla" : "");
 }
 
+// Notificaciones de la GPU (para el error del boton PS): cada 50 ms se comparan las 512 palabras de la region con la
+// vez anterior. La primera vez que cambia una palabra que no es nuestra se anota (quien mas la usa: Adrenaline, el
+// emulador, el dialogo del sistema). En las nuestras (gq_slot, c_slot) se anota si alguien escribio otro valor: solo
+// pueden subir y nunca pasar de lo que mandamos.
+static void notifs(volatile uint32_t *nr) {
+  static uint32_t ant[512], vista[16], hay, n_log, mal_g, mal_c, ug, uc;
+  if (!nr) return;
+  for (uint32_t i = 0; i < 512; i++) {
+    uint32_t v = nr[i];
+    if (hay && v != ant[i] && i != gq_slot && !(c_on && i == c_slot) && !(vista[i >> 5] >> (i & 31) & 1) && n_log < 60) {
+      vista[i >> 5] |= 1u << (i & 31); n_log++;
+      alog("notificaciones: la palabra %u la usa otro (%08x -> %08x)\n", i, ant[i], v);
+    }
+    ant[i] = v;
+  }
+  hay = 1;
+  if (gq_fin) {  // la nuestra: no baja ni pasa de gq
+    uint32_t v = *gq_fin;
+    if (((int)(v - ug) < 0 || (int)(v - gq) > 0) && mal_g++ < 20) alog("notificaciones: la palabra %u (nuestra) tiene %08x: la ultima vista %08x, la ultima mandada %08x\n", gq_slot, v, ug, gq);
+    ug = v;
+  }
+  if (c_on) {
+    uint32_t v = *c_adr.address;
+    if (((int)(v - uc) < 0 || (int)(v - c_av) > 0) && mal_c++ < 20) alog("notificaciones: la palabra %u (del cronometro) tiene %08x: la ultima vista %08x, la ultima mandada %08x\n", c_slot, v, uc, c_av);
+    uc = v;
+  }
+}
+
 // --- Menu L+R+START ---
 static tai_hook_ref_t ref_ctrl;
 static SceUID hk_ctrl = -1;
@@ -508,6 +536,7 @@ static int presThread(SceSize args, void *argp) {
     sceKernelDelayThread(50000);
     if (menu && !pintado) { pintar(); __sync_synchronize(); pintado = 1; }
     if (!(k % 20)) pantalla();
+    notifs(nr);
     volHilo();
     repHilo();
     if (menu != m0) { m0 = menu; alog("presentador: menu %s\n", m0 ? "abierto" : "cerrado"); }

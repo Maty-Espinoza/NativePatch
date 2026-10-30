@@ -22,11 +22,12 @@ static struct { uint8_t tipo; uint16_t dr; uint32_t cola, us; } c_det[CD];  // d
 static volatile uint32_t c_dn = CD;  // escenas ya anotadas en c_det (CD: lleno, esperando que el informe lo imprima)
 
 // Prueba de la GPU (interruptor ux0:data/nativedraw/prueba_gpu, con medir_gpu): cada 10 s el traductor cambia de modo
-// para separar lo que cuesta cada parte del dibujo. Los modos 1 y 2 se ven mal a proposito.
-// 0 normal; 1 sin texturas (cada draw de un color: sin leer texturas ni paletas); 2 sin la imagen normal debajo; 3 la
-// imagen intermedia en CDRAM (memoria de video) en vez de LPDDR
+// para separar lo que cuesta cada parte del dibujo. Los modos 1 a 3 se ven mal a proposito.
+// 0 normal; 1 sin texturas (cada draw de un color: sin leer texturas ni paletas); 2 las texturas con swizzle leidas por
+// la GPU como si fueran lineales (sombreador nd_ft: se ven revueltas, pero la GPU lee lo mismo sin calcular la posicion
+// de cada texel); 3 sin alfa test (ningun pixel se descarta)
 static uint32_t p_on, p_modo;
-static const char *p_nom[4] = { "normal", "sin texturas", "sin la imagen normal debajo", "imagen intermedia en CDRAM" };
+static const char *p_nom[4] = { "normal", "sin texturas", "swizzle leido como lineal", "sin alfa test" };
 // anota en la cola una escena recien mandada (n: su notificacion de fin; dr: draws; px: miles de pixeles dibujados,
 // sumando cada draw; sw: draws con texturas con swizzle)
 static void cAnota(int tipo, const SceGxmNotification *n, uint32_t dr, uint32_t px, uint32_t sw) {
