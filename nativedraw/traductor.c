@@ -358,6 +358,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
 #define ESCENA(sup) do { sceGxmBeginScene(c, 0, rt, 0, 0, 0, sup, &ds); sceGxmSetVertexProgram(c, nvp); \
     sceGxmReserveVertexDefaultUniformBuffer(c, &u); sceGxmSetUniformDataF(u, n_wvp, 0, 16, wvp); } while (0)
   RT *cur_rt = 0;  // destino de la escena abierta (0: la superficie que se muestra)
+  uint32_t d0 = t_draws;  // draws al empezar la escena (cronometro)
   ESCENA(&cs[s]);
   if (base) {  // debajo, la imagen normal estirada con el programa del presentador
     sceGxmSetVertexProgram(c, vp); sceGxmSetFragmentProgram(c, fp);
@@ -385,7 +386,10 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     uint32_t clr = RE(e, 0xD3), tex = !(clr & 1) && (RE(e, 0x1E) & 1) && (d->vt & 3), fb = RE(e, 0x9C) & 0x1FFFF0;
     RT *dst = fb == disp ? 0 : rtDe(fb, f->frame, 1);
     if (fb != disp && !dst) { res = T_DESTINO; break; }
-    if (dst != cur_rt) { sceGxmEndScene(c, 0, gFin()); ESCENA(dst ? &dst->cs : &cs[s]); cur_rt = dst; }
+    if (dst != cur_rt) {
+      sceGxmEndScene(c, 0, gFin()); cAnota(cur_rt ? C_INT : C_TR, &gq_n, t_draws - d0); d0 = t_draws;
+      ESCENA(dst ? &dst->cs : &cs[s]); cur_rt = dst;
+    }
     if ((clr & 1) && !(clr >> 8 & 1)) continue;  // borrado solo de profundidad/stencil: nada que ver
     uint32_t key = clr & 1 ? 0 : blendKey(e), mat = (RE(e, 0x55) & 0xFFFFFF) | (RE(e, 0x56) & 0xFF) << 24;
     float tw = 1, th = 1, sw[4] = { 0, 0, 0, 0 };
@@ -450,6 +454,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     nv += n; t_draws++;
   }
   sceGxmEndScene(c, 0, gFin());  // (si algo fallo a medias, la superficie queda con lo dibujado: no se usa)
+  cAnota(cur_rt ? C_INT : C_TR, &gq_n, t_draws - d0);
   t_q[s] = gq;
   if (res && !t_vis[res]++) alog("traductor: primer frame con '%s' al dibujar\n", tnom[res]);
   return res;

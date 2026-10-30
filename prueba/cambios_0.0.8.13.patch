@@ -1,0 +1,103 @@
+diff --git a/nativedraw/presentador.c b/nativedraw/presentador.c
+index 7b4f98e..5627c68 100644
+--- a/nativedraw/presentador.c
++++ b/nativedraw/presentador.c
+@@ -199,6 +199,7 @@ static int destino(void) {
+   return 0;
+ }
+ 
++#include "cronometro.c"  // cuanto tarda la GPU en cada escena (medir_gpu)
+ #include "traductor.c"  // dibuja el registro del frame con la GPU de la Vita
+ 
+ // --- Ganchos (importaciones de AdrenalineUser) y estadisticas ---
+@@ -212,7 +213,7 @@ static volatile uint32_t n_rev, n_mal;  // frames de la Vita revisados y distint
+ // solo_mal: frames seguidos con la superficie negra y el juego no; falla: 1 se dejo de reemplazar, 2 ya anotado
+ static volatile uint32_t solo_mal, falla;
+ // dib: interruptor dibujar (reemplazar la imagen siempre; si no, solo con el menu abierto); t_on: traductor listo
+-static int dib, t_on;
++static int dib, t_on, c_pedido;  // c_pedido: cronometro de la GPU (medir_gpu)
+ static volatile uint32_t menu, pintado;  // menu abierto; su textura ya tiene el texto
+ #define ACTIVO (listo && !falla && (dib || menu))  // se reemplaza la imagen del PSP
+ static void *psp_data;                // datos de psp_tex (destino de la copia de Adrenaline)
+@@ -290,6 +291,8 @@ static void gAdr(const SceGxmNotification *n) {
+ // fr cuenta las escenas de Adrenaline.
+ static int hookEnd(SceGxmContext *c, const SceGxmNotification *v, const SceGxmNotification *f) {
+   gAdr(v); gAdr(f);
++  f = cAdr(f);  // (cronometro: notificacion de fin propia si no trae)
++  cAnota(C_ADR, f, usada == fr + 1);
+   int r = TAI_CONTINUE(int, ref_end, c, v, f);
+   static uint32_t fq[2];  // ultima escena nuestra del frame anterior y del de antes
+   if (ACTIVO && usada == fr + 1) {  // en esta escena Adrenaline dibujo la imagen del PSP: la pasamos por la superficie
+@@ -370,6 +373,7 @@ static int hookEnd(SceGxmContext *c, const SceGxmNotification *v, const SceGxmNo
+       sceGxmDraw(c, SCE_GXM_PRIMITIVE_TRIANGLE_STRIP, SCE_GXM_INDEX_FORMAT_U16, ib, 4);
+     }
+     sceGxmEndScene(c, 0, gFin());
++    cAnota(C_NORMAL, &gq_n, menu && pintado ? 2 : 1);
+   listo_hd:
+     if (src == &itex[ki]) img_q[ki] = gq;  // escena que lee esa copia
+     fq[1] = fq[0]; fq[0] = gq;
+@@ -455,6 +459,7 @@ static int presThread(SceSize args, void *argp) {
+   for (gq_slot = 511; gq_slot > 400 && (g_adr[gq_slot >> 5] >> (gq_slot & 31) & 1); gq_slot--) {}
+   if (nr) { gq_fin = nr + gq_slot; *gq_fin = 0; gq = 0; }
+   alog("gpu: fin de escenas en la notificacion %u (%p); Adrenaline usa:%s\n", gq_slot, gq_fin, ka ? ua : " ninguna");
++  if (c_pedido) cInicio(nr, g_adr);
+   listo = 1;
+   for (uint32_t t = now(), seen = 0, k = 0, aviso = 0, m0 = 0;;) {  // cada 10 s: cuantos frames y cuanto costo
+     sceKernelDelayThread(50000);
+@@ -497,6 +502,7 @@ static int presThread(SceSize args, void *argp) {
+       alog("gpu: frames no mandados por la GPU atrasada %u, esperas a la GPU %u ms | CPU en 10 s: traductor %u ms, "
+            "revision de frames distintos %u ms | revisiones de la superficie saltadas (GPU sin terminar) %u\n",
+            at, es / 1000, tr / 1000, rv / 1000, sl);
++      if (c_on) cInforme(dt);
+     }
+     alog("presentador: %u frames en %u ms por la superficie (cambios %u en total, %u con copia propia), CPU %u us/frame (max %u) | "
+          "casi negros: juego %u, superficie %u | revisados %u, distintos de la imagen normal %u%s\n", p, dt, n_camb, nd, p ? s / p : 0, m, n_neg_j, n_neg_p, nr, nm,
+@@ -517,6 +523,7 @@ static int swOn(const char *p) {  // el archivo existe y no empieza con "no" (co
+ // imagen del PSP hacen falta y arranca el hilo del presentador.
+ void presStart(void) {
+   dib = swOn("ux0:data/nativedraw/dibujar");
++  c_pedido = swOn("ux0:data/nativedraw/medir_gpu");
+   repInicio();
+   vol_nivel = volNivel();  // volcados: desactivado, pantallazo, frame, secuencia o auto
+   if (vol_nivel == 4 && !dib) vol_nivel = 3;  // (auto compara el dibujo de la Vita: sin dibujar no hay que comparar)
+diff --git a/nativedraw/traductor.c b/nativedraw/traductor.c
+index 8b367b3..c46ff0e 100644
+--- a/nativedraw/traductor.c
++++ b/nativedraw/traductor.c
+@@ -358,6 +358,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
+ #define ESCENA(sup) do { sceGxmBeginScene(c, 0, rt, 0, 0, 0, sup, &ds); sceGxmSetVertexProgram(c, nvp); \
+     sceGxmReserveVertexDefaultUniformBuffer(c, &u); sceGxmSetUniformDataF(u, n_wvp, 0, 16, wvp); } while (0)
+   RT *cur_rt = 0;  // destino de la escena abierta (0: la superficie que se muestra)
++  uint32_t d0 = t_draws;  // draws al empezar la escena (cronometro)
+   ESCENA(&cs[s]);
+   if (base) {  // debajo, la imagen normal estirada con el programa del presentador
+     sceGxmSetVertexProgram(c, vp); sceGxmSetFragmentProgram(c, fp);
+@@ -385,7 +386,10 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
+     uint32_t clr = RE(e, 0xD3), tex = !(clr & 1) && (RE(e, 0x1E) & 1) && (d->vt & 3), fb = RE(e, 0x9C) & 0x1FFFF0;
+     RT *dst = fb == disp ? 0 : rtDe(fb, f->frame, 1);
+     if (fb != disp && !dst) { res = T_DESTINO; break; }
+-    if (dst != cur_rt) { sceGxmEndScene(c, 0, gFin()); ESCENA(dst ? &dst->cs : &cs[s]); cur_rt = dst; }
++    if (dst != cur_rt) {
++      sceGxmEndScene(c, 0, gFin()); cAnota(cur_rt ? C_INT : C_TR, &gq_n, t_draws - d0); d0 = t_draws;
++      ESCENA(dst ? &dst->cs : &cs[s]); cur_rt = dst;
++    }
+     if ((clr & 1) && !(clr >> 8 & 1)) continue;  // borrado solo de profundidad/stencil: nada que ver
+     uint32_t key = clr & 1 ? 0 : blendKey(e), mat = (RE(e, 0x55) & 0xFFFFFF) | (RE(e, 0x56) & 0xFF) << 24;
+     float tw = 1, th = 1, sw[4] = { 0, 0, 0, 0 };
+@@ -450,6 +454,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
+     nv += n; t_draws++;
+   }
+   sceGxmEndScene(c, 0, gFin());  // (si algo fallo a medias, la superficie queda con lo dibujado: no se usa)
++  cAnota(cur_rt ? C_INT : C_TR, &gq_n, t_draws - d0);
+   t_q[s] = gq;
+   if (res && !t_vis[res]++) alog("traductor: primer frame con '%s' al dibujar\n", tnom[res]);
+   return res;
+diff --git a/nativedraw/version.h b/nativedraw/version.h
+index b98b648..26a2248 100644
+--- a/nativedraw/version.h
++++ b/nativedraw/version.h
+@@ -1,3 +1,3 @@
+ // version.h: version de NativeDraw. La usan nativedraw.c y captura.c (logs) y presentador.c (menu). Numeracion:
+ // docs/dev/versiones.md.
+-#define NATIVEDRAW_VERSION "0.0.7"
++#define NATIVEDRAW_VERSION "0.0.8.13"
