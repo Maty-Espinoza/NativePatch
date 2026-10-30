@@ -18,9 +18,8 @@ Los números viejos (devNN, vNN) se explican en `docs/dev/versiones.md`. Los `et
 - [x] ~~6. Limpiar el repo~~: salidas de compilación en `build/`, herramientas viejas fuera (etiqueta `gepatch-dev66`),
       ambiente por scripts (`tools/preparar.sh`, `tools/compilar.sh`, `tools/windows/`), documentos en `docs/dev` y
       `docs/changelog`.
-- [ ] **Separar el repo del fork en GitHub** (lo hace el usuario: en GitHub, Settings del repo → "Leave fork network" si
-      aparece, o pedirlo a soporte de GitHub con el asistente "detach fork"). Después, la rama por defecto pasa a `master`
-      con lo confirmado (hoy `master` ya está al día con `dev`).
+- [x] ~~Separar el repo del fork en GitHub~~ (2026-10-29): ya no es fork, rama por defecto `master`, etiqueta
+      `gepatch-dev66` subida.
 - [x] ~~Probar el instalador en la Vita~~: limpiar restos + instalar funcionaron (`docs/changelog/etapa3_preparacion.md`).
       Falta probar en la Vita "Desinstalar" y reinstalar sobre una instalación hecha (en el PC funcionan).
 - [ ] Correr **Ridge Racer** con NativeDraw 0.0.2 (solo se probó GT; la captura no cambió).
