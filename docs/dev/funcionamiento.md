@@ -124,5 +124,5 @@ de un sync, 9 escritura de la CPU (T4), 10 resumen de T4, 11 costo del frame par
 - No dibuja: la imagen que se ve es la del juego, escalada por Adrenaline.
 - 0.0.3: el presentador (`presentador.c`, interruptor `dibujar`) ya pasa la imagen del juego por una superficie propia,
   pero es una copia: el dibujo con los comandos del GE viene en los pasos 3.2–3.3 (`etapa3_plan.md`).
-- Menú L+R+START: pendiente, lo va a dibujar NativeDraw (`TODO.md`). Mientras tanto las opciones son archivos en
+- Menú L+R+START (0.0.4): lo dibuja NativeDraw; por ahora solo las versiones. Las opciones siguen siendo archivos en
   `ux0:data/nativedraw/` (`registros.md`).

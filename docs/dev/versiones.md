@@ -29,7 +29,8 @@ NativeLink (lado PSP) y NativeDraw (lado Vita) son proyectos hermanos: cada uno 
 | 0.0.1 | 0.0.1 | `4faaa2b` | Cambio de nombre y carpetas. Mismo comportamiento que GePatch 0.2-dev66 + gepresent v13.13 |
 | 0.0.2 | | `b5d4a56` | NativeLink: se quita lo heredado de GePatch (arquitectura A, menú, volcados) |
 | | 0.0.2 | `6992890` | NativeDraw: se quita la presentación vieja, el banco de GXM y los volcados |
-| | 0.0.3 | (este commit) | Etapa 3, paso 3.0: presentador transparente, apagado por defecto (`docs/dev/etapa3_plan.md`) |
+| | 0.0.3 | `34dee77` | Etapa 3, paso 3.0: presentador transparente, apagado por defecto (`docs/dev/etapa3_plan.md`) |
+| | 0.0.4 | (este commit) | Etapa 3, paso 3.1: menú L+R+START dibujado por NativeDraw (por ahora, las versiones) |
 
 Probadas en la Vita con Gran Turismo: `docs/changelog/etapa3_preparacion.md`.
 

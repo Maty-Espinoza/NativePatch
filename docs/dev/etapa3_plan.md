@@ -82,8 +82,21 @@ copias de la imagen ≈ 11 MB), LPDDR 25 MB.
 Pendiente menor: una línea de puntos fija sobre la fecha del menú de Adrenaline (solo ahí; en los juegos no). Falta ver
 si también sale sin NativeDraw (`dibujar` con `no`).
 
+## Paso 3.1: menú L+R+START (NativeDraw 0.0.4, probado el 2026-10-29) [medido]
+- Botones: gancho a la importación de ScePspemu `sceCompatWriteSharedCtrl` (la misma que usa Adrenaline para su menú).
+  L+R+START abre/cierra; abierto, el juego recibe "nada apretado" (también mientras se mantiene la combinación). Solo se
+  abre si Adrenaline está mostrando la imagen del PSP (no en PS1).
+- Dibujo: cuadro de 256x128 (textura en LPDDR, filtro punto) al doble, centrado, con mezcla, encima de la imagen en la
+  superficie del presentador. Texto con la fuente 8x16 del instalador.
+- Sin `dibujar`, el presentador se prepara igual (la memoria de siempre) y reemplaza la imagen solo con el menú abierto.
+- Por ahora solo muestra las versiones (el usuario: es un lugar para las opciones; cuáles van, se decide después).
+- Lección (0.0.4.1): la primera línea de `nativelink.log` (la versión) la escribe el PSP directo a la tarjeta, antes de
+  que NativeDraw atienda el log: para saber la versión se lee el archivo.
+- Probado en el menú de Adrenaline, Retro City Rampage y Gran Turismo: abre, cierra, bloquea los botones, sin saltos.
+
 ## Estado
 | Paso | Estado |
 |---|---|
 | 3.0 | **hecho** (NativeDraw 0.0.3) |
-| 3.1–3.4 | pendientes |
+| 3.1 | **hecho** (NativeDraw 0.0.4) |
+| 3.2–3.4 | pendientes |

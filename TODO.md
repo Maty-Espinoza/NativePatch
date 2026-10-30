@@ -1,7 +1,7 @@
 # TODO: pendientes
 
 Cosas pendientes, de lo más próximo a lo que puede esperar. Cada una dice de dónde salió (documento en `docs/dev/`,
-`docs/changelog/` o en el proyecto de claude.ai). Actualizado: 2026-10-29 (**NativeDraw 0.0.3**: paso 3.0 de la etapa 3; antes **NativeLink 0.0.2 + NativeDraw 0.0.2**:
+`docs/changelog/` o en el proyecto de claude.ai). Actualizado: 2026-10-29 (**NativeDraw 0.0.4**: pasos 3.0 y 3.1 de la etapa 3; antes **NativeLink 0.0.2 + NativeDraw 0.0.2**:
 nombres nuevos, limpieza, instalador; antes GePatch 0.2-dev66 + gepresent v13.13 con la **etapa 2 cerrada**). Lo que
 sigue es la etapa 3 de `docs/dev/arquitectura_dibujo_en_vita.md` §6. Cómo se trabaja: `docs/dev/FLUJO_DE_TRABAJO.md`.
 Los números viejos (devNN, vNN) se explican en `docs/dev/versiones.md`. Los `etapaN_*.md` citados están en
@@ -24,16 +24,13 @@ Los números viejos (devNN, vNN) se explican en `docs/dev/versiones.md`. Los `et
       Falta probar en la Vita "Desinstalar" y reinstalar sobre una instalación hecha (en el PC funcionan).
 - [x] ~~Etapa 3, paso 3.0: presentador transparente~~ (NativeDraw 0.0.3, `docs/dev/etapa3_plan.md`). Siguen 3.1 (menú),
       3.2 (registro del frame), 3.3 (traductor 2D), 3.4 (copias de bloque + comparación).
+- [x] ~~Etapa 3, paso 3.1: menú L+R+START~~ (NativeDraw 0.0.4): por ahora solo versiones; falta poner opciones.
 - [ ] Línea de puntos fija sobre la fecha del menú de Adrenaline con el presentador (solo en el menú). Ver si sale con
       `dibujar` en `no`.
 - [ ] Correr **Ridge Racer** con NativeDraw 0.0.2 (solo se probó GT; la captura no cambió).
-- [ ] **Menú L+R+START dibujado por NativeDraw** (decisión del usuario): todas las opciones que hoy son archivos en
-      `ux0:data/nativedraw/` (`registro`, `nucleo_captura`, `medir_ge`, `off` y los de análisis, `docs/dev/registros.md`)
-      tienen que poder cambiarse desde ese menú. Depende de que NativeDraw dibuje (etapa 3). Ideas: NativeLink detecta los
-      botones y bloquea los del juego mientras el menú está abierto (la parte de los botones del menú viejo está en la
-      etiqueta `gepatch-dev66`, `menu.c`: `ctrl*Patched`); el estado del menú va por el buzón; NativeDraw lo dibuja encima
-      con GXM y guarda las opciones en `ux0:data/nativedraw/opciones.txt`. Las que solo valen al abrir Adrenaline
-      (`nucleo_captura`, `off`) lo tienen que decir en el menú.
+- [ ] **Opciones en el menú L+R+START** (el menú ya existe, NativeDraw 0.0.4): las que hoy son archivos en
+      `ux0:data/nativedraw/` (`registros.md`); decidir cuáles valen la pena. Las que solo valen al abrir Adrenaline
+      (`nucleo_captura`, `off`) lo tienen que decir. Guardar en `ux0:data/nativedraw/opciones.txt`.
 - [ ] **Actualizador** en el instalador (a futuro): buscar en GitHub (releases) si hay un VPK nuevo y bajarlo.
 - [ ] **Antes de la 1.0:** quitar "Limpiar restos de pruebas" del instalador.
 - [ ] **Antes del primer release:** quitar `docs/changelog/conversaciones/` (queda `CHANGELOG.md` como resumen) y armar el

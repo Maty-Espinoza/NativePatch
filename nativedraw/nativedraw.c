@@ -80,7 +80,26 @@ static int writerThread(SceSize args, void *argp) {
   for (;;) { logFlushOut(); sceKernelDelayThread(2000); }
   return 0;
 }
-static uint32_t nlogs;
+static uint32_t nlogs, ram_ok;
+// Version de NativeLink para el menu: la primera linea de nativelink.log ("000000 NativeLink 0.0.2 (build ..."). Esa linea
+// la escribe el PSP directo a la tarjeta (antes de que la Vita atienda el log), asi que se lee del archivo. Solo si
+// NativeLink esta activo ("GPV1" en el buzon): si no, el archivo es del juego anterior.
+static char nl_ver[16];
+const char *nlVersion(void) {
+  if (!ram_ok || DESC[0] != 0x31565047) return 0;
+  char b[96] = { 0 };
+  SceUID fd = sceIoOpen("ux0:pspemu/nativelink.log", SCE_O_RDONLY, 0);
+  if (fd < 0) return 0;
+  sceIoRead(fd, b, sizeof b - 1); sceIoClose(fd);
+  for (int i = 0; i + 12 < (int)sizeof b - 1; i++)
+    if (!sceClibStrncmp(b + i, "NativeLink ", 11)) {
+      int k = 0;
+      for (i += 11; k < 15 && b[i] && b[i] != ' ' && b[i] != '\n'; ) nl_ver[k++] = b[i++];
+      nl_ver[k] = 0;
+      return k ? nl_ver : 0;
+    }
+  return 0;
+}
 static void serveLog(void) {
   uint32_t seq = DESC[VLOG];
   if (seq == DESC[VLOG + 1]) return;
@@ -105,7 +124,7 @@ static int mainThread(SceSize args, void *argp) {
     alog("ux0:data/nativedraw/off existe: no se engancha nada\n");
     return sceKernelExitDeleteThread(0);
   }
-  presStart();  // (0.0.3) solo si existe ux0:data/nativedraw/dibujar
+  presStart();  // (0.0.3) presentador y menu L+R+START (0.0.4)
   // La RAM del PSP se mapea en el proceso despues de cargar el plugin: leerla antes cierra Adrenaline
   // (C2-12828-1 en v4). Se espera a que el bloque exista, como vpcdram.
   for (int mapped = 0;;) {  // solo escribe si NativeLink dejo su marca (la zona es del XMB fuera de los juegos)
@@ -117,7 +136,7 @@ static int mainThread(SceSize args, void *argp) {
       continue;
     }
     if (!mapped) capturaStart();  // (v12) el hilo de captura espera el buzon de NativeLink
-    mapped = 1;  // (v9: se comprueba una vez; la RAM del PSP queda mapeada mientras viva el proceso)
+    mapped = ram_ok = 1;  // (v9: se comprueba una vez; la RAM del PSP queda mapeada mientras viva el proceso)
     int busy = 0;
     if (DESC[0] == 0x31565047) {  // "GPV1"
       if (DESC[8] != LOGV) DESC[8] = LOGV;
