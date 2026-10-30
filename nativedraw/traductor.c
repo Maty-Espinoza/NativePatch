@@ -242,6 +242,22 @@ static int trVerts(RFrame *f, RDraw *d, TV *o, float tw, float th, uint32_t col0
   return T_OK;
 }
 
+// Pixeles que cubren los n vertices traducidos de un draw (rectangulos: cada uno; el resto: el rectangulo que los
+// encierra). Para el cronometro.
+static float trArea(const TV *o, uint32_t n, uint32_t prim) {
+  float a = 0;
+  if (prim == 6) {
+    for (uint32_t j = 0; j + 6 <= n; j += 6) { float w = o[j + 5].x - o[j].x, h = o[j + 5].y - o[j].y; a += (w < 0 ? -w : w) * (h < 0 ? -h : h); }
+    return a;
+  }
+  float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f;
+  for (uint32_t j = 0; j < n; j++) {
+    x0 = o[j].x < x0 ? o[j].x : x0; x1 = o[j].x > x1 ? o[j].x : x1;
+    y0 = o[j].y < y0 ? o[j].y : y0; y1 = o[j].y > y1 ? o[j].y : y1;
+  }
+  return n ? (x1 - x0) * (y1 - y0) : 0;
+}
+
 // --- prueba del sombreador con swizzle (trPrueba, una vez al empezar a dibujar): separa un error de nd_fs de uno de
 // los datos. Dibuja en la imagen intermedia 1 una textura T4 de 512x512 conocida (entera 1:1 y los texels 384-511 al
 // doble, para ver la precision), la lee de vuelta y cuenta los pixeles distintos; repite despues de cambiar la textura
@@ -358,8 +374,11 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
 #define ESCENA(sup) do { sceGxmBeginScene(c, 0, rt, 0, 0, 0, sup, &ds); sceGxmSetVertexProgram(c, nvp); \
     sceGxmReserveVertexDefaultUniformBuffer(c, &u); sceGxmSetUniformDataF(u, n_wvp, 0, 16, wvp); } while (0)
   RT *cur_rt = 0;  // destino de la escena abierta (0: la superficie que se muestra)
+  uint32_t d0 = t_draws, ssw = 0;  // cronometro: draws al empezar la escena, draws con swizzle y pixeles de la escena
+  float spx = 0;
   ESCENA(&cs[s]);
   if (base) {  // debajo, la imagen normal estirada con el programa del presentador
+    spx += W * H;
     sceGxmSetVertexProgram(c, vp); sceGxmSetFragmentProgram(c, fp);
     sceGxmReserveVertexDefaultUniformBuffer(c, &u); sceGxmSetUniformDataF(u, p_wvp, 0, 16, wvp);
     sceGxmSetFragmentTexture(c, 0, base); sceGxmSetVertexStream(c, 0, vb);
@@ -385,7 +404,10 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     uint32_t clr = RE(e, 0xD3), tex = !(clr & 1) && (RE(e, 0x1E) & 1) && (d->vt & 3), fb = RE(e, 0x9C) & 0x1FFFF0;
     RT *dst = fb == disp ? 0 : rtDe(fb, f->frame, 1);
     if (fb != disp && !dst) { res = T_DESTINO; break; }
-    if (dst != cur_rt) { sceGxmEndScene(c, 0, gFin()); ESCENA(dst ? &dst->cs : &cs[s]); cur_rt = dst; }
+    if (dst != cur_rt) {
+      sceGxmEndScene(c, 0, gFin()); cAnota(cur_rt ? C_INT : C_TR, &gq_n, t_draws - d0, spx / 1000, ssw); d0 = t_draws; spx = 0; ssw = 0;
+      ESCENA(dst ? &dst->cs : &cs[s]); cur_rt = dst;
+    }
     if ((clr & 1) && !(clr >> 8 & 1)) continue;  // borrado solo de profundidad/stencil: nada que ver
     uint32_t key = clr & 1 ? 0 : blendKey(e), mat = (RE(e, 0x55) & 0xFFFFFF) | (RE(e, 0x56) & 0xFF) << 24;
     float tw = 1, th = 1, sw[4] = { 0, 0, 0, 0 };
@@ -430,6 +452,9 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     if ((res = trVerts(f, d, o + nv, tw, th, mat, sc, &n))) break;
     if (!n) continue;
     if (nv + n > TV_N) { res = T_TOPE; break; }
+    if (c_on) { spx += trArea(o + nv, n, d->prim); ssw += tex == 2; }
+    if (p_on && p_modo == 1) tex = 0;  // (prueba_gpu) sin texturas: el color del vertice
+    if (p_on && p_modo == 2 && tex == 2) tex = 1;  // (prueba_gpu) swizzle leido como lineal
     SceGxmFragmentProgram *p = fragProg(tex, key);
     if (!p) { res = T_PROG; break; }
     sceGxmSetFragmentProgram(c, p);
@@ -437,7 +462,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     // uniformes (ver sombreadores/*.cg): at = funcion del alfa test (1: siempre pasa) y referencia; tf = funcion de
     // textura, TCC y color al doble
     uint32_t db = RE(e, 0xDB), c9 = RE(e, 0xC9);
-    float at[4] = { (clr & 1) || !(RE(e, 0x22) & 1) ? 1.0f : (float)(db & 7), (float)(db >> 8 & 0xFF), 0, 0 };
+    float at[4] = { (clr & 1) || !(RE(e, 0x22) & 1) || (p_on && p_modo == 3) ? 1.0f : (float)(db & 7), (float)(db >> 8 & 0xFF), 0, 0 };
     sceGxmSetUniformDataF(u, tex == 2 ? n_ats : tex ? n_atx : n_atc, 0, 4, at);
     if (tex) {
       float tf[4] = { (c9 & 7) == 3 ? 1.0f : 0.0f, (float)(c9 >> 8 & 1), (float)(c9 >> 16 & 1), 0 };
@@ -450,6 +475,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     nv += n; t_draws++;
   }
   sceGxmEndScene(c, 0, gFin());  // (si algo fallo a medias, la superficie queda con lo dibujado: no se usa)
+  cAnota(cur_rt ? C_INT : C_TR, &gq_n, t_draws - d0, spx / 1000, ssw);
   t_q[s] = gq;
   if (res && !t_vis[res]++) alog("traductor: primer frame con '%s' al dibujar\n", tnom[res]);
   return res;

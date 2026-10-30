@@ -15,12 +15,16 @@ NativeLink (lado PSP) y NativeDraw (lado Vita) son proyectos hermanos: cada uno 
 
 - **Dos plugins con el mismo MENOR funcionan juntos.** El instalador lleva siempre un par compatible.
 - **Versiones de prueba:** un cuarto número sobre la versión que se está preparando (`0.0.3.1`, `0.0.3.2`...). El commit
-  lleva la versión confirmada en la Vita, sin el cuarto número. Cada error arreglado = un commit con su versión.
+  que confirma lleva la versión confirmada en la Vita, sin el cuarto número. Cada error arreglado = un commit con su versión.
+- **Los commits de prueba también se suben** (decisión del usuario, 2026-10-30): para seguir en otro computador o en otra
+  conversación, cada versión de prueba que se manda a la Vita puede ir como commit a `dev`, marcado "(prueba)" con su
+  número completo (`NativeDraw 0.0.8.15 (prueba)`). Lo importante son las versiones: que cada commit diga qué versión
+  trae y que las confirmadas sigan la numeración sin huecos.
 - **Sin versiones perdidas en el repo:** la versión del commit es siempre la que sigue a la última confirmada en GitHub
   (`git log --oneline -- nativedraw/version.h` o `nativelink/log.h`), aunque las pruebas hayan usado otra numeración.
   Ej.: GitHub tenía NativeDraw 0.0.6 y las pruebas llegaron a 0.0.8.12 → el commit es NativeDraw 0.0.7. Los commits
   marcados "(prueba)" no cuentan como versión confirmada.
-- **Pruebas de NativeDraw 0.0.8** (propuesta, pendiente de confirmar por el usuario): siguen desde **0.0.8.13**, para no
+- **Pruebas de NativeDraw 0.0.8** (confirmado por el usuario): siguen desde **0.0.8.13**, para no
   chocar con los nombres de `vitabridge\respaldo\` y `vitabridge\etapa3_0.0.8.x\`, que ya usaron 0.0.8.1–0.0.8.12
   como pruebas de 0.0.7.
 - El primer release (0.1.0) se marca con etiqueta y release en GitHub cuando el usuario lo decida.

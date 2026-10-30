@@ -159,6 +159,8 @@ Los números viejos (devNN, vNN) se explican en `docs/dev/versiones.md`. Los `et
 - [ ] La prueba de qemu de NativeDraw (`nativedraw/prueba_memoria.c`) se compila con `-I` a una carpeta con solo `psp2*`
       y `vitasdk*` de los encabezados de vitasdk (con toda la carpeta `include` choca la libc de vitasdk con la del PC).
       Las pruebas del PSP (`tests/`) se quitaron en 0.0.2 (eran de la arquitectura A y no compilaban desde dev61).
+- [ ] `tools/compilar.sh` no se detiene si NativeDraw no compila: deja en `build/` el `.suprx` anterior (pasó con
+      0.0.8.14). Mientras tanto, revisar que el md5 cambie después de compilar.
 - [ ] La VM de Claude en el PC con Windows a veces no llega a GitHub (proxy 403): pull y push por paquetes de git
       (`docs/dev/FLUJO_DE_TRABAJO.md` §2). El push desde el contenedor (`add_repo` con push) funciona; los commits
       subidos así quedan a nombre de Claude.

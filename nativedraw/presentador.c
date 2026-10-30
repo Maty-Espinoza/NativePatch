@@ -199,20 +199,21 @@ static int destino(void) {
   return 0;
 }
 
+#include "cronometro.c"  // cuanto tarda la GPU en cada escena (medir_gpu)
 #include "traductor.c"  // dibuja el registro del frame con la GPU de la Vita
 
 // --- Ganchos (importaciones de AdrenalineUser) y estadisticas ---
 static tai_hook_ref_t ref_end, ref_tex, ref_dma;
 static SceUID hk_end = -1, hk_tex = -1, hk_dma = -1;
 static const SceGxmTexture *psp_tex;    // la textura de 512x272 de Adrenaline (la imagen del juego de PSP)
-static volatile uint32_t fr, listo;     // fr: escenas de Adrenaline terminadas
+static volatile uint32_t fr, listo, n_us;  // fr: escenas de Adrenaline terminadas; n_us: de ellas, con la imagen del PSP
 static uint32_t usada, dibujada, cur;   // escena en que Adrenaline uso psp_tex / en que se dibujo sup[cur]
 static volatile uint32_t n_pres, n_camb, n_neg_j, n_neg_p, us_sum, us_max;  // (se leen en el hilo del registro)
 static volatile uint32_t n_rev, n_mal;  // frames de la Vita revisados y distintos de la imagen normal
 // solo_mal: frames seguidos con la superficie negra y el juego no; falla: 1 se dejo de reemplazar, 2 ya anotado
 static volatile uint32_t solo_mal, falla;
 // dib: interruptor dibujar (reemplazar la imagen siempre; si no, solo con el menu abierto); t_on: traductor listo
-static int dib, t_on;
+static int dib, t_on, c_pedido;  // c_pedido: cronometro de la GPU (medir_gpu)
 static volatile uint32_t menu, pintado;  // menu abierto; su textura ya tiene el texto
 #define ACTIVO (listo && !falla && (dib || menu))  // se reemplaza la imagen del PSP
 static void *psp_data;                // datos de psp_tex (destino de la copia de Adrenaline)
@@ -290,7 +291,10 @@ static void gAdr(const SceGxmNotification *n) {
 // fr cuenta las escenas de Adrenaline.
 static int hookEnd(SceGxmContext *c, const SceGxmNotification *v, const SceGxmNotification *f) {
   gAdr(v); gAdr(f);
+  f = cAdr(f);  // (cronometro: notificacion de fin propia si no trae)
+  cAnota(C_ADR, f, usada == fr + 1, 0, 0);
   int r = TAI_CONTINUE(int, ref_end, c, v, f);
+  n_us += usada == fr + 1;
   static uint32_t fq[2];  // ultima escena nuestra del frame anterior y del de antes
   if (ACTIVO && usada == fr + 1) {  // en esta escena Adrenaline dibujo la imagen del PSP: la pasamos por la superficie
     uint32_t t0 = now();
@@ -370,6 +374,7 @@ static int hookEnd(SceGxmContext *c, const SceGxmNotification *v, const SceGxmNo
       sceGxmDraw(c, SCE_GXM_PRIMITIVE_TRIANGLE_STRIP, SCE_GXM_INDEX_FORMAT_U16, ib, 4);
     }
     sceGxmEndScene(c, 0, gFin());
+    cAnota(C_NORMAL, &gq_n, menu && pintado ? 2 : 1, W * H / 1000, 0);
   listo_hd:
     if (src == &itex[ki]) img_q[ki] = gq;  // escena que lee esa copia
     fq[1] = fq[0]; fq[0] = gq;
@@ -381,6 +386,65 @@ static int hookEnd(SceGxmContext *c, const SceGxmNotification *v, const SceGxmNo
 fin:
   fr++;
   return r;
+}
+
+// --- Quien dibuja la pantalla (para el error del boton PS) ---
+// Ganchos que solo cuentan: escenas y frames mandados a la pantalla por Adrenaline (AdrenalineUser) y por el emulador
+// del sistema (ScePspemu). Cada segundo, presThread arma el estado (quien dibujo, si hay un dialogo del sistema abierto,
+// superficie de la Vita o imagen normal, tapado) y lo anota cuando cambia y los 3 segundos siguientes.
+static tai_hook_ref_t ref_aq, ref_afb, ref_pend, ref_pq, ref_pfb;
+static SceUID hk_aq = -1, hk_afb = -1, hk_pend = -1, hk_pq = -1, hk_pfb = -1;
+static volatile uint32_t n_aq, n_afb, n_pend, n_pq, n_pfb;
+static int hookAq(void *a, void *b, const void *d) { n_aq++; return TAI_CONTINUE(int, ref_aq, a, b, d); }
+static int hookAfb(const void *p, int s) { n_afb++; return TAI_CONTINUE(int, ref_afb, p, s); }
+static int hookPend(SceGxmContext *c, const SceGxmNotification *v, const SceGxmNotification *f) { n_pend++; return TAI_CONTINUE(int, ref_pend, c, v, f); }
+static int hookPq(void *a, void *b, const void *d) { n_pq++; return TAI_CONTINUE(int, ref_pq, a, b, d); }
+static int hookPfb(const void *p, int s) { n_pfb++; return TAI_CONTINUE(int, ref_pfb, p, s); }
+static int (*dlgCorre)(void);  // sceCommonDialogIsRunning (con esto, Adrenaline deja de dibujar)
+// cada 1 s (lo llama presThread): anota el estado si cambio y los 3 s siguientes (como mucho 300 lineas)
+static void pantalla(void) {
+  static uint32_t a0, u0, aq0, afb0, p0, pq0, pfb0, sig0 = ~0u, extra, lineas;
+  uint32_t a = fr - a0, u = n_us - u0, aq = n_aq - aq0, afb = n_afb - afb0, pe = n_pend - p0, pq = n_pq - pq0, pfb = n_pfb - pfb0;
+  a0 = fr; u0 = n_us; aq0 = n_aq; afb0 = n_afb; p0 = n_pend; pq0 = n_pq; pfb0 = n_pfb;
+  int dl = dlgCorre ? dlgCorre() : -1;
+  uint32_t sig = (a > 0) | (u > 0) << 1 | (aq > 0) << 2 | (pe > 0) << 3 | (pq > 0 || pfb > 0) << 4 | (dl > 0) << 5 | tapado << 6 |
+                 cur_hd << 7 | menu << 8 | falla << 9;
+  if (sig != sig0) extra = 4;
+  sig0 = sig;
+  if (!extra || lineas >= 300) return;
+  extra--; lineas++;
+  alog("pantalla: Adrenaline escenas %u (con la imagen del PSP %u), a la pantalla %u (cambios de buffer %u) | ScePspemu escenas %u, "
+       "a la pantalla %u (cambios de buffer %u) | dialogo del sistema %s | superficie: %s%s%s%s\n", a, u, aq, afb, pe, pq, pfb,
+       dl < 0 ? "?" : dl ? "abierto" : "no", cur_hd ? "dibujo de la Vita" : "imagen normal", tapado ? ", tapado" : "",
+       menu ? ", menu L+R+START" : "", falla ? ", falla" : "");
+}
+
+// Notificaciones de la GPU (para el error del boton PS): cada 50 ms se comparan las 512 palabras de la region con la
+// vez anterior. La primera vez que cambia una palabra que no es nuestra se anota (quien mas la usa: Adrenaline, el
+// emulador, el dialogo del sistema). En las nuestras (gq_slot, c_slot) se anota si alguien escribio otro valor: solo
+// pueden subir y nunca pasar de lo que mandamos.
+static void notifs(volatile uint32_t *nr) {
+  static uint32_t ant[512], vista[16], hay, n_log, mal_g, mal_c, ug, uc;
+  if (!nr) return;
+  for (uint32_t i = 0; i < 512; i++) {
+    uint32_t v = nr[i];
+    if (hay && v != ant[i] && i != gq_slot && !(c_on && i == c_slot) && !(vista[i >> 5] >> (i & 31) & 1) && n_log < 60) {
+      vista[i >> 5] |= 1u << (i & 31); n_log++;
+      alog("notificaciones: la palabra %u la usa otro (%08x -> %08x)\n", i, ant[i], v);
+    }
+    ant[i] = v;
+  }
+  hay = 1;
+  if (gq_fin) {  // la nuestra: no baja ni pasa de gq
+    uint32_t v = *gq_fin;
+    if (((int)(v - ug) < 0 || (int)(v - gq) > 0) && mal_g++ < 20) alog("notificaciones: la palabra %u (nuestra) tiene %08x: la ultima vista %08x, la ultima mandada %08x\n", gq_slot, v, ug, gq);
+    ug = v;
+  }
+  if (c_on) {
+    uint32_t v = *c_adr.address;
+    if (((int)(v - uc) < 0 || (int)(v - c_av) > 0) && mal_c++ < 20) alog("notificaciones: la palabra %u (del cronometro) tiene %08x: la ultima vista %08x, la ultima mandada %08x\n", c_slot, v, uc, c_av);
+    uc = v;
+  }
 }
 
 // --- Menu L+R+START ---
@@ -441,6 +505,17 @@ static int presThread(SceSize args, void *argp) {
   }
   alog("presentador: ganchos sceGxmEndScene %08x sceGxmSetFragmentTexture %08x sceDmacMemcpy %08x sceCompatWriteSharedCtrl %08x\n",
        hk_end, hk_tex, hk_dma, hk_ctrl);
+  // solo cuentan (quien dibuja la pantalla): sceGxmDisplayQueueAddEntry y sceDisplaySetFrameBuf de los dos y
+  // sceGxmEndScene de ScePspemu
+  hk_aq = taiHookFunctionImport(&ref_aq, "AdrenalineUser", 0xF76B66BD, 0xEC5C26B5, hookAq);
+  hk_afb = taiHookFunctionImport(&ref_afb, "AdrenalineUser", 0x4FAACD11, 0x7A410B64, hookAfb);
+  hk_pend = taiHookFunctionImport(&ref_pend, "ScePspemu", 0xF76B66BD, 0xFE300E2F, hookPend);
+  hk_pq = taiHookFunctionImport(&ref_pq, "ScePspemu", 0xF76B66BD, 0xEC5C26B5, hookPq);
+  hk_pfb = taiHookFunctionImport(&ref_pfb, "ScePspemu", 0x4FAACD11, 0x7A410B64, hookPfb);
+  int rd = taiGetModuleExportFunc("SceCommonDialog", 0xE537816C, 0x043A353E, (uintptr_t *)&dlgCorre);
+  alog("pantalla: ganchos Adrenaline cola %08x buffer %08x | ScePspemu escenas %08x cola %08x buffer %08x | "
+       "sceCommonDialogIsRunning %08x\n", hk_aq, hk_afb, hk_pend, hk_pq, hk_pfb, rd);
+  if (rd < 0) dlgCorre = 0;
   if (hk_end < 0 || hk_tex < 0) return sceKernelExitDeleteThread(0);
   while (fr < 30) sceKernelDelayThread(100000);  // GXM ya iniciado por Adrenaline
   int r1 = programas(), r2 = r1 >= 0 ? destino() : 0;
@@ -455,10 +530,13 @@ static int presThread(SceSize args, void *argp) {
   for (gq_slot = 511; gq_slot > 400 && (g_adr[gq_slot >> 5] >> (gq_slot & 31) & 1); gq_slot--) {}
   if (nr) { gq_fin = nr + gq_slot; *gq_fin = 0; gq = 0; }
   alog("gpu: fin de escenas en la notificacion %u (%p); Adrenaline usa:%s\n", gq_slot, gq_fin, ka ? ua : " ninguna");
+  if (c_pedido) cInicio(nr, g_adr);
   listo = 1;
   for (uint32_t t = now(), seen = 0, k = 0, aviso = 0, m0 = 0;;) {  // cada 10 s: cuantos frames y cuanto costo
     sceKernelDelayThread(50000);
     if (menu && !pintado) { pintar(); __sync_synchronize(); pintado = 1; }
+    if (!(k % 20)) pantalla();
+    notifs(nr);
     volHilo();
     repHilo();
     if (menu != m0) { m0 = menu; alog("presentador: menu %s\n", m0 ? "abierto" : "cerrado"); }
@@ -497,6 +575,7 @@ static int presThread(SceSize args, void *argp) {
       alog("gpu: frames no mandados por la GPU atrasada %u, esperas a la GPU %u ms | CPU en 10 s: traductor %u ms, "
            "revision de frames distintos %u ms | revisiones de la superficie saltadas (GPU sin terminar) %u\n",
            at, es / 1000, tr / 1000, rv / 1000, sl);
+      if (c_on) cInforme(dt);
     }
     alog("presentador: %u frames en %u ms por la superficie (cambios %u en total, %u con copia propia), CPU %u us/frame (max %u) | "
          "casi negros: juego %u, superficie %u | revisados %u, distintos de la imagen normal %u%s\n", p, dt, n_camb, nd, p ? s / p : 0, m, n_neg_j, n_neg_p, nr, nm,
@@ -517,6 +596,8 @@ static int swOn(const char *p) {  // el archivo existe y no empieza con "no" (co
 // imagen del PSP hacen falta y arranca el hilo del presentador.
 void presStart(void) {
   dib = swOn("ux0:data/nativedraw/dibujar");
+  c_pedido = swOn("ux0:data/nativedraw/medir_gpu");
+  p_on = c_pedido && swOn("ux0:data/nativedraw/prueba_gpu");  // (modos de prueba: solo con el cronometro)
   repInicio();
   vol_nivel = volNivel();  // volcados: desactivado, pantallazo, frame, secuencia o auto
   if (vol_nivel == 4 && !dib) vol_nivel = 3;  // (auto compara el dibujo de la Vita: sin dibujar no hay que comparar)
@@ -533,4 +614,9 @@ void presStop(void) {
   if (hk_tex >= 0) taiHookRelease(hk_tex, ref_tex);
   if (hk_dma >= 0) taiHookRelease(hk_dma, ref_dma);
   if (hk_ctrl >= 0) taiHookRelease(hk_ctrl, ref_ctrl);
+  if (hk_aq >= 0) taiHookRelease(hk_aq, ref_aq);
+  if (hk_afb >= 0) taiHookRelease(hk_afb, ref_afb);
+  if (hk_pend >= 0) taiHookRelease(hk_pend, ref_pend);
+  if (hk_pq >= 0) taiHookRelease(hk_pq, ref_pq);
+  if (hk_pfb >= 0) taiHookRelease(hk_pfb, ref_pfb);
 }

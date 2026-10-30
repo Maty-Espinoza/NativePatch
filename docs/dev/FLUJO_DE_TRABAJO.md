@@ -50,9 +50,11 @@ paquete al revés: `git bundle create $HOME/mnt/Downloads/vitabridge/subir.bundl
 nuevas). Al usuario no le importa que los commits queden a nombre de Claude; le importa que queden subidos. Si no se
 puede, avisar: él puede hacer push desde su Git (Windows tiene Git for Windows; Mac, GitHub Desktop).
 
-**Mientras se prueba (sin commit):** Claude edita en su copia del contenedor, compila ahí y aplica el mismo cambio al
-repo del PC con `git diff > /mnt/user-data/outputs/<versión>.patch` → `device_commit_files` a `vitabridge\` → en la VM
-`git apply`. Así el repo del PC siempre tiene lo que corre en la Vita y el parche queda de respaldo en `vitabridge/`.
+**Mientras se prueba:** Claude edita en su copia del contenedor, compila ahí y sube la versión de prueba como commit a
+`dev` marcado "(prueba)" (decisión del usuario, 2026-10-30: los commits de prueba se suben; lo importante es que cada uno
+diga su versión). El computador vinculado la trae con `git pull` (o por paquete de git si la VM no llega a GitHub). Si
+`device_commit_files` no está disponible, el binario se puede pasar con una rama temporal que lo traiga (`git show
+<rama>:<archivo>`); `git diff` no incluye archivos nuevos, así que un `.patch` solo no basta.
 
 ## 3. Compilar
 - **Contenedor de Claude:** `T=/home/claude/tc sh tools/preparar.sh` (una vez por sesión, ~3 min) y
@@ -150,8 +152,9 @@ Una sospecha razonable no basta: se dice como sospecha y se confirma con datos a
 
 ## 7. Reglas del usuario
 - Versiones (`versiones.md`): cambio de un plugin = sube su PARCHE; cambio que necesita a los dos = sube el MENOR de los
-  dos. Pruebas con un cuarto número; **commit solo con la versión confirmada**. Cada error arreglado = un commit con su
-  versión. No hacer commits solo de documentación si se pueden juntar.
+  dos. Pruebas con un cuarto número. **Los commits de prueba también se suben** (marcados "(prueba)" con su versión);
+  la versión confirmada va sin el cuarto número. Cada error arreglado = un commit con su versión. No hacer commits solo
+  de documentación si se pueden juntar.
 - **No deben quedar versiones perdidas en el repo:** el commit lleva la versión que sigue a la última confirmada en
   GitHub, no la de la última prueba (detalle en `versiones.md`).
 - **Videos solo cuando sean necesarios:** primero logs y volcados. Grabar la pantalla (Vitastream + OBS) se pide solo
