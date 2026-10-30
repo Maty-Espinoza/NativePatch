@@ -1,8 +1,12 @@
 # Versiones
 
-## Regla (decisión del usuario, 2026-10-29)
+## Regla (decisión del usuario, 2026-10-29; corregida el mismo día al empezar la etapa 3)
 NativeLink (lado PSP) y NativeDraw (lado Vita) son proyectos hermanos: cada uno lleva su propia versión
 `0.MENOR.PARCHE` y puede cambiar sin el otro.
+
+- **Hasta el primer release todo es 0.0.x**, toque uno o los dos plugins: cada cambio sube el PARCHE del plugin que
+  cambió. **El primer release es NativeLink 0.1.0 + NativeDraw 0.1.0.**
+- Después del primer release:
 
 | Cambio | Qué sube | Ejemplo |
 |---|---|---|
@@ -12,7 +16,7 @@ NativeLink (lado PSP) y NativeDraw (lado Vita) son proyectos hermanos: cada uno 
 - **Dos plugins con el mismo MENOR funcionan juntos.** El instalador lleva siempre un par compatible.
 - **Versiones de prueba:** un cuarto número sobre la versión que se está preparando (`0.0.3.1`, `0.0.3.2`...). El commit
   lleva la versión confirmada en la Vita, sin el cuarto número. Cada error arreglado = un commit con su versión.
-- El "primer release" no depende del número: se marca aparte (etiqueta y release en GitHub) cuando el usuario lo decida.
+- El primer release (0.1.0) se marca con etiqueta y release en GitHub cuando el usuario lo decida.
   Antes de la 1.0 se quita la opción "Limpiar restos de pruebas" del instalador.
 - Dónde está el número: NativeLink en `nativelink/log.h` (`NATIVELINK_VERSION`); NativeDraw en `nativedraw/version.h`
   (`NATIVEDRAW_VERSION`). `tools/compilar.sh` los lee para el instalador (`version.txt` dentro del VPK).
@@ -25,6 +29,7 @@ NativeLink (lado PSP) y NativeDraw (lado Vita) son proyectos hermanos: cada uno 
 | 0.0.1 | 0.0.1 | `4faaa2b` | Cambio de nombre y carpetas. Mismo comportamiento que GePatch 0.2-dev66 + gepresent v13.13 |
 | 0.0.2 | | `b5d4a56` | NativeLink: se quita lo heredado de GePatch (arquitectura A, menú, volcados) |
 | | 0.0.2 | `6992890` | NativeDraw: se quita la presentación vieja, el banco de GXM y los volcados |
+| | 0.0.3 | (este commit) | Etapa 3, paso 3.0: presentador transparente, apagado por defecto (`docs/dev/etapa3_plan.md`) |
 
 Probadas en la Vita con Gran Turismo: `docs/changelog/etapa3_preparacion.md`.
 

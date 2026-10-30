@@ -7,6 +7,7 @@ NativePatch es software libre bajo la [GPLv3](LICENSE). Incluye o usa estas part
 | Funciones mínimas de `sceGu` (copias del GE), basadas en el PSPSDK | `nativelink/gu.c` | BSD (aviso abajo) |
 | Reglas del GE (tamaño de vértice, comandos) tomadas de cómo las implementa PPSSPP | `nativedraw/captura.c` | PPSSPP es GPL 2.0 o posterior: compatible con GPLv3 |
 | Fuente 8x16 generada desde DejaVu Sans Mono Bold | `instalador/font.h` | Bitstream Vera / DejaVu (permite modificar y redistribuir) |
+| Sombreadores compilados `texture_v`/`texture_f` de vita2d (los de vita-shader-collection, que usa Adrenaline 8) | `nativedraw/sombreadores.h` | vita2d (xerpi): MIT [verificar la licencia de vita-shader-collection antes del release] |
 | Encabezados y biblioteca de Adrenaline (`systemctrl.h`, `libpspsystemctrl_kernel.a`), solo para compilar | se bajan con `tools/preparar.sh` | GPLv3 (Adrenaline) |
 | pspdev, vitasdk, taiHEN | se bajan con `tools/preparar.sh` | sus licencias |
 

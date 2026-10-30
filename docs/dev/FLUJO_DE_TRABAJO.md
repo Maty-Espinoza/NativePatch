@@ -33,7 +33,8 @@ Remoto: `origin` = https://github.com/Maty-Espinoza/NativePatch (público). Rama
 
 ## 2. Actualizar el repo (pull) y subir commits (push)
 **Primero intentar lo normal** en la VM del computador: `cd $HOME/mnt/GitHub/NativePatch && git pull --ff-only`.
-La VM de Windows a veces **no llega a GitHub** (el proxy responde 403): entonces se hace por paquete de git:
+La VM a veces **no llega a GitHub** (el proxy responde 403; pasó en Windows y el 2026-10-29 también en el Mac): entonces
+se hace por paquete de git:
 1. En el contenedor de Claude (sí puede leer el repo público):
    `git clone --branch dev https://github.com/Maty-Espinoza/nativepatch /home/claude/maty-espinoza/nativepatch`
    (si ya existe: `git -C ... fetch origin dev && git -C ... merge --ff-only origin/dev`).
@@ -72,13 +73,14 @@ Lo pone en marcha el usuario (§1). Claude solo trabaja con archivos en la carpe
 
 | Archivo / carpeta | Qué hace |
 |---|---|
-| `estado.txt` | `vivo <hora>, Vita <ip> (respondio <hora>)`: si la hora es reciente, el relevo está corriendo |
+| `estado.txt` | `vivo <hora>, Vita <ip> (respondio <hora>), despierto hasta <hora>` o `dormido`: si la primera hora es reciente, el relevo está corriendo |
+| `vigilar.txt` | solo despierta al relevo (cualquier pedido también lo despierta): para que vuelva a mirar los logs si la prueba empieza más de 30 min después del último pedido |
 | `vitabridge.log` | todo lo que hizo (subidas, bajadas, comandos, errores) |
 | `enviar/ux0/...` (o `enviar/ur0/...`) | se sube a la misma ruta de la Vita y pasa a `enviados/` |
 | `bajar_<algo>.txt` | una línea por archivo: `ux0:/ruta` (va a `recibidos/`) o `ux0:/ruta -> ~/Downloads/vitabridge/...` |
 | `listar_<algo>.txt` | una carpeta de la Vita por línea; el listado queda en `respuestas/` |
 | `cmd_<algo>.txt` | comandos a vitacompanion (puerto 1338): `destroy` cierra las aplicaciones, `reboot` reinicia la Vita; la respuesta queda en `respuestas/` |
-| `recibidos/` | los logs (`ux0:/pspemu/native*.log`) se bajan solos **al cerrar el juego o Adrenaline**: el relevo mira la carpeta cada 15 s y baja un archivo cuando su tamaño no cambió desde la vez anterior. Durante el juego no baja nada |
+| `recibidos/` | los logs (`ux0:/pspemu/native*.log`) se bajan solos **al cerrar el juego o Adrenaline**: el relevo despierto mira la carpeta cada 60 s y baja un archivo cuando su tamaño no cambió desde la vez anterior. Durante el juego no baja nada |
 
 - NativeLink: `enviar/ux0/pspemu/seplugins/nativelink.prx`. Copia también en `Descargas/nativelink.prx` (pedido del usuario).
 - NativeDraw: `enviar/ux0/data/nativedraw/nativedraw.suprx`. Lo carga Adrenaline al abrirse: después de subirlo, mandar
@@ -90,6 +92,11 @@ Lo pone en marcha el usuario (§1). Claude solo trabaja con archivos en la carpe
 - **Verificar** lo subido: un `bajar_verif.txt` que lo baje a `vitabridge/<etapa>_<versión>/verif/` y comparar md5.
   `device_commit_files` puede entregar una copia vieja si se recompila con el mismo nombre de archivo (pasó con
   v13.11.2): al recompilar, mandar una copia con otro nombre y comparar el md5 en el PC antes de pedir la prueba.
+- **Despierto / dormido** (desde el 2026-10-29): el relevo solo trabaja hasta 30 min después del último pedido o de que un
+  log creció. Despierto pide `nosleep on` (la Vita no se duerme sola); dormido no toca la Vita y manda `nosleep off`
+  para que se duerma y ahorre batería (vitacompanion enciende `nosleep` en cada arranque). Abre el FTP solo para lo que
+  haya que hacer y lo cierra. Motivo: el FTP de vitacompanion pierde memoria; con el relevo consultando todo el día
+  (cada 15 s) la Vita se colgaba dentro y fuera de Adrenaline. Si una prueba empieza tarde, dejar un `vigilar.txt`.
 - El relevo a veces se queda pegado sin marcar errores (el latido de `estado.txt` deja de avanzar): pedir al usuario que
   cierre la ventana y vuelva a abrir `vitabridge.cmd`. "timed out" seguidos = la Vita no responde (dormida o colgada).
 - La VM de Claude no llega a la red de la casa (la Vita está en 192.168.0.10): todo pasa por el relevo.

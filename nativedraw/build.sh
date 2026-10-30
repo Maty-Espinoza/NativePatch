@@ -6,13 +6,13 @@
 set -e
 F="-mcpu=cortex-a9 -mthumb -mfloat-abi=hard -mfpu=neon -O2 -Wall -Wno-format -nostdlib -fno-builtin -ffreestanding"
 O=${O:-o}; rm -rf $O; mkdir -p $O
-for c in nativedraw captura; do arm-none-eabi-gcc $F -I$VH/include -I$TAI/include -c $c.c -o $O/$c.o; done
+for c in nativedraw captura presentador; do arm-none-eabi-gcc $F -I$VH/include -I$TAI/include -c $c.c -o $O/$c.o; done
 # Stubs: cada funcion que falta sale del primer archivo de $STUBS que la tenga, en este orden de bibliotecas
-arm-none-eabi-ld -r -o $O/todo.o $O/nativedraw.o $O/captura.o
+arm-none-eabi-ld -r -o $O/todo.o $O/nativedraw.o $O/captura.o $O/presentador.o
 for s in $(arm-none-eabi-nm -u $O/todo.o | awk '{print $2}' | grep -v -E '^(__|tai|mem)' | sort -u); do
   ok=
   for lib in SceLibKernel_SceLibKernel SceIofilemgr_SceIofilemgr SceSysmem_SceSysmem SceKernelThreadMgr_SceThreadmgr \
-             SceKernelDmacMgr_SceDmacmgr; do
+             SceKernelDmacMgr_SceDmacmgr SceGxm_SceGxm; do
     if [ -f $STUBS/${lib}_$s.S ]; then arm-none-eabi-as --defsym GEN_WEAK_EXPORTS=0 $STUBS/${lib}_$s.S -o $O/s_$s.o; ok=1; break; fi
   done
   [ -n "$ok" ] || { echo "sin stub: $s"; exit 1; }

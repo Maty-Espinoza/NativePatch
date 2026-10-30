@@ -3,6 +3,15 @@
 Versiones: `docs/dev/versiones.md`. El detalle de cada paso está en `docs/changelog/` (antes del primer release se quitan
 de ahí los resúmenes de conversación; este archivo queda como el resumen).
 
+## NativeDraw 0.0.3 (2026-10-29)
+- **Etapa 3, paso 3.0 (presentador transparente):** NativeDraw toma la pantalla de Adrenaline: la imagen del juego de PSP
+  pasa por una superficie propia del doble de tamaño dibujada con la GPU de la Vita (por ahora una copia, sin más
+  detalle). Respeta la escala, la posición y la proporción que elige Adrenaline; los juegos de PS1 no se tocan.
+  Apagado por defecto: se prende con `ux0:data/nativedraw/dibujar`. Costo ~0,15 ms por frame. Detalle y lecciones
+  (memoria CDRAM y videos, z obligatorio) en `docs/dev/etapa3_plan.md`.
+- Relevo (`tools/vitabridge.py`): duerme sin pedidos (deja dormir a la Vita: `nosleep off`) y abre el FTP solo para lo
+  necesario.
+
 ## NativeLink 0.0.2 + NativeDraw 0.0.2 (2026-10-29)
 - **NativeLink:** se quita todo lo heredado de GePatch que ya no se usaba: escalado en el PSP (arquitectura A), VRAM
   falsa, presentación por descriptor, menú L+R+START viejo, opciones por juego, captura al log y volcados .gpd

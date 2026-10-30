@@ -3,7 +3,8 @@
 // Plugin de usuario en el proceso de Adrenaline (taiHEN, seccion *PSPEMUCFW de ur0:tai/config.txt). Trabaja junto a
 // NativeLink (el plugin del lado PSP): NativeLink anota en un buzon de la RAM del PSP todo lo que el juego le pide al GE, y
 // el capturador de NativeDraw (captura.c) recorre las mismas listas desde la Vita. Por ahora (etapa 2 de la arquitectura B)
-// solo las captura y mide; en la etapa 3 las va a dibujar con la GPU de la Vita.
+// solo las captura y mide; en la etapa 3 las va a dibujar con la GPU de la Vita (presentador.c: desde 0.0.3 toma la
+// pantalla de Adrenaline, apagado por defecto).
 // Este archivo: arranque, log propio, el log de NativeLink (lo escribe la Vita, asi el PSP no espera a la tarjeta) y el
 // gancho que anota los hilos del emulador (captura.c mide cuanto procesador usa cada uno).
 // Si existe ux0:data/nativedraw/off no se engancha nada.
@@ -30,7 +31,7 @@
 #define DESC ((volatile uint32_t *)PSP(0x0A7FF000u))
 
 static int nlog;
-static void alog(const char *fmt, ...) {
+void alog(const char *fmt, ...) {
   if (nlog++ > 1000) return;
   char b[256];
   va_list ap; va_start(ap, fmt);
@@ -96,6 +97,7 @@ static void serveLog(void) {
 }
 
 void capturaStart(void);  // captura.c
+void presStart(void), presStop(void);  // presentador.c (0.0.3)
 
 static int mainThread(SceSize args, void *argp) {
   SceIoStat st;
@@ -103,6 +105,7 @@ static int mainThread(SceSize args, void *argp) {
     alog("ux0:data/nativedraw/off existe: no se engancha nada\n");
     return sceKernelExitDeleteThread(0);
   }
+  presStart();  // (0.0.3) solo si existe ux0:data/nativedraw/dibujar
   // La RAM del PSP se mapea en el proceso despues de cargar el plugin: leerla antes cierra Adrenaline
   // (C2-12828-1 en v4). Se espera a que el bloque exista, como vpcdram.
   for (int mapped = 0;;) {  // solo escribe si NativeLink dejo su marca (la zona es del XMB fuera de los juegos)
@@ -152,5 +155,6 @@ int module_start(SceSize args, void *argp) {
 }
 int module_stop(SceSize args, void *argp) {
   if (hk_ct >= 0) taiHookRelease(hk_ct, ref_ct);
+  presStop();
   return SCE_KERNEL_STOP_SUCCESS;
 }

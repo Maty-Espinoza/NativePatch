@@ -1,7 +1,7 @@
 # TODO: pendientes
 
 Cosas pendientes, de lo más próximo a lo que puede esperar. Cada una dice de dónde salió (documento en `docs/dev/`,
-`docs/changelog/` o en el proyecto de claude.ai). Actualizado: 2026-10-29 (**NativeLink 0.0.2 + NativeDraw 0.0.2**:
+`docs/changelog/` o en el proyecto de claude.ai). Actualizado: 2026-10-29 (**NativeDraw 0.0.3**: paso 3.0 de la etapa 3; antes **NativeLink 0.0.2 + NativeDraw 0.0.2**:
 nombres nuevos, limpieza, instalador; antes GePatch 0.2-dev66 + gepresent v13.13 con la **etapa 2 cerrada**). Lo que
 sigue es la etapa 3 de `docs/dev/arquitectura_dibujo_en_vita.md` §6. Cómo se trabaja: `docs/dev/FLUJO_DE_TRABAJO.md`.
 Los números viejos (devNN, vNN) se explican en `docs/dev/versiones.md`. Los `etapaN_*.md` citados están en
@@ -22,6 +22,10 @@ Los números viejos (devNN, vNN) se explican en `docs/dev/versiones.md`. Los `et
       `gepatch-dev66` subida.
 - [x] ~~Probar el instalador en la Vita~~: limpiar restos + instalar funcionaron (`docs/changelog/etapa3_preparacion.md`).
       Falta probar en la Vita "Desinstalar" y reinstalar sobre una instalación hecha (en el PC funcionan).
+- [x] ~~Etapa 3, paso 3.0: presentador transparente~~ (NativeDraw 0.0.3, `docs/dev/etapa3_plan.md`). Siguen 3.1 (menú),
+      3.2 (registro del frame), 3.3 (traductor 2D), 3.4 (copias de bloque + comparación).
+- [ ] Línea de puntos fija sobre la fecha del menú de Adrenaline con el presentador (solo en el menú). Ver si sale con
+      `dibujar` en `no`.
 - [ ] Correr **Ridge Racer** con NativeDraw 0.0.2 (solo se probó GT; la captura no cambió).
 - [ ] **Menú L+R+START dibujado por NativeDraw** (decisión del usuario): todas las opciones que hoy son archivos en
       `ux0:data/nativedraw/` (`registro`, `nucleo_captura`, `medir_ge`, `off` y los de análisis, `docs/dev/registros.md`)
@@ -120,6 +124,11 @@ Los números viejos (devNN, vNN) se explican en `docs/dev/versiones.md`. Los `et
       dejar siempre, muestrear cada ~1 ms o desde otro lado.
 
 ## Pruebas y herramientas
+- [ ] **Cuelgues de la Vita con el relevo abierto** (2026-10-28/29, dentro y fuera de Adrenaline): el relevo ahora
+      duerme sin pedidos y abre el FTP solo para lo necesario (`FLUJO_DE_TRABAJO.md` §4). Ver si los cuelgues paran; si
+      siguen, revisar la tarjeta de memoria. En la Vita se quitaron de `ur0:tai/config.txt` dos líneas a archivos que no
+      existían (`yamt_helper.skprx`, `vdb_daemon.suprx`; respaldo `ur0:tai/config_respaldo_2026-10-29.txt`).
+      En Windows, copiar `tools/vitabridge.py` a `Descargas\` (el relevo de ahí es una copia).
 - [ ] La prueba de qemu de NativeDraw (`nativedraw/prueba_memoria.c`) se compila con `-I` a una carpeta con solo `psp2*`
       y `vitasdk*` de los encabezados de vitasdk (con toda la carpeta `include` choca la libc de vitasdk con la del PC).
       Las pruebas del PSP (`tests/`) se quitaron en 0.0.2 (eran de la arquitectura A y no compilaban desde dev61).
@@ -139,9 +148,8 @@ Los números viejos (devNN, vNN) se explican en `docs/dev/versiones.md`. Los `et
 - [ ] Leer la hora en la Vita cuesta 390 ns: el registro extremo completo altera lo que mide (corrida 5 de la fase 1).
 
 ## Pendientes heredados
-- [ ] Pantalla negra durante la presentación del banco de la etapa 1: la textura del juego llegó negra en esos 10 s.
-      El banco se quitó en NativeDraw 0.0.2, pero mirar esto cuando la Vita presente su imagen (etapa 3).
-      (`docs/changelog/etapa1_banco_gxm.md` §3.3)
+- [x] ~~Pantalla negra durante la presentación del banco de la etapa 1~~: era la CDRAM que tomaba el banco (la usan
+      los videos de la Vita). Resuelto en NativeDraw 0.0.3 (`docs/dev/etapa3_plan.md`).
 - [x] ~~Licencia~~: GPLv3 (`LICENSE`); lo de PPSSPP (GPL 2.0 o posterior) es compatible. `AVISOS_TERCEROS.md`.
 - [ ] La causa de que la Vita se apagara con el banco v11.3 y GePatch activo a 2x sigue sin confirmar (el escalado de
       GePatch ya no existe; tener cuidado con lo nuevo de la GPU igual). (`docs/changelog/etapa1_banco_gxm.md`)
