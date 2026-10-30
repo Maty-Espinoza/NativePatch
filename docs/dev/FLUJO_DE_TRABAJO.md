@@ -64,6 +64,8 @@ repo del PC con `git diff > /mnt/user-data/outputs/<versión>.patch` → `device
 - **WSL (usuario):** `tools/windows/compilar.cmd [versión]` hace lo mismo con `V` = `Descargas\vitabridge`.
 - Versiones: `NATIVELINK_VERSION` en `nativelink/log.h`; `NATIVEDRAW_VERSION` en `nativedraw/version.h`. Reglas en
   `versiones.md` (pruebas con un cuarto número: 0.0.3.1...).
+- `nativedraw/build.sh` enlaza dos veces, la segunda con `-Tdata` una página más allá del código: `vita-elf-create`
+  agrega ~1,1 KB al final del segmento de código y fallaba cuando el de datos empezaba muy cerca (0.0.7.4).
 - Los md5 cambian en cada compilación de NativeDraw (lleva fecha y hora) y entre compiladores (contenedor, Mac, WSL): se
   comparan solo contra el binario que se mandó.
 - Prueba del capturador fuera de la Vita (qemu): ver la cabecera de `nativedraw/prueba_memoria.c`.
@@ -83,8 +85,9 @@ Lo pone en marcha el usuario (§1). Claude solo trabaja con archivos en la carpe
 | `recibidos/` | los logs (`ux0:/pspemu/native*.log`) se bajan solos **al cerrar el juego o Adrenaline**: el relevo despierto mira la carpeta cada 60 s y baja un archivo cuando su tamaño no cambió desde la vez anterior. Durante el juego no baja nada |
 
 - NativeLink: `enviar/ux0/pspemu/seplugins/nativelink.prx`. Copia también en `Descargas/nativelink.prx` (pedido del usuario).
-- NativeDraw: `enviar/ux0/data/nativedraw/nativedraw.suprx`. Lo carga Adrenaline al abrirse: después de subirlo, mandar
-  `cmd_cerrar.txt` con `destroy` (o `reboot` si hace falta reiniciar) para dejar la Vita lista.
+- NativeDraw: `enviar/ux0/data/nativedraw/nativedraw.suprx`. Lo carga Adrenaline al abrirse: después de subirlo,
+  **siempre** mandar `cmd_cerrar.txt` con `destroy` (o `reboot` si hace falta reiniciar). Adrenaline sigue con el
+  plugin viejo cargado hasta cerrarse: una prueba se hizo con 0.0.8.9 creyendo que era 0.0.8.10.
 - El instalador (`NativePatch.vpk`) solo hace falta para instalar por primera vez o probar el instalador: se sube a
   `enviar/ux0/data/nativepatch/` y el usuario lo instala con VitaShell. Para las versiones de prueba basta el relevo
   (los plugins ya están activados en `plugins.txt` y `config.txt`).
@@ -95,7 +98,9 @@ Lo pone en marcha el usuario (§1). Claude solo trabaja con archivos en la carpe
 - **Despierto / dormido** (desde el 2026-10-29): el relevo solo trabaja hasta 30 min después del último pedido o de que un
   log creció. Despierto pide `nosleep on` (la Vita no se duerme sola); dormido no toca la Vita y manda `nosleep off`
   para que se duerma y ahorre batería (vitacompanion enciende `nosleep` en cada arranque). Abre el FTP solo para lo que
-  haya que hacer y lo cierra. Motivo: el FTP de vitacompanion pierde memoria; con el relevo consultando todo el día
+  haya que hacer y lo cierra. Motivo: el FTP de vitacompanion pierde memoria (listando cada 1 s y bajando
+  los logs mientras crecían, a las ~600 descargas respondía "550 Could not allocate memory" y la Vita no abría
+  programas); con el relevo consultando todo el día
   (cada 15 s) la Vita se colgaba dentro y fuera de Adrenaline. Si una prueba empieza tarde, dejar un `vigilar.txt`.
 - El relevo a veces se queda pegado sin marcar errores (el latido de `estado.txt` deja de avanzar): pedir al usuario que
   cierre la ventana y vuelva a abrir `vitabridge.cmd`. "timed out" seguidos = la Vita no responde (dormida o colgada).
@@ -129,6 +134,9 @@ Una sospecha razonable no basta: se dice como sospecha y se confirma con datos a
   (15–30 s después de cerrar) y copiar de `recibidos/` `nativelink.log`, `nativelink_prev.log`, `nativedraw_captura.log`,
   `nativedraw_captura_prev.log`, `nativedraw.log` (con registro extremo, también `nativedraw_frames.log` y
   `nativedraw_tarde.log`) a `vitabridge/<etapa>_<versión>/<juego><n>/` (p. ej. `etapa3_0.0.3.1/gt1`).
+- **Antes de analizar, verificar la versión** en los logs: `head -1 nativelink.log`, la primera línea de
+  `nativedraw_captura.log` y la última línea "NativeDraw 0.0.x ... compilado" de `nativedraw.log` (este se agrega,
+  no se reemplaza: el análisis empieza en esa línea). Guardar los logs con un `bajar_*.txt` a la carpeta de la prueba.
 - Resumen sin leer los logs enteros: `python3 tools/resumen_corrida.py <carpeta>` (fps cada 10 s, esperas al sync,
   espejo, segundos donde la Vita no alcanza, DISTINTAS). Con registro extremo:
   `python3 tools/analisis_fase1.py <carpeta> [<carpeta> ...]`. Los dos leen también las carpetas viejas (`ge_patch*.log`).
@@ -144,6 +152,10 @@ Una sospecha razonable no basta: se dice como sospecha y se confirma con datos a
 - Versiones (`versiones.md`): cambio de un plugin = sube su PARCHE; cambio que necesita a los dos = sube el MENOR de los
   dos. Pruebas con un cuarto número; **commit solo con la versión confirmada**. Cada error arreglado = un commit con su
   versión. No hacer commits solo de documentación si se pueden juntar.
+- **No deben quedar versiones perdidas en el repo:** el commit lleva la versión que sigue a la última confirmada en
+  GitHub, no la de la última prueba (detalle en `versiones.md`).
+- **Videos solo cuando sean necesarios:** primero logs y volcados. Grabar la pantalla (Vitastream + OBS) se pide solo
+  para errores que los volcados no logran capturar (así se encontraron los cuadros rotos de KOF 96).
 - Después de cada cambio: compilar y mandar a la Vita. Las pruebas son solo en la Vita (el laboratorio PPSSPP se quitó
   en 0.0.2: NativeLink no hace nada visible sin la Vita). No hacer procesos que gasten muchos tokens sin preguntar ni
   acciones que no pidió.

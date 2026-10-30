@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Dibuja en el PC un frame volcado por NativeDraw (fK_registro.bin, desde 0.0.7.7) y lo compara con la imagen normal.
+"""Dibuja en el PC un frame volcado por NativeDraw (fK_registro.bin) y lo compara con la imagen normal.
 
   python3 tools/volcado.py <carpeta del volcado> [K] [--texturas-de <otro .bin>] [--salida <carpeta>]
 
@@ -13,12 +13,15 @@ Lo que dice:
   - con --texturas-de f2_registro.bin: dibuja f1 con las texturas copiadas en el frame siguiente; si asi sale bien, la
     copia del espejo llego atrasada.
 Deja fK_pc.png (normal | PC | Vita reducida | diferencias) en --salida (por defecto, la carpeta del volcado).
-Necesita numpy y Pillow. No escribe nada en el repo.
+Necesita numpy y Pillow. No escribe nada en el repo. Formato del registro y niveles de volcado: docs/dev/volcados.md.
 """
 import struct, sys, os
 import numpy as np
 from PIL import Image
 
+# Lee un fK_registro.bin: cabecera de 16 palabras, registros guardados (RS), tabla de texturas (ta/tn/to/tq/tm), draws
+# (d), estados (e: un valor por registro de RS), datos de vertices/indices/paletas (a) y copias de texturas (tx).
+# Las posiciones 'off' de los draws son desplazamiento + 1 (0 = no hay).
 def leer(path):
     b = open(path, 'rb').read()
     h = struct.unpack_from('<16I', b, 0)
@@ -40,7 +43,9 @@ def leer(path):
     F['tx'] = bytearray(b[o:o + F['ntx']])
     return F
 
-def exacta(F):  # (desde 0.0.8.4, con volcado_auto) la imagen del PSP de ese mismo frame, de la copia del espejo de su flip
+# La imagen del PSP de ese mismo frame (copia del espejo de su flip), si el registro la trae; None si no.
+# Devuelve 272x480 RGB float segun el formato de pixel del framebuffer (565, 5551, 4444 u 8888).
+def exacta(F):
     if not F['nimg']: return None
     w, f, o = F['fbw'] & 0xFFFF, F['fbw'] >> 16 & 3, F['nimg'] - 1
     if f == 3: return np.frombuffer(bytes(F['tx'][o:o + w * 272 * 4]), np.uint8).reshape(272, w, 4)[:, :480, :3].astype(np.float32)
@@ -50,6 +55,7 @@ def exacta(F):  # (desde 0.0.8.4, con volcado_auto) la imagen del PSP de ese mis
     else: r, g, b = (c & 15) * 17, (c >> 4 & 15) * 17, (c >> 8 & 15) * 17
     return np.stack([r, g, b], 2).astype(np.float32)
 
+# Valor del registro r del GE en el estado e (0 si el registro no se guardo).
 def RE(F, e, r): return e[F['RS'].index(r)] if r in F['RS'] else 0
 
 def c8888(c, f):  # color del PSP -> (r, g, b, a) 0..255
@@ -58,6 +64,8 @@ def c8888(c, f):  # color del PSP -> (r, g, b, a) 0..255
     if f == 1: return ((c & 31) * 255 // 31, (c >> 5 & 31) * 255 // 31, (c >> 10 & 31) * 255 // 31, 255 if c >> 15 else 0)
     return ((c & 15) * 17, (c >> 4 & 15) * 17, (c >> 8 & 15) * 17, (c >> 12 & 15) * 17)
 
+# Decodifica los vertices del draw segun su tipo de vertice (vt: formatos de textura, color, normal y posicion, con
+# indices de 8/16/32 bits): lista de (x, y, u, v, color). col0 = color del material si el vertice no trae color.
 def verts(F, d, col0):
     s4, cs = (0, 1, 2, 4), (0, 0, 0, 0, 2, 2, 2, 4)
     vt = d['vt']; tc, ct, nt, pt = vt & 3, vt >> 2 & 7, vt >> 5 & 3, vt >> 7 & 3
@@ -84,7 +92,10 @@ def verts(F, d, col0):
         out.append((float(x), float(y), float(u), float(v), c))
     return out
 
-class Tex:  # una textura del draw: devuelve (r, g, b, a) para arreglos de u, v enteros
+# Textura de un draw, decodificada a RGBA (o a indices + paleta en T4/T8), o una imagen intermedia ya dibujada en el PC
+# (rt) si la textura no se copio. ok = False si es una imagen intermedia que el PC no dibujo.
+# texturas_de: otro registro del que tomar las filas que se copiaron alli (grupos de 8 filas marcados en tm).
+class Tex:
     def __init__(s, F, d, e, fbs, texturas_de):
         s.ok, fmt = True, RE(F, e, 0xC3) & 15
         ta = (RE(F, e, 0xA0) & 0xFFFFF0) | ((RE(F, e, 0xA8) << 8) & 0x0F000000)
@@ -107,7 +118,7 @@ class Tex:  # una textura del draw: devuelve (r, g, b, a) para arreglos de u, v 
                         if m >> g & 1: buf[g * 8 * rb:(g + 1) * 8 * rb] = G['tx'][og + g * 8 * rb:og + (g + 1) * 8 * rb]
                     data = bytes(buf[:rb * s.th])
         raw = np.frombuffer(data.ljust(rb * s.th, b'\0'), np.uint8).reshape(s.th, rb)
-        if F['ver'] >= 2 and RE(F, e, 0xC2) & 1 and s.th >= 8:  # (desde 0.0.8 la copia con swizzle va tal cual: se ordena aca)
+        if F['ver'] >= 2 and RE(F, e, 0xC2) & 1 and s.th >= 8:  # la copia con swizzle va tal cual: se ordena aca
             raw = raw.reshape(s.th // 8, rb // 16, 8, 16).transpose(0, 2, 1, 3).reshape(s.th, rb)
         if fmt == 4: s.idx = np.stack([raw & 15, raw >> 4], 2).reshape(s.th, rb * 2)
         elif fmt == 5: s.idx = raw
@@ -124,7 +135,8 @@ class Tex:  # una textura del draw: devuelve (r, g, b, a) para arreglos de u, v 
                 v = struct.unpack_from('<I' if bpe == 4 else '<H', F['a'], po + j * bpe)[0] if d['clut'] and j < mx else 0
                 pal.append(c8888(v, cf))
             s.pal = np.array(pal, np.float32)
-    def get(s, U, V, lin=False):  # U, V en texels (float); lin: filtro bilineal (solo para imagenes intermedias)
+    # (r, g, b, a) para U, V en texels (float); lin: filtro bilineal (solo en imagenes intermedias).
+    def get(s, U, V, lin=False):
         if s.rt is not None:
             if not lin: return s.rt[np.clip(np.floor(V).astype(np.int64), 0, 271), np.clip(np.floor(U).astype(np.int64), 0, 511)]
             x, y = U - .5, V - .5; x0, y0 = np.floor(x), np.floor(y); fx, fy = (x - x0)[..., None], (y - y0)[..., None]
@@ -137,6 +149,7 @@ class Tex:  # una textura del draw: devuelve (r, g, b, a) para arreglos de u, v 
         if s.fmt >= 4: return s.pal[s.idx[v, u]]
         return s.rgba[v, u]
 
+# Mezcla del GE (si esta activa): factores fuente/destino (con colores fijos) y operacion, sobre colores 0..255.
 def blend(F, e, src, dst):
     if not RE(F, e, 0x21) & 1: return src
     df = RE(F, e, 0xDF); sf, dfc, op = df & 15, df >> 4 & 15, df >> 8 & 15
@@ -149,24 +162,27 @@ def blend(F, e, src, dst):
     out = src.copy(); out[..., :3] = np.clip(r, 0, 1) * 255
     return out
 
+# Mascara del alfa test del GE para los alfas a (todo True si esta apagado).
 def atest(F, e, a):
     if not RE(F, e, 0x22) & 1: return np.ones(a.shape, bool)
     db = RE(F, e, 0xDB); fn, ref, mk = db & 7, db >> 8 & 255, db >> 16 & 255
     a = a.astype(np.int32) & mk; ref &= mk
     return [a < -1, a > -1, a == ref, a != ref, a < ref, a <= ref, a > ref, a >= ref][fn]
 
+# Dibuja los draws through (2D) del registro: rectangulos, triangulos y tiras, con textura, alfa test, mezcla, borrados
+# y scissor. Cada imagen destino es 512x272; la que se muestra empieza desde base. Los draws 3D se saltan.
+# Devuelve (imagenes por direccion, ultimo draw que escribio cada pixel, direccion mostrada).
 def dibujar(F, base, texturas_de=None):
     fbs, quien = {}, {}
     disp = F['fb'] & 0x1FFFF0
     dest = [RE(F, F['e'][d['st']], 0x9C) & 0x1FFFF0 for d in F['d']]
-    if F['d'] and disp not in dest: disp = dest[-1]  # (como el traductor 0.0.7.5)
+    if F['d'] and disp not in dest: disp = dest[-1]  # ninguno va a la que se muestra: la del ultimo (como la Vita)
     def fbuf(a):
         if a not in fbs:
             fbs[a] = np.zeros((272, 512, 4), np.float32); fbs[a][..., 3] = 255
             if a == disp: fbs[a][:, :480, :3] = base
             quien[a] = np.full((272, 512), -1, np.int32)
         return fbs[a]
-    fuente = {}  # draw -> la imagen intermedia que leyo (para culpar a sus draws)
     for i, d in enumerate(F['d']):
         e = F['e'][d['st']]
         if not d['vt'] >> 23 & 1: continue  # 3D: no
@@ -177,7 +193,6 @@ def dibujar(F, base, texturas_de=None):
         if not clr & 1 and RE(F, e, 0x1E) & 1 and d['vt'] & 3:
             tex = Tex(F, d, e, fbs, texturas_de)
             if not tex.ok: continue
-            if tex.rt is not None: fuente[i] = tex.ta & 0x1FFFF0
         d4, d5 = RE(F, e, 0xD4), RE(F, e, 0xD5)
         sx0, sy0, sx1, sy1 = (d4 & 1023, d4 >> 10 & 1023, (d5 & 1023) + 1, (d5 >> 10 & 1023) + 1) if d5 & 0xFFFFF else (0, 0, 512, 272)
         tris = []
@@ -229,8 +244,10 @@ def dibujar(F, base, texturas_de=None):
             reg = dst[y0:y1, x0:x1]
             reg[m, :3] = src[m, :3]
             quien[dest[i]][y0:y1, x0:x1][m] = i
-    return fbs, quien, disp, fuente
+    return fbs, quien, disp
 
+# Lee los argumentos, dibuja el frame K, imprime las diferencias, los draws culpables y las texturas, y guarda las
+# imagenes (fK_pc.png y las intermedias).
 def main():
     args = sys.argv[1:]
     if not args: sys.exit(__doc__)
@@ -250,13 +267,13 @@ def main():
     if ex is not None:  # (la imagen normal de la Vita puede ser de otro frame: se compara con la exacta)
         print(f'imagen exacta del frame: si (la normal difiere de ella en {(np.abs(ex - normal) > 40).any(2).mean() * 100:.2f}%: atraso de la Vita)')
         normal = ex
-    fbs, quien, disp, fuente = dibujar(F, normal, otro)
+    fbs, quien, disp = dibujar(F, normal, otro)
     pc = fbs.get(disp, np.zeros((272, 512, 4), np.float32))[:, :480, :3]
     dif = (np.abs(pc - normal) > 40).any(2)
     difv = (np.abs(vita - normal) > 60).any(2)
     print(f'frame {F["frame"]}: draws {F["nd"]}, texturas {F["nt"]}, espejo usado {F["esp"]} (ultimo terminado {F["espf"]}), imagen {disp:06x}')
     print(f'pixeles distintos de la normal: PC {dif.mean() * 100:.2f}% | Vita {difv.mean() * 100:.2f}%')
-    # culpables: el ultimo draw de cada pixel distinto (si leyo una imagen intermedia, el de esa imagen en el mismo lugar)
+    # culpables: el ultimo draw que escribio cada pixel distinto de la imagen que se muestra
     cul = {}
     q = quien[disp][:, :480]
     for y, x in zip(*np.nonzero(dif)):
@@ -264,7 +281,7 @@ def main():
         cul[i] = cul.get(i, 0) + 1
     if cul:
         print('draws con pixeles distintos (draw: pixeles) en la imagen que se muestra:', sorted(cul.items(), key=lambda t: -t[1])[:12])
-    for a, Q in quien.items():  # en las imagenes intermedias: que draws escribieron donde el PC y la normal difieren no se sabe
+    for a, Q in quien.items():  # imagenes intermedias: solo cuantos draws (no hay referencia para compararlas)
         if a != disp: print(f'imagen intermedia {a:06x}: {len(set(Q[Q >= 0].tolist()))} draws')
     print('texturas: t direccion bytes grupos_copiados copia_del_espejo')
     for j in range(F['nt']):

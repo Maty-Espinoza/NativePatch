@@ -1,14 +1,17 @@
-// NativeLink: plugin del lado PSP (corre en el PSP de Adrenaline, junto al juego). No cambia nada de lo que dibuja el
-// juego: engancha las funciones con que el juego le pasa sus listas de dibujo al GE y anota en un buzon compartido cada
-// encolado, stall, sync y flip. NativeDraw (el plugin del lado Vita) lee ese buzon y recorre las mismas listas desde la RAM
-// del PSP. Ademas:
+// NativeLink: plugin del lado PSP. Adrenaline lo carga junto al juego (seplugins/plugins.txt). No cambia lo que dibuja
+// el juego: engancha las funciones con que le pasa sus listas al GE (encolar, stall, sync) y el flip, y anota cada
+// llamada en un buzon en la RAM del PSP (SB, 0x0A000000). NativeDraw (lado Vita) lee el buzon y recorre las mismas
+// listas desde la RAM del PSP. Ademas:
 //   - espejo de la VRAM: la Vita no ve la VRAM del PSP; en cada flip el GE copia a la RAM las paginas que pide la Vita;
 //   - compuerta: si la Vita va atrasada, el juego la espera (hasta 5 ms) antes de reusar una lista;
-//   - telemetria para los registros (T4/T6, CPU libre, vida de la lista) y el log, que escribe NativeDraw (log.c).
+//   - telemetria para los registros (T4/T6, CPU libre, costo por frame, vida de la lista) y el log (log.c).
 // Atajos al abrir un juego: L o SELECT = NativeLink apagado (el juego corre como sin plugin); R = log sincrono.
-// Hasta 0.2-dev66 se llamaba GePatch y ademas escalaba la imagen en el PSP (arquitectura A). Ese codigo se quito en 0.0.2:
-// esta en la etiqueta gepatch-dev66 del repo (docs/dev/versiones.md). Los numeros "devNN" de los comentarios son de esa
-// numeracion vieja.
+// Mapa del buzon y de la zona compartida: docs/dev/funcionamiento.md; niveles e interruptores: docs/dev/registros.md.
+//
+// TODO:
+// - T4: sceDmacMemcpy/sceDmacTryMemcpy no se encuentran con ningun nombre de modulo probado en Adrenaline 8
+// - T6: geBusy da siempre 0 al llamar al sync aunque el juego espera al GE dentro de sceGeDrawSync: entender que espera
+// - T6 apagado por defecto por su costo: si se quiere siempre, muestrear cada ~1 ms o desde otro lado
 #include <pspsdk.h>
 #include <pspkernel.h>
 #include <pspctrl.h>
@@ -23,53 +26,60 @@
 
 PSP_MODULE_INFO("NativeLink", 0x1007, 1, 0);
 
-#define DRAW_NATIVE 0xABCDEF00 // != 0: Adrenaline muestra la imagen de 0x0A400000 en vez de la del juego (no se usa: 0)
+#define DRAW_NATIVE 0xABCDEF00 // != 0: Adrenaline muestra la imagen de 0x0A400000 en vez de la del juego
 #define ZONA 0x0A000000        // 16 MB para los plugins (buzon, espejos, listas propias)
 #define STATS_EVERY 600        // frames entre cada linea de estadisticas (~10 s)
 
 static int passive; // L o SELECT al abrir el juego, o el juego ocupa la zona: no se anota nada
-static struct { u32 lists, heads, stalls, frames, frame_us, frame_max, slow60, slow30, long_logged; } st; // (log, 10 s)
+static struct { u32 lists, heads, stalls, frames, frame_us, frame_max, slow60, slow30, long_logged; } st; // (log)
 static u32 last_flip;
 
+// Funciones originales (las que llaman los ganchos)
 int (*_sceGeListUpdateStallAddr)(int qid, void *stall);
 int (*_sceGeListEnQueue)(const void *list, void *stall, int cbid, PspGeListArgs *arg);
 int (*_sceGeListEnQueueHead)(const void *list, void *stall, int cbid, PspGeListArgs *arg);
 int (*_sceDisplaySetFrameBuf)(void *topaddr, int bufferwidth, int pixelformat, int sync);
 
-// --- Buzon compartido con NativeDraw (etapa 2 de la arquitectura B, desde dev61 "modo sombra") ---------------------
+// --- Buzon compartido con NativeDraw ---------------------------------------------------------------------------------
 // El juego corre como sin plugin (VRAM real, listas sin tocar; Adrenaline muestra su imagen). Los ganchos solo anotan
 // lo que el juego le pide al GE y el capturador de NativeDraw recorre las mismas listas leyendo la RAM del PSP.
-// Buzon en 0x0A000000 (zona reservada para los plugins, ver zoneCheck), sin cache:
-//   +0x00 "SOMB"  +0x04 version  +0x08 eventos escritos (PSP)  +0x0C ultima lista capturada (Vita, numero de orden)
-//   +0x10 latido de la Vita  +0x14 eventos leidos (Vita)  +0x18 listas encoladas (PSP)
-//   +0x1000 anillo de SB_N eventos de 32 bytes: tipo | dato << 8, a, b, c, hora del PSP (us), orden de la lista
-// Compuerta en el sync (modo normal de la arquitectura B): sceGeDrawSync/ListSync esperan hasta 5 ms a que la Vita
-// haya capturado las listas que el juego espera. Se mide cuantas veces hace falta esperar y cuanto.
+// Palabras de 32 bits en 0x0A000000 (zona reservada para los plugins, ver zoneCheck), sin cache:
+//   SB[0] "SOMB"  SB[1] version  SB[2] eventos escritos (PSP)  SB[3] ultima lista capturada (Vita, numero de orden)
+//   SB[4] latido de la Vita  SB[5] eventos leidos (Vita)  SB[6] listas encoladas (PSP)
+//   SB[0x400] anillo de SB_N eventos de 8 palabras: tipo | dato << 8, a, b, c, hora del PSP (us), orden de la lista
+//   (solo encolados) o extra (EV_FRAME, 3 palabras)
+// EV_FRAME (antes de cada EV_FLIP), lo que le cuesta al juego cada parte en el frame: dato = esperas en la compuerta |
+// syncs con la Vita atrasada en que no se espero (sin_compuerta) << 8; a = frame (us, flip a flip), b = espera en la
+// compuerta (us), c = espera al GE dentro de sceGeDrawSync/ListSync (us); e[5] = vueltas del hilo de CPU libre
+// (SB[0x4D]: vueltas por ms = 100 %), e[6] = espejo: CPU del flip (us) | paginas << 16, e[7] = ganchos (us en sbPost).
+// Interruptores que pone NativeDraw en SB[0x4A]: 1 sin compuerta (no se espera a la Vita, solo se cuenta), 2 sin
+// espejo, 4 sin hilo de CPU libre, 8 compuerta siempre en el sync, 16 espejo completo (todas las paginas de datos
+// pedidas en cada flip), 32 el flip espera a que termine la copia del espejo (prueba).
+// SB[0x4E] = nivel de registro de NativeDraw (0 minimo, 1 mediano, 2 extremo): EV_FRAME y el hilo de CPU libre desde
+// mediano; la vida de la lista (EV_VIDA) y los eventos de la CPU del juego (T4: EV_CPU, EV_CPUSUM) solo en extremo.
+// Mientras la compuerta espera: SB[0x4B] = lista esperada, SB[0x4C] = hora de inicio | 1.
 #define SB ((volatile u32 *)(0x0A000000 | 0x40000000))
 #define SB_MAGIC 0x424D4F53 // "SOMB"
 #define SB_N 4096
-enum { EV_ENQ = 1, EV_HEAD, EV_STALL, EV_DSYNC, EV_LSYNC, EV_FLIP, EV_GEFIN, EV_SYNCEND, EV_CPU, EV_CPUSUM, EV_FRAME, EV_VIDA }; // (7-10: dev63; 11: dev65; 12: dev65.2)
-static int activo, mode_done; // activo: el juego no se abrio con L o SELECT y la zona esta libre
-// dev65 (fase de analisis): cuanto le cuesta al juego cada parte, por frame. EV_FRAME (antes de EV_FLIP): dato = esperas
-// en la compuerta | syncs en que la Vita iba atrasada pero no se espero (sin_compuerta) << 8; a = frame (us, flip a flip),
-// b = espera en la compuerta (us), c = espera al GE dentro de sceGeDrawSync/ListSync (us); e[5] = vueltas del hilo de CPU
-// libre (SB[0x4D]: vueltas por ms = 100 %), e[6] = espejo: CPU del flip (us) | paginas << 16, e[7] = ganchos (us en sbPost).
-// Interruptores que pone NativeDraw en SB[0x4A]: 1 sin compuerta (no se espera a la Vita, solo se cuenta), 2 sin espejo, 4
-// sin hilo de CPU libre, 16 (0.0.3) espejo completo: todas las paginas de datos pedidas en cada flip, 32 (0.0.3.2,
-// prueba) el flip espera a que termine la copia del espejo. Mientras la compuerta espera: SB[0x4B] = lista esperada, SB[0x4C] = hora de inicio.
-// dev65.3: nivel de registro de NativeDraw en SB[0x4E] (0 minimo, 1 mediano, 2 extremo; docs/dev/registros.md): EV_FRAME y el hilo
-// de CPU libre desde mediano; la vida de la lista (EV_VIDA) y los eventos de la CPU del juego (T4: EV_CPU, EV_CPUSUM) solo en extremo.
-static volatile u32 spin, spin_cal;  // hilo de CPU libre (como vpjuego): vueltas y calibracion (vueltas por ms)
-static struct { u32 gate_us, gate_n, nowait, sync_us, post_us, esp_us, esp_pages; } fr;              // del frame
-static struct { u32 frames, frame_us, spin, gate_us, gate_n, nowait, sync_us, post_us, esp_us, esp_pages; } frs; // (log, 10 s)
+// Tipos de evento del anillo (NativeDraw usa los mismos numeros)
+enum { EV_ENQ = 1, EV_HEAD, EV_STALL, EV_DSYNC, EV_LSYNC, EV_FLIP, EV_GEFIN, EV_SYNCEND, EV_CPU, EV_CPUSUM, EV_FRAME, EV_VIDA };
+// activo: no se abrio con L o SELECT y la zona esta libre; mode_done: ya corrio modeDecide
+static int activo, mode_done;
+static volatile u32 spin, spin_cal;  // hilo de CPU libre: vueltas y calibracion (vueltas por ms)
+// Costo del frame para el juego: fr, el frame en curso (EV_FRAME); frs, la suma para el log
+static struct { u32 gate_us, gate_n, nowait, sync_us, post_us, esp_us, esp_pages; } fr;
+static struct { u32 frames, frame_us, spin, gate_us, gate_n, nowait, sync_us, post_us, esp_us, esp_pages; } frs;
 static u32 sb_x[3];  // e[5..7] de EV_FRAME
-// dev65.2, vida de la lista: NativeDraw deja una muestra de lineas de 64 bytes de la ultima lista que capturo (SB[0x50]
-// numero de muestra, 0 mientras la escribe; SB[0x51] cuantas, hasta 32; SB[0x52] cuantas son del nivel de arriba; SB[0x60+k]
-// direccion, SB[0x80+k] huella FNV de sus 16 palabras, como lineHash en captura.c). Antes de cada encolado y en cada sync,
-// NativeLink rehace las huellas con la cache (lo que ve la CPU del juego) y anota EV_VIDA: dato = 0 encolado / 1 drawsync / 2
-// listsync, a = numero de muestra, b = cambiadas del nivel de arriba | de sublistas << 8, c = ultima lista encolada.
-static int (*_sceGeGetReg)(int); // (T6, dev63)
-static u32 geBusy(void) { // 1 si el GE tiene una lista en curso (desde un gancho: con k1 = 0, dev63.2)
+// Vida de la lista: NativeDraw deja una muestra de lineas de 64 bytes de la ultima lista que capturo (SB[0x50] numero
+// de muestra, 0 mientras la escribe; SB[0x51] cuantas, hasta 32; SB[0x52] cuantas son del nivel de arriba; SB[0x53]
+// orden de la lista; SB[0x60+k] direccion, SB[0x80+k] huella FNV de sus 16 palabras, como lineHash en captura.c).
+// Antes de cada encolado y en cada sync, NativeLink rehace las huellas con la cache (lo que ve la CPU del juego) y
+// anota EV_VIDA: dato = 0 encolado / 1 drawsync / 2 listsync, a = numero de muestra, b = cambiadas del nivel de
+// arriba | de sublistas << 8, c = ultima lista encolada. La misma muestra sirve para la autocomprobacion de la
+// compuerta.
+static int (*_sceGeGetReg)(int); // NULL si no se encontro (sin T6)
+// 1 si el GE tiene una lista en curso, 0 si no, 2 si no hay sceGeGetReg. Desde un gancho hace falta k1 = 0.
+static u32 geBusy(void) {
   if (!_sceGeGetReg) return 2;
   int k1 = pspSdkSetK1(0);
   u32 e = _sceGeGetReg(3) & 1;
@@ -78,8 +88,11 @@ static u32 geBusy(void) { // 1 si el GE tiene una lista en curso (desde un ganch
 }
 static u32 sb_ord; // numero de orden de la ultima lista encolada
 static struct { u32 qid, ord; } sb_q[16]; // ultimas listas, para la compuerta de sceGeListSync
-static struct { u32 ev, syncs, late, wait_us, wait_max, timeouts, in_sync_us, lsyncs, llate; } sbs;
+static struct { u32 ev, syncs, late, wait_us, wait_max, timeouts, in_sync_us, lsyncs, llate; } sbs; // (log)
 
+// Anota un evento en el anillo: llena la entrada y despues sube SB[2] (la Vita solo lee hasta SB[2]). A los encolados
+// les da numero de orden (SB[6]) y los guarda en sb_q; EV_FRAME lleva ademas sb_x. Con interrupciones apagadas porque
+// lo llaman los ganchos de cualquier hilo y el hilo de T6.
 static void sbPost(u32 type, u32 aux, u32 a, u32 b, u32 c) {
   int intr = pspSdkDisableInterrupts();
   u32 h = SB[2];
@@ -91,13 +104,15 @@ static void sbPost(u32 type, u32 aux, u32 a, u32 b, u32 c) {
   } else if (type == EV_FRAME) {
     e[5] = sb_x[0]; e[6] = sb_x[1]; e[7] = sb_x[2];
   }
-  asm volatile("sync");
+  asm volatile("sync"); // la entrada antes que el contador
   SB[2] = h + 1;
   sbs.ev++;
-  fr.post_us += sceKernelGetSystemTimeLow() - e[4]; // (dev65) costo de anotar
+  fr.post_us += sceKernelGetSystemTimeLow() - e[4]; // costo de anotar (e[7] de EV_FRAME)
   pspSdkEnableInterrupts(intr);
 }
-static u32 vidaHash(u32 *ptop, u32 *psub) { // rehace las huellas de la muestra; devuelve su numero (0: no hay o cambio)
+// Rehace las huellas de la muestra de NativeDraw y cuenta las lineas que cambiaron (*ptop del nivel de arriba, *psub de
+// sublistas). Devuelve el numero de muestra, o 0 si no hay muestra o la Vita la cambio mientras se revisaba.
+static u32 vidaHash(u32 *ptop, u32 *psub) {
   u32 sq = SB[0x50], n = SB[0x51], nt = SB[0x52], k, i, top = 0, sub = 0;
   *ptop = *psub = 0;
   if (!sq || n > 32) return 0;
@@ -111,15 +126,17 @@ static u32 vidaHash(u32 *ptop, u32 *psub) { // rehace las huellas de la muestra;
   *ptop = top; *psub = sub;
   return SB[0x50] == sq ? sq : 0; // (si la Vita cambio la muestra mientras tanto, no vale)
 }
+// En extremo: anota EV_VIDA (kind: 0 encolado, 1 drawsync, 2 listsync) si hay una muestra valida
 static void vidaCheck(u32 kind) {
   u32 top, sub, sq;
   if (activo && SB[0x4E] >= 2 && (sq = vidaHash(&top, &sub))) sbPost(EV_VIDA, kind, sq, top | sub << 8, sb_ord);
 }
+// Deja el buzon en cero (cabecera, interruptores, mapas del espejo) y escribe "SOMB" al final, cuando ya esta listo
 static void sbInit(void) {
   int i;
   for (i = 0; i < 0x50; i++) SB[i] = 0;
   for (i = 0x200; i < 0x400; i++) SB[i] = SB[0x8200 + i] = 0; // (ultima copia de cada pagina en los dos espejos)
-  SB[1] = 5; SB[6] = sb_ord; // version 2: con espejo de la VRAM (dev62); 3: con T4/T6 (eventos 7-10, dev63); 4: espejo doble (dev64); 5: EV_FRAME (dev65)
+  SB[1] = 5; SB[6] = sb_ord; // version del buzon: NativeDraw activa cada parte segun este numero
   SB[0x4D] = spin_cal; SB[0x54] = 0;
   SB[0] = SB_MAGIC;
 }
@@ -130,10 +147,11 @@ static int sbAlive(void) { // el capturador de la Vita responde (su latido cambi
   if (SB[4] != hb) { hb = SB[4]; hb_t = now; }
   return hb && now - hb_t < 500000;
 }
-// 0 si la Vita ya capturo hasta la lista 'ord'; si no, los us que se espero (hasta 5 ms) | 1
+// Compuerta: espera (de a 50 us, hasta 5 ms) a que la Vita haya capturado la lista 'ord'. Devuelve 0 si no hizo falta
+// esperar (ya la capturo, la Vita no responde o sin_compuerta); si no, los us que se espero | 1.
 static u32 sbGate(u32 ord) {
   if (!sbAlive() || (int)(SB[3] - ord) >= 0) return 0;
-  if (SB[0x4A] & 1) { fr.nowait++; return 0; } // (dev65) sin compuerta: solo se cuenta
+  if (SB[0x4A] & 1) { fr.nowait++; return 0; } // sin_compuerta: solo se cuenta
   u32 t0 = sceKernelGetSystemTimeLow(), w;
   SB[0x4B] = ord; SB[0x4C] = t0 | 1;
   do {
@@ -147,23 +165,24 @@ static u32 sbGate(u32 ord) {
   fr.gate_us += w; fr.gate_n++;
   return w | 1;
 }
-// --- dev66 (fase 2): compuerta antes de encolar la lista siguiente ---
-// En GT la lista de un frame no cambia hasta que el juego encola la siguiente (fase 1: 0 de 11 436). Entonces el juego
-// no tiene que esperar a la Vita en el sync: puede esperar recien antes de encolar la lista siguiente, y la Vita gana
-// ~2,4 ms por frame (lo que va del sync al encolado). En el sync solo se anota hasta que lista hay que esperar.
-// Autocomprobacion (para cualquier juego): NativeDraw deja una muestra de huellas de la ultima lista que capturo
-// (SB[0x50..], SB[0x53] = su numero de orden). Antes de cada encolado, si esa lista ya paso por un sync, NativeLink rehace
-// las huellas: si cambiaron, el juego reescribe la lista antes de encolar la siguiente y la Vita podria leer algo que el
-// GE no dibujo -> la compuerta vuelve al sync. Empieza en el sync y pasa a "antes de encolar" despues de 60
-// comprobaciones limpias seguidas; un cambio la devuelve al sync hasta juntar otras 60 (dev66.2: en GT cambia una vez al
-// pasar de la presentacion a la carrera, en la pantalla de carga) y con 10 cambios se queda en el sync hasta cerrar el juego. Interruptor de NativeDraw compuerta_sync (SB[0x4A] & 8): siempre en el
-// sync (las comprobaciones siguen, para comparar). SB[0x54] = modo (0 probando, 1 antes de encolar, 2 la lista cambio 10 veces).
-// dev66.3: solo vale la muestra de una lista encolada despues del sync anterior (sync_lo, sync_ord]: la de una lista mas vieja
-// puede estar en la zona que el juego ya reusa (GT alterna dos zonas) y daba falsos cambios (dev66.2: 10 en una carrera).
-static u32 sync_ord, sync_lo, gate_ord, gate_sq, gate_ok; // ultima lista que paso por un sync (y la del sync anterior); la que espera el proximo encolado
+// --- Compuerta antes de encolar la lista siguiente ---
+// Si el juego no reescribe una lista hasta encolar la siguiente, no hace falta esperar a la Vita en el sync: alcanza
+// con esperar justo antes de encolar la siguiente, y la Vita gana el rato que va del sync al encolado. En el sync solo
+// se anota hasta que lista hay que esperar (gateSync).
+// Autocomprobacion (vale para cualquier juego): antes de cada encolado, si la muestra de NativeDraw (SB[0x50..], ver
+// arriba) es de una lista que ya paso por un sync, se rehacen sus huellas: si cambiaron, el juego reescribe la lista
+// antes de encolar la siguiente y la Vita podria leer algo que el GE no dibujo -> la compuerta vuelve al sync.
+// Modo (gate_mode, copiado en SB[0x54]): 0 en el sync, probando; pasa a 1 (antes de encolar) con 60 comprobaciones
+// limpias seguidas; un cambio lo devuelve a 0 y con 10 cambios queda en 2 (en el sync hasta cerrar el juego).
+// compuerta_sync (SB[0x4A] & 8): siempre en el sync, pero las comprobaciones siguen (para comparar).
+// Solo vale la muestra de una lista encolada despues del sync anterior (sync_lo, sync_ord]: la de una lista mas vieja
+// puede estar en una zona que el juego ya reusa y daria falsos cambios.
+// sync_ord / sync_lo: ultima lista que paso por un sync y la del sync anterior; gate_ord: la que espera el proximo
+// encolado; gate_sq: ultima muestra revisada; gate_ok: comprobaciones limpias seguidas.
+static u32 sync_ord, sync_lo, gate_ord, gate_sq, gate_ok;
 static int gate_mode;
-static struct { u32 checks, bad, n, us, max; } gts; // (log, 10 s)
-static int gateEnq(void) { return gate_mode == 1 && !(SB[0x4A] & 8); }
+static struct { u32 checks, bad, n, us, max; } gts; // (log)
+static int gateEnq(void) { return gate_mode == 1 && !(SB[0x4A] & 8); } // 1: la espera va antes de encolar
 static void gateSync(u32 ord) { // en el sync: hasta que lista hay que esperar
   if ((int)(ord - sync_ord) > 0) { sync_lo = sync_ord; sync_ord = ord; }
   if (gateEnq()) gate_ord = sync_ord;
@@ -173,7 +192,8 @@ static u32 gateBeforeEnq(void) { // antes de encolar: espera (si toca) y autocom
   if (gate_ord) { w = gateEnq() ? sbGate(gate_ord) : 0; gate_ord = 0; }
   if (w) { gts.n++; gts.us += w; if (w > gts.max) gts.max = w; }
   u32 so = SB[0x53];
-  if (!sq || sq == gate_sq || !sync_ord || (int)(so - sync_ord) > 0 || (int)(so - sync_lo) <= 0 || !sbAlive()) return w; // ya revisada / no es del ultimo sync
+  // sale si la muestra ya se reviso o no es de una lista posterior al sync anterior
+  if (!sq || sq == gate_sq || !sync_ord || (int)(so - sync_ord) > 0 || (int)(so - sync_lo) <= 0 || !sbAlive()) return w;
   if (!(sq = vidaHash(&top, &sub))) return w;
   gate_sq = sq; gts.checks++;
   if (top | sub) {
@@ -188,13 +208,16 @@ static u32 gateBeforeEnq(void) { // antes de encolar: espera (si toca) y autocom
   SB[0x54] = gate_mode;
   return w;
 }
+// Ganchos de sceGeDrawSync y sceGeListSync (solo mode 0, el que espera): revisan la vida de la lista, pasan por la
+// compuerta (si no va antes de encolar), anotan el sync, llaman al original y anotan EV_SYNCEND con lo que se espero
+// al GE.
 int (*_sceGeDrawSync)(int mode);
 int (*_sceGeListSync)(int qid, int mode);
 int sceGeDrawSyncPatched(int mode) {
   if (!activo || mode)
     return _sceGeDrawSync(mode);
   vidaCheck(1);
-  u32 w = gateEnq() ? 0 : sbGate(sb_ord), t0; // (dev66) antes de encolar: aqui solo se anota
+  u32 w = gateEnq() ? 0 : sbGate(sb_ord), t0; // con la compuerta antes de encolar, aqui solo se anota
   gateSync(sb_ord);
   sbs.syncs++;
   sbs.late += !!w;
@@ -204,7 +227,7 @@ int sceGeDrawSyncPatched(int mode) {
   int r = _sceGeDrawSync(mode);
   u32 dt = sceKernelGetSystemTimeLow() - t0;
   sbs.in_sync_us += dt; fr.sync_us += dt;
-  sbPost(EV_SYNCEND, 0, dt, busy, 0); // T6 (dev63): cuanto espero de verdad al GE, y si el GE estaba trabajando
+  sbPost(EV_SYNCEND, 0, dt, busy, 0); // cuanto espero de verdad al GE, y si el GE estaba trabajando al llamar
   return r;
 }
 int sceGeListSyncPatched(int qid, int mode) {
@@ -212,7 +235,7 @@ int sceGeListSyncPatched(int qid, int mode) {
     u32 ord = 0, w;
     int i;
     vidaCheck(2);
-    for (i = 0; i < 16; i++)
+    for (i = 0; i < 16; i++) // ord: la ultima lista encolada con ese qid
       if (sb_q[i].qid == (u32)qid && (int)(sb_q[i].ord - ord) > 0)
         ord = sb_q[i].ord;
     w = ord && !gateEnq() ? sbGate(ord) : 0;
@@ -230,21 +253,23 @@ int sceGeListSyncPatched(int qid, int mode) {
   return _sceGeListSync(qid, mode);
 }
 
-// --- T6 y T4 (dev63, etapa 2): cuando trabaja el GE y que escribe la CPU del juego ---
-// T6: un hilo mira el GE cada ~250 us con sceGeGetReg (como vpjuego) solo mientras tiene trabajo; sin listas duerme
-// 2 ms. dev63.3: apagado salvo que NativeDraw lo pida (SB[0x47] = 1, archivo ux0:data/nativedraw/medir_ge): despertar
-// cada 250 us le quitaba ~2-3 fps a GT en el puente. Por cada tramo en que el GE estuvo ocupado sin pausa anota EV_GEFIN: a = inicio (hora del encolado si el GE
-// estaba libre), b = muestras detenido en el stall, c = muestras; la hora del evento es el fin (+-250 us).
+// --- Telemetria T6 y T4: cuando trabaja el GE y que le deja preparado la CPU del juego ---
+// T6: un hilo mira el GE cada ~250 us con sceGeGetReg solo mientras tiene trabajo; sin listas duerme 2 ms. Apagado
+// salvo que NativeDraw lo pida (SB[0x47] = 1, archivo medir_ge): despertar cada 250 us le quita 2-3 fps a GT. Por cada
+// tramo en que el GE estuvo ocupado sin pausa anota EV_GEFIN: a = inicio (hora del encolado si el GE estaba libre),
+// b = muestras detenido en el stall, c = muestras; la hora del evento es el fin (+-250 us).
 // T4: ganchos de las funciones con que el juego deja datos listos para el GE (vaciar la cache de un rango, DMA):
 // EV_CPU (dato: 0 WritebackRange, 1 WritebackInvalidateRange, 2 InvalidateRange, 3 WritebackAll, 4
 // WritebackInvalidateAll, 5 sceDmacMemcpy, 6 sceDmacTryMemcpy; a = direccion o destino, b = tamano o origen, c =
-// tamano del DMA). Hasta 96 por frame (el resto solo se cuenta); en el flip EV_CPUSUM con los totales del frame.
+// tamano del DMA). Solo en extremo y hasta 96 por frame (el resto solo se cuenta); en el flip EV_CPUSUM con los totales
+// del frame (dato = no anotados, a = llamadas a la cache, b = KB, c = llamadas de DMA | KB << 16).
 static volatile u32 ge_kick; // hora del ultimo encolado (0: ya visto)
-static struct { u32 busy_us, runs, run_max, stall_n, n; } ges;  // (para el log de NativeLink)
+static struct { u32 busy_us, runs, run_max, stall_n, n; } ges;  // (log)
+// Hilo de T6. Registros del GE: 3 (bit 0) = ejecutando una lista, 5 = direccion actual de la lista, 6 = stall.
 static int geThread(SceSize args, void *argp) {
   u32 busy0 = 0, n = 0, nst = 0;
   for (;;) {
-    if (!activo || !_sceGeGetReg || SB[0x47] != 1) { // (dev63.3) solo si NativeDraw lo pide: le quitaba ~2-3 fps a GT
+    if (!activo || !_sceGeGetReg || SB[0x47] != 1) { // solo si NativeDraw lo pide (medir_ge)
       busy0 = ge_kick = 0;
       sceKernelDelayThread(100000);
       continue;
@@ -252,7 +277,8 @@ static int geThread(SceSize args, void *argp) {
     sceKernelDelayThread(busy0 || ge_kick ? 250 : 2000);
     u32 e = _sceGeGetReg(3), t = sceKernelGetSystemTimeLow();
     if (e & 1) {
-      if (!busy0) { busy0 = ge_kick && (int)(t - ge_kick) >= 0 ? ge_kick : t; n = nst = 0; } // (dev63.2: el encolado pudo ser despues de leer t)
+      // inicio del tramo: la hora del encolado, salvo que sea posterior a t (el encolado fue despues de leer t)
+      if (!busy0) { busy0 = ge_kick && (int)(t - ge_kick) >= 0 ? ge_kick : t; n = nst = 0; }
       u32 la = _sceGeGetReg(5), st = _sceGeGetReg(6);
       n++;
       if (st && (la & 0x0FFFFFFF) == (st & 0x0FFFFFFF)) nst++;
@@ -268,7 +294,9 @@ static int geThread(SceSize args, void *argp) {
   }
   return 0;
 }
-static int libreThread(SceSize args, void *argp) { // (dev65) ver t4t6Install
+// CPU libre del PSP: hilo de prioridad minima que da vueltas (spin); solo avanza cuando nadie mas quiere la CPU. Las
+// vueltas de un frame contra la calibracion (spin_cal, de t4t6Install) dan el % libre. Desde mediano, salvo sin_libre.
+static int libreThread(SceSize args, void *argp) {
   for (;;) {
     if (!activo || SB[0x4A] & 4 || SB[0x4E] < 1) { sceKernelDelayThread(100000); continue; }
     u32 k;
@@ -277,14 +305,16 @@ static int libreThread(SceSize args, void *argp) { // (dev65) ver t4t6Install
   return 0;
 }
 static struct { u32 n, kb, dn, dkb, posted, dropped; } t4;  // del frame
-static struct { u32 n, kb, dn, dkb; } t4s;                  // (para el log de NativeLink)
-static void t4Post(u32 kind, u32 a, u32 b, u32 c) {
-  if (SB[0x4E] < 2) return; // (dev65.3: solo en extremo)
+static struct { u32 n, kb, dn, dkb; } t4s;                  // (log)
+static void t4Post(u32 kind, u32 a, u32 b, u32 c) { // anota EV_CPU: solo en extremo y hasta 96 por frame
+  if (SB[0x4E] < 2) return;
   if (t4.posted < 96) { t4.posted++; sbPost(EV_CPU, kind, a, b, c); } else t4.dropped++;
 }
+// Originales de UtilsForUser (cache) y sceDmac
 static void (*_dcWbR)(const void *, unsigned int), (*_dcWbIR)(const void *, unsigned int), (*_dcIR)(const void *, unsigned int);
 static void (*_dcWbA)(void), (*_dcWbIA)(void);
 static int (*_dmac)(void *, const void *, unsigned int), (*_dmacTry)(void *, const void *, unsigned int);
+// Ganchos de T4: llaman al original y despues cuentan (y anotan) la llamada
 static void dcRange(int kind, const void *p, unsigned int n) { if (activo) { t4.n++; t4.kb += n >> 10; t4Post(kind, (u32)p, n, 0); } }
 void dcWbRPatched(const void *p, unsigned int n) { _dcWbR(p, n); dcRange(0, p, n); }
 void dcWbIRPatched(const void *p, unsigned int n) { _dcWbIR(p, n); dcRange(1, p, n); }
@@ -299,6 +329,8 @@ static void t4Flip(void) { // en el flip: totales del frame
   t4s.n += t4.n; t4s.kb += t4.kb; t4s.dn += t4.dn; t4s.dkb += t4.dkb;
   memset(&t4, 0, sizeof(t4));
 }
+// Busca sceGeGetReg y las funciones de cache y DMA y engancha las que encuentra; arranca el hilo de T6 y el de CPU
+// libre (despues de calibrarlo). Lo que encontro va al log.
 static void t4t6Install(void) {
   static const char *um[2] = { "sceSystemMemoryManager", "sceKernelUtils" };
   int i, nd = 0, nm = 0;
@@ -315,8 +347,9 @@ static void t4t6Install(void) {
   if (_dcIR) { sctrlHENPatchSyscall((u32)_dcIR, dcIRPatched); nd++; }
   if (_dcWbA) { sctrlHENPatchSyscall((u32)_dcWbA, dcWbAPatched); nd++; }
   if (_dcWbIA) { sctrlHENPatchSyscall((u32)_dcWbIA, dcWbIAPatched); nd++; }
-  static const char *dm[4] = { "sceDMAManager", "sceDMACManager", "sceDmacManager", "sceDMAC_Driver" }; // (dev63.2: con
-  for (i = 0; i < 4 && !_dmac; i++) {                                                                // el primero no se encontro)
+  // nombres posibles del modulo de sceDmac (se prueban en orden)
+  static const char *dm[4] = { "sceDMAManager", "sceDMACManager", "sceDmacManager", "sceDMAC_Driver" };
+  for (i = 0; i < 4 && !_dmac; i++) {
     _dmac = (void *)FindProc(dm[i], "sceDmac", 0x617F3FE6);
     _dmacTry = (void *)FindProc(dm[i], "sceDmac", 0xD97F94D8);
     if (_dmac) LOG("T4: sceDmac en %s\n", dm[i]);
@@ -325,8 +358,7 @@ static void t4t6Install(void) {
   if (_dmacTry) { sctrlHENPatchSyscall((u32)_dmacTry, dmacTryPatched); nm++; }
   SceUID th = _sceGeGetReg ? sceKernelCreateThread("NativeLinkGE", geThread, 0x11, 0x800, 0, NULL) : -1;
   if (th >= 0) sceKernelStartThread(th, 0, NULL);
-  // (dev65) CPU libre del PSP, como vpjuego: el mismo bucle se cronometra aqui (2 millones de vueltas) y un hilo de
-  // prioridad minima lo repite: solo avanza cuando nadie mas quiere la CPU. Solo con NativeLink activo.
+  // Calibracion de la CPU libre: el mismo bucle del hilo, cronometrado aqui (2 millones de vueltas) = vueltas por ms
   u32 k, tc = sceKernelGetSystemTimeLow();
   for (k = 0; k < 2000000; k++) { spin++; asm volatile("" ::: "memory"); }
   tc = sceKernelGetSystemTimeLow() - tc;
@@ -338,30 +370,31 @@ static void t4t6Install(void) {
       (u32)th, nd, nm);
 }
 
-// --- Espejo de la VRAM (dev62, etapa 2; doble desde dev64) ---
-// La Vita no ve la VRAM real del PSP (no esta mapeada en Adrenaline), y GT guarda ahi sublistas, texturas y paletas.
-// El capturador pide paginas de 4 KB en dos mapas de bits del buzon ("listas" y "datos") y en cada flip el GE copia
-// las pedidas a la RAM. dev64: dos espejos alternados (copias pares en MIRROR, impares en MIRROR2) y en cada copia
-// todas las paginas de listas y hasta ESP_DATOS de datos (si hay mas, por turnos). La Vita lee cada lista con la ultima copia
-// terminada y anota en SB[0x48] la que esta usando: no se copia encima de esa (asi nunca lee algo que el GE esta
-// sobrescribiendo). Una copia final de 16 bytes escribe en SB[0x40] el numero de la copia: la Vita sabe cuando termino.
-// Buzon: +0x80 listas y +0xC0 datos (16 palabras cada uno, Vita) | +0x100 ultima copia terminada (GE) | +0x110 copias,
-// +0x114 paginas copiadas, +0x118 veces que la copia de hace dos frames seguia en el GE, +0x124 veces que la Vita usaba
-// ese espejo (totales, PSP) | +0x120 copia en uso (Vita) | +0x800 y +0x21000: numero de la ultima copia de cada pagina
-// en MIRROR y en MIRROR2 (512 palabras cada uno, PSP).
+// --- Espejo de la VRAM ---
+// La Vita no ve la VRAM real del PSP (Adrenaline no la mapea) y hay juegos que guardan ahi sublistas, texturas y
+// paletas. NativeDraw pide paginas de 4 KB en dos mapas de bits del buzon (SB[0x20..0x2F] "listas" y SB[0x30..0x3F]
+// "datos") y en cada flip el GE copia las pedidas a la RAM. Dos espejos alternados: copias pares en MIRROR, impares en
+// MIRROR2. En cada copia van todas las paginas de listas y hasta ESP_DATOS de datos (si hay mas, por turnos); con
+// SB[0x4A] & 16 (NativeDraw lo pone cuando la Vita dibuja frames 2D) van todas, para que ninguna quede vieja.
+// La Vita lee cada lista con la ultima copia terminada y anota en SB[0x48] la que esta usando: no se copia encima de
+// esa (asi nunca lee algo que el GE esta sobrescribiendo). Una copia final de 16 bytes escribe en SB[0x40] el numero
+// de la copia: asi la Vita sabe cuando termino. PSP: SB[0x44] copia pedida, SB[0x45] paginas copiadas, SB[0x46] veces
+// que la copia de hace dos frames seguia en el GE, SB[0x49] veces que la Vita usaba ese espejo (totales); SB[0x200..] y
+// SB[0x8400..] (512 palabras cada uno): numero de la ultima copia de cada pagina en MIRROR y en MIRROR2.
 #define MIRROR 0x0A200000
 #define MIRROR2 0x0AC00000
 #define ESP_LIST 0x0A100000 // dos listas de 8 KB, alternadas (en la zona reservada)
-#define ESP_DATOS 64 // paginas de datos por copia (256 KB; dev64.3 las copiaba todas: ~730 KB por frame bajaban GT a ~57 fps)
-// 0.0.3: con SB[0x4A] & 16 (lo pone NativeDraw cuando la Vita dibuja frames 2D: KOF 96) se copian todas las pedidas en cada
-// flip; de a 64 por turnos, KOF 96 (256 paginas de sprites) veia cada pagina cada 4 frames: sprites con pedazos viejos.
+#define ESP_DATOS 64 // paginas de datos por copia (256 KB; copiar todas, ~730 KB por frame, bajaba GT a ~57 fps)
 void guStart(int cid, void *list); // gu.c
 static int esp_qid[2] = { -1, -1 };
 static u32 esp_seq, esp_rr, esp_pages, esp_busy, esp_vita; // (los tres ultimos: totales, para la Vita)
-static struct { u32 copies, pages, busy, vita, over, runs_max; } esps;
+static struct { u32 copies, pages, busy, vita, over, runs_max; } esps; // (log)
+// En el flip: elige las paginas a copiar, junta las contiguas en tramos y arma una lista propia del GE con una copia de
+// bloque por tramo (de la VRAM al espejo que toca) mas la copia final que marca SB[0x40]. No copia si la copia de hace
+// dos frames (el mismo espejo) sigue en el GE o si la Vita todavia lee ese espejo.
 static void espejoFlip(void) {
   u32 cp[16], wd[16], i, p, w, b, n = 0, any = 0; // (n: paginas de datos de esta copia)
-  if (SB[0x4A] & 2) return; // (dev65) sin espejo
+  if (SB[0x4A] & 2) return; // sin_espejo
   for (i = 0; i < 16; i++) { cp[i] = SB[0x20 + i]; wd[i] = SB[0x30 + i] & ~cp[i]; any |= cp[i] | wd[i]; }
   if (!any) return;
   for (i = 0; i < 512; i++) { // listas: todas; datos: los que entren, empezando donde quedo la ultima vez que no entraron todos
@@ -375,7 +408,7 @@ static void espejoFlip(void) {
     esps.busy++; SB[0x46] = ++esp_busy;
     return;
   }
-  if (u && (int)(esp_seq - u) >= 0 && !((seq ^ u) & 1) && sbAlive()) { // la Vita sigue leyendo ese espejo (la de hace dos frames)
+  if (u && (int)(esp_seq - u) >= 0 && !((seq ^ u) & 1) && sbAlive()) { // la Vita sigue leyendo ese espejo
     esps.vita++; SB[0x49] = ++esp_vita;
     return;
   }
@@ -395,12 +428,12 @@ static void espejoFlip(void) {
   sceGuCopyImage(GU_PSM_8888, 0, 0, 4, 1, 64, (void *)(rl + 0x1FF0), 0, 0, 64, (void *)0x0A000100);
   sceGuFinish();
   esp_qid[s] = _sceGeListEnQueue((void *)rl, NULL, -1, NULL);
-  if (SB[0x4A] & 32 && esp_qid[s] >= 0) _sceGeListSync(esp_qid[s], 0);  // (0.0.3.2, prueba) el juego espera la copia: que no
+  if (SB[0x4A] & 32 && esp_qid[s] >= 0) _sceGeListSync(esp_qid[s], 0);  // (prueba) el juego espera la copia: que no
   esps.copies++;                                                         // alcance a cambiar la VRAM mientras se copia
   SB[0x44] = seq; SB[0x45] = esp_pages;
 }
 
-// Primer gancho que llama el juego: buzon listo y ID del juego en el log
+// Primer gancho que llama el juego: ID del juego al log, imagen normal de Adrenaline y buzon listo
 static void modeDecide(void) {
   mode_done = 1;
   if (passive)
@@ -412,6 +445,8 @@ static void modeDecide(void) {
   LOG("NativeLink activo: el juego corre sin cambios; buzon de eventos en 0x0A000000 para el capturador de NativeDraw\n");
 }
 
+// Ganchos de stall y de encolado: llaman al original y anotan el evento. Antes de encolar pasan por la compuerta
+// (gateBeforeEnq) y el dato del evento es lo que se espero ahi (us | 1).
 int sceGeListUpdateStallAddrPatched(int qid, void *stall) {
   int r = _sceGeListUpdateStallAddr(qid, stall);
   st.stalls++;
@@ -424,11 +459,11 @@ int sceGeListEnQueuePatched(const void *list, void *stall, int cbid, PspGeListAr
   if (!mode_done)
     modeDecide();
   st.lists++;
-  u32 gw = activo ? gateBeforeEnq() : 0; // (dev66)
-  vidaCheck(0); // (dev65.2) antes de encolar: la lista anterior sigue intacta?
+  u32 gw = activo ? gateBeforeEnq() : 0;
+  vidaCheck(0); // antes de encolar: la lista anterior sigue intacta?
   int r = _sceGeListEnQueue(list, stall, cbid, arg);
   if (activo && r >= 0) {
-    sbPost(EV_ENQ, gw, (u32)list, (u32)stall, r); // (dev66: dato = espera antes de encolar, us | 1)
+    sbPost(EV_ENQ, gw, (u32)list, (u32)stall, r);
     if (!ge_kick) ge_kick = sceKernelGetSystemTimeLow() | 1;
   }
   return r;
@@ -438,7 +473,7 @@ int sceGeListEnQueueHeadPatched(const void *list, void *stall, int cbid, PspGeLi
   if (!mode_done)
     modeDecide();
   st.heads++;
-  u32 gw = activo ? gateBeforeEnq() : 0; // (dev66)
+  u32 gw = activo ? gateBeforeEnq() : 0;
   int r = _sceGeListEnQueueHead(list, stall, cbid, arg);
   if (activo && r >= 0) {
     sbPost(EV_HEAD, gw, (u32)list, (u32)stall, r);
@@ -464,6 +499,8 @@ static void memSnapshot(const char *why) {
   LOG("memoria (%s): ram del juego libre=%d KB (bloque mayor %d KB) | cpu=%d MHz bus=%d MHz\n", why, ft, fm, c, b);
 }
 
+// Gancho del flip: repone el buzon si alguien lo borro, cierra el frame (totales de T4, copia del espejo, EV_FRAME,
+// EV_FLIP), mide los fps y cada STATS_EVERY frames escribe las estadisticas en el log y las pone en cero.
 int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat, int sync) {
   if (!mode_done)
     modeDecide();
@@ -478,10 +515,10 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
     t4Flip();
     int k1e = pspSdkSetK1(0);
     u32 te = sceKernelGetSystemTimeLow(), pg0 = esp_pages;
-    espejoFlip(); // copia de la VRAM pedida por la Vita (dev62)
+    espejoFlip(); // copia de la VRAM pedida por la Vita
     fr.esp_us += sceKernelGetSystemTimeLow() - te; fr.esp_pages += esp_pages - pg0;
     pspSdkSetK1(k1e);
-    { // (dev65) lo que le costo este frame al juego (ver EV_FRAME)
+    { // lo que le costo este frame al juego (ver EV_FRAME)
       static u32 ft, sp0;
       u32 tn = sceKernelGetSystemTimeLow(), sp = spin, fd = ft ? tn - ft : 0;
       ft = tn;
@@ -535,7 +572,7 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
           gate_mode == 1 ? "antes de encolar" : gate_mode ? "en el sync (la lista cambio 10 veces)" : "en el sync (probando)", SB[0x4A] & 8 ? " [compuerta_sync]" : "",
           gts.n, gts.n ? gts.us / gts.n : 0, gts.max, gts.checks, gts.bad);
       memset(&gts, 0, sizeof(gts));
-      if (frs.frames) { // (dev65) impacto en el juego, por frame
+      if (frs.frames) { // impacto en el juego, por frame
         u32 f = frs.frames, ms = frs.frame_us / 1000 + 1;
         LOG("stats impacto (por frame): frame=%lu us CPU_libre=%lu%% compuerta=%lu us (%lu esperas en 10 s, %lu sin esperar) sync_GE=%lu us ganchos=%lu us espejo=%lu us (%lu paginas)\n",
             frs.frame_us / f, spin_cal ? frs.spin / spin_cal * 100 / ms : 0, frs.gate_us / f, frs.gate_n, frs.nowait, frs.sync_us / f,
@@ -561,9 +598,9 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
   return _sceDisplaySetFrameBuf(topaddr, bufferwidth, pixelformat, sync);
 }
 
-// Adrenaline 8 da al juego (MEMSIZE en el SFO, memoria alta, homebrew de 40 MB) memoria que puede llegar a la zona de los
-// plugins, y crea ahi la particion 11, donde carga los plugins de usuario. Si el juego llega a 0x0A000000 NativeLink no
-// puede funcionar (1). Si no, se reserva la zona en la particion 11 para que nadie mas la use.
+// Adrenaline 8 puede dar al juego memoria que llega a la zona de los plugins (MEMSIZE en el SFO, memoria alta, homebrew
+// de 40 MB) y crea ahi la particion 11, donde carga los plugins de usuario. Devuelve 1 si el juego llega a 0x0A000000
+// (NativeLink no puede funcionar); si no, reserva la zona en la particion 11 para que nadie mas la use y devuelve 0.
 static int zoneCheck(void) {
   PspSysmemPartitionInfo pi;
   pi.size = sizeof(pi);
@@ -583,11 +620,12 @@ static int zoneCheck(void) {
   return 0;
 }
 
+// Arranque: lee los botones (L/SELECT apagado, R log sincrono), revisa la zona compartida, busca las funciones del GE y
+// del display y las engancha. Los ganchos se instalan aunque NativeLink este apagado: entonces solo llaman al original.
 int module_start(SceSize args, void *argp) {
   SceCtrlData pad;
   sceCtrlPeekBufferPositive(&pad, 1);
-  // L o SELECT al abrir el juego: apagado (L es el atajo original de GePatch; en Adrenaline 8 mantener L ademas
-  // desactiva todos los plugins)
+  // L o SELECT al abrir el juego: apagado (en Adrenaline 8 mantener L ademas desactiva todos los plugins)
   passive = !!(pad.Buttons & (PSP_CTRL_SELECT | PSP_CTRL_LTRIGGER));
   logInit(pad.Buttons & PSP_CTRL_RTRIGGER);
   if (passive)

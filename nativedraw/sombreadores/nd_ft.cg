@@ -1,5 +1,5 @@
-// Con textura: funcion de textura del GE (tf.x 0 modular, 1 reemplazar; tf.y 1 = alfa de la textura (TCC); tf.z 1 =
-// color al doble) y alfa test (at.x funcion del GE 0-7, at.y referencia 0-255).
+// Fragmentos del traductor con textura (lineal): funcion de textura del GE (tf.x 0 modular, 1 reemplazar; tf.y 1 =
+// alfa de la textura (TCC); tf.z 1 = color al doble) y alfa test (at.x funcion del GE 0-7, at.y referencia 0-255).
 float4 main(float2 uv : TEXCOORD0, float4 col : COLOR, uniform sampler2D tex, uniform float4 tf, uniform float4 at) : COLOR
 {
   float4 t = tex2D(tex, uv);

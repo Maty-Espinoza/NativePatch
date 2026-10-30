@@ -1,4 +1,5 @@
-// Vertices del traductor: posicion en pixeles de la superficie, coordenadas de textura normalizadas y color (u8 x 4).
+// Vertices del traductor (traductor.c): posicion en pixeles de la superficie, coordenadas de textura normalizadas y
+// color (u8 x 4). wvp: ortografica por columnas, como la de vita2d.
 void main(float3 aPosition, float2 aTexcoord, float4 aColor, uniform float4x4 wvp,
           float4 out vPosition : POSITION, float2 out vTexcoord : TEXCOORD0, float4 out vColor : COLOR)
 {

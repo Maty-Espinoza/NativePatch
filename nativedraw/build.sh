@@ -18,8 +18,8 @@ for s in $(arm-none-eabi-nm -u $O/todo.o | awk '{print $2}' | grep -v -E '^(__|t
   [ -n "$ok" ] || { echo "sin stub: $s"; exit 1; }
 done
 arm-none-eabi-gcc $F -Wl,-q -o $O/nativedraw.elf $O/todo.o $O/s_*.o $TAI/lib/libtaihen_stub.a -lgcc
-# vita-elf-create agrega ~1,1 KB al final del segmento del codigo: si el de los datos empieza muy cerca, falla (0.0.7.4).
-# Entonces los datos van una pagina mas alla.
+# vita-elf-create agrega ~1,1 KB al final del segmento del codigo y falla si el de los datos empieza muy cerca: se
+# enlaza de nuevo con los datos una pagina (4 KB) despues del final del codigo, redondeado a pagina.
 dat=$(arm-vita-eabi-readelf -lW $O/nativedraw.elf | awk '$1 == "LOAD" { print $3, $6; exit }' | { read a m; printf '0x%x' $(( (a + m + 0x1fff) & ~0xfff )); })
 arm-none-eabi-gcc $F -Wl,-q -Wl,-Tdata=$dat -o $O/nativedraw.elf $O/todo.o $O/s_*.o $TAI/lib/libtaihen_stub.a -lgcc
 vita-elf-create -e exports.yml $O/nativedraw.elf $O/nativedraw.velf

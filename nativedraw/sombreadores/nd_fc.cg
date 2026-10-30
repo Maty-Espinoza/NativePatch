@@ -1,4 +1,4 @@
-// Sin textura (y los borrados): el color del vertice, con alfa test (como nd_ft).
+// Fragmentos del traductor sin textura (y los borrados): el color del vertice, con alfa test (como nd_ft).
 float4 main(float2 uv : TEXCOORD0, float4 col : COLOR, uniform float4 at) : COLOR
 {
   float a = floor(col.a * 255.0 + 0.5);

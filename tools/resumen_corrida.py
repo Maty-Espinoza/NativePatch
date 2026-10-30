@@ -1,20 +1,25 @@
 #!/usr/bin/env python3
 """Resumen corto de una corrida en la Vita (NativeLink + NativeDraw), para no leer los logs enteros.
 
-Uso: python3 resumen_corrida.py <carpeta de la corrida, p. ej. vitabridge/etapa2_dev64/gt1> [umbral de fps]
+Uso: python3 resumen_corrida.py <carpeta de la corrida> [umbral de fps, 58 por defecto]
 Lee nativelink.log (una linea de stats cada 600 vblanks = 10 s) y nativedraw_captura.log (cada 1 s); en carpetas
-anteriores al cambio de nombre, ge_patch.log y ge_patch_captura.log:
+viejas, ge_patch.log y ge_patch_captura.log. Muestra:
   1. por cada 10 s: fps del juego | esperas al sync (atrasados, >5 ms, us por sync, max) | copias del espejo y KB/frame
-  2. segundos de la captura con menos frames que el umbral (58) o mas de 60 000 comandos: donde la Vita no alcanza
+  2. segundos de la captura con menos frames que el umbral o mas de 60 000 comandos: donde la Vita no alcanza
   3. total de la revision de la memoria de sublistas (revisadas y DISTINTAS)
-  4. si hay ge_patch_banco.log en la carpeta (corridas viejas): promedio por configuracion del banco de nucleos (v13.7)
+  4. si hay ge_patch_banco.log (corridas viejas): promedio por configuracion del banco de nucleos
+Busca las lineas con expresiones regulares: si cambia el texto de una linea del log, hay que cambiarla aca.
+
+TODO:
+- Mostrar las lineas "stats compuerta" (nativelink.log) y "adelanto/f" (nativedraw_captura.log); hoy van con grep.
 """
 import os, re, sys
 from collections import defaultdict
 
 d = sys.argv[1]
 umbral = int(sys.argv[2]) if len(sys.argv) > 2 else 58
-VIEJO = {'nativelink.log': 'ge_patch.log', 'nativedraw_captura.log': 'ge_patch_captura.log'}  # antes del cambio de nombre
+VIEJO = {'nativelink.log': 'ge_patch.log', 'nativedraw_captura.log': 'ge_patch_captura.log'}  # nombres viejos
+# Abre f en la carpeta (o su nombre viejo); lista vacia si no esta.
 def leer(f):
     for n in (f, VIEJO.get(f, f)):
         if os.path.exists(os.path.join(d, n)): return open(os.path.join(d, n), errors='replace')

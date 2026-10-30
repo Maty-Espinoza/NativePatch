@@ -1,3 +1,5 @@
+# Exportaciones de nativedraw.suprx para vita-elf-create (nativedraw/build.sh): nombre del modulo y sus funciones
+# de arranque y cierre (nativedraw.c).
 nativedraw:
   attributes: 0
   version:

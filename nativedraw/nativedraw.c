@@ -1,20 +1,15 @@
-// nativedraw.suprx: NativeDraw, el plugin del lado Vita.
-//
-// Plugin de usuario en el proceso de Adrenaline (taiHEN, seccion *PSPEMUCFW de ur0:tai/config.txt). Trabaja junto a
-// NativeLink (el plugin del lado PSP): NativeLink anota en un buzon de la RAM del PSP todo lo que el juego le pide al GE, y
-// el capturador de NativeDraw (captura.c) recorre las mismas listas desde la Vita. Por ahora (etapa 2 de la arquitectura B)
-// solo las captura y mide; en la etapa 3 las va a dibujar con la GPU de la Vita (presentador.c: desde 0.0.3 toma la
-// pantalla de Adrenaline, apagado por defecto).
-// Este archivo: arranque, log propio, el log de NativeLink (lo escribe la Vita, asi el PSP no espera a la tarjeta) y el
-// gancho que anota los hilos del emulador (captura.c mide cuanto procesador usa cada uno).
-// Si existe ux0:data/nativedraw/off no se engancha nada.
+// nativedraw.c: arranque de NativeDraw (nativedraw.suprx), el plugin del lado Vita.
+// Plugin de usuario en el proceso de Adrenaline (taiHEN, seccion *PSPEMUCFW de ur0:tai/config.txt). NativeLink (lado
+// PSP) anota en un buzon de la RAM del PSP lo que el juego le pide al GE; captura.c lo recorre y registra, y
+// presentador.c lo dibuja con la GPU de la Vita. Este archivo: arranque (module_start), log propio (alog), el log de
+// NativeLink (lo escribe la Vita, asi el PSP no espera a la tarjeta), la version de NativeLink para el menu y el gancho
+// que anota los hilos del emulador. Con ux0:data/nativedraw/off no se engancha nada.
 // Logs: ux0:pspemu/nativedraw.log (este), nativedraw_captura.log (captura.c) y nativelink.log (el de NativeLink).
-// Hasta v13.13 se llamaba gepresent y ademas presentaba la imagen escalada de GePatch (arquitectura A), tenia el banco de
-// pruebas de GXM (etapa 1) y escribia los volcados .gpd. Eso se quito en 0.0.2: esta en la etiqueta gepatch-dev66 del repo
-// (docs/dev/versiones.md). Los numeros "vNN" de los comentarios son de esa numeracion vieja.
-//
+// Diseno: docs/dev/funcionamiento.md.
 // Canal del log de NativeLink (pagina 0x0A7FF000 de la RAM del PSP, ver nativelink/log.h): +0 "GPV1" (NativeLink),
 // +0x20 "LOGV" (este plugin: atiende el buzon), +0x40 seq, done, bytes (texto en 0x0A7FA000).
+// TODO:
+// - El gancho de CreateThread no ve los hilos que Adrenaline crea antes de cargar NativeDraw (nucleo 0 casi vacio).
 #include <psp2/kernel/modulemgr.h>
 #include <psp2/kernel/threadmgr.h>
 #include <psp2/kernel/clib.h>
@@ -31,13 +26,15 @@
 #define DESC ((volatile uint32_t *)PSP(0x0A7FF000u))
 
 static int nlog;
+// Log propio (ux0:pspemu/nativedraw.log): cada linea con los ms desde que arranco el proceso; como mucho ~1000 lineas.
+// Abre, escribe y cierra cada vez (lento: no usar en caminos rapidos).
 void alog(const char *fmt, ...) {
   if (nlog++ > 1000) return;
-  char b[256];
+  char b[512];
   va_list ap; va_start(ap, fmt);
   int n = sceClibSnprintf(b, 16, "%7u ", sceKernelGetProcessTimeLow() / 1000);
   n += sceClibVsnprintf(b + n, sizeof b - n, fmt, ap); va_end(ap);
-  if (n > (int)sizeof b - 1) n = sizeof b - 1;
+  if (n > (int)sizeof b - 1) { n = sizeof b - 1; b[n - 1] = '\n'; }  // (cortada: el salto de linea se conserva)
   SceUID fd = sceIoOpen(LOGF, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_APPEND, 0666);
   if (fd >= 0) { sceIoWrite(fd, b, n); sceIoClose(fd); }
 }
@@ -50,11 +47,12 @@ void *memcpy(void *d, const void *s, unsigned n) { char *p = d; const char *q = 
 #define LOGV 0x56474F4Cu
 #define VLOG 16
 void *sceDmacMemcpy(void *dst, const void *src, SceSize size);
-// (v9) El texto se copia por DMA a un anillo y un hilo lo escribe a la tarjeta despues: el PSP no espera la escritura
-// (abrir, escribir y cerrar toma decenas de ms).
+// El texto se copia por DMA a un anillo (lring, lw/lr = bytes escritos/leidos) y un hilo lo escribe a la tarjeta
+// despues: el PSP no espera la escritura (abrir, escribir y cerrar toma decenas de ms).
 static char lring[0x40000];
 static volatile uint32_t lw, lr;
 static int writer;  // 1 si el hilo escritor corre (si no, se escribe directo)
+// Copia n bytes de la RAM del PSP (a) al anillo, esperando si esta lleno.
 static void logPut(uint32_t a, uint32_t n) {
   while (n) {
     while (lw - lr >= sizeof lring) sceKernelDelayThread(1000);
@@ -65,7 +63,7 @@ static void logPut(uint32_t a, uint32_t n) {
     a += k; lw += k; n -= k;
   }
 }
-static void logFlushOut(void) {  // en el hilo escritor
+static void logFlushOut(void) {  // (hilo escritor) pasa lo que hay en el anillo a nativelink.log
   if (lr == lw) return;
   SceUID fd = sceIoOpen("ux0:pspemu/nativelink.log", SCE_O_WRONLY | SCE_O_CREAT | SCE_O_APPEND, 0666);
   while (lr != lw) {
@@ -76,14 +74,14 @@ static void logFlushOut(void) {  // en el hilo escritor
   }
   if (fd >= 0) sceIoClose(fd);
 }
-static int writerThread(SceSize args, void *argp) {
+static int writerThread(SceSize args, void *argp) {  // hilo escritor: vacia el anillo cada 2 ms
   for (;;) { logFlushOut(); sceKernelDelayThread(2000); }
   return 0;
 }
-static uint32_t nlogs, ram_ok;
-// Version de NativeLink para el menu: la primera linea de nativelink.log ("000000 NativeLink 0.0.2 (build ..."). Esa linea
-// la escribe el PSP directo a la tarjeta (antes de que la Vita atienda el log), asi que se lee del archivo. Solo si
-// NativeLink esta activo ("GPV1" en el buzon): si no, el archivo es del juego anterior.
+static uint32_t nlogs, ram_ok;  // pedazos de log atendidos; la RAM del PSP ya esta mapeada
+// Version de NativeLink para el menu: la primera linea de nativelink.log ("000000 NativeLink X.Y.Z (build ..."). Esa
+// linea la escribe el PSP directo a la tarjeta (antes de que la Vita atienda el log), asi que se lee del archivo. Solo
+// si NativeLink esta activo ("GPV1" en el buzon): si no, el archivo es del juego anterior.
 static char nl_ver[16];
 const char *nlVersion(void) {
   if (!ram_ok || DESC[0] != 0x31565047) return 0;
@@ -100,6 +98,8 @@ const char *nlVersion(void) {
     }
   return 0;
 }
+// Atiende el buzon del log: si NativeLink subio seq, pasa sus bytes (texto en 0x0A7FA000, hasta 16 KB) al anillo (o
+// directo al archivo sin hilo escritor) y responde igualando done.
 static void serveLog(void) {
   uint32_t seq = DESC[VLOG];
   if (seq == DESC[VLOG + 1]) return;
@@ -116,17 +116,19 @@ static void serveLog(void) {
 }
 
 void capturaStart(void);  // captura.c
-void presStart(void), presStop(void);  // presentador.c (0.0.3)
+void presStart(void), presStop(void);  // presentador.c
 
+// Hilo principal: arranca el presentador, espera a que la RAM del PSP este mapeada, arranca el capturador y desde ahi
+// atiende el log de NativeLink (cada 0,2 ms si hay trabajo, si no cada 2 ms).
 static int mainThread(SceSize args, void *argp) {
   SceIoStat st;
   if (sceIoGetstat("ux0:data/nativedraw/off", &st) >= 0) {
     alog("ux0:data/nativedraw/off existe: no se engancha nada\n");
     return sceKernelExitDeleteThread(0);
   }
-  presStart();  // (0.0.3) presentador y menu L+R+START (0.0.4)
-  // La RAM del PSP se mapea en el proceso despues de cargar el plugin: leerla antes cierra Adrenaline
-  // (C2-12828-1 en v4). Se espera a que el bloque exista, como vpcdram.
+  presStart();  // presentador y menu L+R+START
+  // La RAM del PSP se mapea en el proceso despues de cargar el plugin: leerla antes cierra Adrenaline.
+  // Se espera a que el bloque exista.
   for (int mapped = 0;;) {  // solo escribe si NativeLink dejo su marca (la zona es del XMB fuera de los juegos)
     SceKernelMemBlockInfo in; in.size = sizeof in;
     uint32_t a = (uint32_t)DESC;
@@ -135,8 +137,8 @@ static int mainThread(SceSize args, void *argp) {
       sceKernelDelayThread(100000);
       continue;
     }
-    if (!mapped) capturaStart();  // (v12) el hilo de captura espera el buzon de NativeLink
-    mapped = ram_ok = 1;  // (v9: se comprueba una vez; la RAM del PSP queda mapeada mientras viva el proceso)
+    if (!mapped) capturaStart();  // el hilo de captura espera el buzon de NativeLink
+    mapped = ram_ok = 1;  // (se comprueba una vez: la RAM del PSP queda mapeada mientras viva el proceso)
     int busy = 0;
     if (DESC[0] == 0x31565047) {  // "GPV1"
       if (DESC[8] != LOGV) DESC[8] = LOGV;
@@ -147,11 +149,12 @@ static int mainThread(SceSize args, void *argp) {
   }
 }
 
-// v12.6 (diagnostico): cada hilo que crea el emulador (ScePspemu) con su prioridad y nucleos, para elegir donde corre
-// el capturador sin quitarle tiempo al audio (v12.4 con prioridad 0x40 en el nucleo 2 lo cortaba)
+// Gancho de sceKernelCreateThread de ScePspemu: anota en el log cada hilo que crea el emulador (prioridad, nucleos) y
+// lo guarda en emu_th/emu_aff para que captura.c mida cuanto procesador usa cada uno. No ve los hilos creados antes de
+// cargar NativeDraw.
 static tai_hook_ref_t ref_ct;
 static SceUID hk_ct = -1;
-SceUID emu_th[256]; int emu_aff[256], emu_n;  // v12.10: captura.c mide cuanto procesador usa cada uno
+SceUID emu_th[256]; int emu_aff[256], emu_n;  // (captura.c los lee: EMU_N tiene que ser igual)
 static SceUID hookCT(const char *name, SceKernelThreadEntry entry, int prio, int stack, SceUInt attr, int aff,
                      const SceKernelThreadOptParam *opt) {
   SceUID r = TAI_CONTINUE(SceUID, ref_ct, name, entry, prio, stack, attr, aff, opt);
@@ -161,6 +164,7 @@ static SceUID hookCT(const char *name, SceKernelThreadEntry entry, int prio, int
 }
 
 void _start() __attribute__((weak, alias("module_start")));
+// Arranque del plugin: hilo escritor del log de NativeLink, gancho de los hilos del emulador e hilo principal.
 int module_start(SceSize args, void *argp) {
   alog("NativeDraw " NATIVEDRAW_VERSION " (antes gepresent v13.13) compilado %s %s (dato %d)\n", __DATE__, __TIME__, dato);
   SceUID wt = sceKernelCreateThread("nativedraw_escritor", writerThread, 0xA0, 0x2000, 0, 0, NULL);
@@ -172,7 +176,7 @@ int module_start(SceSize args, void *argp) {
   if (th >= 0) sceKernelStartThread(th, 0, NULL);
   return SCE_KERNEL_START_SUCCESS;
 }
-int module_stop(SceSize args, void *argp) {
+int module_stop(SceSize args, void *argp) {  // suelta el gancho y apaga el presentador
   if (hk_ct >= 0) taiHookRelease(hk_ct, ref_ct);
   presStop();
   return SCE_KERNEL_STOP_SUCCESS;

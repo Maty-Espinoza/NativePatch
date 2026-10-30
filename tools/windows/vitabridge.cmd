@@ -4,6 +4,7 @@ rem Sin argumentos busca la Vita en la red; o con la IP: vitabridge.cmd 192.168.
 cd /d "%~dp0"
 set PY=python
 where py >nul 2>&1 && set PY=py -3
+rem inicio.txt: hora y que Python se uso (para revisar desde Claude si el relevo no arranca)
 (echo %date% %time% & where py python & %PY% --version) > vitabridge\inicio.txt 2>&1
 %PY% -u vitabridge.py %*
 pause

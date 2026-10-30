@@ -3,6 +3,33 @@
 Versiones: `docs/dev/versiones.md`. El detalle de cada paso está en `docs/changelog/` (antes del primer release se quitan
 de ahí los resúmenes de conversación; este archivo queda como el resumen).
 
+## NativeLink 0.0.3 + NativeDraw 0.0.7 (2026-10-30)
+Probadas en la Vita como NativeDraw 0.0.7.1–0.0.8.12 y NativeLink 0.0.3.1–0.0.3.3 (logs en
+`Descargas\vitabridge\etapa3_<versión de prueba>\`); lo confirmado es 0.0.8.12 + 0.0.3.3. Detalle en
+`docs/dev/etapa3_plan.md` (paso 3.3 en KOF 96).
+- **Etapa 3, paso 3.3 en KOF 96:** la Vita dibuja las peleas al doble. Sombreadores propios (`nativedraw/sombreadores/`):
+  borrados, color por vértice, mezcla, alfa test y swizzle; imágenes intermedias (KOF dibuja la pelea en una imagen
+  escondida de la VRAM); paletas de 16 colores; scissor; la imagen normal va debajo.
+- **Texturas por DMA:** las de la RAM al momento y las de la VRAM desde la copia del espejo de su flip; solo los grupos
+  de 8 filas que usan los draws; el swizzle lo ordena la GPU.
+- **NativeLink:** espejo completo para frames 2D (interruptor 16) y `espejo_espera` (32: el flip del PSP espera la copia
+  del espejo). Buffer de cada línea del log de 160 a 256 bytes (las largas se cortaban).
+- **Volcados** por niveles, reproducción de un volcado en la Vita y `tools/volcado.py` (`docs/dev/volcados.md`).
+- **Cuadros rotos de un frame en las peleas (arreglado):** la Vita reescribía texturas, vértices, paletas y la copia de
+  la imagen normal mientras su GPU todavía los leía (iba 3 a 8 escenas atrasada). Se midió con las notificaciones de GXM
+  (líneas `gpu:`). Ahora no se manda otro frame si la GPU no terminó el de hace 2 (se repite la superficie), se espera a
+  la GPU antes de reescribir (como mucho 30 ms) y el registro siguiente es uno que la GPU ya terminó de leer.
+  Reescritos con la GPU leyendo: 0.
+- **Rendimiento:** la revisión de frames distintos y el "tapado" leen la superficie solo si la GPU ya la terminó (sin
+  `sceGxmFinish`, que costaba ~20 ms en KOF); 4 copias de la imagen normal.
+- **Limpieza:** los comentarios dicen qué hace cada función y cómo (la historia pasó a `docs/dev/`); código y contadores
+  sin uso quitados (el binario compilado salió idéntico).
+- Medido en peleas de KOF 96 (cada 10 s), 0.0.8.11 → 0.0.8.12: frames de la Vita ~350 → ~385–410 (~35 → ~40 fps), CPU
+  por frame ~13 → ~6,5 ms, esperas a la GPU ~1,5 s → 0, revisión de frames distintos ~2,3 s → ~0,03 s, frames
+  repetidos 40–80 → 1–12. El juego sigue a 59,9 fps. Ahora el límite es la GPU de la Vita (~165 frames cada 10 s no se
+  mandan porque va atrasada).
+- Error menor conocido: el botón PS en KOF 96 (`TODO.md`).
+
 ## NativeDraw 0.0.6 (2026-10-30)
 - **Etapa 3, paso 3.3 (primera versión):** con `dibujar`, la Vita dibuja el frame con su GPU a partir del registro, al
   doble (2D simple: rectángulos y triángulos con textura, sin transparencias). Retro City Rampage se dibuja entero así.

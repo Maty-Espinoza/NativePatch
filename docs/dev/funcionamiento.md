@@ -66,7 +66,7 @@ ocupa, NativeLink queda apagado. La Vita la ve en `0x68000000 + (dirección & 0x
 | 0x44, 0x45, 0x46, 0x49 | PSP | copia pedida, páginas copiadas, veces que el GE seguía ocupado, veces que la Vita usaba ese espejo |
 | 0x47 | Vita | 1 = encender T6 (`medir_ge`) |
 | 0x48 | Vita | copia del espejo en uso (no se pisa) |
-| 0x4A | Vita | interruptores: 1 sin compuerta, 2 sin espejo, 4 sin CPU libre, 8 compuerta en el sync |
+| 0x4A | Vita | interruptores: 1 sin compuerta, 2 sin espejo, 4 sin CPU libre, 8 compuerta en el sync, 16 espejo completo (lo pone NativeDraw con `dibujar` cuando el registro da frames 2D completos), 32 el flip del PSP espera la copia del espejo (`espejo_espera`) |
 | 0x4B, 0x4C | PSP | lista que espera la compuerta y desde cuándo |
 | 0x4D | PSP | calibración de la CPU libre |
 | 0x4E | Vita | nivel de registro (0 mínimo, 1 mediano, 2 extremo) |

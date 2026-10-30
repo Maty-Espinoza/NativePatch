@@ -1,17 +1,20 @@
-// reproduccion.c (NativeDraw 0.0.8.5): vuelve a dibujar en la Vita un frame volcado (fK_registro.bin), con el mismo
-// traductor, para separar un error que depende del momento (datos que cambian, carreras) de uno que se repite siempre
-// con los mismos datos (el traductor, los sombreadores, la GPU). Se incluye dentro de presentador.c.
-// Uso: ux0:data/nativedraw/reproducir con la ruta del .bin adentro (p. ej. ux0:data/nativedraw/volcados/037/f0_registro.bin).
-// Al abrir el juego (con dibujar), en el primer frame que la Vita dibuja, carga el registro, lo dibuja en vez del frame
-// del juego (se ve un instante) y guarda junto al .bin: fK_reproduccion.bmp (960x544) y fK_reproduccion_intermedia.bmp
-// (la imagen intermedia 0, 1024x544). Una vez por juego; despues se borra la ruta del archivo (queda "no").
+// reproduccion.c: vuelve a dibujar en la Vita, con el mismo traductor (trFrame), un frame guardado por un volcado
+// (fK_registro.bin, formato de volBin en volcado.c). Sirve para separar un error que depende del momento (datos que
+// cambian, carreras con la GPU) de uno que sale siempre con los mismos datos (traductor, sombreadores).
+// Se incluye dentro de presentador.c: presStart llama a repInicio, el hilo del presentador a repHilo y el de Adrenaline
+// a repDibujar. Uso: ux0:data/nativedraw/reproducir con la ruta del .bin. Deja fK_reproduccion.bmp y
+// fK_reproduccion_intermedia.bmp junto al .bin y escribe "no" en el archivo (una vez por juego).
+// Detalle: docs/dev/volcados.md.
 static char rep_ruta[128];
-static volatile uint32_t rep_on;  // 0 nada, 1 por cargar, 2 cargado (lo dibuja el hilo de Adrenaline), 3 dibujado (por escribir)
+// rep_on: 0 nada, 1 por cargar, 2 cargado (lo dibuja el hilo de Adrenaline), 3 dibujado (por escribir)
+static volatile uint32_t rep_on;
+// rep_f: el frame cargado; rep_hd y rep_rt: copias de la superficie y de la imagen intermedia 0 despues de dibujarlo
 static RFrame *rep_f;
 static uint8_t *rep_hd, *rep_rt;
-static SceUID rep_blk[3];
+static SceUID rep_blk[2];
 
-static void repInicio(void) {  // (presStart) lee la ruta
+// Lee la ruta de ux0:data/nativedraw/reproducir (sin espacios ni saltos al final); si hay una y no es "no", rep_on = 1.
+static void repInicio(void) {
   SceUID fd = sceIoOpen("ux0:data/nativedraw/reproducir", SCE_O_RDONLY, 0);
   if (fd < 0) return;
   int n = sceIoRead(fd, rep_ruta, sizeof rep_ruta - 1);
@@ -21,7 +24,9 @@ static void repInicio(void) {  // (presStart) lee la ruta
   if (n > 4 && !(rep_ruta[0] == 'n' && rep_ruta[1] == 'o')) { rep_on = 1; alog("reproduccion: %s\n", rep_ruta); }
 }
 
-static void repCargar(void) {  // (hilo del presentador) el .bin a un RFrame propio; las texturas a memoria de la GPU
+// En el hilo del presentador: lee el .bin a un RFrame propio (cabecera, revisada contra los topes de registro.h, y cada
+// arreglo alineado a 4) y las texturas a memoria que lee la GPU. Si sale bien, rep_on = 2; si no, rep_on = 0.
+static void repCargar(void) {
   SceUID fd = sceIoOpen(rep_ruta, SCE_O_RDONLY, 0);
   if (fd < 0) { alog("reproduccion: no se pudo abrir %s\n", rep_ruta); rep_on = 0; return; }
   void *p = 0, *q = 0;
@@ -38,8 +43,9 @@ static void repCargar(void) {  // (hilo del presentador) el .bin a un RFrame pro
   int ok = h[0] == 0x47524E44 && h[13] == NRS && h[14] == sizeof(RDraw) && h[5] <= RD_N && h[6] <= RE_N && h[7] <= RA_N && h[9] <= TN_N && tx;
   if (ok) {
     f->frame = h[2]; f->fb = h[3]; f->fbw = h[4]; f->nd = h[5]; f->ne = h[6]; f->na = h[7]; f->flags = h[8]; f->nt = h[9]; f->ntx = h[10];
-    f->esp = h[11]; f->espf = h[12]; f->nimg = h[1] >= 3 ? h[15] : 0;
+    f->esp = h[11]; f->espf = h[12]; f->nimg = h[1] >= 3 ? h[15] : 0;  // (h[1]: version del formato)
     uint8_t rs[64];
+    // LEE: n bytes a dst y salta el relleno hasta multiplo de 4 (como PON en volBin)
 #define LEE(dst, n) do { uint32_t n_ = (n); if (n_ && sceIoRead(fd, dst, n_) != (int)n_) ok = 0; if (n_ & 3) { uint8_t z[4]; sceIoRead(fd, z, 4 - (n_ & 3)); } } while (0)
     LEE(rs, NRS);
     LEE(f->ta, f->nt * 4); LEE(f->tn, f->nt * 4); LEE(f->to, f->nt * 4); LEE(f->tq, f->nt * 4); LEE(f->tm, f->nt * 8);
@@ -54,7 +60,9 @@ static void repCargar(void) {  // (hilo del presentador) el .bin a un RFrame pro
   rep_on = 2;
 }
 
-static int repDibujar(SceGxmContext *c, int s, const SceGxmTexture *base) {  // (hilo de Adrenaline) 1 si lo dibujo en surf[s]
+// En el hilo de Adrenaline, en vez del frame del juego: dibuja el frame cargado en la superficie s (base: la imagen
+// normal, debajo), espera a la GPU y copia la superficie y la imagen intermedia 0. 1 si lo dibujo (rep_on = 3).
+static int repDibujar(SceGxmContext *c, int s, const SceGxmTexture *base) {
   if (rep_on != 2) return 0;
   int r = trFrame(c, rep_f, s, base);
   sceGxmFinish(c);
@@ -65,11 +73,13 @@ static int repDibujar(SceGxmContext *c, int s, const SceGxmTexture *base) {  // 
   return 1;
 }
 
-static void repHilo(void) {  // (hilo del presentador)
+// En el hilo del presentador: carga el .bin cuando el traductor esta listo y, despues de dibujado, escribe los dos BMP
+// junto al .bin (fK_registro.bin -> fK_reproduccion*.bmp), escribe "no" en el archivo de la ruta y libera la memoria.
+static void repHilo(void) {
   if (rep_on == 1 && t_on) repCargar();
   if (rep_on != 3) return;
   char p[160];
-  static uint8_t w[1024 * 4 * 16];  // (bmp() escribe de a 16 filas en vol_w: sin volcado en curso no hay)
+  static uint8_t w[1024 * 4 * 16];  // (bmp() usa vol_w, que sin volcado en curso no existe: se presta este)
   uint8_t *vw = vol_w;
   vol_w = w;
   int n = sceClibStrnlen(rep_ruta, sizeof rep_ruta);

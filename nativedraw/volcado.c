@@ -1,50 +1,26 @@
-// volcado.c (NativeDraw 0.0.7.4): volcados para ver lo que pasa en pantalla. Se incluye dentro de presentador.c.
-// L+R+SELECT guarda 4 frames seguidos (3 desde 0.0.7.9) en ux0:data/nativedraw/volcados/NNN/:
-//   fK_normal.bmp  la imagen del PSP en ese frame (480x272)
-//   fK_vita.bmp    lo que Adrenaline mostro en ese frame desde la superficie de NativeDraw (960x544); si ese frame no
-//                  paso por la superficie, no se guarda
-//   fK.txt         como se hizo esa superficie: dibujo de la Vita (y el frame del registro, con la lista de draws) o
-//                  imagen normal y por que
-// Las imagenes se copian por DMA en el hilo de Adrenaline (con sceGxmFinish antes: ese frame se traba un poco) y se
-// escriben a la tarjeta desde el hilo del presentador (unos segundos).
-// 0.0.7.5: escribir tardaba ~50 s (se leia de a byte la memoria sin cache) y frenaba al capturador: ahora de a filas
-// enteras a memoria con cache y de a 16 filas a la tarjeta. El texto da cada estado una vez, solo con lo que cambio
-// (antes se cortaba a los 64 KB en la pelea). Se empieza en el frame que ya tiene su texto (antes f0 salia sin datos).
-// 0.0.7.7: en los frames 1 y 2 tambien fK_registro.bin: todo lo que la Vita recibio para dibujar ese frame (draws,
-// estados, vertices, paletas y las texturas copiadas), para dibujarlo en el PC con tools/volcado/dibujar.py y comparar con
-// la imagen normal. El texto lista ademas cada textura: filas copiadas y de que copia del espejo salieron.
-// 0.0.7.8: volcado automatico (ux0:data/nativedraw/volcado_auto): con el archivo, el volcado queda armado todo el juego
-// (memoria tomada desde el principio; el texto y el registro de cada frame se preparan siempre, ~1-3 ms del hilo de
-// Adrenaline) y se dispara solo cuando la imagen de la Vita y la normal difieren en ese frame (5184 puntos, uno cada 5
-// pixeles; entre 12 y la mitad: con mas es un dialogo encima, "tapado"). Asi f0 es el frame con el error, con su registro.
-// Como mucho 10 por juego, con 1 s entre uno y otro (0.0.7.8: 3 s). Los registros (.bin) van en hasta 3 bloques de 2 MB de memoria
-// fisica: el de f0 y el de f1 (0.0.7.7 pedia 3 MB y solo cabia uno).
-// 0.0.7.9: el automatico de 0.0.7.8 tomaba la memoria fisica de las imagenes intermedias (KOF se veia con la imagen
-// normal) y escribir el texto de cada frame costaba 2-40 ms del hilo de Adrenaline. Ahora: 3 frames, todos con su
-// registro (3 bloques de 2 MB); en cada frame solo se copia el registro y una linea; el texto completo se arma al
-// escribir, desde el registro. Las imagenes intermedias se reservan al iniciar el traductor (antes que el volcado).
-// 0.0.8.5: NIVELES (como los del registro), en ux0:data/nativedraw/volcado (una palabra; sin el archivo: secuencia):
-//   desactivado  L+R+SELECT no hace nada y no se toma memoria
-//   pantallazo   L+R+SELECT guarda 1 frame: la imagen del PSP y la de la Vita (fK_normal.bmp, fK_vita.bmp) y una linea
-//   frame        1 frame con todo: imagenes, texto, registro (.bin para tools/volcado.py) e imagen intermedia; desde
-//                0.0.8.7 tambien la imagen del PSP exacta (se pide al apretar: el PSP la copia ~1,5 s)
-//   secuencia    3 frames seguidos con todo (lo de antes)
-//   auto         secuencia que ademas se dispara sola cuando algun bloque de 16x16 de la imagen de la Vita no se parece a
-//                ninguna de las ultimas 4 imagenes del PSP (0.0.8.8, volMalos: sin costo para el PSP). Toma la memoria
-//                desde el principio y gasta unos ms del hilo de Adrenaline por frame. Como mucho 10 por juego.
-//                (ux0:data/nativedraw/volcado_auto, de 0.0.7.8, = auto)
-// Detalle y como leerlos: docs/dev/volcados.md.
+// volcado.c: volcados de frames para depurar lo que se ve en pantalla. Se incluye dentro de presentador.c: el hilo de
+// Adrenaline (hookEnd) llama a volTexto y volFrame para capturar cada frame; el hilo del presentador llama a volHilo
+// para armar el volcado (L+R+SELECT o automatico) y escribirlo en ux0:data/nativedraw/volcados/NNN/. Guarda por frame
+// la imagen del PSP, la de la Vita, un texto con como se hizo y una copia del registro del frame (registro.h) para
+// tools/volcado.py y reproduccion.c. Nivel en ux0:data/nativedraw/volcado (volNivel). Detalle: docs/dev/volcados.md.
+// TODO:
+// - elegir el nivel del volcado desde el menu L+R+START (hoy solo con el archivo)
 #include <psp2/io/stat.h>
 void *sceDmacMemcpy(void *dst, const void *src, SceSize size);
-#define VN 3
+#define VN 3            // frames por volcado (como maximo)
 #define VL 256          // linea de cada frame (como se hizo la superficie)
 #define VB_N (2 << 20)  // registro por frame
-static volatile uint32_t vol_req, vol_on, vol_k;  // pedido; 0 nada, 3 armado (auto), 1 capturando, 2 para escribir; frame capturado
-extern volatile uint32_t nd_exacta_hasta;  // (captura.c)
-static uint32_t vol_auto, vol_n, vol_t, vol_dif, vol_t0;   // (0.0.7.8) automatico; cuantos; hora del ultimo; bloques distintos del que disparo
-static uint32_t vol_nivel = 3, vol_nf = VN;      // (0.0.8.5) nivel (0 desactivado, 1 pantallazo, 2 frame, 3 secuencia, 4 auto) y frames por volcado
+// vol_req: pedido de L+R+SELECT; vol_on: 0 nada, 3 armado (auto), 1 capturando, 2 para escribir; vol_k: frames listos
+static volatile uint32_t vol_req, vol_on, vol_k;
+extern volatile uint32_t nd_exacta_hasta;  // (captura.c) hasta cuando el registro trae la imagen exacta del PSP
+// si es automatico; volcados hechos; hora del ultimo; bloques malos del que disparo el automatico; hora del pedido
+static uint32_t vol_auto, vol_n, vol_t, vol_dif, vol_t0;
+// Nivel (0 desactivado, 1 pantallazo, 2 frame, 3 secuencia, 4 auto) y frames por volcado
+static uint32_t vol_nivel = 3, vol_nf = VN;
 static const char *vol_nom[5] = { "desactivado", "pantallazo", "frame", "secuencia", "auto" };
-int volNivel(void) {  // (0.0.8.5) lee ux0:data/nativedraw/volcado (tambien lo usa captura.c)
+// Nivel de volcado: 4 si existe ux0:data/nativedraw/volcado_auto (y no dice "no"); si no, la palabra de
+// ux0:data/nativedraw/volcado (se comparan 4 letras; "no" = desactivado); sin archivo, 3 (secuencia).
+int volNivel(void) {
   char b[16] = { 0 };
   SceUID fd = sceIoOpen("ux0:data/nativedraw/volcado_auto", SCE_O_RDONLY, 0);
   if (fd >= 0) { sceIoRead(fd, b, 2); sceIoClose(fd); if (!(b[0] == 'n' && b[1] == 'o')) return 4; }
@@ -53,16 +29,23 @@ int volNivel(void) {  // (0.0.8.5) lee ux0:data/nativedraw/volcado (tambien lo u
   for (int i = 0; i < 5; i++) if (!sceClibStrncmp(b, vol_nom[i], 4)) return i;
   return b[0] == 'n' ? 0 : 3;  // ("no": desactivado)
 }
-static uint8_t *vol_hd[VN], *vol_ps[VN], *vol_w;  // vol_w: para escribir (con cache, 192 KB)
-static char vol_tx[VN][VL], vol_last[VL];           // vol_last: la linea del ultimo frame hecho (se empareja con el siguiente)
+// Memoria de cada frame capturado: vol_hd superficie de la Vita, vol_ps imagen del PSP, vol_tx su linea, vol_ok si hubo
+// superficie. vol_w: memoria con cache para escribir (192 KB). vol_last: la linea del ultimo frame hecho (se empareja
+// con el siguiente que muestra Adrenaline). vol_rt: la imagen intermedia 0 en f0 (vol_rtfb: su direccion; ~0u: no hay).
+static uint8_t *vol_hd[VN], *vol_ps[VN], *vol_w;
+static char vol_tx[VN][VL], vol_last[VL];
 static uint32_t vol_ok[VN], vol_lastn, vol_mem, vol_rtfb;
-static uint8_t *vol_rt; static SceUID vol_rtblk;  // (0.0.8.3) la imagen intermedia 0 de f0 (la Vita la dibuja al doble)
+static uint8_t *vol_rt; static SceUID vol_rtblk;
 static SceUID vol_blk[VN + 1], vol_bblk[VN];
 static uint8_t *vol_bb[VN];                 // bloques para registros
 static uint32_t vol_bbn[VN], vol_bpend = VN;  // bytes en cada uno; el del ultimo frame hecho (VN: ninguno)
 static int vol_bf[VN] = { VN, VN, VN };     // bloque del registro de cada frame capturado (VN: sin registro)
+// 1 si el bloque de registro b ya es de un frame capturado
 static int volUsado(int b) { for (int i = 0; i < (int)vol_k; i++) if (vol_bf[i] == b) return 1; return 0; }
-static void volBin(RFrame *f) {  // en el hilo de Adrenaline: copia el registro f a un bloque libre (lo toma el frame que viene)
+// En el hilo de Adrenaline: copia el registro f a un bloque libre (lo toma el frame que viene, volFrame). Formato: una
+// cabecera de 16 palabras y despues cada arreglo de RFrame alineado a 4 (lo lee reproduccion.c y tools/volcado.py; si
+// cambia, cambiar los dos). Si no entra en VB_N queda sin registro.
+static void volBin(RFrame *f) {
   vol_bpend = VN;
   int k = 0;
   while (k < VN && (!vol_bb[k] || volUsado(k))) k++;
@@ -78,21 +61,22 @@ static void volBin(RFrame *f) {  // en el hilo de Adrenaline: copia el registro 
   sceDmacMemcpy(b + o, f->tx, f->ntx);
   vol_bbn[k] = o + f->ntx; vol_bpend = k;
 }
-// (0.0.7.10) Bloques de 16x16 pixeles (510) cuyo color promedio (16 puntos) difiere en mas de 20 en algun canal. Asi las
-// diferencias finas del escalado (sprites encogidos que la Vita muestrea distinto: 0.0.7.9 se disparaba con el logo de
-// SNK) casi no cuentan y un sprite con pedazos ajenos si (los volcados con mosaicos dan 69-90 bloques; los buenos, 0).
-static uint8_t *vol_nat;          // (0.0.8.4) la imagen del PSP exacta del ultimo frame dibujado (del registro); 0: no hay
+static uint8_t *vol_nat;          // la imagen del PSP exacta del ultimo frame dibujado (del registro); 0: no hay
 static uint32_t vol_natf, vol_natw, vol_natok;  // su formato (0 5650, 1 5551, 2 4444, 3 8888), ancho y si hay
 static SceUID vol_natblk;
-static uint32_t volPx(const uint8_t *p, uint32_t f, uint32_t i) {  // pixel -> 0xBBGGRR aproximado
+static uint32_t volPx(const uint8_t *p, uint32_t f, uint32_t i) {  // pixel i de p en formato f -> 0xBBGGRR aproximado
   if (f == 3) return ((const uint32_t *)p)[i] & 0xFFFFFF;
   uint32_t c = ((const uint16_t *)p)[i];
   if (f == 0) return (c & 31) << 3 | (c >> 5 & 63) << 10 | (c >> 11 & 31) << 19;
   if (f == 1) return (c & 31) << 3 | (c >> 5 & 31) << 11 | (c >> 10 & 31) << 19;
   return (c & 15) << 4 | (c >> 4 & 15) << 12 | (c >> 8 & 15) << 20;
 }
+// Cuantos bloques de 16x16 pixeles del PSP (de 510) difieren entre la imagen del PSP (la exacta si la hay; si no, pj,
+// 512 de ancho) y la superficie de la Vita ps: color promedio de 16 puntos con mas de 20 de diferencia en algun canal.
+// El promedio hace que las diferencias finas del escalado no cuenten y un sprite con pedazos ajenos si.
+// La usa el presentador para su estadistica de frames distintos.
 static int volDistintos(const uint32_t *pj, const uint32_t *ps) {
-  const uint8_t *nb = vol_natok ? vol_nat : (const uint8_t *)pj;  // (0.0.8.4) con la imagen exacta de ese frame, si la hay
+  const uint8_t *nb = vol_natok ? vol_nat : (const uint8_t *)pj;
   uint32_t nf = vol_natok ? vol_natf : 3, nw = vol_natok ? vol_natw : 512;
   int k = 0;
   for (uint32_t by = 0; by < 272 / 16; by++)
@@ -108,11 +92,10 @@ static int volDistintos(const uint32_t *pj, const uint32_t *ps) {
   return k;
 }
 
-// (0.0.8.8) Detector del automatico sin tocar al PSP: la imagen de la Vita va 1-2 frames atras de la del PSP, asi que se
-// compara cada bloque de 16x16 con las ultimas 4 copias de la imagen del PSP (img[], las hace Adrenaline) y vale la mas
-// parecida. Un bloque que no se parece a ninguna es un error de verdad (un sprite con mosaico), no atraso. 0.0.8.4-0.0.8.7
-// comparaba con la imagen exacta, pero copiarla le costaba ~1,2 ms por frame al PSP y con eso los mosaicos no salian.
-// mejor: si no es 0, la copia (de img[]) que mas se parece en total.
+// Detector del volcado automatico: cuantos bloques de 16x16 de la superficie de la Vita ps no se parecen (mas de 20 en
+// algun canal, como volDistintos) a ninguna de las ultimas n_img copias de la imagen del PSP (img[]). La Vita va 1-2
+// frames atras, asi que vale la copia mas parecida de cada bloque: un bloque malo es un error, no atraso. No le cuesta
+// nada al PSP. mejor: si no es 0, la copia que mas se parece en total.
 static int volMalos(const uint32_t *ps, int *mejor) {
   int k = 0, tot[4] = { 0, 0, 0, 0 };
   for (uint32_t by = 0; by < 272 / 16; by++)
@@ -136,29 +119,38 @@ static int volMalos(const uint32_t *ps, int *mejor) {
   return k;
 }
 
-static void volTexto(RFrame *f, const char *como, int motivo) {  // en el hilo de Adrenaline: como se hizo la superficie (una linea)
+// En el hilo de Adrenaline, despues de preparar la superficie: anota como se hizo (como, y el motivo del traductor si
+// fallo; -1 sin traductor), copia el registro f (volBin) y, si trae la imagen exacta del PSP, la guarda en vol_nat.
+static void volTexto(RFrame *f, const char *como, int motivo) {
   if ((vol_on != 1 && vol_on != 3) || !vol_mem) return;
   vol_lastn = sceClibSnprintf(vol_last, VL, "superficie: %s%s%s | tapado=%u\n", como, motivo > 0 ? ", motivo: " : "", motivo > 0 ? tnom[motivo] : "", tapado);
   volBin(f);
-  if (f && f->nimg && vol_nat && motivo <= 0) {  // (0.0.8.4) su imagen del PSP exacta (se compara en el frame que viene)
+  if (f && f->nimg && vol_nat && motivo <= 0) {  // (se compara en el frame que viene)
     vol_natf = f->fbw >> 16 & 3; vol_natw = f->fbw & 0xFFFF;
     sceDmacMemcpy(vol_nat, f->tx + f->nimg - 1, vol_natw * 272 * (vol_natf == 3 ? 4 : 2)); vol_natok = 1;
   } else if (motivo != 0) vol_natok = 0;  // (imagen normal: no hay registro dibujado; "repite": se deja la anterior)
 }
 
-static void volFrame(SceGxmContext *c, const void *pj, int con_sup) {  // en el hilo de Adrenaline, al empezar su hookEnd
-  if (vol_on == 3 && con_sup && cur_hd && !tapado && (fr & 1)) {  // (0.0.7.8) automatico: si el dibujo de la Vita no coincide (0.0.8.8: con
-    int n = now() - vol_t > 1000000 ? volMalos(surf[cur], 0) : 0;      // ninguna de las ultimas imagenes del PSP; 1 de cada 2 frames)
-    if (n >= 6 && n < 255) { sceGxmFinish(c); n = volMalos(surf[cur], 0); }  // (se confirma con la GPU ya terminada: 0.0.7.9
-    if (n >= 6 && n < 255) { vol_dif = n; vol_k = 0; vol_on = 1; }              // leia la superficie a medio dibujar)
+// En el hilo de Adrenaline, al empezar su hookEnd, con la superficie que se va a mostrar (surf[cur], si con_sup) y la
+// imagen del PSP pj. Armado (auto): 1 de cada 2 frames, con 1 s desde el ultimo volcado, si 6 o mas bloques (y menos de
+// 255: un dialogo encima) no se parecen a la imagen del PSP, empieza a capturar. Capturando: copia por DMA las dos
+// imagenes y la linea del frame (y en f0 la imagen intermedia 0) hasta tener vol_nf frames; despues vol_on = 2.
+static void volFrame(SceGxmContext *c, const void *pj, int con_sup) {
+  if (vol_on == 3 && con_sup && cur_hd && !tapado && (fr & 1)) {
+    int n = now() - vol_t > 1000000 ? volMalos(surf[cur], 0) : 0;
+    // se confirma con la GPU terminada: si no, puede leer la superficie a medio dibujar
+    if (n >= 6 && n < 255) { sceGxmFinish(c); n = volMalos(surf[cur], 0); }
+    if (n >= 6 && n < 255) { vol_dif = n; vol_k = 0; vol_on = 1; }
   }
   if (vol_on != 1 || vol_k >= vol_nf || !vol_lastn) return;  // (sin la linea del frame todavia: desde el siguiente)
-  if (!vol_k && !vol_dif && vol_nivel >= 2 && !vol_natok && now() - vol_t0 < 500000) return;  // (0.0.8.7: L+R+SELECT espera la imagen exacta, hasta 0,5 s)
+  // (L+R+SELECT espera la imagen exacta, hasta 0,5 s)
+  if (!vol_k && !vol_dif && vol_nivel >= 2 && !vol_natok && now() - vol_t0 < 500000) return;
   uint32_t k = vol_k;
   vol_bf[k] = vol_bpend; vol_bpend = VN;  // (el registro del frame que se ve)
   sceGxmFinish(c);
   int mej = -1;
-  if (vol_auto && con_sup) volMalos(surf[cur], &mej);  // (0.0.8.8) se guarda la imagen del PSP que mas se parece (la del mismo frame)
+  // se guarda la imagen del PSP que mas se parece (la del mismo frame)
+  if (vol_auto && con_sup) volMalos(surf[cur], &mej);
   sceDmacMemcpy(vol_ps[k], mej >= 0 ? img[mej] : pj, 512 * 272 * 4);
   vol_ok[k] = con_sup;
   if (con_sup) { sceDmacMemcpy(vol_hd[k], surf[cur], LINE * H * 4); sceClibMemcpy(vol_tx[k], vol_last, VL); }
@@ -168,14 +160,17 @@ static void volFrame(SceGxmContext *c, const void *pj, int con_sup) {  // en el 
   if (++vol_k == vol_nf) vol_on = 2;
 }
 
-static void bmp(const char *p, const uint8_t *px, uint32_t w, uint32_t h, uint32_t linea) {  // 32 bits, de arriba hacia abajo
+// Escribe en p un BMP de 32 bits (de arriba hacia abajo) con w x h pixeles RGBA de px (linea: pixeles por fila).
+// Usa vol_w como memoria intermedia (16 filas).
+static void bmp(const char *p, const uint8_t *px, uint32_t w, uint32_t h, uint32_t linea) {
   SceUID fd = sceIoOpen(p, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0666);
   if (fd < 0) return;
   uint8_t hd[54] = { 'B', 'M' };
   uint32_t sz = 54 + w * h * 4, v[13] = { sz, 0, 54, 40, w, (uint32_t)-(int)h, 1 | 32 << 16, 0, w * h * 4, 2835, 2835, 0, 0 };
   sceClibMemcpy(hd + 2, v, 52);
   sceIoWrite(fd, hd, 54);
-  for (uint32_t y = 0; y < h; y += 16) {  // de a 16 filas: leidas enteras (memoria sin cache), RGBA -> BGRA, a la tarjeta
+  // de a 16 filas: copiadas enteras (leer px de a pixel sin cache es muy lento), RGBA -> BGRA
+  for (uint32_t y = 0; y < h; y += 16) {
     uint32_t m = h - y < 16 ? h - y : 16;
     for (uint32_t r = 0; r < m; r++) {
       uint32_t *q = (uint32_t *)(vol_w + r * w * 4);
@@ -187,7 +182,8 @@ static void bmp(const char *p, const uint8_t *px, uint32_t w, uint32_t h, uint32
   sceIoClose(fd);
 }
 
-// El texto del frame, desde su registro (en el hilo del presentador): texturas, estados (solo lo que cambio) y draws
+// En el hilo del presentador: escribe en fd el texto del frame a partir de su registro b (formato de volBin):
+// texturas, cada estado la primera vez (solo los registros que cambiaron) y la lista de draws. Arma el texto en vol_w.
 static void volListado(SceUID fd, const uint8_t *b) {
   const uint32_t *h = (const uint32_t *)b;
   uint32_t nt = h[9], nd = h[5], ne = h[6], o = 64 + ((NRS + 3) & ~3u), k = 0, n = 192 << 10;
@@ -220,7 +216,10 @@ static void volListado(SceUID fd, const uint8_t *b) {
   if (k) sceIoWrite(fd, t, k);
 }
 
-static int volMem(void) {  // toma la memoria del volcado; 0 si no hay
+// Toma la memoria del volcado segun el nivel: imagenes (obligatorias) y, desde "frame", registros, imagen exacta e
+// imagen intermedia (opcionales: si no hay, el volcado sale sin ellos). 0 si no hay memoria para las imagenes.
+// Los registros van en memoria fisica: las imagenes intermedias del traductor se reservan antes.
+static int volMem(void) {
   uint32_t n = 0, ok = 1;
   for (int i = 0; i < (int)vol_nf && ok; i++) {  // superficie de la Vita + imagen del PSP, en un bloque
     void *p = 0;
@@ -233,14 +232,15 @@ static int volMem(void) {  // toma la memoria del volcado; 0 si no hay
   if (!ok) { alog("volcado: sin memoria\n"); for (uint32_t i = 0; i < n; i++) if (vol_blk[i] >= 0) sceKernelFreeMemBlock(vol_blk[i]); for (int i = 0; i <= VN; i++) vol_blk[i] = 0; return 0; }
   vol_w = t;
   int nb = 0;
-  for (int i = 0; i < (int)vol_nf && vol_nivel >= 2; i++) {  // registros, en memoria fisica (lo que queda despues de las imagenes intermedias); si no hay, sin ellos
+  for (int i = 0; i < (int)vol_nf && vol_nivel >= 2; i++) {  // registros
     void *q = 0;
     vol_bblk[i] = sceKernelAllocMemBlock("nativedraw_volcado_reg", SCE_KERNEL_MEMBLOCK_TYPE_USER_MAIN_PHYCONT_NC_RW, VB_N, 0);
     vol_bb[i] = vol_bblk[i] >= 0 && sceKernelGetMemBlockBase(vol_bblk[i], &q) >= 0 ? q : 0;
     nb += vol_bb[i] != 0;
   }
   void *r = 0, *nn = 0;
-  if (vol_nivel >= 2) vol_natblk = sceKernelAllocMemBlock("nativedraw_volcado_nat", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW_UNCACHE, 0x100000, 0);  // (0.0.8.4)
+  // imagen exacta del PSP e imagen intermedia
+  if (vol_nivel >= 2) vol_natblk = sceKernelAllocMemBlock("nativedraw_volcado_nat", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW_UNCACHE, 0x100000, 0);
   vol_nat = vol_nivel >= 2 && vol_natblk >= 0 && sceKernelGetMemBlockBase(vol_natblk, &nn) >= 0 ? nn : 0; vol_natok = 0;
   if (vol_nivel >= 2) vol_rtblk = sceKernelAllocMemBlock("nativedraw_volcado_rt", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW_UNCACHE, (LINE * H * 4 + 0x3FFFF) & ~0x3FFFFu, 0);
   vol_rt = vol_nivel >= 2 && vol_rtblk >= 0 && sceKernelGetMemBlockBase(vol_rtblk, &r) >= 0 ? r : 0;
@@ -248,7 +248,7 @@ static int volMem(void) {  // toma la memoria del volcado; 0 si no hay
   alog("volcado: memoria lista, nivel %s (%u frames, %u bloques para registros)\n", vol_nom[vol_nivel], vol_nf, nb);
   return 1;
 }
-static void volLibre(void) {
+static void volLibre(void) {  // libera toda la memoria del volcado
   for (int i = 0; i <= VN; i++) if (vol_blk[i] > 0) { sceKernelFreeMemBlock(vol_blk[i]); vol_blk[i] = 0; }
   for (int i = 0; i < VN; i++) { if (vol_bblk[i] > 0) sceKernelFreeMemBlock(vol_bblk[i]); vol_bblk[i] = 0; vol_bb[i] = 0; }
   if (vol_rtblk > 0) sceKernelFreeMemBlock(vol_rtblk);
@@ -256,16 +256,21 @@ static void volLibre(void) {
   vol_natblk = 0; vol_nat = 0; vol_natok = 0;
   vol_rtblk = 0; vol_rt = 0; vol_mem = 0;
 }
-static void volHilo(void) {  // en el hilo del presentador (cada 50 ms)
-  if (vol_auto && !vol_on && vol_n < 10) {  // (0.0.7.8) automatico: se arma (la memoria queda tomada)
+// En el hilo del presentador (cada 50 ms): en automatico arma el volcado (vol_on = 3, como mucho 10 por juego); con un
+// pedido de L+R+SELECT toma la memoria y empieza a capturar; cuando la captura termino (vol_on = 2) escribe los
+// archivos en la primera carpeta volcados/NNN libre y libera la memoria (salvo en automatico).
+static void volHilo(void) {
+  if (vol_auto && !vol_on && vol_n < 10) {  // automatico: se arma (la memoria queda tomada)
     if (!vol_mem && !volMem()) { vol_auto = 0; return; }
     vol_k = 0; vol_dif = 0; vol_lastn = 0; vol_on = 3;
     return;
   }
-  if (vol_req && (!vol_on || vol_on == 3)) {  // pedido (L+R+SELECT): memoria (se libera al terminar, salvo en automatico)
+  // pedido (L+R+SELECT): memoria (se libera al terminar, salvo en automatico)
+  if (vol_req && (!vol_on || vol_on == 3)) {
     vol_req = 0;
     if (!vol_nivel) return;
-    if (vol_nivel >= 2) nd_exacta_hasta = now() + 1500000;  // (0.0.8.7) por 1,5 s cada frame trae su imagen del PSP exacta
+    // por 1,5 s cada frame del registro trae su imagen del PSP exacta
+    if (vol_nivel >= 2) nd_exacta_hasta = now() + 1500000;
     vol_t0 = now();
     if (!vol_mem && !volMem()) return;
     vol_k = 0; vol_dif = 0; vol_lastn = 0; vol_on = 1;

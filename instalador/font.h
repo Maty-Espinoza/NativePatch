@@ -1,5 +1,6 @@
-// Fuente 8x16 (ASCII 32-126) generada desde DejaVu Sans Mono Bold (licencia Bitstream Vera /
-// DejaVu, permite modificar y redistribuir). Cada caracter: 16 filas, bit 7 = pixel izquierdo.
+// Fuente 8x16 de los caracteres ASCII 32-126 (indice = caracter - 32), para escribir texto en pantalla. La incluyen
+// instalador/main.c y nativedraw/presentador.c (menu L+R+START). Cada caracter: 16 bytes, uno por fila, bit 7 = pixel
+// izquierdo. Generada desde DejaVu Sans Mono Bold (licencia Bitstream Vera / DejaVu: permite modificar y redistribuir).
 #ifndef FONT_H
 #define FONT_H
 static const unsigned char font8x16[95][16] = {

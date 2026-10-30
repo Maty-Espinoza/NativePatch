@@ -53,7 +53,7 @@ Juegos de prueba: **Retro City Rampage DX** (2D), **KOF 96** (2D; [verificar] si
 - Seguro: si la superficie sale negra 30 frames seguidos y la imagen del juego no, deja de reemplazarla hasta cerrar
   Adrenaline. El log marca "primer frame dibujado" y "60 frames dibujados" (para ver dónde se cuelga si pasa).
 - Después de la escena de Adrenaline, en su hilo y su contexto, dibuja `psp_tex` al doble en una de dos superficies
-  propias (CDRAM, 1024x544 con 960x544 visibles, z D24S8). En el frame siguiente, cuando Adrenaline usa `psp_tex`, se le
+  propias (LPDDR física, 1024x544 con 960x544 visibles, z D24S8). En el frame siguiente, cuando Adrenaline usa `psp_tex`, se le
   pasa la superficie. Si en un frame Adrenaline no usó `psp_tex` (menú de Adrenaline, PS1, filtro Original), no se dibuja
   nada y al volver no se cambia hasta tener una superficie nueva.
 - `nativedraw.log` cada 10 s: frames pasados por la superficie, CPU por frame (promedio y máximo) y cuántos frames casi
@@ -97,7 +97,8 @@ si también sale sin NativeDraw (`dibujar` con `no`).
 ## Paso 3.2: registro del frame (NativeDraw 0.0.5, probado el 2026-10-29) [medido]
 `nativedraw/registro.c` (incluido en `captura.c`), activo con `dibujar`. Por draw: tipo, cantidad, tipo de vértice,
 vértices (e índices) copiados al momento, el estado (56 registros del GE, `RS`) solo cuando cambia y la paleta cargada
-(copiada en cada C4). Frames cerrados en el flip, 3 registros que se turnan (`rg_pub` = último completo). Completo =
+(copiada en cada C4). Frames cerrados en el flip, 4 registros que se turnan (`rg_pub` = último completo; eran 3 hasta la prueba 0.0.8.6:
+el último que dibujó la Vita no se reescribe hasta que dibuje otro, porque la GPU lo lee después). Completo =
 todos los draws contados pasaron por el registro (la memoria de sublistas, las curvas y lo que no se pudo leer lo dejan
 incompleto); un frame incompleto deja de copiarse. Línea `registro:` por segundo en `nativedraw_captura.log`.
 Prueba fuera de la Vita: `REG=1 ./prueba 0` (todos completos) y `REG=1 ./prueba 1` (incompletos por la memoria).
@@ -128,11 +129,56 @@ dibuja el último frame completo del registro al doble. Esta versión: modo thro
   KOF 96: 0 % (cada frame empieza con un borrado: siguiente versión).
 - Lección: registrar la RAM del PSP con `sceGxmMapMemory` (0x70000000, 32 MB) funciona; 0x72000000 da 805b0017.
 
+## Paso 3.3 en KOF 96 (NativeLink 0.0.3 + NativeDraw 0.0.7, pruebas 0.0.7.1–0.0.8.12, 2026-10-30) [medido]
+KOF 96 (NeoGeo Station, NPUH-10119) dibujado por la Vita en las peleas, sin cuadros rotos, ~40 fps de la Vita con el
+juego a 59,9. Lo que se aprendió en el camino (los números de prueba sirven para ubicar los logs de
+`vitabridge\etapa3_<versión>\` y los volcados):
+- **Sombreadores propios** (`nativedraw/sombreadores/*.cg` → `sombreadores_nd.h`, 0.0.7): color por vértice o del
+  material, función de textura modular/reemplazar (TCC, color al doble), alfa test, borrados (rectángulo del color
+  pedido; sin el bit de color no dibuja nada), mezcla (un programa de fragmentos por combinación). El alfa de la
+  superficie va siempre en 255: el alfa del PSP es su stencil y Adrenaline no lo usa.
+- **Imágenes intermedias** (0.0.7.2): KOF dibuja la pelea a la resolución de la Neo Geo en una imagen escondida de la
+  VRAM y después la estira a la pantalla. Los draws a otra imagen (ancho ≤ 512) van a una superficie propia al doble
+  (hasta 2, 1024x544) y una textura en esa dirección se lee de ahí; los draws se agrupan en escenas por destino
+  (`scenesPerFrame = 8`). Se reservan al iniciar el traductor (0.0.7.9: el volcado automático les quitaba la memoria).
+- **Debajo, la imagen normal estirada** (0.0.7.5): KOF dibuja los bordes una vez y después solo el centro (con negro
+  desaparecían). Los rectángulos se recortan al scissor (el borrado de KOF es de pantalla completa recortado al centro).
+  Si ningún draw va a la imagen que se muestra (el flip llega con la otra del doble buffer), vale la del último draw.
+- **Paletas de 16 colores en 64 bytes** (0.0.7.6) y una igual a la anterior se reusa: KOF carga ~260 por frame y con
+  el tope de 256 de 1 KB casi todos los frames iban con la imagen normal.
+- **Texturas de la VRAM** (los sprites de KOF están ahí): desde el espejo (0.0.7.3); solo los grupos de 8 filas que usan
+  los draws (0.0.7.5: copiar las hojas de 512x512 enteras costaba 7–17 ms por frame y el juego bajaba a ~35 fps).
+  0.0.8: se copian después del flip, de la copia del espejo de **ese** flip: el juego sube los sprites de un frame
+  después del flip anterior, así que la copia con que se leyó la lista era de un frame antes (mosaicos; el volcado 013
+  de 0.0.7.10 dibujado en el PC salía bien con la copia siguiente). Por DMA (~512 MB/s; la CPU lee la RAM del PSP a
+  ~74 MB/s) y sin ordenar el swizzle: lo hace el sombreador `nd_fs`, por eso sin filtro.
+- **Espejo completo para 2D** (NativeLink, interruptor 16, 0.0.7.6): con 64 páginas por turnos KOF (256 páginas de
+  sprites) veía cada página cada 4 frames → sprites con pedazos viejos. `espejo_espera` (interruptor 32, 0.0.8.2): el
+  flip del PSP espera la copia del espejo.
+- **Cuadros rotos de un frame en las peleas** (0.0.8.6–0.0.8.11): primero 4 registros en vez de 3 (0.0.8.6). Después,
+  midiendo con las notificaciones de GXM (0.0.8.10, líneas `gpu:` de `registros.md`): la GPU de la Vita iba 3 a 8
+  escenas atrasada y ~140 frames por 10 s empezaban con el de hace 2 sin terminar; se reescribían con la GPU leyendo
+  vértices y paletas (25–180 cada 10 s), la imagen normal (~200) y texturas del registro (~8–11 por segundo). Cada uno
+  calzaba con un tipo de error del video: texturas → fondo con pedazos, vértices → "K.O." deformado, paletas → colores
+  equivocados. Arreglo (0.0.8.11): si la GPU no terminó el frame de hace 2, no se le manda otro y se repite la
+  superficie; antes de reescribir vértices/paletas o la copia de la imagen normal se espera a la GPU (como mucho 30 ms);
+  el registro siguiente es uno que la GPU ya terminó de leer. Resultado: 0 reescritos.
+- **Rendimiento** (0.0.8.12): la revisión de frames distintos usaba `sceGxmFinish` (~85 veces cada 10 s, ~20 ms cada
+  una); ahora se salta si la GPU no terminó la superficie. Peleas: ~35 → ~40 fps de la Vita, CPU por frame ~13 →
+  ~6,5 ms, esperas a la GPU ~1,5 s → 0 cada 10 s.
+- **Ritmo** (0.0.8.9): los juegos de Neo Geo hacen transparencias dibujando algo un frame sí y otro no; con saltos o
+  repeticiones destella (cuadro HOW TO PLAY). Línea `traductor: ritmo`.
+- Lección: grabar la pantalla (Vitastream + OBS a 60 fps) encontró lo que los volcados no capturaban; el detector de
+  cuadros rotos de un frame en un video está en `vitabridge\respaldo\limpieza_0.0.8.11\transitorios.py`. Usar videos
+  solo cuando haga falta (`FLUJO_DE_TRABAJO.md`).
+- Lo que sigue: la GPU de la Vita tarda ~20 ms por frame de KOF (~430 draws) y cada 10 s ~165 frames no se mandan
+  porque va atrasada; el traductor gasta ~7 ms de CPU por frame. Medir el tiempo de GPU por escena antes de cambiar.
+
 ## Estado
 | Paso | Estado |
 |---|---|
 | 3.0 | **hecho** (NativeDraw 0.0.3) |
 | 3.1 | **hecho** (NativeDraw 0.0.4) |
 | 3.2 | **hecho** (NativeDraw 0.0.5) |
-| 3.3 | **primera versión** (NativeDraw 0.0.6): Retro City dibujado por la Vita. Sigue KOF 96 |
+| 3.3 | Retro City (NativeDraw 0.0.6) y **KOF 96** (NativeLink 0.0.3 + NativeDraw 0.0.7: sin cuadros rotos, ~40 fps de la Vita). Sigue: rendimiento de la GPU de la Vita |
 | 3.4 | adelantado en parte: comparación con la imagen normal (detecta lo que el sistema dibuja encima) |

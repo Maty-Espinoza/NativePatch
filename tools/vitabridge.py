@@ -1,27 +1,29 @@
 #!/usr/bin/env python3
-"""Relevo entre Claude y la PS Vita (correr en la Terminal del Mac o en Windows, en la misma red que la Vita).
-  En Windows: doble clic en vitabridge.cmd (usa el Python de Windows; en WSL la busqueda automatica de la Vita no funciona).
+"""Relevo entre Claude y la PS Vita: corre en el PC del usuario (Mac o Windows, con vitabridge.cmd) en la misma red
+que la Vita, y pasa a la Vita lo que Claude deja en una carpeta compartida (y trae de vuelta lo que pide).
 
   python3 vitabridge.py [IP_DE_LA_VITA] [CARPETA]    (CARPETA: ~/Downloads/vitabridge)
-  Sin IP (o con "buscar") busca la Vita en la red local: el puerto 1338 de vitacompanion.
+  Sin IP (o con "buscar") busca la Vita en las redes /24 locales (puerto 1338 que responda "vitacompanion").
+  En Windows usar el Python de Windows: desde WSL la busqueda de la Vita no funciona.
 
-En la Vita: vitacompanion (FTP en 1337 y comandos en 1338: launch, press, wait, kill...).
-Claude escribe en CARPETA y el relevo hace el resto:
-  enviar/ux0/pspemu/seplugins/nativelink.prx  -> se sube a ux0:/pspemu/seplugins/nativelink.prx (igual con ur0/...)
+En la Vita: vitacompanion (FTP en 1337 y comandos en 1338: launch, press, wait, kill, destroy, reboot...).
+Lo que Claude deja en CARPETA:
+  enviar/ux0/<ruta>  -> se sube a ux0:/<ruta> (igual con ur0/...) y pasa a enviados/
   cmd_*.txt   -> cada linea va al puerto 1338; la respuesta queda en respuestas/cmd_*.txt
   bajar_*.txt -> cada linea es una ruta de la Vita (ux0:/...) que se baja a recibidos/, o
-                 "ruta -> destino" para dejarla en otra carpeta del Mac (p. ej. ~/Documents/...)
+                 "ruta -> destino" para dejarla en otra carpeta del PC (p. ej. ~/Documents/...)
   listar_*.txt -> cada linea es una carpeta de la Vita; el listado queda en respuestas/
   vigilar.txt -> solo despierta al relevo (lo de arriba tambien lo despierta)
-  Ademas baja lo nuevo de ux0:/pspemu (native*.log), pero solo cuando el archivo deja de crecer (al cerrar el juego o
-  Adrenaline): mira la carpeta cada 60 s y baja un archivo cuando su tamano no cambio desde la vez anterior.
-  Solo trabaja "despierto": hasta 30 min despues del ultimo pedido o de que un log crecio. Despierto le pide a la Vita
-  que no se duerma (nosleep on); dormido no la toca y la deja dormirse (nosleep off), para ahorrar bateria.
-  Abre el FTP solo cuando hay algo que hacer y lo cierra al terminar.
-  (Historia: el FTP de vitacompanion pierde memoria. Listando cada 1 s y bajando los logs mientras crecian, a las ~600
-  descargas respondia "550 Could not allocate memory" y la Vita no abria programas; el 2026-10-29 se paso a cada 15 s,
-  pero con el relevo abierto todo el dia la Vita igual se colgaba, dentro y fuera de Adrenaline.)
+Lo que escribe el relevo:
+  recibidos/  -> ademas de lo pedido, los ux0:/pspemu/native*.log nuevos, pero solo cuando dejan de crecer (al cerrar
+                 el juego o Adrenaline): mira la carpeta cada 60 s y baja un archivo si su tamano no cambio desde la
+                 vez anterior.
   estado.txt  -> latido (hora), la ultima vez que respondio la Vita y si el relevo esta despierto
+  vitabridge.log -> copia de todo lo que muestra
+Despierto / dormido: solo trabaja hasta 30 min despues del ultimo pedido o de que un log crecio. Despierto le pide a la
+Vita "nosleep on"; dormido no la toca y manda "nosleep off" para que se duerma y ahorre bateria.
+Abre el FTP solo cuando hay algo que hacer y lo cierra al terminar: el FTP de vitacompanion pierde memoria con cada
+uso y consultarlo seguido termina colgando la Vita. Detalle: docs/dev/FLUJO_DE_TRABAJO.md (seccion 4).
 Solo usa la biblioteca estandar. Ctrl+C para terminar.
 """
 import ftplib, os, socket, sys, time, fnmatch, shutil
@@ -36,6 +38,7 @@ WATCH_EVERY, AWAKE_FOR = 60, 30 * 60  # mirar ux0:/pspemu cada 60 s, hasta 30 mi
 REQUESTS = ('cmd_*.txt', 'bajar_*.txt', 'listar_*.txt', 'vigilar*.txt')
 watch_t, vita_t, awake_until, first = 0, '-', 0, True
 
+# Muestra una linea con la hora y la agrega a CARPETA/vitabridge.log.
 def log(*a):
     line = ' '.join([time.strftime('%H:%M:%S')] + [str(x) for x in a])
     print(line, flush=True)
@@ -45,6 +48,7 @@ def log(*a):
     except OSError:
         pass
 
+# Conexion FTP nueva a vitacompanion (anonima, modo pasivo).
 def ftp():
     f = ftplib.FTP()
     f.connect(IP, 1337, timeout=20)
@@ -56,6 +60,7 @@ def vpath(p):  # VitaShell y vitacompanion usan /ux0:/...
     p = p.replace('\\', '/')
     return p if p.startswith('/') else '/' + p
 
+# Manda una linea al puerto 1338 y devuelve lo que responda hasta cerrar o 3 s sin datos.
 def command(line, ip=None):
     s = socket.create_connection((ip or IP, 1338), timeout=30)
     s.sendall((line.strip() + '\n').encode())
@@ -72,6 +77,7 @@ def command(line, ip=None):
     s.close()
     return out.decode(errors='replace')
 
+# Archivos (no carpetas) de una carpeta de la Vita: {nombre: tamano}, leidos del LIST del FTP.
 def listing(f, d):
     rows = []
     f.retrlines('LIST ' + vpath(d), rows.append)
@@ -85,6 +91,7 @@ def listing(f, d):
                 pass
     return out
 
+# Baja un archivo a <local>.parcial y lo renombra al terminar: un corte no deja un archivo a medias con el nombre final.
 def download(f, remote, local):
     os.makedirs(os.path.dirname(local), exist_ok=True)
     tmp = local + '.parcial'
@@ -100,19 +107,23 @@ def download(f, remote, local):
     os.replace(tmp, local)
     log('bajado', remote, '->', local)
 
+# Archivos pendientes de subir en CARPETA/enviar/, sin ocultos ni la basura del Finder/Explorador.
 def uploads():
     send = os.path.join(BASE, 'enviar')
     return [os.path.join(r, n) for r, _, fs in os.walk(send) for n in fs
             if not (n.startswith('.') or n.lower() in ('desktop.ini', 'thumbs.db'))]  # basura del Finder/Explorador
 
+# Manda "nosleep on|off" a la Vita (un error solo se anota).
 def nosleep(state):  # vitacompanion lo enciende en cada arranque: la Vita no se duerme sola y gasta bateria
     try:
         log('nosleep', state, '->', command('nosleep ' + state).strip())
     except OSError as e:
         log('nosleep', state, 'no respondio:', e)
 
+# Una vuelta del bucle principal: decide si esta despierto, abre el FTP solo si hay subidas, pedidos de archivos o
+# toca mirar los logs (transfer), ejecuta los cmd_*.txt, borra los cmd_/vigilar ya atendidos y escribe estado.txt.
 def step():
-    global watch_t, vita_t, awake_until, first
+    global watch_t, vita_t, awake_until
     now = time.time()
     ups = uploads()
     reqs = [n for n in sorted(os.listdir(BASE)) if any(fnmatch.fnmatch(n, p) for p in REQUESTS)]
@@ -153,6 +164,8 @@ def step():
     open(os.path.join(BASE, 'estado.txt'), 'w', encoding='utf-8').write('vivo %s, Vita %s (respondio %s), %s\n' % (
         time.strftime('%Y-%m-%d %H:%M:%S'), IP, vita_t, est))
 
+# Todo lo que usa el FTP abierto: subidas (enviar/ -> enviados/), bajar_*.txt, listar_*.txt y, si watch, la mirada a
+# ux0:/pspemu: un native*.log se baja cuando tiene el mismo tamano que en la mirada anterior (ya no crece).
 def transfer(f, ups, reqs, watch):
     global watch_t, awake_until, first
     send = os.path.join(BASE, 'enviar')
@@ -219,7 +232,7 @@ def transfer(f, ups, reqs, watch):
         last_size[name] = size
 
 def local_nets():
-    """Redes /24 de este Mac (por la interfaz con ruta a internet y las de los nombres locales)."""
+    """Redes /24 de este equipo (de la interfaz con ruta a internet y de las IP del nombre local), como "a.b.c"."""
     ips = set()
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -234,12 +247,15 @@ def local_nets():
         pass
     return sorted({ip.rsplit('.', 1)[0] for ip in ips if not ip.startswith('127.')})
 
+# True si en esa IP responde vitacompanion al comando version.
 def is_vita(ip):  # el puerto 1338 abierto no basta (VPN, otros equipos): debe responder vitacompanion
     try:
         return 'vitacompanion' in command('version', ip)
     except OSError:
         return False
 
+# Busca la Vita: primero la IP guardada en ultima_ip.txt; si no, prueba el puerto 1338 en .1-.254 de cada red local
+# (64 a la vez) y confirma con is_vita. Guarda la IP encontrada.
 def find_vita():
     last = os.path.join(BASE, 'ultima_ip.txt')
     if os.path.exists(last):  # primero la IP de la vez anterior
@@ -266,6 +282,8 @@ def find_vita():
                 return ip
     return None
 
+# Encuentra la Vita (si no se paso la IP), crea las carpetas y repite step() cada 1 s; con un error de red reintenta en
+# 5 s y lo marca en estado.txt.
 def main():
     global IP
     if not IP:

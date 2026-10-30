@@ -1,7 +1,8 @@
 #!/bin/bash
-# Ambiente de NativePatch en Windows + WSL (lo llama instalar.cmd). Se puede correr de nuevo: salta lo que ya esta.
-# Todo lo que necesita PATH queda en Ubuntu (~/tc); en Windows solo se crean carpetas:
-#   Documents\GitHub\{NativePatch,Adrenaline}   Downloads\{vitabridge.py,vitabridge.cmd,vitabridge\}
+# Ambiente de NativePatch en Windows + WSL (lo llama instalar.cmd): paquetes de Ubuntu, nombre/correo de git, clon del
+# repo (rama dev), compiladores (tools/preparar.sh), relevo en Descargas y una primera compilacion.
+# Se puede correr de nuevo: salta lo que ya esta. Todo lo que necesita PATH queda en Ubuntu (~/tc, con Adrenaline);
+# en Windows solo se crean: Documents\GitHub\NativePatch y Downloads\{vitabridge.py,vitabridge.cmd,vitabridge\}
 set -e
 REPO_URL=https://github.com/Maty-Espinoza/NativePatch.git
 WIN=${WINHOME:-$(wslpath "$(cmd.exe /c 'echo %USERPROFILE%' 2>/dev/null | tr -d '\r')")}  # C:\Users\<usuario>

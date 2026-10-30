@@ -1,13 +1,14 @@
-// Instalador de NativePatch para la PS Vita (VPK). Lleva adentro nativelink.prx y nativedraw.suprx (los copia
-// tools/compilar.sh al armar el VPK) y los deja donde los cargan Adrenaline 8 y taiHEN:
-//   - NativeLink (lado PSP): ux0:pspemu/seplugins/nativelink.prx, activado en ux0:pspemu/seplugins/plugins.txt
-//     ("game, ms0:/seplugins/nativelink.prx, on"; Adrenaline 8 lee EPIplugins.txt en su lugar si existe).
-//   - NativeDraw (lado Vita): ux0:data/nativedraw/nativedraw.suprx, en la seccion *PSPEMUCFW del config.txt de taiHEN
-//     (ux0:tai/config.txt si existe; si no, ur0:tai/config.txt). Ese cambio necesita reiniciar la Vita.
+// Instalador de NativePatch (app de la Vita, NativePatch.vpk): instalar/actualizar, desinstalar y limpiar restos de
+// pruebas. El VPK lleva nativelink.prx, nativedraw.suprx y version.txt (los mete tools/compilar.sh) y los deja donde
+// los cargan Adrenaline 8 y taiHEN:
+//   - NativeLink: ux0:pspemu/seplugins/nativelink.prx, activado con LINK_LINE en plugins.txt (o EPIplugins.txt).
+//   - NativeDraw: ux0:data/nativedraw/nativedraw.suprx, en *PSPEMUCFW del config.txt de taiHEN (pide reiniciar).
 // Antes de cambiar un archivo de configuracion deja una copia en ux0:data/nativepatch/respaldo/.
-// Actualizar = volver a instalar desde un VPK mas nuevo (buscar actualizaciones en internet: pendiente, ver TODO.md).
-// "Limpiar restos de pruebas" borra lo que dejaron en la Vita GePatch, gepresent y las herramientas de prueba del
-// desarrollo (0.0.x). Es temporal: se quita antes de la version 1.0.
+// Actualizar = instalar desde un VPK mas nuevo. Reglas de carga de los plugins: docs/dev/adrenaline_notas.md.
+// TODO:
+// - Actualizador: buscar en GitHub (releases) si hay un VPK nuevo y bajarlo.
+// - Quitar "Limpiar restos de pruebas" (restos() y sus listas) antes de la version 1.0.
+// - Probar en la Vita "Desinstalar" y reinstalar sobre una instalacion hecha.
 #include <psp2/kernel/processmgr.h>
 #include <psp2/kernel/sysmem.h>
 #include <psp2/kernel/threadmgr.h>
@@ -40,6 +41,7 @@ static uint32_t *fb;
 enum { C_FONDO = 0xFF201810, C_TEXTO = 0xFFFFFFFF, C_TENUE = 0xFFA0A0A0, C_TITULO = 0xFF40D0FF, C_SEL = 0xFF804010,
        C_OK = 0xFF60E060, C_MAL = 0xFF6060FF };  // ABGR
 
+// Escribe s desde la celda (col, row) con la fuente 8x16 al doble (16x32 pixeles); corta en COLS columnas.
 static void putText(int col, int row, uint32_t color, uint32_t fondo, const char *s) {
   for (; *s && col < COLS; s++, col++) {
     int c = (unsigned char)*s;
@@ -50,13 +52,15 @@ static void putText(int col, int row, uint32_t color, uint32_t fondo, const char
     }
   }
 }
+// Pinta una fila de texto entera de color c (fondo de la opcion elegida y del pie).
 static void fillRow(int row, uint32_t c) {
   for (int i = row * 32 * W; i < (row + 1) * 32 * W; i++) fb[i] = c;
 }
 static void clear(void) { for (int i = 0; i < W * H; i++) fb[i] = C_FONDO; }
 
+// Espera el vblank y devuelve los botones recien apretados (prev: los que estaban apretados en la llamada anterior).
 static uint32_t prev;
-static uint32_t buttons(void) {  // botones recien apretados
+static uint32_t buttons(void) {
   SceCtrlData pad;
   sceDisplayWaitVblankStart();
   sceCtrlPeekBufferPositive(0, &pad, 1);
@@ -70,6 +74,7 @@ static uint32_t buttons(void) {  // botones recien apretados
 static char logl[NLOG][COLS + 1];
 static uint32_t logc[NLOG];
 static int nlog;
+// Agrega una linea (formato printf, cortada en COLS) con su color al registro; si esta lleno no hace nada.
 static void say(uint32_t color, const char *fmt, ...) {
   if (nlog >= NLOG) return;
   va_list ap; va_start(ap, fmt);
@@ -81,7 +86,8 @@ static void say(uint32_t color, const char *fmt, ...) {
 // --- Archivos -----------------------------------------------------------------------------------------------------
 static int exists(const char *p) { SceIoStat st; return sceIoGetstat(p, &st) >= 0; }
 static int isDir(const char *p) { SceIoStat st; return sceIoGetstat(p, &st) >= 0 && SCE_S_ISDIR(st.st_mode); }
-static char *readAll(const char *p, int *n) {  // NULL si no existe; termina en 0
+// Lee el archivo entero en un bloque nuevo (malloc, terminado en 0; *n = largo). NULL si no existe o falla.
+static char *readAll(const char *p, int *n) {
   SceUID fd = sceIoOpen(p, SCE_O_RDONLY, 0);
   if (fd < 0) return NULL;
   int sz = sceIoLseek(fd, 0, SCE_SEEK_END);
@@ -94,6 +100,7 @@ static char *readAll(const char *p, int *n) {  // NULL si no existe; termina en 
   if (n) *n = r;
   return b;
 }
+// Crea o reemplaza el archivo con los n bytes de d. 0 si escribio todo; negativo si fallo.
 static int writeAll(const char *p, const void *d, int n) {
   SceUID fd = sceIoOpen(p, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0777);
   if (fd < 0) return fd;
@@ -101,12 +108,13 @@ static int writeAll(const char *p, const void *d, int n) {
   sceIoClose(fd);
   return r == n ? 0 : -1;
 }
-static void mkdirs(const char *p) {  // crea las carpetas que falten
+static void mkdirs(const char *p) {  // crea las carpetas que falten, una por cada '/' de la ruta
   char b[256];
   snprintf(b, sizeof b, "%s", p);
   for (char *q = strchr(b, '/'); q; q = strchr(q + 1, '/')) { *q = 0; sceIoMkdir(b, 0777); *q = '/'; }
   sceIoMkdir(b, 0777);
 }
+// Copia un archivo leyendolo entero en memoria. 0 si salio bien.
 static int copyFile(const char *from, const char *to) {
   int n;
   char *d = readAll(from, &n);
@@ -115,6 +123,7 @@ static int copyFile(const char *from, const char *to) {
   free(d);
   return r;
 }
+// Nombre del archivo, sin la carpeta.
 static const char *nombre(const char *p) { const char *s = strrchr(p, '/'); return s ? s + 1 : p; }
 // Copia de un archivo de configuracion antes de cambiarlo, en respaldo/: <nombre>_original (la primera vez que se toca;
 // no se pisa) y <nombre>_anterior (antes del ultimo cambio). Nombre: ur0:tai/config.txt -> ur0_tai_config.txt
@@ -150,12 +159,15 @@ static int removeTree(const char *p) {  // borra una carpeta con todo lo que tie
 }
 
 // --- Archivos de texto de configuracion: se procesan linea por linea -------------------------------------------
-// keep(linea) devuelve 0 para quitarla; extra se agrega al final (o despues de la cabecera 'after' si existe).
-static const char *const *quitarCon;  // quitar las lineas que contengan alguna de estas
-static int keepLine(const char *l) {
+static const char *const *quitarCon;  // quitar las lineas que contengan alguna de estas (lista terminada en NULL)
+static int keepLine(const char *l) {  // 0 si la linea hay que quitarla
   for (const char *const *q = quitarCon; q && *q; q++) if (strstr(l, *q)) return 0;
   return 1;
 }
+// Reescribe un archivo de texto: quita las lineas que contienen algun texto de quitar y deja la linea add una sola vez
+// (se conserva aunque coincida con quitar). Si falta, add va justo despues de la cabecera after; si no hay cabecera,
+// al final (con la cabecera delante si after no es NULL). add NULL: solo quita. Solo escribe si el contenido cambia,
+// con respaldo() antes y una linea en el registro; *cambio = 1 si escribio. Devuelve si el contenido cambio.
 static int editText(const char *path, const char *const *quitar, const char *after, const char *add, int *cambio) {
   int n = 0;
   char *t = readAll(path, &n);
@@ -171,7 +183,7 @@ static int editText(const char *path, const char *const *quitar, const char *aft
     int k = ll < 511 ? ll : 511;
     memcpy(line, l, k); line[k] = 0;
     char *z = line + strlen(line); while (z > line && (z[-1] == '\n' || z[-1] == '\r' || z[-1] == ' ')) *--z = 0;
-    int ya = add && !strcmp(line, add);  // la linea que se quiere dejar ya esta: se conserva una sola vez
+    int ya = add && !strcmp(line, add);  // la linea que se quiere dejar ya esta: se conserva la primera
     if (ya ? puesta : !keepLine(line)) quitadas++;
     else { memcpy(o + len, l, ll); len += ll; if (!e) o[len++] = '\n'; }
     puesta |= ya;
@@ -204,6 +216,7 @@ static const char *taiConfig(void) {  // taiHEN usa ux0:tai/config.txt si existe
 // --- Estado ---------------------------------------------------------------------------------------------------------
 static char lleva[64], instalada[64];  // versiones: la de este VPK y la instalada
 static int reiniciar;                   // config.txt cambio: hay que reiniciar la Vita
+// Lee un version.txt en out en una sola linea (hasta 60 caracteres, saltos de linea como espacios); "" si no existe.
 static void leerVersion(const char *p, char *out) {
   char *t = readAll(p, NULL);
   out[0] = 0;
@@ -214,6 +227,7 @@ static void leerVersion(const char *p, char *out) {
   out[k] = 0;
   free(t);
 }
+// 1 si el archivo existe y contiene el texto s (en cualquier parte, no solo como linea entera).
 static int lineaEn(const char *path, const char *s) {
   char *t = readAll(path, NULL);
   int r = t && strstr(t, s);
@@ -221,14 +235,16 @@ static int lineaEn(const char *path, const char *s) {
   return r;
 }
 
-// --- Restos de las pruebas (GePatch, gepresent y herramientas; temporal, se quita antes de 1.0) --------------------
+// --- Restos de las pruebas (GePatch, gepresent y herramientas de desarrollo) ---------------------------------------
+// Carpetas, archivos, textos de lineas de plugins.txt/game.txt (restoPlug) y de config.txt (restoTai) que borra
+// "Limpiar restos".
 static const char *const restoDirs[] = { "ux0:data/gepresent", "ux0:data/adrfsr", "ux0:data/kbench", "ux0:data/vprobe",
   "ux0:pspemu/kbench", "ux0:pspemu/vprobe", "ux0:pspemu/gepvm", "ux0:pspemu/geptest", "ux0:pspemu/PSP/GAME/VPROBE",
   "ux0:pspemu/PSP/GAME/KBENCH", "ux0:pspemu/PSP/GAME/GEPTEST", "ux0:pspemu/PSP/GAME/GEPVM", NULL };
 static const char *const restoArch[] = { "ux0:pspemu/seplugins/ge_patch.prx", "ux0:pspemu/seplugins/ge_patch_anterior.prx",
   "ux0:pspemu/seplugins/._ge_patch.prx", "ux0:pspemu/seplugins/kbench.prx", "ux0:pspemu/seplugins/vpjuego.prx",
   "ux0:pspemu/seplugins/geptest.prx", NULL };  // (exFAT no distingue mayusculas: tambien borra GE_PATCH.PRX)
-static const char *const restoPlug[] = { "ge_patch.prx", "kbench.prx", "vpjuego.prx", "geptest.prx", NULL };  // lineas de plugins.txt
+static const char *const restoPlug[] = { "ge_patch.prx", "kbench.prx", "vpjuego.prx", "geptest.prx", NULL };
 static const char *const restoTai[] = { "ux0:data/gepresent/", "ux0:data/adrfsr/", "ux0:data/kbench/", "ux0:data/vprobe/", NULL };
 static int esResto(const char *n) {  // archivos sueltos en ux0:pspemu: logs, volcados y opciones de GePatch
   int l = strlen(n);
@@ -236,7 +252,10 @@ static int esResto(const char *n) {  // archivos sueltos en ux0:pspemu: logs, vo
   return (!strncasecmp(n, "ge_patch", 8) && l > 4 && !strcasecmp(n + l - 4, ".log")) || (l > 4 && !strcasecmp(n + l - 4, ".gpd")) ||
          !strncasecmp(n, "gepatch_", 8);
 }
-static int restos(int borrar) {  // cuenta (y si borrar, borra) lo que encuentra; deja el detalle en el registro
+// Busca los restos: carpetas y archivos de las listas, archivos sueltos de ux0:pspemu (esResto), lineas de restoPlug
+// en plugins.txt y game.txt, y de restoTai en los dos config.txt. Con borrar, ademas los borra (las lineas con
+// editText, con respaldo). Devuelve cuantos encontro y deja el detalle en el registro.
+static int restos(int borrar) {
   int total = 0, sueltos = 0;
   for (const char *const *d = restoDirs; *d; d++)
     if (isDir(*d)) {
@@ -282,6 +301,8 @@ static int restos(int borrar) {  // cuenta (y si borrar, borra) lo que encuentra
 }
 
 // --- Acciones -------------------------------------------------------------------------------------------------------
+// Copia los dos plugins y version.txt, activa NativeLink en plugins.txt (reemplaza otra linea de nativelink.prx) y
+// agrega NativeDraw en *PSPEMUCFW de config.txt. Si no puede copiar un plugin, no toca la configuracion.
 static void instalar(void) {
   say(C_TITULO, "Instalar / actualizar: %s", lleva);
   mkdirs("ux0:pspemu/seplugins");
@@ -302,6 +323,8 @@ static void instalar(void) {
     say(C_TITULO, "Quedan restos de GePatch/gepresent: ver 'Limpiar restos'.");
   say(C_OK, reiniciar ? "Listo. Reinicia la Vita para cargar NativeDraw." : "Listo. Cierra Adrenaline si estaba abierto.");
 }
+// Quita las lineas de los plugins (plugins.txt y los dos config.txt) y borra nativelink.prx y la carpeta
+// ux0:data/nativedraw entera (tambien interruptores y volcados). Los respaldos quedan.
 static void desinstalar(void) {
   say(C_TITULO, "Desinstalar NativeLink y NativeDraw");
   static const char *const link[] = { "nativelink.prx", NULL }, *const draw[] = { DRAW_DST, NULL };
@@ -313,7 +336,7 @@ static void desinstalar(void) {
   say(C_OK, reiniciar ? "Listo. Reinicia la Vita." : "Listo.");
 }
 
-// Pantalla del registro: arriba/abajo para moverse, O o X para volver
+// Muestra el registro con un pie de texto: arriba/abajo para moverse, O, X o START para volver.
 static void verRegistro(const char *pie) {
   int top = 0;
   for (;;) {
@@ -328,7 +351,7 @@ static void verRegistro(const char *pie) {
     else if (b & (SCE_CTRL_CIRCLE | SCE_CTRL_CROSS | SCE_CTRL_START)) { prev |= b; return; }
   }
 }
-static int confirmar(const char *titulo) {  // muestra el registro (lo que se va a hacer) y pide X
+static int confirmar(const char *titulo) {  // muestra el registro (lo que se va a hacer): 1 con X, 0 con O
   int top = 0;
   for (;;) {
     clear();
@@ -345,6 +368,8 @@ static int confirmar(const char *titulo) {  // muestra el registro (lo que se va
   }
 }
 
+// Pantalla propia en CDRAM (960x544 ABGR, 2 MB). Bucle del menu: muestra la version del VPK, lo instalado y si falta
+// reiniciar; X ejecuta la opcion elegida, que llena el registro y lo muestra (las que borran piden confirmar antes).
 int main(void) {
   SceUID mb = sceKernelAllocMemBlock("pantalla", SCE_KERNEL_MEMBLOCK_TYPE_USER_CDRAM_RW, 0x200000, NULL);
   if (mb < 0 || sceKernelGetMemBlockBase(mb, (void **)&fb) < 0) { sceKernelExitProcess(0); return 0; }

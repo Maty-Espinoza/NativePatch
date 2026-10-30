@@ -1,17 +1,20 @@
 #!/bin/sh
-# Compila NativeLink (lado PSP, pspdev) y NativeDraw (lado Vita, vitasdk), arma el instalador (NativePatch.vpk, que los
-# lleva adentro) y deja todo en build/ del repo.
-# Antes, una vez: sh tools/preparar.sh (Linux x86_64: contenedor de Claude o WSL) o sh tools/mac/preparar_vm.sh (VM del Mac).
-# Uso: [V=<carpeta del relevo>] sh tools/compilar.sh [version de prueba, p. ej. 0.0.2.1]
-#   con version: ademas build/<plugin>_<version>.* y build/cambios_<version>.patch (git diff), de respaldo
-#   con V (p. ej. ~/Downloads/vitabridge): copia a V/enviar/ (el relevo lo sube a la Vita), V/respaldo/ y a la carpeta
-#   de V (Descargas)
+# Compila NativeLink (lado PSP, pspdev, con su Makefile) y NativeDraw (lado Vita, nativedraw/build.sh), arma el
+# instalador NativePatch.vpk (lleva los dos plugins y un version.txt) y deja todo en build/ del repo; al final muestra
+# los md5. Lo llaman a mano, tools/windows/compilar.cmd, tools/windows/instalar.sh y .github/workflows/ci.yml.
+# Antes, una vez: sh tools/preparar.sh (Linux x86_64) o sh tools/mac/preparar_vm.sh (VM ARM64 del Mac); los dos dejan
+# $T/env.sh con las variables que usa este script. Flujo de trabajo: docs/dev/FLUJO_DE_TRABAJO.md.
+# Uso: [V=<carpeta del relevo>] sh tools/compilar.sh [version de prueba]
+#   con version: ademas copias build/<plugin>_<version>.*, NativePatch_<version>.vpk y cambios_<version>.patch (git diff)
+#   con V (p. ej. ~/Downloads/vitabridge): los plugins a V/enviar/ (el relevo los sube a la Vita), los plugins y el VPK
+#   a la carpeta de arriba de V (Descargas) y las copias con version a V/respaldo/
 set -e
 T=${T:-$HOME/tc}; . $T/env.sh
 R=$(cd "$(dirname "$0")/.." && pwd); B=$R/build; mkdir -p $B
 make -s -C $R/nativelink ADRENALINE=$ADRENALINE && cp $R/nativelink/nativelink.prx $B/
 (cd $R/nativedraw && O=$B/nativedraw sh build.sh >/dev/null) && cp $B/nativedraw/nativedraw.suprx $B/
-# Instalador: version de cada plugin (de sus fuentes), app sin firma "segura" (necesita escribir en ur0:tai)
+# Instalador: version.txt con la version de cada plugin (sacada de nativelink/log.h y nativedraw/version.h).
+# vita-make-fself sin -s: app no "segura", necesaria para que pueda escribir en ur0:tai.
 VL=$(sed -n 's/.*NATIVELINK_VERSION "\([^"]*\)".*/\1/p' $R/nativelink/log.h)
 VD=$(sed -n 's/.*NATIVEDRAW_VERSION "\([^"]*\)".*/\1/p' $R/nativedraw/version.h)
 I=$B/instalador; rm -rf $I; mkdir -p $I

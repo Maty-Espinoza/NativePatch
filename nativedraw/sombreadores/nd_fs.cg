@@ -1,6 +1,7 @@
-// (0.0.8) Como nd_ft, con la textura tal como esta en el PSP con swizzle (bloques de 16 bytes x 8 filas): la GPU busca
-// el texel (sw.x ancho y sw.y alto en texels, sw.z texels por 16 bytes) en vez de que la CPU ordene la textura. Solo
-// sin filtro (el texel mas cercano). La textura se lee como si fuera lineal, del mismo ancho y alto.
+// Fragmentos del traductor para texturas con swizzle del PSP (bloques de 16 bytes x 8 filas), sin ordenarlas con la
+// CPU: como nd_ft, pero calcula donde esta cada texel en la memoria (sw.x ancho y sw.y alto en texels, sw.z texels por
+// 16 bytes) y lo lee de la textura cargada como si fuera lineal, del mismo ancho y alto. Solo sin filtro (el texel
+// mas cercano).
 float4 main(float2 uv : TEXCOORD0, float4 col : COLOR, uniform sampler2D tex, uniform float4 tf, uniform float4 at,
             uniform float4 sw) : COLOR
 {

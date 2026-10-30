@@ -1,17 +1,18 @@
+// Log de NativeLink (implementacion en log.c, lo incluye main.c) y version del plugin. Tambien define el descriptor
+// compartido con NativeDraw (VDESC), por el que la Vita escribe el log a la tarjeta. Detalle en
+// docs/dev/funcionamiento.md (zona compartida).
 #ifndef LOG_H
 #define LOG_H
 
 #include <stdio.h>
 #include <psptypes.h>
 
-// Log liviano para ms0:/nativelink.log (la sesion anterior queda en nativelink_prev.log).
-// Las lineas van a un buffer en RAM y un hilo las escribe a la tarjeta cada ~1 s,
-// asi el hilo del juego nunca espera por la memory stick.
-// Mantener R al iniciar el juego activa el modo sincrono: escribe cada linea al
-// instante (mas lento, pero no se pierde nada si el juego se cuelga).
+// Log en ms0:/nativelink.log (la sesion anterior queda en nativelink_prev.log). Las lineas van a un buffer en RAM y un
+// hilo las escribe cada ~1 s, asi el hilo del juego nunca espera a la tarjeta. Mantener R al abrir el juego activa el
+// modo sincrono: cada linea se escribe al instante (mas lento, pero no se pierde nada si el juego se cuelga).
 // Cada linea parte con el numero de frame (cuantas veces se llamo sceDisplaySetFrameBuf).
 
-#define NATIVELINK_VERSION "0.0.3.2" // antes GePatch 0.2-devNN (docs/dev/versiones.md)
+#define NATIVELINK_VERSION "0.0.3" // tools/compilar.sh lo lee de aqui (docs/dev/versiones.md)
 
 extern u32 log_frame;
 
@@ -19,11 +20,11 @@ void logInit(int sync);
 void logWrite(const char *s, int n);
 void logFlush(void);
 void logGameId(void);
-extern char game_id[11]; // ID del juego (ULUS-10450...), desde el frame 30
+extern char game_id[11]; // ID del juego (ULUS-10450...), desde el primer gancho (logGameId)
 int logOnce(u32 key); // 1 la primera vez que se ve 'key', 0 las siguientes
 
-// Canal con NativeDraw (desde dev56.5): la Vita escribe el log, asi el PSP no espera a la tarjeta. Va en una pagina sin
-// cache de la zona de los plugins; el buzon tiene seq (lo sube el PSP al dejar un pedido) y done (lo iguala NativeDraw al
+// Canal con NativeDraw: la Vita escribe el log, asi el PSP no espera a la tarjeta. Va en una pagina sin cache de la
+// zona de los plugins; el buzon tiene seq (lo sube el PSP al dejar un pedido) y done (lo iguala NativeDraw al
 // terminarlo).
 //   +0x00 "GPV1": NativeLink esta (lo repone en cada flip: Adrenaline 8 limpia la zona al cargar el juego)
 //   +0x20 "LOGV": NativeDraw atiende el buzon (lo repone siempre)
@@ -33,8 +34,9 @@ int logOnce(u32 key); // 1 la primera vez que se ve 'key', 0 las siguientes
 #define VLOG 16
 #define VLOG_BUF 0x0A7FA000
 
+// Escribe una linea con formato printf (hasta 160 bytes con el numero de frame; lo que sobra se corta)
 #define LOG(...) do { \
-  char _b[160]; \
+  char _b[256]; \
   int _n = snprintf(_b, sizeof(_b), "%06lu ", log_frame); \
   _n += snprintf(_b + _n, sizeof(_b) - _n, __VA_ARGS__); \
   logWrite(_b, _n < (int)sizeof(_b) ? _n : (int)sizeof(_b) - 1); \

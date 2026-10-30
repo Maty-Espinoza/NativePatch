@@ -1,7 +1,8 @@
 # TODO: pendientes
 
 Cosas pendientes, de lo más próximo a lo que puede esperar. Cada una dice de dónde salió (documento en `docs/dev/`,
-`docs/changelog/` o en el proyecto de claude.ai). Actualizado: 2026-10-30 (**NativeDraw 0.0.6**: pasos 3.0 a 3.3 (primera versión) de la etapa 3; antes **NativeLink 0.0.2 + NativeDraw 0.0.2**:
+`docs/changelog/` o en el proyecto de claude.ai). Actualizado: 2026-10-30 (**NativeLink 0.0.3 + NativeDraw 0.0.7**: KOF 96 dibujado por la Vita sin cuadros rotos, ~40 fps;
+antes **NativeDraw 0.0.6**: pasos 3.0 a 3.3 (primera versión) de la etapa 3; antes **NativeLink 0.0.2 + NativeDraw 0.0.2**:
 nombres nuevos, limpieza, instalador; antes GePatch 0.2-dev66 + gepresent v13.13 con la **etapa 2 cerrada**). Lo que
 sigue es la etapa 3 de `docs/dev/arquitectura_dibujo_en_vita.md` §6. Cómo se trabaja: `docs/dev/FLUJO_DE_TRABAJO.md`.
 Los números viejos (devNN, vNN) se explican en `docs/dev/versiones.md`. Los `etapaN_*.md` citados están en
@@ -29,6 +30,31 @@ Los números viejos (devNN, vNN) se explican en `docs/dev/versiones.md`. Los `et
       en una transición; copiar de la RAM del PSP cuesta ~6 µs por draw (KOF, ~2,4 ms por frame): abaratar si molesta.
 - [x] ~~Etapa 3, paso 3.3, primera versión~~ (NativeDraw 0.0.6): Retro City dibujado por la Vita. Sigue KOF 96:
       borrados, color por vértice, mezcla, alfa test, swizzle (sombreadores propios).
+- [x] ~~Etapa 3, paso 3.3 en KOF 96~~ (NativeLink 0.0.3 + NativeDraw 0.0.7, pruebas 0.0.7.1–0.0.8.12): la Vita dibuja
+      las peleas; cuadros rotos de un frame arreglados (datos reescritos con la GPU de la Vita leyéndolos). Detalle en
+      `docs/dev/etapa3_plan.md`.
+- [ ] **Siguiente: rendimiento de la GPU de la Vita en KOF 96.** La Vita muestra ~40 de 60 frames en las peleas: la GPU
+      tarda ~20 ms en terminar un frame (~430 draws, varias escenas por las imágenes intermedias) y cada 10 s ~165
+      frames no se mandan porque va atrasada (línea `gpu:` de `nativedraw.log`). El traductor gasta ~7 ms de CPU por
+      frame. Medir primero el tiempo de GPU por escena (p. ej. un hilo que anote con hora cuándo avanza la notificación
+      de fin de escenas) antes de cambiar nada.
+- [ ] **Error menor: botón PS en KOF 96** (NativeDraw 0.0.7, prueba 0.0.8.12, 2026-10-30). Al presionar PS para salir
+      desapareció el fondo a los lados del juego y no apareció el diálogo de salida; presionarlo de nuevo devolvía el
+      fondo. Se arregló saliendo al menú de la Vita (PS dos veces) y volviendo a abrir Adrenaline. No pasaba en
+      versiones anteriores. En el log no hay nada raro (148 s: frames 3D → imagen normal; 154,8 s: el buzón de NativeLink
+      desapareció; después, imagen de Adrenaline a 60 fps). Pista sin confirmar: desde 0.0.8.12 el "tapado" (que
+      detecta el diálogo comparando con la imagen normal) solo mira la superficie si la GPU ya la terminó; en las peleas
+      casi nunca (~360 revisiones saltadas y 6–12 hechas cada 10 s). Prioridad baja: si vuelve a pasar, resolverlo.
+- [ ] **Posibles errores anotados en la limpieza de comentarios** (sin tocar; confirmar antes de cambiar):
+      `volcado.c` `volFrame`: el `else` que marca "no se usó en este frame" parece pegado al `if` equivocado (en
+      `secuencia`/`auto` f1 y f2 saldrían sin `.bin`; confirmar con un volcado de secuencia). `reproduccion.c`
+      `repCargar`: con texturas más grandes que el buffer sigue con datos basura y al fallar no libera la memoria.
+      `captura.c` `markRt`: no protege `n == 0` (`want` sí); podría marcar las 512 páginas de la VRAM. Instalador:
+      `lineaEn()` cuenta como activada una línea comentada, "Desinstalar" borra los volcados sin avisar y "Limpiar
+      restos" informa como borrados archivos sin comprobarlo. `traductor.c` `trPrueba` corre en el primer frame de cada
+      juego y deja ~1 MB sin liberar (¿quitarla o ponerla detrás de un interruptor?). NativeLink: `game_id`,
+      `DRAW_NATIVE` y `SB[0x4B]`/`SB[0x4C]` podrían no usarse. `instalar.cmd`/`instalar.sh` usan la rama `dev`, pero la
+      rama por defecto es `master`.
 - [ ] Línea de puntos fija sobre la fecha del menú de Adrenaline con el presentador (solo en el menú). Ver si sale con
       `dibujar` en `no`.
 - [ ] Correr **Ridge Racer** con NativeDraw 0.0.2 (solo se probó GT; la captura no cambió).

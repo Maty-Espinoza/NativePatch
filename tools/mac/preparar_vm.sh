@@ -1,11 +1,11 @@
 #!/bin/sh
-# Compiladores de NativeLink (pspdev) y NativeDraw (vitasdk) en la VM Linux ARM64 que usa Claude en el Mac (2026-10-28).
-# La VM es Ubuntu 22.04 sin root y se borra con cada sesion: este script lo rearma en ~2 minutos en $HOME/tc.
-# - pspdev para ARM64 pide glibc 2.38: se usa la de conda-forge (sysroot 2.39) con un envoltorio por programa
-#   (patchelf rompia cc1; el envoltorio lanza cada binario con el cargador nuevo).
-# - vitasdk: paquete "core" aarch64-linux-gnu de vitasdk/autobuilds (corre con la glibc del sistema). GCC 15 usa C23 por
-#   defecto: el envoltorio de arm-none-eabi-gcc agrega -std=gnu17 (nativedraw/build.sh espera arm-none-eabi-*).
+# Como tools/preparar.sh, pero para la VM Linux ARM64 que usa Claude en el Mac (Ubuntu 22.04 sin root, se borra con
+# cada sesion): instala pspdev, Adrenaline, vitasdk, taihen y stubs en $HOME/tc y escribe $HOME/tc/env.sh.
 # Uso: sh tools/mac/preparar_vm.sh ; despues: V=$HOME/mnt/Downloads/vitabridge sh tools/compilar.sh [version]
+# - pspdev para ARM64 pide glibc 2.38: se usa la de conda-forge (sysroot 2.39) y un envoltorio por programa que lo lanza
+#   con ese cargador. No usar patchelf: rompe cc1.
+# - vitasdk: paquete "core" aarch64-linux-gnu de vitasdk/autobuilds (corre con la glibc del sistema).
+# - GCC 15 de vitasdk usa C23 por defecto y taihen.h no compila: el envoltorio de arm-none-eabi-gcc agrega -std=gnu17.
 set -e
 T=$HOME/tc; mkdir -p $T; cd $T
 REL=https://github.com/vitasdk/autobuilds/releases
@@ -29,7 +29,9 @@ if [ ! -d vcore ]; then  # la instantanea mas nueva que tenga el paquete core pa
   mkdir vcore; curl -sSL $REL/download/$TAG/$PKG | tar xJ -C vcore
 fi
 [ -d taipkg ] || { mkdir taipkg; curl -sSL https://github.com/vitasdk/packages/releases/download/master/taihen.tar.xz | tar xJ -C taipkg; }
+# Un .S por funcion de la base de datos de vita-headers: nativedraw/build.sh arma solo los stubs que usa
 [ -d stubs ] || { mkdir stubs; vcore/bin/vita-libs-gen-2 -yml=vcore/share/vita-headers/db/360 -output=stubs >/dev/null; }
+# nb/: nombres arm-none-eabi-* que espera nativedraw/build.sh, apuntando a las herramientas de vitasdk
 mkdir -p nb; for t in ld nm as; do ln -sf $T/vcore/bin/arm-vita-eabi-$t nb/arm-none-eabi-$t; done
 printf '#!/bin/sh\nexec %s -std=gnu17 "$@"\n' $T/vcore/bin/arm-vita-eabi-gcc > nb/arm-none-eabi-gcc; chmod +x nb/arm-none-eabi-gcc
 cat > env.sh <<E2

@@ -16,6 +16,13 @@ NativeLink (lado PSP) y NativeDraw (lado Vita) son proyectos hermanos: cada uno 
 - **Dos plugins con el mismo MENOR funcionan juntos.** El instalador lleva siempre un par compatible.
 - **Versiones de prueba:** un cuarto número sobre la versión que se está preparando (`0.0.3.1`, `0.0.3.2`...). El commit
   lleva la versión confirmada en la Vita, sin el cuarto número. Cada error arreglado = un commit con su versión.
+- **Sin versiones perdidas en el repo:** la versión del commit es siempre la que sigue a la última confirmada en GitHub
+  (`git log --oneline -- nativedraw/version.h` o `nativelink/log.h`), aunque las pruebas hayan usado otra numeración.
+  Ej.: GitHub tenía NativeDraw 0.0.6 y las pruebas llegaron a 0.0.8.12 → el commit es NativeDraw 0.0.7. Los commits
+  marcados "(prueba)" no cuentan como versión confirmada.
+- **Pruebas de NativeDraw 0.0.8** (propuesta, pendiente de confirmar por el usuario): siguen desde **0.0.8.13**, para no
+  chocar con los nombres de `vitabridge\respaldo\` y `vitabridge\etapa3_0.0.8.x\`, que ya usaron 0.0.8.1–0.0.8.12
+  como pruebas de 0.0.7.
 - El primer release (0.1.0) se marca con etiqueta y release en GitHub cuando el usuario lo decida.
   Antes de la 1.0 se quita la opción "Limpiar restos de pruebas" del instalador.
 - Dónde está el número: NativeLink en `nativelink/log.h` (`NATIVELINK_VERSION`); NativeDraw en `nativedraw/version.h`
@@ -32,7 +39,8 @@ NativeLink (lado PSP) y NativeDraw (lado Vita) son proyectos hermanos: cada uno 
 | | 0.0.3 | `34dee77` | Etapa 3, paso 3.0: presentador transparente, apagado por defecto (`docs/dev/etapa3_plan.md`) |
 | | 0.0.4 | `a0d85da` | Etapa 3, paso 3.1: menú L+R+START dibujado por NativeDraw (por ahora, las versiones) |
 | | 0.0.5 | `1ae7191` | Etapa 3, paso 3.2: registro del frame (con `dibujar`) |
-| | 0.0.6 | (este commit) | Etapa 3, paso 3.3 (primera versión): la Vita dibuja el registro (Retro City); "tapado" |
+| | 0.0.6 | `da1daa0` | Etapa 3, paso 3.3 (primera versión): la Vita dibuja el registro (Retro City); "tapado" |
+| 0.0.3 | 0.0.7 | (este commit) | Etapa 3, paso 3.3 en KOF 96 (sombreadores propios, texturas por DMA, volcados) y cuadros rotos arreglados. Pruebas: NativeDraw 0.0.7.1–0.0.8.12 y NativeLink 0.0.3.1–0.0.3.3 (`8573486` era un commit de prueba, 0.0.8.10 + 0.0.3.2) |
 
 Probadas en la Vita con Gran Turismo: `docs/changelog/etapa3_preparacion.md`.
 

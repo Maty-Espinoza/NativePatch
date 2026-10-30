@@ -50,7 +50,29 @@ o `auto`. Qué guarda cada uno, cuánto cuesta y cómo se leen con `tools/volcad
 | `sin_captura` | la Vita no recorre nada: marca las listas como capturadas (casi NativeLink solo) |
 | `compuerta_sync` | (v13.10) la espera a la Vita se queda en el sync, como antes de dev66 (para comparar); ver `etapa2_fase2_compuerta.md` |
 | `sin_adelanto` | (v13.12) los lectores no comprueban el plan por adelantado (solo al llegar a cada CALL, como antes); ver `etapa2_fase2_adelanto.md` |
+| `espejo_espera` | (NativeLink 0.0.3) el flip del PSP espera a que termine la copia del espejo (interruptor 32 del buzón): en KOF 96 los sprites del frame están copiados cuando la Vita los pide. En la Vita del usuario está en `si` |
 | `nucleo_captura` | (v13.13) `0`, `1` o `2` fija el capturador a ese núcleo (antes de v13.13 siempre el 1); sin archivo o `libre`: cualquiera de los 3. La línea `hilos: captura` del log dice cuál se usó; ver `etapa2_ridge_racer.md` |
+
+## Dibujo en la Vita (etapa 3, con `dibujar`; `nativedraw.log`, cada 10 s)
+- `presentador: N frames en T ms por la superficie (cambios, con copia propia), CPU us/frame (max) | casi negros: juego,
+  superficie | revisados N, distintos de la imagen normal M`: frames que pasaron por la superficie de NativeDraw, su
+  costo en el hilo de Adrenaline y la revisión de frames distintos (1 de cada 4, solo si la GPU ya terminó la superficie).
+- `traductor: frames HD N, con la imagen normal M | motivos: ... | draws dibujados`: cuántos frames dibujó la Vita y por
+  qué los otros fueron con la imagen normal (`sin_frame_nuevo`, `3d`, `primitiva`, `formato`, `mezcla`...).
+- `traductor: ritmo (frames del PSP que avanzó cada frame dibujado): 0 (repetido) N, 1 N, 2 N...`: con muchos repetidos
+  o saltos los juegos de Neo Geo destellan (hacen transparencias dibujando algo un frame sí y otro no).
+- `gpu: al empezar cada frame, escenas nuestras sin terminar: promedio, max | sin terminar: el frame anterior N, el de
+  hace 2 N | reescritos con la GPU sin terminar: vértices y paletas N, imagen normal N`: cuánto va atrasada la GPU de la
+  Vita y cuántas veces se reescribió algo que todavía podía estar leyendo (las texturas del registro, en la línea
+  `registro:` de `nativedraw_captura.log`: "con la GPU sin terminar (medido)"). Debe ser 0: si no, cuadros rotos.
+- `gpu: frames no mandados por la GPU atrasada N, esperas a la GPU N ms | CPU en 10 s: traductor N ms, revisión de frames
+  distintos N ms | revisiones de la superficie saltadas (GPU sin terminar) N` (NativeDraw 0.0.7): frames que no se le
+  mandaron a la GPU porque no terminó el de hace 2 (se repite la superficie), tiempo esperándola antes de reescribir y
+  tiempo de CPU del traductor y de la revisión.
+- Cómo se sabe cuándo termina la GPU: cada escena propia escribe su número en una palabra de las notificaciones de GXM
+  (la última que Adrenaline no usa, de 511 hacia abajo; el log la anota al empezar: `gpu: fin de escenas en la
+  notificación N`). Leer una superficie que la GPU no terminó da resultados falsos y `sceGxmFinish` para esperarla
+  cuesta ~20 ms en KOF: por eso la revisión se salta en vez de esperar.
 
 ## Memoria de sublistas (v13.11)
 Cada sublista guardada suma solo sus estadísticas distintas de 0 (hasta 48; con más no se guarda y el log lo avisa). En el
