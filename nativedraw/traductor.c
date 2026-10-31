@@ -396,7 +396,22 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     if ((res = trVerts(f, d, o + nv, tw, th, mat, sc, &n))) break;
     if (!n) continue;
     if (nv + n > TV_N) { res = T_TOPE; break; }
-    if (c_on) { spx += trArea(o + nv, n, d->prim); ssw += tex && d->toff && (RE(e, 0xC2) & 1); }
+    float ar = trArea(o + nv, n, d->prim);
+    if (c_on) { spx += ar; ssw += tex && d->toff && (RE(e, 0xC2) & 1); }
+    static uint32_t gig;  // draws gigantes (mas de 2 pantallas al doble): los primeros 40, con su detalle
+    if (ar > 2.0f * LINE * H && gig < 40) {
+      float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f, u0 = 1e9f, v0 = 1e9f, u1 = -1e9f, v1 = -1e9f;
+      for (uint32_t j = 0; j < n; j++) {
+        const TV *q = &o[nv + j];
+        x0 = q->x < x0 ? q->x : x0; x1 = q->x > x1 ? q->x : x1; y0 = q->y < y0 ? q->y : y0; y1 = q->y > y1 ? q->y : y1;
+        u0 = q->u < u0 ? q->u : u0; u1 = q->u > u1 ? q->u : u1; v0 = q->v < v0 ? q->v : v0; v1 = q->v > v1 ? q->v : v1;
+      }
+      gig++;
+      alog("traductor: draw gigante (%u): frame %u draw %u de %u prim %u vertices %u->%u area %u miles x %d..%d y %d..%d | tex %u %ux%u fmt %u "
+           "swz %u copia %u uv %d..%d %d..%d (milesimas) | destino %s\n", gig, f->frame, i, f->nd, d->prim, d->n, n, (uint32_t)(ar / 1000),
+           (int)x0, (int)x1, (int)y0, (int)y1, tex, (uint32_t)tw, (uint32_t)th, RE(e, 0xC3) & 15, RE(e, 0xC2) & 1, d->toff ? 1 : 0,
+           (int)(u0 * 1000), (int)(u1 * 1000), (int)(v0 * 1000), (int)(v1 * 1000), dst ? "intermedia" : "superficie");
+    }
     SceGxmFragmentProgram *p = fragProg(tex, key);
     if (!p) { res = T_PROG; break; }
     sceGxmSetFragmentProgram(c, p);

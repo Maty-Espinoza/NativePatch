@@ -536,6 +536,13 @@ static int presThread(SceSize args, void *argp) {
     if (menu && !pintado) { pintar(); __sync_synchronize(); pintado = 1; }
     if (!(k % 20)) pantalla();
     notifs(nr);
+    static uint32_t ln0, vl;  // escenas lentas ya anotadas y volcados pedidos por ellas
+    while (ln0 != c_ln) {
+      uint32_t j = ln0++ % CL;
+      alog("gpu: escena lenta: %s, %u draws, %u miles de pixeles, %u.%u ms de GPU (%u.%u ms en cola)\n", cnom[c_lenta[j].tipo], c_lenta[j].dr,
+           c_lenta[j].px, c_lenta[j].us / 1000, c_lenta[j].us / 100 % 10, c_lenta[j].cola / 1000, c_lenta[j].cola / 100 % 10);
+      if (vl < 3 && vol_nivel && !vol_req && (!vol_on || vol_on == 3)) { vl++; vol_req = 1; alog("volcado: pedido por una escena lenta (%u de 3)\n", vl); }
+    }
     volHilo();
     repHilo();
     if (menu != m0) { m0 = menu; alog("presentador: menu %s\n", m0 ? "abierto" : "cerrado"); }

@@ -20,6 +20,10 @@ static volatile uint32_t c_n[CN], c_us[CN], c_max[CN], c_dr[CN], c_cola[CN], c_h
 #define CD 16
 static struct { uint8_t tipo; uint16_t dr; uint32_t cola, us; } c_det[CD];  // detalle: las escenas que siguen al informe
 static volatile uint32_t c_dn = CD;  // escenas ya anotadas en c_det (CD: lleno, esperando que el informe lo imprima)
+// escenas nuestras de mas de 30 ms (las anota el presentador en el log y pide un volcado): las ultimas CL, c_ln en total
+#define CL 8
+static struct { uint8_t tipo; uint16_t dr; uint32_t px, us, cola; } c_lenta[CL];
+static volatile uint32_t c_ln;
 
 // anota en la cola una escena recien mandada (n: su notificacion de fin; dr: draws; px: miles de pixeles dibujados,
 // sumando cada draw; sw: draws con texturas que tenian swizzle en el PSP)
@@ -53,6 +57,11 @@ static int cHilo(SceSize args, void *argp) {
       c_n[k]++; c_us[k] += us; c_dr[k] += e->dr; c_cola[k] += ini - e->t; c_px[k] += e->px; c_sw[k] += e->sw;
       if (us > c_max[k]) c_max[k] = us;
       c_h[k][ms < 20 ? ms / 5 : ms < 30 ? 4 : 5]++;
+      if (us > 30000 && k != C_ADR) {
+        uint32_t j = c_ln % CL;
+        c_lenta[j].tipo = k; c_lenta[j].dr = e->dr; c_lenta[j].px = e->px; c_lenta[j].us = us; c_lenta[j].cola = ini - e->t;
+        __sync_synchronize(); c_ln++;
+      }
       if (c_dn < CD) { c_det[c_dn].tipo = k; c_det[c_dn].dr = e->dr; c_det[c_dn].cola = ini - e->t; c_det[c_dn].us = us; c_dn++; }
       prev = t; c_out++;
     }
