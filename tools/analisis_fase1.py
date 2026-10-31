@@ -3,14 +3,12 @@
 # Uso: python3 tools/analisis_fase1.py <carpeta> [<carpeta> ...] [--tabla]
 # Solo cuenta los frames "de carrera" (mas de 30 000 comandos, GT en pista). Por carpeta: fps, frames lentos y lo que
 # le costo cada parte al juego por frame; con varias, una columna por carpeta. --tabla: ademas, cada 10 s de cada
-# corrida. Lee tambien las carpetas viejas (ge_patch_frames.log, ge_patch_tarde.log).
-# Columnas de los logs: docs/dev/registros.md.
+# corrida. Columnas de los logs: docs/dev/<idioma>/logs-and-switches.md (idioma: en o es).
 import csv, sys, os, statistics as st
 
-# Filas del CSV d/f (o de su nombre viejo ge_patch_*) con t_ms numerico; los valores enteros pasan a int.
+# Filas del CSV d/f con t_ms numerico; los valores enteros pasan a int.
 def leer(d, f):
     p = os.path.join(d, f)
-    if not os.path.exists(p): p = os.path.join(d, f.replace('nativedraw_', 'ge_patch_'))  # corridas viejas
     if not os.path.exists(p): return []
     return [{k: (int(v) if v.lstrip('-').isdigit() else v) for k, v in r.items()} for r in csv.DictReader(open(p, errors='replace'))
             if r.get('t_ms', '').isdigit()]

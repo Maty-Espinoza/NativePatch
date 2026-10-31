@@ -1,6 +1,5 @@
 // Log de NativeLink (implementacion en log.c, lo incluye main.c) y version del plugin. Tambien define el descriptor
-// compartido con NativeDraw (VDESC), por el que la Vita escribe el log a la tarjeta. Detalle en
-// docs/dev/funcionamiento.md (zona compartida).
+// compartido con NativeDraw (VDESC), por el que la Vita escribe el log a la tarjeta.
 #ifndef LOG_H
 #define LOG_H
 
@@ -12,7 +11,7 @@
 // modo sincrono: cada linea se escribe al instante (mas lento, pero no se pierde nada si el juego se cuelga).
 // Cada linea parte con el numero de frame (cuantas veces se llamo sceDisplaySetFrameBuf).
 
-#define NATIVELINK_VERSION "0.0.3" // tools/compilar.sh lo lee de aqui (docs/dev/versiones.md)
+#define NATIVELINK_VERSION "0.0.3.4" // tools/compilar.sh lo lee de aqui
 
 extern u32 log_frame;
 
@@ -20,7 +19,6 @@ void logInit(int sync);
 void logWrite(const char *s, int n);
 void logFlush(void);
 void logGameId(void);
-extern char game_id[11]; // ID del juego (ULUS-10450...), desde el primer gancho (logGameId)
 int logOnce(u32 key); // 1 la primera vez que se ve 'key', 0 las siguientes
 
 // Canal con NativeDraw: la Vita escribe el log, asi el PSP no espera a la tarjeta. Va en una pagina sin cache de la

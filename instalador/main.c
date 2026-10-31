@@ -4,11 +4,7 @@
 //   - NativeLink: ux0:pspemu/seplugins/nativelink.prx, activado con LINK_LINE en plugins.txt (o EPIplugins.txt).
 //   - NativeDraw: ux0:data/nativedraw/nativedraw.suprx, en *PSPEMUCFW del config.txt de taiHEN (pide reiniciar).
 // Antes de cambiar un archivo de configuracion deja una copia en ux0:data/nativepatch/respaldo/.
-// Actualizar = instalar desde un VPK mas nuevo. Reglas de carga de los plugins: docs/dev/adrenaline_notas.md.
-// TODO:
-// - Actualizador: buscar en GitHub (releases) si hay un VPK nuevo y bajarlo.
-// - Quitar "Limpiar restos de pruebas" (restos() y sus listas) antes de la version 1.0.
-// - Probar en la Vita "Desinstalar" y reinstalar sobre una instalacion hecha.
+// Actualizar = instalar desde un VPK mas nuevo.
 #include <psp2/kernel/processmgr.h>
 #include <psp2/kernel/sysmem.h>
 #include <psp2/kernel/threadmgr.h>

@@ -2,9 +2,7 @@
 // Adrenaline (hookEnd) llama a volTexto y volFrame para capturar cada frame; el hilo del presentador llama a volHilo
 // para armar el volcado (L+R+SELECT o automatico) y escribirlo en ux0:data/nativedraw/volcados/NNN/. Guarda por frame
 // la imagen del PSP, la de la Vita, un texto con como se hizo y una copia del registro del frame (registro.h) para
-// tools/volcado.py y reproduccion.c. Nivel en ux0:data/nativedraw/volcado (volNivel). Detalle: docs/dev/volcados.md.
-// TODO:
-// - elegir el nivel del volcado desde el menu L+R+START (hoy solo con el archivo)
+// tools/volcado.py y reproduccion.c. Nivel en ux0:data/nativedraw/volcado (volNivel).
 #include <psp2/io/stat.h>
 void *sceDmacMemcpy(void *dst, const void *src, SceSize size);
 #define VN 3            // frames por volcado (como maximo)
@@ -18,14 +16,13 @@ static uint32_t vol_auto, vol_n, vol_t, vol_dif, vol_t0;
 // Nivel (0 desactivado, 1 pantallazo, 2 frame, 3 secuencia, 4 auto) y frames por volcado
 static uint32_t vol_nivel = 3, vol_nf = VN;
 static const char *vol_nom[5] = { "desactivado", "pantallazo", "frame", "secuencia", "auto" };
-// Nivel de volcado: 4 si existe ux0:data/nativedraw/volcado_auto (y no dice "no"); si no, la palabra de
-// ux0:data/nativedraw/volcado (se comparan 4 letras; "no" = desactivado); sin archivo, 3 (secuencia).
+// Nivel de volcado: la palabra de ux0:data/nativedraw/volcado (se comparan 4 letras; "no" = desactivado); sin
+// archivo, 3 (secuencia).
 int volNivel(void) {
   char b[16] = { 0 };
-  SceUID fd = sceIoOpen("ux0:data/nativedraw/volcado_auto", SCE_O_RDONLY, 0);
-  if (fd >= 0) { sceIoRead(fd, b, 2); sceIoClose(fd); if (!(b[0] == 'n' && b[1] == 'o')) return 4; }
-  if ((fd = sceIoOpen("ux0:data/nativedraw/volcado", SCE_O_RDONLY, 0)) < 0) return 3;
-  sceClibMemset(b, 0, sizeof b); sceIoRead(fd, b, 15); sceIoClose(fd);
+  SceUID fd = sceIoOpen("ux0:data/nativedraw/volcado", SCE_O_RDONLY, 0);
+  if (fd < 0) return 3;
+  sceIoRead(fd, b, 15); sceIoClose(fd);
   for (int i = 0; i < 5; i++) if (!sceClibStrncmp(b, vol_nom[i], 4)) return i;
   return b[0] == 'n' ? 0 : 3;  // ("no": desactivado)
 }

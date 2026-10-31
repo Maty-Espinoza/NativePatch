@@ -4,11 +4,7 @@
 // Como la superficie es el doble exacto de la textura, Adrenaline la ubica y escala igual (se ve un frame mas tarde).
 // Tambien dibuja el menu L+R+START y le oculta los botones al juego mientras esta abierto.
 // Lo llama nativedraw.c (presStart/presStop); incluye traductor.c, volcado.c y reproduccion.c y lee el registro del
-// frame (registro.c). Diseno: docs/dev/etapa3_plan.md y docs/dev/funcionamiento.md.
-// TODO:
-// - Opciones en el menu L+R+START (hoy solo versiones), incluido el nivel de volcado; guardar en opciones.txt.
-// - Linea de puntos fija sobre la fecha del menu de Adrenaline con el presentador: ver si sale sin dibujar.
-// - Proponer a Adrenaline un punto de enganche oficial para un presentador externo (no enganchar su hilo de dibujo).
+// frame (registro.c).
 #include <psp2/gxm.h>
 #include <psp2/kernel/sysmem.h>
 #include <psp2/kernel/clib.h>
@@ -210,13 +206,10 @@ static volatile uint32_t fr, listo, n_us;  // fr: escenas de Adrenaline terminad
 static uint32_t usada, dibujada, cur;   // escena en que Adrenaline uso psp_tex / en que se dibujo sup[cur]
 static volatile uint32_t n_pres, n_camb, n_neg_j, n_neg_p, us_sum, us_max;  // (se leen en el hilo del registro)
 static volatile uint32_t n_rev, n_mal;  // frames de la Vita revisados y distintos de la imagen normal
-// falla: 1 se dejo de reemplazar la imagen, 2 ya anotado (el seguro de pantalla negra que lo activaba esta quitado por
-// ahora: TODO.md)
-static volatile uint32_t falla;
 // dib: interruptor dibujar (reemplazar la imagen siempre; si no, solo con el menu abierto); t_on: traductor listo
 static int dib, t_on, c_pedido;  // c_pedido: cronometro de la GPU (medir_gpu)
 static volatile uint32_t menu, pintado;  // menu abierto; su textura ya tiene el texto
-#define ACTIVO (listo && !falla && (dib || menu))  // se reemplaza la imagen del PSP
+#define ACTIVO (listo && (dib || menu))  // se reemplaza la imagen del PSP
 static void *psp_data;                // datos de psp_tex (destino de la copia de Adrenaline)
 static uint32_t copia = ~0u, ki;      // escena en que se copio la imagen a img[ki]
 static volatile uint32_t n_dma;
@@ -268,7 +261,7 @@ static int hookTex(SceGxmContext *c, unsigned int i, const SceGxmTexture *t) {
   if (t && !psp_tex && sceGxmTextureGetWidth(t) == 512 && sceGxmTextureGetHeight(t) == 272) { psp_tex = t; psp_data = sceGxmTextureGetData(t); }
   if (t && t == psp_tex) {
     usada = fr + 1;
-    if (listo && !falla && dibujada == fr && !(tapado && copia == fr)) { t = &sup[cur]; n_camb++; }
+    if (listo && dibujada == fr && !(tapado && copia == fr)) { t = &sup[cur]; n_camb++; }
     else if (copia == fr) t = &itex[ki];  // (sin superficie: la copia de este frame, psp_tex ya no se actualiza)
   }
   return TAI_CONTINUE(int, ref_tex, c, i, t);
@@ -287,8 +280,8 @@ static void gAdr(const SceGxmNotification *n) {
 // Gancho a sceGxmEndScene: despues de cada escena de Adrenaline en la que uso la imagen del PSP, en su hilo y su
 // contexto, prepara la superficie que no se muestra (sup[s]) para el frame siguiente: la reproduccion de un volcado, el
 // ultimo frame completo del registro dibujado por el traductor, la repeticion de la superficie anterior o, si no, la
-// imagen del PSP estirada al doble con el menu encima. Ademas: seguro de pantalla negra, tapado, revision de frames
-// distintos, volcado y estadisticas. Si Adrenaline no uso la imagen del PSP (su menu, PS1, filtro Original), nada.
+// imagen del PSP estirada al doble con el menu encima. Ademas: tapado, revision de frames distintos, volcado y
+// estadisticas. Si Adrenaline no uso la imagen del PSP (su menu, PS1, filtro Original), nada.
 // fr cuenta las escenas de Adrenaline.
 static int hookEnd(SceGxmContext *c, const SceGxmNotification *v, const SceGxmNotification *f) {
   gAdr(v); gAdr(f);
@@ -407,15 +400,15 @@ static void pantalla(void) {
   a0 = fr; u0 = n_us; aq0 = n_aq; afb0 = n_afb; p0 = n_pend; pq0 = n_pq; pfb0 = n_pfb;
   int dl = dlgCorre ? dlgCorre() : -1;
   uint32_t sig = (a > 0) | (u > 0) << 1 | (aq > 0) << 2 | (pe > 0) << 3 | (pq > 0 || pfb > 0) << 4 | (dl > 0) << 5 | tapado << 6 |
-                 cur_hd << 7 | menu << 8 | falla << 9;
+                 cur_hd << 7 | menu << 8;
   if (sig != sig0) extra = 4;
   sig0 = sig;
   if (!extra || lineas >= 300) return;
   extra--; lineas++;
   alog("pantalla: Adrenaline escenas %u (con la imagen del PSP %u), a la pantalla %u (cambios de buffer %u) | ScePspemu escenas %u, "
-       "a la pantalla %u (cambios de buffer %u) | dialogo del sistema %s | superficie: %s%s%s%s\n", a, u, aq, afb, pe, pq, pfb,
+       "a la pantalla %u (cambios de buffer %u) | dialogo del sistema %s | superficie: %s%s%s\n", a, u, aq, afb, pe, pq, pfb,
        dl < 0 ? "?" : dl ? "abierto" : "no", cur_hd ? "dibujo de la Vita" : "imagen normal", tapado ? ", tapado" : "",
-       menu ? ", menu L+R+START" : "", falla ? ", falla" : "");
+       menu ? ", menu L+R+START" : "");
 }
 
 // Notificaciones de la GPU (para el error del boton PS): cada 50 ms se comparan las 512 palabras de la region con la
@@ -454,7 +447,7 @@ static uint32_t combo0;
 // L+R+START abre o cierra el menu (solo si se esta viendo la imagen del PSP). Con el menu abierto o con una combinacion
 // apretada, el juego recibe "nada apretado".
 static int hookCtrl(SceCtrlDataPsp *p) {
-  if (p && listo && !falla) {
+  if (p && listo) {
     static uint32_t cv0;  // L+R+SELECT (0x301): volcado
     uint32_t cv = (p->Buttons & 0x301) == 0x301;
     if (cv && !cv0 && (!vol_on || vol_on == 3) && !vol_req) vol_req = 1;
@@ -549,7 +542,6 @@ static int presThread(SceSize args, void *argp) {
     static uint32_t tp0;
     if (tapado != tp0) { tp0 = tapado; alog("traductor: %s\n", tp0 ? "algo tapa la imagen (no esta en el registro): imagen normal" : "vuelve el dibujo de la Vita"); }
     if (aviso < 2 && n_pres >= (aviso ? 60 : 1)) alog("presentador: %s\n", aviso++ ? "60 frames dibujados" : "primer frame dibujado");
-    if (falla == 1) { falla = 2; alog("presentador: se deja la imagen normal hasta cerrar Adrenaline\n"); }
     if (++k < 200) continue;
     k = 0;
     uint32_t p = n_pres, m = us_max, s = us_sum, dt = (now() - t) / 1000, nd = n_dma, nr = n_rev, nm = n_mal;

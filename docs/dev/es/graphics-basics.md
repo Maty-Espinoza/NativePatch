@@ -1,12 +1,9 @@
 # Manual básico de gráficos para NativePatch
 
-> **Nota (2026-10-29):** lo de gráficos (CPU, GE, RAM, VRAM, listas, texturas...) sigue valiendo. Los ejemplos que hablan
-> de lo que hace "GePatch" (dibujar más grande en el PSP) son de la arquitectura A, que ya no se usa: hoy el PSP dibuja
-> normal y la Vita lee sus listas (NativeLink + NativeDraw, ver `funcionamiento.md`).
-
-Para Matías. La idea es entender lo justo para seguir lo que hacemos, saber qué mirar cuando algo
-se ve mal y poder mandar reportes más completos. No hace falta saber de gráficos: se explica
-desde cero, con ejemplos de Ridge Racer (RR) y Silent Hill (SH).
+Para entender lo justo para seguir el proyecto, saber qué mirar cuando algo se ve mal y mandar reportes más completos.
+No hace falta saber de gráficos: se explica desde cero, con ejemplos de Ridge Racer (RR) y Silent Hill (SH). Lo de
+gráficos (CPU, GE, RAM, VRAM, listas, texturas...) vale para cualquier juego de PSP. Cómo lo usa NativePatch:
+`how-it-works.md`.
 
 ---
 
@@ -217,49 +214,43 @@ y en qué lo convirtió el plugin.
 - Otra causa: leer un número de 16 bits desde una dirección impar. La CPU de la PSP no lo permite
   y se cae. Es lo que pasó con dev49 en la prueba automática.
 
-## 12. Un frame con GePatch, paso a paso
+## 12. Un frame con NativePatch, paso a paso
 
-1. El juego arma la lista del frame y la encola.
-2. GePatch la recorre comando por comando:
-   - fb de pantalla → al buffer grande;
-   - fb chico → render target a escala 1 (rt1);
-   - viewport y scissor → x2;
-   - coordenadas 2D → x2;
-   - draws 3D que se salen del rango al doble → recorte 3D;
-   - texturas que leen un fb → se redirigen (texmode).
-3. El GE ejecuta la lista ya parchada y dibuja en el buffer grande de la VRAM real.
-4. En el flip, GePatch copia el buffer grande a 0x0A400000 y Adrenaline lo muestra en la Vita.
+1. El juego arma la lista del frame y la encola. NativeLink (en el PSP) lo anota en el buzón y deja que el GE la
+   dibuje como siempre, en la VRAM del PSP a 480x272 (esa imagen no se ve).
+2. NativeDraw (en la Vita) lee el buzón y recorre la misma lista desde la RAM del PSP: lleva el estado del GE y guarda
+   cada draw con sus vértices, su textura y su paleta (el registro del frame).
+3. En el flip, NativeLink anota qué imagen se muestra y le pide al GE que copie a la RAM normal los pedazos de la VRAM
+   que la Vita pidió (el espejo).
+4. En la Vita, el traductor dibuja el registro con la GPU en una superficie del doble (960x544) y el presentador se la
+   da a Adrenaline en lugar de la imagen del PSP. Si algo del frame no se sabe dibujar, se muestra la imagen del PSP.
+5. Todo eso tarda: la imagen HD se ve un frame después que la del PSP.
 
 ## 13. Log y volcado: qué son y cómo sacar buenos
 
-- **Log** (`ge_patch.log`): texto con eventos.
-  - Al inicio: versión, memoria, fb vistos.
-  - Cada 600 frames: estadísticas (fps, costo del plugin, draws, recortes).
-  - Eventos nuevos, una vez cada uno ("textura desde fb...", "CALL a dirección inválida...").
-  - El número del principio de cada línea es el frame.
-- **Volcado** (`.gpd`, L+R+SELECT): todo lo que pasó en un frame:
-  - cada comando (original y parchado);
-  - cada draw con sus vértices y texturas;
-  - la VRAM al principio y al final;
-  - los eventos.
-  - Con eso se puede reconstruir el frame en el PC, incluso cómo se vería **sin GePatch**.
+- **Logs** (`ux0:pspemu/nativelink.log`, `nativedraw.log`, `nativedraw_captura.log`): texto con eventos y
+  estadísticas (`logs-and-switches.md`).
+  - Al inicio: versión, memoria, qué se enganchó.
+  - Cada 10 s (NativeLink y `nativedraw.log`) o cada 1 s (`nativedraw_captura.log`): fps, comandos y draws por frame,
+    tiempo de la Vita, texturas, GPU.
+  - Eventos nuevos, una vez cada uno.
+  - El número del principio de cada línea es el frame (NativeLink) o los ms desde el arranque (NativeDraw).
+- **Volcado** (`ux0:data/nativedraw/volcados/NNN/`, L+R+SELECT o automático): lo que pasó en pantalla en uno o más
+  frames: la imagen del PSP, la que dibujó la Vita, un texto con cómo se hizo y todo lo que la Vita recibió para
+  dibujarla (`dumps.md`). Con eso `tools/volcado.py` dibuja el frame en el PC y dice si el error está en los datos o en
+  cómo dibuja la Vita.
 - Tips para un buen volcado:
-  - Captura **justo cuando el error está en pantalla**. Si el error parpadea, saca 2 o 3.
-  - Anota qué estabas viendo ("cielo negro en el puente, cámara exterior").
-  - Si puedes, saca el mismo lugar en **modo pasivo** (mantener L al iniciar el juego): es la
-    referencia de cómo debería verse.
-  - Probar el mismo lugar con otra versión (carpeta `versiones/` del laboratorio) ayuda a saber
-    **desde cuándo** está el error.
-  - Desactivar una opción en el menú (L+R+START), por ejemplo `recorte3d`, y ver si el error se
-    va, dice mucho de dónde está.
+  - Captura **justo cuando el error está en pantalla**. Si el error dura poco, usa el nivel `auto` (se dispara solo).
+  - Anota qué estabas viendo ("fondo con pedazos de otro sprite en la pelea 2").
+  - Si puedes, saca el mismo lugar con NativeDraw sin dibujar (`dibujar` en `no`): es la referencia de cómo debería verse.
+  - Probar el mismo lugar con otra versión ayuda a saber **desde cuándo** está el error.
 
-## 14. Lo mínimo de `gpd.py` para ti
+## 14. Lo mínimo de las herramientas del PC
 
-- `python3 tools/gpd.py resumen archivo.gpd`: versión, opciones y en qué se dibujó.
-- `python3 tools/gpd.py original archivo.gpd carpeta --ppsspp=<PPSSPPHeadless>`: deja
-  `carpeta/comparacion.png` con tres paneles: **sin GePatch | con GePatch | diferencias en
-  rojo**. Es la forma más rápida de ver qué rompió el plugin.
-- `python3 tools/gpd.py imagenes archivo.gpd carpeta`: PNG de cada fb y del buffer grande.
+- `python3 tools/resumen_corrida.py <carpeta>`: resumen de una corrida (fps cada 10 s, esperas al sync, espejo,
+  segundos donde la Vita no alcanza, DISTINTAS) sin leer los logs enteros.
+- `python3 tools/volcado.py <carpeta del volcado> [K]`: dibuja el frame K en el PC y deja `fK_pc.png` con
+  **referencia | PC | Vita | diferencias**. Es la forma más rápida de ver dónde está el error.
 
 ## 15. Glosario rápido
 

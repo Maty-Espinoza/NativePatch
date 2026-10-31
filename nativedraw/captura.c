@@ -5,26 +5,6 @@
 // compuerta de NativeLink) y un latido (SB[4]). Ademas: lectores adelantados, memoria de sublistas, pedidos al espejo
 // de la VRAM y los logs nativedraw_captura.log, nativedraw_frames.log y nativedraw_tarde.log.
 // Lo arranca nativedraw.c (capturaStart); prueba_memoria.c lo incluye para probarlo en el PC.
-// Diseno: docs/dev/funcionamiento.md; logs e interruptores: docs/dev/registros.md.
-//
-// TODO:
-// - Leer la RAM del PSP mas barato (vista con cache o DMA): limita la comparacion de sublistas. Medir primero.
-// - walkList: sumar l->n, acc.cmds, f_cmds, l->pc, l->prev y l->hi una vez por linea (cuidando los return del switch).
-// - Pasar las estadisticas de draw() (lotes, cambios de estado) al registro extremo.
-// - Aplicar una sublista copia hasta 64 registros y sus matrices: medir aplicar_us (registro extremo) antes de tocarlo.
-// - Comparar las sublistas directo desde la cache compartida, sin copiar la linea a R0.buf.
-// - clGet: sacar la linea con NEON y menos barreras.
-// - memoVerify compara todas las versiones (hasta 8) de una sublista aunque tengan las mismas lineas: hacerlo una vez
-//   por tramo.
-// - Muchas sublistas que entran con otro estado (otra_entrada) se vuelven a recorrer: ver como reusarlas.
-// - Una linea de una sublista de la VRAM sin copia valida en el espejo se regraba: si en otros juegos hay muchas
-//   "cambiaron" en sublistas de la VRAM, revisar esto.
-// - Los destinos de TRANSFER en la VRAM no se piden al espejo: la Vita tendra que repetir esas copias.
-// - Estadisticas aproximadas: con sublistas aplicadas, cambios y lotes del primer draw dependen del estado de entrada y
-//   chg[] no las suma.
-// - cpuSample: el nucleo 0 sale casi vacio (el gancho de CreateThread no ve los hilos creados antes de NativeDraw).
-// - Leer la hora es caro: el registro extremo altera lo que mide.
-// - Pasar los interruptores (archivos en ux0:data/nativedraw/) al menu L+R+START.
 #include <psp2/kernel/threadmgr.h>
 #include <psp2/kernel/clib.h>
 #include <psp2/kernel/processmgr.h>
@@ -37,7 +17,7 @@
 
 // PSP(a): direccion de la Vita donde Adrenaline mapea la direccion a de la RAM del PSP
 #define PSP(a) (0x68000000u + ((a) & 0x0FFFFFFFu))
-#define SB ((volatile uint32_t *)PSP(0x0A000000u))  // buzon de NativeLink (mapa de palabras en funcionamiento.md)
+#define SB ((volatile uint32_t *)PSP(0x0A000000u))  // buzon de NativeLink (mapa de palabras en nativelink/main.c)
 #define SB_MAGIC 0x424D4F53u
 #define SB_N 4096  // eventos en el anillo del buzon (8 palabras cada uno, desde SB[0x400])
 #define LOGC "ux0:pspemu/nativedraw_captura.log"
@@ -75,7 +55,7 @@ typedef struct {
 static Stats acc, rep;
 static volatile int rep_ready;
 // Nivel de registro (ux0:data/nativedraw/registro): 0 minimo, 1 mediano (sin archivo), 2 extremo. NativeLink lo lee en
-// SB[0x4E]. Que agrega cada nivel: docs/dev/registros.md.
+// SB[0x4E].
 static uint32_t nivel = 1;
 static uint32_t f_cmds, f_draws, f_us;  // del frame en curso
 
@@ -1205,7 +1185,7 @@ static int capThread(SceSize args, void *argp) {
       for (int w = 0; w < 16; w++) want_l[w] = want_d[w] = rt_pg[w] = esp_ok[0][w] = esp_ok[1][w] = 0;
       esp_u = 0; esp_reset = 1; esp_on = SB[1] >= 4;
       clog("buzon de NativeLink (modo sombra) encontrado: eventos=%u listas=%u -> captura activa%s\n", tail, SB[6],
-           esp_on ? ", con espejo de la VRAM" : " (NativeLink sin espejo doble de la VRAM: hace falta dev64)");
+           esp_on ? ", con espejo de la VRAM" : " (NativeLink sin espejo de la VRAM)");
       if (reg_on) regBanco();  // mide una vez la velocidad de las copias del registro del frame
     }
     SB[4] = ++beat;
@@ -1369,7 +1349,7 @@ static int repThread(SceSize args, void *argp) {
       }
       if (r->pf_n) {  // lo que le costo cada frame al juego y los syncs en que la Vita iba atrasada
         uint32_t g = r->pf_n, cal = SB[0x4D], ms = r->pf_us / 1000 + 1;
-        clog("  impacto en el PSP (por frame del juego): frames=%u frame_us=%u CPU_libre=%u%% compuerta_us=%u (esperas/seg=%u sin_esperar/seg=%u) sync_GE_us=%u ganchos_us=%u espejo_us=%u paginas=%u | Vita atrasada: syncs/seg=%u atraso_us=%u c/u | lectura propia: %u us (%u cronometradas) | linea de la cache compartida: %u ns (%u) | compuerta (v13.10): %s, esperas antes de encolar/seg=%u (%u us c/u)\n",
+        clog("  impacto en el PSP (por frame del juego): frames=%u frame_us=%u CPU_libre=%u%% compuerta_us=%u (esperas/seg=%u sin_esperar/seg=%u) sync_GE_us=%u ganchos_us=%u espejo_us=%u paginas=%u | Vita atrasada: syncs/seg=%u atraso_us=%u c/u | lectura propia: %u us (%u cronometradas) | linea de la cache compartida: %u ns (%u) | compuerta: %s, esperas antes de encolar/seg=%u (%u us c/u)\n",
              g, r->pf_us / g, cal ? r->pf_spin / cal * 100 / ms : 0, r->pf_gate / g, r->pf_gate_n, r->pf_nowait, r->pf_sync / g, r->pf_post / g,
              r->pf_esp / g, r->pf_pg / g, r->pf_late, r->pf_late ? r->pf_late_us / r->pf_late : 0, r->rd_n ? r->rd_us / r->rd_n : 0, r->rd_n, r->hit_n ? r->hit_us * 1000 / r->hit_n : 0, r->hit_n,
              gp_flags & 8 ? "en el sync (compuerta_sync)" : SB[0x54] == 1 ? "antes de encolar" : SB[0x54] == 2 ? "en el sync (la lista cambio 10 veces)" : "en el sync (probando)",
@@ -1548,8 +1528,8 @@ void capturaStart(void) {
     SceUID fd = sceIoOpen("ux0:data/nativedraw/registro", SCE_O_RDONLY, 0);
     if (fd >= 0) { sceIoRead(fd, b, 7); sceIoClose(fd); nivel = b[0] == 'e' ? 2 : b[0] == 'm' && b[1] == 'i' ? 0 : 1; }
   }
-  if (nivel >= 2) { uint32_t t0 = now(), x = 0; for (int i = 0; i < 10000; i++) x += now(); clog("(v13.9.4) costo de leer la hora: %u ns (%u)\n", (now() - t0) / 10, x & 1); }
-  clog("NativeDraw " NATIVEDRAW_VERSION ": capturador de la etapa 2 (memoria de sublistas, espejo de la VRAM) con registros de la fase de analisis\n");
+  if (nivel >= 2) { uint32_t t0 = now(), x = 0; for (int i = 0; i < 10000; i++) x += now(); clog("costo de leer la hora: %u ns (%u)\n", (now() - t0) / 10, x & 1); }
+  clog("NativeDraw " NATIVEDRAW_VERSION ": capturador (memoria de sublistas, espejo de la VRAM, registro del frame)\n");
   static const char *rot[2][2] = { { "ux0:pspemu/nativedraw_frames.log", "ux0:pspemu/nativedraw_frames_prev.log" },
                                    { "ux0:pspemu/nativedraw_tarde.log", "ux0:pspemu/nativedraw_tarde_prev.log" } };
   for (int k = 0; k < 2; k++) { sceIoRemove(rot[k][1]); sceIoRename(rot[k][0], rot[k][1]); }
@@ -1560,7 +1540,7 @@ void capturaStart(void) {
           "vita_recorrio_us,trabajo_us,lecturas_propias,de_lectores,aplicadas,procesador_us\n");
   static const char *sw[4] = { "ux0:data/nativedraw/sin_compuerta", "ux0:data/nativedraw/sin_espejo", "ux0:data/nativedraw/sin_libre", "ux0:data/nativedraw/compuerta_sync" };
   for (int k = 0; k < 4; k++) if (swOn(sw[k])) gp_flags |= 1u << k;
-  if (swOn("ux0:data/nativedraw/espejo_espera")) gp_flags |= 32;  // (prueba) el flip del PSP espera la copia del espejo
+  if (swOn("ux0:data/nativedraw/espejo_espera")) gp_flags |= 32;  // el flip del PSP espera la copia del espejo
   sin_captura = swOn("ux0:data/nativedraw/sin_captura");
   pv_on = !swOn("ux0:data/nativedraw/sin_adelanto");
   reg_on = swOn("ux0:data/nativedraw/dibujar");  // registro del frame

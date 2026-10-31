@@ -1,7 +1,9 @@
-# Etapa 3: renderizador mínimo (plan, 2026-10-29)
+# Etapa 3: renderizador mínimo (plan y resultados)
 
-Etapa 3 de la hoja de ruta (`arquitectura_dibujo_en_vita.md` §6): **¿funciona la cadena completa (captura → GPU de la
-Vita → pantalla) sin frenar al juego?** Plan acordado con el usuario al empezar la etapa. Estado de cada paso al final.
+Etapa 3 de la hoja de ruta (`../../dev/es/architecture-and-roadmap.md` §6): **¿funciona la cadena completa (captura → GPU de la
+Vita → pantalla) sin frenar al juego?** Plan acordado con el usuario al empezar la etapa (2026-10-29) y lo aprendido en
+cada versión de prueba. Estado de cada paso al final. Este documento se actualiza mientras dure la etapa; al cerrarla,
+lo que valga pasa a `../../dev/es/findings.md` y el documento se archiva en `../../changelog/`.
 
 ## En simple
 Hasta ahora NativeDraw solo **lee** lo que el juego le pide al chip gráfico del PSP. En esta etapa empieza a **dibujarlo**
@@ -24,8 +26,8 @@ un frame trae algo que todavía no sabe dibujar, se muestra la imagen normal del
 
 | Paso | Qué se ve | Qué valida | Versión |
 |---|---|---|---|
-| **3.0 Presentador transparente** | Nada distinto: la imagen del juego pasa por una superficie propia de NativeDraw | Tomar la pantalla de Adrenaline de forma estable y cuánto cuesta; la pantalla negra que quedó pendiente de la etapa 1 (`docs/changelog/etapa1_banco_gxm.md` §3.3) | NativeDraw 0.0.3 |
-| **3.1 Menú L+R+START dibujado por NativeDraw** | Menú encima del juego con las opciones que hoy son archivos (`registros.md`) | Dibujar encima. Bloquear los botones del juego desde la Vita (ganchos de entrada de Adrenaline) [verificar]; si no se puede, lo hace NativeLink | 0.0.x |
+| **3.0 Presentador transparente** | Nada distinto: la imagen del juego pasa por una superficie propia de NativeDraw | Tomar la pantalla de Adrenaline de forma estable y cuánto cuesta; la pantalla negra que quedó pendiente de la etapa 1 (`../../changelog/es/etapa1_banco_gxm.md` §3.3) | NativeDraw 0.0.3 |
+| **3.1 Menú L+R+START dibujado por NativeDraw** | Menú encima del juego con las opciones que hoy son archivos (`../../dev/es/logs-and-switches.md`) | Dibujar encima. Bloquear los botones del juego desde la Vita (ganchos de entrada de Adrenaline) [verificar]; si no se puede, lo hace NativeLink | 0.0.x |
 | **3.2 Registro del frame** | Nada (solo el log) | El capturador, además de contar, guarda cada dibujo con su estado; los vértices 2D se copian (el juego puede reusar esa memoria en el frame siguiente). Organizado **por sublistas** desde el principio (base para reusar lo grabado en GT, `etapa2_nucleos.md`) | 0.0.x |
 | **3.3 Traductor 2D** | Menús y juegos 2D en HD (960x544) | Borrar pantalla, sprites/triángulos en modo "through", texturas 8888/565/5551/4444, paletas CLUT4/8, swizzle del PSP, mezcla y alpha test básicos. Solo se muestra en HD el frame entendido completo | 0.0.x |
 | **3.4 Copias de bloque + comparación** | Igual, más robusto | TRANSFER en la Vita; T5: la imagen HD reducida contra la nativa → si difieren mucho, la nativa y un volcado | 0.0.x |
@@ -33,14 +35,14 @@ un frame trae algo que todavía no sabe dibujar, se muestra la imagen normal del
 Juegos de prueba: **Retro City Rampage DX** (2D), **KOF 96** (2D; [verificar] si es la versión de PSP o la de PS1: la de PS1 no pasa por el GE y solo sirve para comprobar que NativeDraw no la toca) y los menús de GT, RR, SH y LocoRoco.
 
 ## Decisiones
-- **Versiones:** todo 0.0.x hasta el primer release, que será NativeLink 0.1.0 + NativeDraw 0.1.0 (`versiones.md`).
+- **Versiones:** todo 0.0.x hasta el primer release, que será NativeLink 0.1.0 + NativeDraw 0.1.0 (`../../dev/es/versions.md`).
 - **Interruptor `ux0:data/nativedraw/dibujar`, apagado por defecto** mientras se estabiliza (sin el archivo no se engancha
   nada del presentador). Lo nuevo de la GPU se prende a propósito: en la etapa 1 un experimento apagó la Vita entera.
 - **Traductor propio**, con PPSSPP como referencia y copiando funciones puntuales cuando ahorre tiempo (licencia
-  compatible, se anota en `AVISOS_TERCEROS.md`).
+  compatible, se anota en `THIRD_PARTY_NOTICES.md`).
 - **Sombreadores:** para 3.0 y el menú, los de vita2d ya compilados (`nativedraw/sombreadores.h`, los mismos que usa
   Adrenaline). Para 3.3, sombreadores propios precompilados con la cadena del FSR (compilador de Sony bajo qemu,
-  `JagerDesu/vita-shaders`, documentada en `docs/changelog/conversaciones/resumen_conversacion_2026-10-27f.md`).
+  `JagerDesu/vita-shaders`, documentada en `../../changelog/es/conversaciones/resumen_conversacion_2026-10-27f.md`).
 - **Escala:** 2x (960x544 visibles). Más (3x reducido = antialiasing) es una opción posterior.
 - **Latencia:** la imagen HD se ve un frame después que la nativa (la Vita dibuja el frame N mientras el juego arma el
   N+1). El paso 3.0 ya funciona así.
@@ -156,7 +158,7 @@ juego a 59,9. Lo que se aprendió en el camino (los números de prueba sirven pa
   sprites) veía cada página cada 4 frames → sprites con pedazos viejos. `espejo_espera` (interruptor 32, 0.0.8.2): el
   flip del PSP espera la copia del espejo.
 - **Cuadros rotos de un frame en las peleas** (0.0.8.6–0.0.8.11): primero 4 registros en vez de 3 (0.0.8.6). Después,
-  midiendo con las notificaciones de GXM (0.0.8.10, líneas `gpu:` de `registros.md`): la GPU de la Vita iba 3 a 8
+  midiendo con las notificaciones de GXM (0.0.8.10, líneas `gpu:` de `../../dev/es/logs-and-switches.md`): la GPU de la Vita iba 3 a 8
   escenas atrasada y ~140 frames por 10 s empezaban con el de hace 2 sin terminar; se reescribían con la GPU leyendo
   vértices y paletas (25–180 cada 10 s), la imagen normal (~200) y texturas del registro (~8–11 por segundo). Cada uno
   calzaba con un tipo de error del video: texturas → fondo con pedazos, vértices → "K.O." deformado, paletas → colores
@@ -170,12 +172,12 @@ juego a 59,9. Lo que se aprendió en el camino (los números de prueba sirven pa
   repeticiones destella (cuadro HOW TO PLAY). Línea `traductor: ritmo`.
 - Lección: grabar la pantalla (Vitastream + OBS a 60 fps) encontró lo que los volcados no capturaban; el detector de
   cuadros rotos de un frame en un video está en `vitabridge\respaldo\limpieza_0.0.8.11\transitorios.py`. Usar videos
-  solo cuando haga falta (`FLUJO_DE_TRABAJO.md`).
+  solo cuando haga falta (`workflow.md`).
 - Lo que sigue: la GPU de la Vita tarda ~20 ms por frame de KOF (~430 draws) y cada 10 s ~165 frames no se mandan
   porque va atrasada; el traductor gasta ~7 ms de CPU por frame. Medir el tiempo de GPU por escena antes de cambiar.
 
 ## Rendimiento de la GPU y Metal Slug XX (pruebas NativeDraw 0.0.8.13–0.0.8.21, 2026-10-30) [medido]
-Cronómetro de la GPU (`cronometro.c`, interruptor `medir_gpu`, líneas `gpu tiempos:` de `registros.md`): cada escena
+Cronómetro de la GPU (`cronometro.c`, interruptor `medir_gpu`, líneas `gpu tiempos:` de `../../dev/es/logs-and-switches.md`): cada escena
 (nuestra y de Adrenaline) anota su fin con una notificación de GXM (510 para las de Adrenaline, 511 la nuestra); un hilo
 calcula cuánto tardó cada una.
 - **KOF 96, antes:** la GPU al 96–99 %, ~26 ms por frame del PSP (imagen intermedia ~16 ms con ~430 draws, dos escenas
@@ -192,7 +194,7 @@ calcula cuánto tardó cada una.
   escena lee y escribe su superficie entera: KOF pasa de T → I → T a I → T, ~3 ms menos). **KOF 96 a 60 fps en las
   peleas** (615–633 frames dibujados cada 10 s, ~16 ms de GPU por frame, GPU al 87–97 %).
 - **Seguro de pantalla negra quitado** (0.0.8.18, a pedido del usuario): en las peleas se activaba porque revisaba la
-  superficie con la GPU sin terminar (0.0.8.17: todos los frames "negros" se leyeron así). En `TODO.md`.
+  superficie con la GPU sin terminar (0.0.8.17: todos los frames "negros" se leyeron así). En `../../../TODO.md`.
 - **Metal Slug XX (ULUS-10495):** el juego corre a 30 fps; la partida es 2D through (los menús, 3D). La Vita lo dibuja
   entero a su velocidad: intermedia ~13,5 ms (~2 millones de píxeles, ~3,6 veces la pantalla), superficie ~7,2 ms, GPU
   ~75 %. Texturas (línea `texturas:`, 0.0.8.19): todas de la RAM del PSP, 630–800 KB por frame en 90–170 copias (la
@@ -204,6 +206,10 @@ calcula cuánto tardó cada una.
   55–1900 ms). Causa: el capturador iba atrasado (copiar texturas costaba 20–28 ms de cada frame de 33 ms) y la
   compuerta espera como mucho 5 ms: copió vértices que el juego ya reescribía. 0.0.8.21: un vértice fuera de ±4096 o NaN
   manda ese frame con la imagen normal (motivo `vertice_fuera`). Lo que ataca la causa: el caché de texturas.
+- **0.0.8.22 + NativeLink 0.0.3.4 (2026-10-31): limpieza**, sin cambios de comportamiento: comentarios sin historia ni
+  TODO (van a `TODO.md`), fuera el seguro de pantalla negra que ya no se activaba (`falla`), el archivo `volcado_auto` y
+  las palabras 0x4B/0x4C del buzón que nadie leía; documentación reorganizada en `docs/dev`, `docs/agent` y
+  `docs/changelog` en inglés y español.
 - Lo que sigue: **caché de texturas entre frames** (ordenadas en memoria propia de la Vita; revisión barata por muestra
   en cada frame, completa por turnos 1 de cada N grupos, e invalidación cuando el GE escribe en esa memoria; el usuario
   aceptó que en casos raros una textura se vea vieja hasta N frames). Después, cachés del traductor (paletas, draws
@@ -215,5 +221,5 @@ calcula cuánto tardó cada una.
 | 3.0 | **hecho** (NativeDraw 0.0.3) |
 | 3.1 | **hecho** (NativeDraw 0.0.4) |
 | 3.2 | **hecho** (NativeDraw 0.0.5) |
-| 3.3 | Retro City (NativeDraw 0.0.6), **KOF 96** (NativeDraw 0.0.7; 60 fps en las peleas desde la prueba 0.0.8.18) y **Metal Slug XX** (a sus 30 fps; glitch blanco evitado en 0.0.8.21). Sigue: caché de texturas |
+| 3.3 | Retro City (NativeDraw 0.0.6), **KOF 96** (NativeDraw 0.0.7; 60 fps en las peleas desde la prueba 0.0.8.18) y **Metal Slug XX** (a sus 30 fps; glitch blanco evitado en 0.0.8.21). Pendiente de probar en la Vita: 0.0.8.21/0.0.8.22 en Metal Slug XX hasta el final del nivel. Sigue: caché de texturas |
 | 3.4 | adelantado en parte: comparación con la imagen normal (detecta lo que el sistema dibuja encima) |

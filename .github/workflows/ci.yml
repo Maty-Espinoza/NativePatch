@@ -1,7 +1,5 @@
 # En cada push: compila NativeLink, NativeDraw y el instalador con los mismos scripts que se usan a mano.
 # Si no compila, el commit queda marcado en rojo en GitHub. Los binarios quedan como "artifact" de la corrida.
-# TODO:
-# - Si falla por las descargas de vitasdk (siempre la ultima instantanea), fijar la version en tools/preparar.sh.
 name: Compilacion
 on: [push, pull_request]
 

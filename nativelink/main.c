@@ -6,12 +6,7 @@
 //   - compuerta: si la Vita va atrasada, el juego la espera (hasta 5 ms) antes de reusar una lista;
 //   - telemetria para los registros (T4/T6, CPU libre, costo por frame, vida de la lista) y el log (log.c).
 // Atajos al abrir un juego: L o SELECT = NativeLink apagado (el juego corre como sin plugin); R = log sincrono.
-// Mapa del buzon y de la zona compartida: docs/dev/funcionamiento.md; niveles e interruptores: docs/dev/registros.md.
-//
-// TODO:
-// - T4: sceDmacMemcpy/sceDmacTryMemcpy no se encuentran con ningun nombre de modulo probado en Adrenaline 8
-// - T6: geBusy da siempre 0 al llamar al sync aunque el juego espera al GE dentro de sceGeDrawSync: entender que espera
-// - T6 apagado por defecto por su costo: si se quiere siempre, muestrear cada ~1 ms o desde otro lado
+// Mapa del buzon y de la zona compartida: docs/dev/<idioma>/how-it-works.md; niveles e interruptores: docs/dev/<idioma>/logs-and-switches.md.
 #include <pspsdk.h>
 #include <pspkernel.h>
 #include <pspctrl.h>
@@ -54,10 +49,9 @@ int (*_sceDisplaySetFrameBuf)(void *topaddr, int bufferwidth, int pixelformat, i
 // (SB[0x4D]: vueltas por ms = 100 %), e[6] = espejo: CPU del flip (us) | paginas << 16, e[7] = ganchos (us en sbPost).
 // Interruptores que pone NativeDraw en SB[0x4A]: 1 sin compuerta (no se espera a la Vita, solo se cuenta), 2 sin
 // espejo, 4 sin hilo de CPU libre, 8 compuerta siempre en el sync, 16 espejo completo (todas las paginas de datos
-// pedidas en cada flip), 32 el flip espera a que termine la copia del espejo (prueba).
+// pedidas en cada flip), 32 el flip espera a que termine la copia del espejo.
 // SB[0x4E] = nivel de registro de NativeDraw (0 minimo, 1 mediano, 2 extremo): EV_FRAME y el hilo de CPU libre desde
 // mediano; la vida de la lista (EV_VIDA) y los eventos de la CPU del juego (T4: EV_CPU, EV_CPUSUM) solo en extremo.
-// Mientras la compuerta espera: SB[0x4B] = lista esperada, SB[0x4C] = hora de inicio | 1.
 #define SB ((volatile u32 *)(0x0A000000 | 0x40000000))
 #define SB_MAGIC 0x424D4F53 // "SOMB"
 #define SB_N 4096
@@ -153,12 +147,10 @@ static u32 sbGate(u32 ord) {
   if (!sbAlive() || (int)(SB[3] - ord) >= 0) return 0;
   if (SB[0x4A] & 1) { fr.nowait++; return 0; } // sin_compuerta: solo se cuenta
   u32 t0 = sceKernelGetSystemTimeLow(), w;
-  SB[0x4B] = ord; SB[0x4C] = t0 | 1;
   do {
     sceKernelDelayThread(50);
     w = sceKernelGetSystemTimeLow() - t0;
   } while ((int)(SB[3] - ord) < 0 && w < 5000);
-  SB[0x4B] = SB[0x4C] = 0;
   sbs.timeouts += (int)(SB[3] - ord) < 0;
   sbs.wait_us += w;
   if (w > sbs.wait_max) sbs.wait_max = w;
@@ -428,8 +420,8 @@ static void espejoFlip(void) {
   sceGuCopyImage(GU_PSM_8888, 0, 0, 4, 1, 64, (void *)(rl + 0x1FF0), 0, 0, 64, (void *)0x0A000100);
   sceGuFinish();
   esp_qid[s] = _sceGeListEnQueue((void *)rl, NULL, -1, NULL);
-  if (SB[0x4A] & 32 && esp_qid[s] >= 0) _sceGeListSync(esp_qid[s], 0);  // (prueba) el juego espera la copia: que no
-  esps.copies++;                                                         // alcance a cambiar la VRAM mientras se copia
+  if (SB[0x4A] & 32 && esp_qid[s] >= 0) _sceGeListSync(esp_qid[s], 0);  // espejo_espera: el juego espera la copia
+  esps.copies++;                                                         // (no alcanza a cambiar la VRAM mientras tanto)
   SB[0x44] = seq; SB[0x45] = esp_pages;
 }
 
@@ -568,7 +560,7 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
       LOG("stats sombra sync: drawsync=%lu atrasados=%lu (>5 ms: %lu) espera=%lu us/sync (max %lu) listsync=%lu atrasados=%lu\n",
           sbs.syncs, sbs.late, sbs.timeouts, sbs.wait_us / s, sbs.wait_max, sbs.lsyncs, sbs.llate);
       LOG("stats sombra GE: el juego espera al GE en drawsync %lu us/sync\n", sbs.in_sync_us / s);
-      LOG("stats compuerta (dev66): %s%s | esperas antes de encolar=%lu (%lu us c/u, max %lu) | autocomprobaciones=%lu cambiaron=%lu\n",
+      LOG("stats compuerta: %s%s | esperas antes de encolar=%lu (%lu us c/u, max %lu) | autocomprobaciones=%lu cambiaron=%lu\n",
           gate_mode == 1 ? "antes de encolar" : gate_mode ? "en el sync (la lista cambio 10 veces)" : "en el sync (probando)", SB[0x4A] & 8 ? " [compuerta_sync]" : "",
           gts.n, gts.n ? gts.us / gts.n : 0, gts.max, gts.checks, gts.bad);
       memset(&gts, 0, sizeof(gts));

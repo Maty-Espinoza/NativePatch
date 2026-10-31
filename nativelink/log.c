@@ -134,9 +134,8 @@ int logOnce(u32 key) {
 
 // ID del juego al log. Primero de disc0:/UMD_DATA.BIN (ISO/UMD; en module_start el disco aun no esta montado, por eso
 // se llama desde el primer gancho; en juegos PSN no existe).
-char game_id[11] = "?";
 void logGameId(void) {
-  char *id = game_id;
+  static char id[11] = "?";
   int k1 = pspSdkSetK1(0);
   SceUID fd = sceIoOpen("disc0:/UMD_DATA.BIN", PSP_O_RDONLY, 0);
   if (fd >= 0) {

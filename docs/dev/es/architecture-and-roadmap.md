@@ -1,11 +1,12 @@
-# Arquitectura propuesta: el PSP dibuja normal y la Vita dibuja en HD (análisis del 2026-10-28)
+# Arquitectura: el PSP dibuja normal y la Vita dibuja en HD (análisis del 2026-10-28)
 
-> **Nota (2026-10-29, NativeLink 0.0.2 + NativeDraw 0.0.2):** este es el documento de la hoja de ruta (§6) y sigue vigente.
-> Usa los nombres de su época: **GePatch** = NativeLink (lado PSP), **gepresent** = NativeDraw (lado Vita); "modo sombra" =
-> lo que hoy hace NativeLink siempre; "GePatch actual (A)" = el escalado en el PSP, que se quitó en NativeLink 0.0.2 (no
-> queda como modo de respaldo). Los documentos que cita (`contexto_ia.md`, `etapaN_*.md`, `errores_conocidos.md`...) están
-> en `docs/changelog/` o en el proyecto de claude.ai. **Etapa 2 cerrada** (`docs/changelog/etapa2_ridge_racer.md`); sigue
-> la **etapa 3**. Cómo funciona hoy: `funcionamiento.md`.
+> **Cómo leer este documento:** es el análisis que decidió la arquitectura actual y la hoja de ruta por etapas (§6), y
+> sigue vigente. Se conserva tal como se escribió, con los nombres de su época: **GePatch** = NativeLink (lado PSP),
+> **gepresent** = NativeDraw (lado Vita); "modo sombra" = lo que hoy hace NativeLink siempre; "GePatch actual (A)" = el
+> escalado en el PSP, que se quitó en NativeLink 0.0.2 (no queda como modo de respaldo). Los documentos que cita
+> (`contexto_ia.md`, `etapaN_*.md`, `errores_conocidos.md`...) están en `../../changelog/es/` o en el proyecto de
+> claude.ai. **Etapas 0, 1 y 2 hechas**; la etapa 3 está en curso (`../../agent/es/stage3-plan.md`). Cómo funciona hoy:
+> `how-it-works.md`; qué se midió: `findings.md`.
 
 Conversación de análisis (sin cambios de código, sin tocar la Vita ni el laboratorio). Pregunta del usuario: revisar
 toda la documentación y otros proyectos (Adrenaline 8, PPSSPP, GePatch original, NativePatch) y proponer **la mejor

@@ -6,11 +6,7 @@
 // cuando cambia, las paletas al cargarse y las filas de textura que usan los draws (copiadas a memoria sin cache que
 // lee la GPU; las que tienen swizzle del PSP quedan ordenadas, con las filas seguidas: rgTexCopia). Hay RN registros
 // que se turnan: uno se escribe, otro queda publicado (rg_pub) y los que la GPU puede estar leyendo no se tocan.
-// Completo = todos los draws contados pasaron por regDraw y entraron. Detalle: docs/dev/etapa3_plan.md.
-// TODO:
-// - Guardar las matrices (draws 3D).
-// - Copiar de la RAM del PSP cuesta ~6 us por draw (KOF 96, ~2,4 ms por frame): abaratar si molesta.
-// - Algunos frames de KOF 96 llegan al tope (R_TOPE) en las transiciones.
+// Completo = todos los draws contados pasaron por regDraw y entraron.
 static void clog(const char *fmt, ...);
 #include "registro.h"
 enum { R_MEMO = 1, R_LEER = 2, R_TOPE = 4, R_CURVA = 8 };

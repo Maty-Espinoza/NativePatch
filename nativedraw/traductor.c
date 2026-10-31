@@ -2,14 +2,7 @@
 // estados del GE que guardo registro.c en el capturador). Se incluye dentro de presentador.c y usa su patcher, sus
 // superficies y su contexto; el presentador llama a trInit al iniciar y a trFrame en el hilo de Adrenaline, en vez de
 // copiar la imagen del PSP. Si el frame trae algo que no sabe dibujar devuelve el motivo (T_*) y el presentador muestra
-// la imagen normal. Sombreadores propios en sombreadores/*.cg. Detalle: docs/dev/etapa3_plan.md (paso 3.3).
-// TODO:
-// - 3D (sin modo through), profundidad y stencil, test de color y operaciones logicas
-// - mezcla con el alfa del destino o con factores al doble (hoy: motivo "mezcla")
-// - recortar al scissor tambien triangulos y tiras (hoy solo los rectangulos)
-// - imagen intermedia dibujada en un frame y usada como textura en otro (hoy: imagen normal)
-// - repetir las copias de bloque (TRANSFER) del GE a la VRAM
-// - juntar draws con el mismo estado (menos llamadas a la GPU)
+// la imagen normal. Sombreadores propios en sombreadores/*.cg.
 #include "registro.h"
 #include "sombreadores_nd.h"
 // Resultado de trCheck/trFrame: T_OK o el motivo por el que el frame no se dibujo (tnom: su nombre en el log)

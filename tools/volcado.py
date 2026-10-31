@@ -13,7 +13,7 @@ Lo que dice:
   - con --texturas-de f2_registro.bin: dibuja f1 con las texturas copiadas en el frame siguiente; si asi sale bien, la
     copia del espejo llego atrasada.
 Deja fK_pc.png (normal | PC | Vita reducida | diferencias) en --salida (por defecto, la carpeta del volcado).
-Necesita numpy y Pillow. No escribe nada en el repo. Formato del registro y niveles de volcado: docs/dev/volcados.md.
+Necesita numpy y Pillow. No escribe nada en el repo. Formato del registro y niveles de volcado: docs/dev/<idioma>/dumps.md.
 """
 import struct, sys, os
 import numpy as np

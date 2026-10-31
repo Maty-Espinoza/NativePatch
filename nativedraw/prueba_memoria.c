@@ -20,8 +20,7 @@
 // nativedraw_tarde.log). Al final siempre: la vida de la lista (la lista principal cambia una textura en cada frame).
 // Espejo doble: al final de cada frame f el "GE" copia las paginas pedidas a la copia f + 1, en el espejo (f + 1) & 1,
 // que usa el frame siguiente (como el evento del flip). Las sublistas se escriben en los dos espejos (salvo vram 3).
-// TODO:
-// - No simula el aviso de la Vita al PSP (la copia del espejo que la Vita anuncia en SB[0x48]).
+// No simula el aviso de la Vita al PSP (la copia del espejo que la Vita anuncia en SB[0x48]).
 #include "captura.c"
 #include <stdio.h>
 #include <string.h>

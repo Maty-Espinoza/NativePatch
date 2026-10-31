@@ -1,8 +1,9 @@
-# Niveles de registro e interruptores (NativeLink 0.0.2 + NativeDraw 0.0.2)
+# Niveles de registro, interruptores y líneas del log
 
-Vienen de GePatch dev65 + gepresent v13.9 (2026-10-29), con la compuerta de dev66 + v13.10 y v13.11–v13.13; los números
-viejos de este documento son de esa numeración (`versiones.md`). Pendiente: cambiar todo esto desde el menú L+R+START
-que dibujará NativeDraw (`TODO.md`); mientras tanto son archivos.
+Qué escribe cada plugin en sus logs, qué significa cada línea y qué archivos de `ux0:data/nativedraw/` cambian su
+comportamiento. Los números de versión entre paréntesis dicen desde cuándo existe cada cosa (los viejos, `devNN`/`vNN`,
+se explican en `versions.md`). Pendiente: cambiar los interruptores desde el menú L+R+START (`../../../TODO.md`);
+mientras tanto son archivos.
 
 Los registros sirven para entender qué pasa, pero también cuestan rendimiento. Por eso hay tres niveles. Se elige uno en
 la Vita con el archivo `ux0:data/nativedraw/registro` (contenido `minimo`, `mediano` o `extremo`; **sin archivo: mediano**).
@@ -34,12 +35,12 @@ Para cambiarlo: subir el archivo con el relevo (`enviar/ux0/data/nativedraw/regi
 | T4: avisos de la CPU del juego (vaciar caché, DMA) al buzón | no (solo cuenta) | no (solo cuenta) | sí |
 
 Siguen aparte, con su propio archivo: `dibujar` (presentador de la etapa 3: con el archivo reemplaza la imagen siempre; sin él, solo con el menú
-L+R+START abierto; además activa el registro del frame y su línea `registro:` en `nativedraw_captura.log`; ver `etapa3_plan.md`), T6 (`medir_ge`), `memo_revisar` (revisar todas), `sin_memoria`,
-`captura_sin_lectores`, `off`. (Los bancos `banco_nucleos` y `banco_v12` se quitaron en NativeDraw 0.0.2.)
+L+R+START abierto; además activa el registro del frame y su línea `registro:` en `nativedraw_captura.log`; ver `../../agent/es/stage3-plan.md`), T6 (`medir_ge`), `memo_revisar` (revisar todas), `sin_memoria`,
+`captura_sin_lectores`, `off`, `medir_gpu` (cronómetro de la GPU) y `reproducir` (`dumps.md`).
 
 ## Volcados (NativeDraw 0.0.8.5)
 Niveles de volcado en `ux0:data/nativedraw/volcado`: `desactivado`, `pantallazo`, `frame`, `secuencia` (sin el archivo)
-o `auto`. Qué guarda cada uno, cuánto cuesta y cómo se leen con `tools/volcado.py`: `volcados.md`.
+o `auto`. Qué guarda cada uno, cuánto cuesta y cómo se leen con `tools/volcado.py`: `dumps.md`.
 
 ## Interruptores de la fase de análisis (`ux0:data/nativedraw/`; se apagan con `no` adentro, el relevo no borra)
 | Archivo | Qué hace |

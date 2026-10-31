@@ -5,11 +5,8 @@
 // NativeLink (lo escribe la Vita, asi el PSP no espera a la tarjeta), la version de NativeLink para el menu y el gancho
 // que anota los hilos del emulador. Con ux0:data/nativedraw/off no se engancha nada.
 // Logs: ux0:pspemu/nativedraw.log (este), nativedraw_captura.log (captura.c) y nativelink.log (el de NativeLink).
-// Diseno: docs/dev/funcionamiento.md.
 // Canal del log de NativeLink (pagina 0x0A7FF000 de la RAM del PSP, ver nativelink/log.h): +0 "GPV1" (NativeLink),
 // +0x20 "LOGV" (este plugin: atiende el buzon), +0x40 seq, done, bytes (texto en 0x0A7FA000).
-// TODO:
-// - El gancho de CreateThread no ve los hilos que Adrenaline crea antes de cargar NativeDraw (nucleo 0 casi vacio).
 #include <psp2/kernel/modulemgr.h>
 #include <psp2/kernel/threadmgr.h>
 #include <psp2/kernel/clib.h>
@@ -166,7 +163,7 @@ static SceUID hookCT(const char *name, SceKernelThreadEntry entry, int prio, int
 void _start() __attribute__((weak, alias("module_start")));
 // Arranque del plugin: hilo escritor del log de NativeLink, gancho de los hilos del emulador e hilo principal.
 int module_start(SceSize args, void *argp) {
-  alog("NativeDraw " NATIVEDRAW_VERSION " (antes gepresent v13.13) compilado %s %s (dato %d)\n", __DATE__, __TIME__, dato);
+  alog("NativeDraw " NATIVEDRAW_VERSION " compilado %s %s (dato %d)\n", __DATE__, __TIME__, dato);
   SceUID wt = sceKernelCreateThread("nativedraw_escritor", writerThread, 0xA0, 0x2000, 0, 0, NULL);
   if (wt >= 0 && sceKernelStartThread(wt, 0, NULL) >= 0) writer = 1;
   alog("log de NativeLink: %s\n", writer ? "anillo + hilo escritor" : "escritura directa");

@@ -2,7 +2,7 @@
 
 Lo que se hizo y se midió en cada versión, tal como quedó en su momento. **No se actualiza**: usa los nombres y números
 de su época (GePatch `0.2-devNN` = lado PSP, hoy NativeLink; gepresent `vNN` = lado Vita, hoy NativeDraw; ver
-`docs/dev/versiones.md`). Lo vigente para trabajar está en `docs/dev/`. El código de esas versiones está en la etiqueta
+`../../dev/es/versions.md`). Lo vigente para trabajar está en `../../dev/es/` y `../../agent/es/`. Este archivo existe también en inglés (`../en/`), con los mismos nombres de archivo. El código de esas versiones está en la etiqueta
 `gepatch-dev66` y en el historial de git.
 
 El resumen corto de todo esto es `CHANGELOG.md` (raíz). **Antes del primer release se quita `conversaciones/`** (decisión

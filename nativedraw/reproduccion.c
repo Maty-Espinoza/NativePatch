@@ -4,7 +4,6 @@
 // Se incluye dentro de presentador.c: presStart llama a repInicio, el hilo del presentador a repHilo y el de Adrenaline
 // a repDibujar. Uso: ux0:data/nativedraw/reproducir con la ruta del .bin. Deja fK_reproduccion.bmp y
 // fK_reproduccion_intermedia.bmp junto al .bin y escribe "no" en el archivo (una vez por juego).
-// Detalle: docs/dev/volcados.md.
 static char rep_ruta[128];
 // rep_on: 0 nada, 1 por cargar, 2 cargado (lo dibuja el hilo de Adrenaline), 3 dibujado (por escribir)
 static volatile uint32_t rep_on;

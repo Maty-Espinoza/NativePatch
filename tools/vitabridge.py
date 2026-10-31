@@ -23,7 +23,10 @@ Lo que escribe el relevo:
 Despierto / dormido: solo trabaja hasta 30 min despues del ultimo pedido o de que un log crecio. Despierto le pide a la
 Vita "nosleep on"; dormido no la toca y manda "nosleep off" para que se duerma y ahorre bateria.
 Abre el FTP solo cuando hay algo que hacer y lo cierra al terminar: el FTP de vitacompanion pierde memoria con cada
-uso y consultarlo seguido termina colgando la Vita. Detalle: docs/dev/FLUJO_DE_TRABAJO.md (seccion 4).
+uso y consultarlo seguido termina colgando la Vita. Detalle: docs/agent/<idioma>/testing.md.
+Limpieza: una vez por hora borra de enviados/, recibidos/ y respuestas/ lo que tenga mas de LIMPIAR_DIAS dias (y los
+.parcial viejos y las carpetas que queden vacias). Lo que se quiera guardar de una prueba se copia antes a su carpeta
+etapaN_<version>/ (respaldo/ no se toca).
 Solo usa la biblioteca estandar. Ctrl+C para terminar.
 """
 import ftplib, os, socket, sys, time, fnmatch, shutil
@@ -36,7 +39,8 @@ seen = {}  # archivo de la Vita -> tamano ya bajado
 last_size = {}  # archivo de la Vita -> tamano en la mirada anterior (si no cambio, el juego ya no lo escribe)
 WATCH_EVERY, AWAKE_FOR = 60, 30 * 60  # mirar ux0:/pspemu cada 60 s, hasta 30 min despues de lo ultimo que paso
 REQUESTS = ('cmd_*.txt', 'bajar_*.txt', 'listar_*.txt', 'vigilar*.txt')
-watch_t, vita_t, awake_until, first = 0, '-', 0, True
+LIMPIAR_DIAS, LIMPIAR_CADA = 7, 3600  # borrar lo de mas de 7 dias en enviados/, recibidos/ y respuestas/, una vez por hora
+watch_t, vita_t, awake_until, first, clean_t = 0, '-', 0, True, 0
 
 # Muestra una linea con la hora y la agrega a CARPETA/vitabridge.log.
 def log(*a):
@@ -113,6 +117,28 @@ def uploads():
     return [os.path.join(r, n) for r, _, fs in os.walk(send) for n in fs
             if not (n.startswith('.') or n.lower() in ('desktop.ini', 'thumbs.db'))]  # basura del Finder/Explorador
 
+# Borra en enviados/, recibidos/ y respuestas/ los archivos de mas de LIMPIAR_DIAS dias (y cualquier .parcial de mas de
+# un dia), y las carpetas que queden vacias. Lo que se borro va al log.
+def cleanup():
+    limite, n = time.time() - LIMPIAR_DIAS * 86400, 0
+    for d in ('enviados', 'recibidos', 'respuestas'):
+        for root, dirs, files in os.walk(os.path.join(BASE, d), topdown=False):
+            for f in files:
+                p = os.path.join(root, f)
+                try:
+                    viejo = os.path.getmtime(p) < limite or (f.endswith('.parcial') and os.path.getmtime(p) < time.time() - 86400)
+                    if viejo or f == '.DS_Store':
+                        os.remove(p); n += 1
+                except OSError:
+                    pass
+            if root != os.path.join(BASE, d) and not os.listdir(root):
+                try:
+                    os.rmdir(root)
+                except OSError:
+                    pass
+    if n:
+        log('limpieza: %d archivos de mas de %d dias borrados de enviados/, recibidos/ y respuestas/' % (n, LIMPIAR_DIAS))
+
 # Manda "nosleep on|off" a la Vita (un error solo se anota).
 def nosleep(state):  # vitacompanion lo enciende en cada arranque: la Vita no se duerme sola y gasta bateria
     try:
@@ -120,11 +146,15 @@ def nosleep(state):  # vitacompanion lo enciende en cada arranque: la Vita no se
     except OSError as e:
         log('nosleep', state, 'no respondio:', e)
 
-# Una vuelta del bucle principal: decide si esta despierto, abre el FTP solo si hay subidas, pedidos de archivos o
-# toca mirar los logs (transfer), ejecuta los cmd_*.txt, borra los cmd_/vigilar ya atendidos y escribe estado.txt.
+# Una vuelta del bucle principal: limpieza (cada hora), decide si esta despierto, abre el FTP solo si hay subidas,
+# pedidos de archivos o toca mirar los logs (transfer), ejecuta los cmd_*.txt, borra los cmd_/vigilar ya atendidos y
+# escribe estado.txt.
 def step():
-    global watch_t, vita_t, awake_until
+    global watch_t, vita_t, awake_until, clean_t
     now = time.time()
+    if now - clean_t >= LIMPIAR_CADA:
+        clean_t = now
+        cleanup()
     ups = uploads()
     reqs = [n for n in sorted(os.listdir(BASE)) if any(fnmatch.fnmatch(n, p) for p in REQUESTS)]
     if ups or reqs:
@@ -298,7 +328,7 @@ def main():
             log('no respondio al comando version:', e)
     for d in ('enviar', 'enviados', 'recibidos', 'respuestas'):
         os.makedirs(os.path.join(BASE, d), exist_ok=True)
-    log('relevo en', BASE, 'con la Vita en', IP, '(dormido hasta que llegue un pedido)')
+    log('relevo en', BASE, 'con la Vita en', IP, '(dormido hasta que llegue un pedido; borra lo de mas de %d dias en enviados/, recibidos/ y respuestas/)' % LIMPIAR_DIAS)
     nosleep('off')
     while True:
         try:

@@ -1,8 +1,8 @@
-# Volcados (NativeDraw 0.0.8.8)
+# Volcados
 
 Un volcado guarda lo que pasó en pantalla en uno o más frames: la imagen del PSP, la que dibujó la Vita y lo que la Vita
-recibió para dibujarla. Sirve para encontrar el origen de un error visual sin adivinar (regla 5.1 de
-`FLUJO_DE_TRABAJO.md`). Los niveles funcionan como los del registro (`registros.md`): se elige uno según cuánta
+recibió para dibujarla. Sirve para encontrar el origen de un error visual sin adivinar (regla "primero el origen" de
+`../../agent/es/workflow.md`). Los niveles funcionan como los del registro (`logs-and-switches.md`): se elige uno según cuánta
 información hace falta y cuánto puede costar.
 
 ## Niveles (`ux0:data/nativedraw/volcado`, una palabra; sin el archivo: `secuencia`)
@@ -17,7 +17,7 @@ información hace falta y cuánto puede costar.
 
 - Cada volcado queda en `ux0:data/nativedraw/volcados/NNN/`. Guardar tarda unos 7 s (la tarjeta): mientras, no se
   puede hacer otro. El log de NativeDraw anota `volcado: listo en ... (automatico)`.
-- `auto` (antes el archivo `volcado_auto`, que sigue valiendo): desde 0.0.8.8 compara (1 de cada 2 frames) bloques de
+- `auto`: compara (1 de cada 2 frames) bloques de
   16x16 de la imagen de la Vita con las **últimas 4 imágenes del PSP** que copió Adrenaline y vale la más parecida (la
   Vita va 1–2 frames atrás: así el atraso no cuenta). Se dispara con 6 bloques que no se parecen a ninguna (y menos de
   la mitad: con más, es un diálogo encima). `fK_normal.bmp` es la imagen del PSP más parecida. (0.0.8.4–0.0.8.7
@@ -43,7 +43,7 @@ información hace falta y cuánto puede costar.
 ## Cómo se leen (`tools/volcado.py`)
 
 1. Bajar la carpeta: un `listar_*.txt` con `ux0:/data/nativedraw/volcados` y un `bajar_*.txt` con los archivos
-   (`FLUJO_DE_TRABAJO.md` §4). **Escribir el pedido con otro nombre y renombrarlo al final**: el relevo puede tomar un
+   (`../../agent/es/relay.md`). **Escribir el pedido con otro nombre y renombrarlo al final**: el relevo puede tomar un
    archivo a medio escribir.
 2. `python3 tools/volcado.py <carpeta del volcado> [K] [--texturas-de <otro .bin>] [--salida <carpeta>]` (numpy y
    Pillow; corre también en la VM de Windows). Dibuja el frame en el PC imitando al GE del PSP, con los mismos datos que

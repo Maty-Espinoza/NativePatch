@@ -3,7 +3,7 @@
 # instalador NativePatch.vpk (lleva los dos plugins y un version.txt) y deja todo en build/ del repo; al final muestra
 # los md5. Lo llaman a mano, tools/windows/compilar.cmd, tools/windows/instalar.sh y .github/workflows/ci.yml.
 # Antes, una vez: sh tools/preparar.sh (Linux x86_64) o sh tools/mac/preparar_vm.sh (VM ARM64 del Mac); los dos dejan
-# $T/env.sh con las variables que usa este script. Flujo de trabajo: docs/dev/FLUJO_DE_TRABAJO.md.
+# $T/env.sh con las variables que usa este script. Ambientes y flujo de trabajo: docs/agent/<idioma>/environment.md.
 # Uso: [V=<carpeta del relevo>] sh tools/compilar.sh [version de prueba]
 #   con version: ademas copias build/<plugin>_<version>.*, NativePatch_<version>.vpk y cambios_<version>.patch (git diff)
 #   con V (p. ej. ~/Downloads/vitabridge): los plugins a V/enviar/ (el relevo los sube a la Vita), los plugins y el VPK

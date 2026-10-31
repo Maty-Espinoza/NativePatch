@@ -1,18 +1,18 @@
-# Avisos de terceros
+# Third-party notices
 
-NativePatch es software libre bajo la [GPLv3](LICENSE). Incluye o usa estas partes de terceros:
+NativePatch is free software under the [GPLv3](LICENSE). It includes or uses these third-party parts:
 
-| Qué | Dónde | Licencia |
+| What | Where | License |
 |---|---|---|
-| Funciones mínimas de `sceGu` (copias del GE), basadas en el PSPSDK | `nativelink/gu.c` | BSD (aviso abajo) |
-| Reglas del GE (tamaño de vértice, comandos) tomadas de cómo las implementa PPSSPP | `nativedraw/captura.c` | PPSSPP es GPL 2.0 o posterior: compatible con GPLv3 |
-| Fuente 8x16 generada desde DejaVu Sans Mono Bold | `instalador/font.h` | Bitstream Vera / DejaVu (permite modificar y redistribuir) |
-| Sombreadores compilados `texture_v`/`texture_f` de vita2d (los de vita-shader-collection, que usa Adrenaline 8) | `nativedraw/sombreadores.h` | vita2d (xerpi): MIT [verificar la licencia de vita-shader-collection antes del release] |
-| Encabezados y biblioteca de Adrenaline (`systemctrl.h`, `libpspsystemctrl_kernel.a`), solo para compilar | se bajan con `tools/preparar.sh` | GPLv3 (Adrenaline) |
-| pspdev, vitasdk, taiHEN | se bajan con `tools/preparar.sh` | sus licencias |
+| Minimal `sceGu` functions (GE block copies), based on the PSPSDK | `nativelink/gu.c` | BSD (notice below) |
+| GE rules (vertex size, commands) taken from how PPSSPP implements them | `nativedraw/captura.c` | PPSSPP is GPL 2.0 or later: compatible with GPLv3 |
+| 8x16 font generated from DejaVu Sans Mono Bold | `instalador/font.h` | Bitstream Vera / DejaVu (allows modification and redistribution) |
+| Compiled shaders `texture_v`/`texture_f` from vita2d (the ones from vita-shader-collection, which Adrenaline 8 uses) | `nativedraw/sombreadores.h` | vita2d (xerpi): MIT [verify the vita-shader-collection license before the release] |
+| Adrenaline headers and library (`systemctrl.h`, `libpspsystemctrl_kernel.a`), only to build | downloaded by `tools/preparar.sh` | GPLv3 (Adrenaline) |
+| pspdev, vitasdk, taiHEN | downloaded by `tools/preparar.sh` | their own licenses |
 
-El proyecto nació como fork de [GePatch](https://github.com/TheOfficialFloW/GePatch) de TheFlow; el código que quedaba de
-él (escalado en el PSP) se quitó en NativeLink 0.0.2 y está en la historia del repo (etiqueta `gepatch-dev66`).
+The project started as a fork of [GePatch](https://github.com/TheOfficialFloW/GePatch) by TheFlow; the code that
+remained from it (scaling on the PSP) was removed in NativeLink 0.0.2 and is in the repo history (tag `gepatch-dev66`).
 
 ## PSPSDK
 
