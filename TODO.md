@@ -38,6 +38,17 @@ Los números viejos (devNN, vNN) se explican en `docs/dev/versiones.md`. Los `et
       frames no se mandan porque va atrasada (línea `gpu:` de `nativedraw.log`). El traductor gasta ~7 ms de CPU por
       frame. Medir primero el tiempo de GPU por escena (p. ej. un hilo que anote con hora cuándo avanza la notificación
       de fin de escenas) antes de cambiar nada.
+- [ ] **Volver a poner el seguro de pantalla negra** (quitado en NativeDraw 0.0.8.18 a pedido del usuario: si algo sale
+      mal, cierra el juego). Hasta 0.0.8.17 dejaba la imagen normal hasta cerrar Adrenaline si la superficie salía negra y
+      la imagen del juego no; en KOF 96 se activaba en las peleas porque revisaba la superficie con la GPU sin terminar
+      de dibujarla (0.0.8.17: 65 de 65, 42 de 42 y 180 de 180 frames "negros" leídos así). Al volver a ponerlo: revisar
+      solo superficies que la GPU ya terminó (como el "tapado") y no apagar el dibujo para siempre.
+- [ ] **Botón PS en KOF 96, más datos** (0.0.8.17, 2026-10-30): el diálogo salió detrás de la pelea y sobre el fondo, y
+      1–2 s después por encima de todo (sin tocar nada). Pasó con el seguro activado, o sea **con NativeDraw sin
+      reemplazar la imagen**: no es el dibujo de la superficie sino algo que sigue corriendo igual (cronómetro de la GPU
+      con su notificación 510 en las escenas de Adrenaline, ganchos, capturador). Siguiente prueba: lo mismo con
+      `medir_gpu` en `no`. El detector del diálogo (`sceCommonDialogIsRunning`) siempre dice "no": no sirve para esto.
+      Lo veremos más adelante (pedido del usuario).
 - [ ] **Error menor: botón PS en KOF 96** (NativeDraw 0.0.7, prueba 0.0.8.12, 2026-10-30). Al presionar PS para salir
       desapareció el fondo a los lados del juego y no apareció el diálogo de salida; presionarlo de nuevo devolvía el
       fondo. Se arregló saliendo al menú de la Vita (PS dos veces) y volviendo a abrir Adrenaline. No pasaba en
