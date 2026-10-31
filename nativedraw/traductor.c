@@ -13,9 +13,9 @@
 #include "registro.h"
 #include "sombreadores_nd.h"
 // Resultado de trCheck/trFrame: T_OK o el motivo por el que el frame no se dibujo (tnom: su nombre en el log)
-enum { T_OK, T_NUEVO, T_3D, T_PRIM, T_FMT, T_MEZCLA, T_TFUNC, T_RARO, T_DESTINO, T_VERT, T_TOPE, T_TEX, T_PROG, TN };
+enum { T_OK, T_NUEVO, T_3D, T_PRIM, T_FMT, T_MEZCLA, T_TFUNC, T_RARO, T_DESTINO, T_VERT, T_TOPE, T_TEX, T_PROG, T_FUERA, TN };
 static const char *tnom[TN] = { "ok", "sin_frame_nuevo", "3d", "primitiva", "formato", "mezcla", "funcion_textura",
-                                "test_color_o_logica", "otro_destino", "vertice", "tope", "textura_mal", "programa" };
+                                "test_color_o_logica", "otro_destino", "vertice", "tope", "textura_mal", "programa", "vertice_fuera" };
 // contadores del log de cada 10 s (los lee y borra el presentador)
 static volatile uint32_t t_cnt[TN], t_hd, t_nat, t_draws;
 static volatile uint32_t t_salto[6];  // frames del PSP que avanzo cada frame dibujado (0: repetido, 5: 5 o mas)
@@ -187,7 +187,8 @@ static uint32_t col8888(const uint8_t *p, uint32_t ct) {
 // Decodifica los vertices del draw d (modo through) a o: calcula el tamano y la posicion de cada campo segun el tipo de
 // vertice del GE (con su alineacion), sigue los indices si hay, y deja x, y al doble y u, v divididos por tw x th.
 // col0: color si el vertice no trae; sc: scissor al doble (x0, y0, x1, y1). Los rectangulos (2 esquinas) se recortan al
-// scissor y salen como tiras de 4 vertices. *nout: vertices escritos. T_OK, T_VERT (datos fuera del registro) o T_TOPE.
+// scissor y salen como tiras de 4 vertices. *nout: vertices escritos. T_OK, T_VERT (datos fuera del registro), T_TOPE o
+// T_FUERA (posicion fuera de +-4096: vertices basura).
 static int trVerts(RFrame *f, RDraw *d, TV *o, float tw, float th, uint32_t col0, const float *sc, uint32_t *nout) {
   static const uint8_t s4[4] = { 0, 1, 2, 4 }, cs[8] = { 0, 0, 0, 0, 2, 2, 2, 4 };
   uint32_t vt = d->vt, tc = vt & 3, ct = vt >> 2 & 7, nt = vt >> 5 & 3, pt = vt >> 7 & 3, sz = 0, al = 1, s;
@@ -212,6 +213,8 @@ static int trVerts(RFrame *f, RDraw *d, TV *o, float tw, float th, uint32_t col0
     if (tc == 1) { q.u = p[otc]; q.v = p[otc + 1]; }
     else if (tc == 2) { q.u = ((const uint16_t *)(p + otc))[0]; q.v = ((const uint16_t *)(p + otc))[1]; }
     else if (tc == 3) { q.u = ((const float *)(p + otc))[0]; q.v = ((const float *)(p + otc))[1]; }
+    // posicion fuera de lo que dibuja el GE (o NaN): datos leidos tarde, cuando el juego ya los reescribia
+    if (!(q.x > -4096 && q.x < 4096 && q.y > -4096 && q.y < 4096)) return T_FUERA;
     q.x *= 2; q.y *= 2; q.u /= tw; q.v /= th;
     if (d->prim == 6) {  // rectangulo: 2 vertices (esquinas opuestas) -> tira de 4, separada de la siguiente con dos
       r[i & 1] = q;      // vertices repetidos; el color es el del segundo vertice (como el GE)
