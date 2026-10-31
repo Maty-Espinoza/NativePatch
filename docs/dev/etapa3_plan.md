@@ -174,11 +174,46 @@ juego a 59,9. Lo que se aprendió en el camino (los números de prueba sirven pa
 - Lo que sigue: la GPU de la Vita tarda ~20 ms por frame de KOF (~430 draws) y cada 10 s ~165 frames no se mandan
   porque va atrasada; el traductor gasta ~7 ms de CPU por frame. Medir el tiempo de GPU por escena antes de cambiar.
 
+## Rendimiento de la GPU y Metal Slug XX (pruebas NativeDraw 0.0.8.13–0.0.8.21, 2026-10-30) [medido]
+Cronómetro de la GPU (`cronometro.c`, interruptor `medir_gpu`, líneas `gpu tiempos:` de `registros.md`): cada escena
+(nuestra y de Adrenaline) anota su fin con una notificación de GXM (510 para las de Adrenaline, 511 la nuestra); un hilo
+calcula cuánto tardó cada una.
+- **KOF 96, antes:** la GPU al 96–99 %, ~26 ms por frame del PSP (imagen intermedia ~16 ms con ~430 draws, dos escenas
+  de la superficie ~3 + ~5,5 ms, Adrenaline ~2 ms) → ~40 fps. Modos de prueba (0.0.8.15, ya quitados): sin texturas la
+  intermedia bajaba a ~6,5 ms y con el swizzle leído como lineal a ~7,9 ms → **~8 ms eran el cálculo del swizzle en el
+  sombreador** `nd_fs`. La memoria de las superficies (CDRAM o LPDDR) casi no influía. Lección (0.0.8.14): reservar la
+  intermedia en CDRAM dejó 1 MB libre y Adrenaline mostró estática en las vistas previas: **nunca CDRAM**.
+- **0.0.8.16: texturas con swizzle ordenadas por la CPU** al copiarlas al registro (`rgTexCopia`: DMA a una memoria de
+  paso con caché y la CPU deja cada grupo de 8 filas ordenado; la GPU las lee con `nd_ft`, con filtro si el juego lo
+  pide). Se quitaron `nd_fs` y `trPrueba`. Al iniciar se comprueba que el DMA deja al día la memoria con caché
+  (`rgCoherente`: sí). Volcados versión 4 (texturas ya ordenadas). Intermedia de KOF: ~16 → ~7–8,7 ms.
+- **0.0.8.18: una sola escena para la superficie.** Si solo los draws a la superficie leen imágenes intermedias y
+  ninguna se dibuja después de leída, primero van todas las intermedias y después la superficie en una escena (cada
+  escena lee y escribe su superficie entera: KOF pasa de T → I → T a I → T, ~3 ms menos). **KOF 96 a 60 fps en las
+  peleas** (615–633 frames dibujados cada 10 s, ~16 ms de GPU por frame, GPU al 87–97 %).
+- **Seguro de pantalla negra quitado** (0.0.8.18, a pedido del usuario): en las peleas se activaba porque revisaba la
+  superficie con la GPU sin terminar (0.0.8.17: todos los frames "negros" se leyeron así). En `TODO.md`.
+- **Metal Slug XX (ULUS-10495):** el juego corre a 30 fps; la partida es 2D through (los menús, 3D). La Vita lo dibuja
+  entero a su velocidad: intermedia ~13,5 ms (~2 millones de píxeles, ~3,6 veces la pantalla), superficie ~7,2 ms, GPU
+  ~75 %. Texturas (línea `texturas:`, 0.0.8.19): todas de la RAM del PSP, 630–800 KB por frame en 90–170 copias (la
+  mitad de menos de 1 KB), filas de 128 bytes, **~98 % iguales a la copia anterior** (KOF: de la VRAM, 140–220 KB en
+  8–12 copias, ~99 % iguales). Lo caro es el DMA: ~100 µs por llamada (10–17 ms por frame en Metal Slug, ~1,5 ms en
+  KOF); ordenar ~5,5 ms. Promedia 90–126 texturas distintas por frame (tope 128).
+- **Glitch blanco de Metal Slug XX** (0.0.8.20 lo encontró): cuadros de 16x16 del fondo llegaron con posiciones de
+  ~2^31 y uv de 65535; la GPU los rellenaba repitiendo una textura de 32x32 (pantalla blanca con colores, escenas de
+  55–1900 ms). Causa: el capturador iba atrasado (copiar texturas costaba 20–28 ms de cada frame de 33 ms) y la
+  compuerta espera como mucho 5 ms: copió vértices que el juego ya reescribía. 0.0.8.21: un vértice fuera de ±4096 o NaN
+  manda ese frame con la imagen normal (motivo `vertice_fuera`). Lo que ataca la causa: el caché de texturas.
+- Lo que sigue: **caché de texturas entre frames** (ordenadas en memoria propia de la Vita; revisión barata por muestra
+  en cada frame, completa por turnos 1 de cada N grupos, e invalidación cuando el GE escribe en esa memoria; el usuario
+  aceptó que en casos raros una textura se vea vieja hasta N frames). Después, cachés del traductor (paletas, draws
+  traducidos, escenas iguales).
+
 ## Estado
 | Paso | Estado |
 |---|---|
 | 3.0 | **hecho** (NativeDraw 0.0.3) |
 | 3.1 | **hecho** (NativeDraw 0.0.4) |
 | 3.2 | **hecho** (NativeDraw 0.0.5) |
-| 3.3 | Retro City (NativeDraw 0.0.6) y **KOF 96** (NativeLink 0.0.3 + NativeDraw 0.0.7: sin cuadros rotos, ~40 fps de la Vita). Sigue: rendimiento de la GPU de la Vita |
+| 3.3 | Retro City (NativeDraw 0.0.6), **KOF 96** (NativeDraw 0.0.7; 60 fps en las peleas desde la prueba 0.0.8.18) y **Metal Slug XX** (a sus 30 fps; glitch blanco evitado en 0.0.8.21). Sigue: caché de texturas |
 | 3.4 | adelantado en parte: comparación con la imagen normal (detecta lo que el sistema dibuja encima) |

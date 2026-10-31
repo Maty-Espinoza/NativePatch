@@ -33,11 +33,23 @@ Los números viejos (devNN, vNN) se explican en `docs/dev/versiones.md`. Los `et
 - [x] ~~Etapa 3, paso 3.3 en KOF 96~~ (NativeLink 0.0.3 + NativeDraw 0.0.7, pruebas 0.0.7.1–0.0.8.12): la Vita dibuja
       las peleas; cuadros rotos de un frame arreglados (datos reescritos con la GPU de la Vita leyéndolos). Detalle en
       `docs/dev/etapa3_plan.md`.
-- [ ] **Siguiente: rendimiento de la GPU de la Vita en KOF 96.** La Vita muestra ~40 de 60 frames en las peleas: la GPU
-      tarda ~20 ms en terminar un frame (~430 draws, varias escenas por las imágenes intermedias) y cada 10 s ~165
-      frames no se mandan porque va atrasada (línea `gpu:` de `nativedraw.log`). El traductor gasta ~7 ms de CPU por
-      frame. Medir primero el tiempo de GPU por escena (p. ej. un hilo que anote con hora cuándo avanza la notificación
-      de fin de escenas) antes de cambiar nada.
+- [x] ~~Rendimiento de la GPU de la Vita en KOF 96~~ (pruebas NativeDraw 0.0.8.13–0.0.8.18): texturas con swizzle
+      ordenadas por la CPU y una sola escena para la superficie → 60 fps en las peleas (`docs/dev/etapa3_plan.md`).
+- [ ] **Siguiente: caché de texturas entre frames** (pedido del usuario: cachés en todo el proyecto, evitar rehacer lo
+      que no cambió). Medido en 0.0.8.19: ~98–99 % de lo que se copia es igual a la copia anterior; lo caro es el DMA
+      (~100 µs por llamada; Metal Slug XX 10–17 ms por frame). Diseño acordado: texturas ordenadas en memoria propia de
+      la Vita que dura entre frames; revisión barata por muestra cada frame, completa por turnos (1 de cada N grupos de 8
+      filas por frame), invalidación inmediata cuando el GE escribe ahí (copias de bloque, imágenes intermedias); sin el
+      tope de 128 texturas por frame. Riesgo aceptado: una textura cambiada solo en bytes que la muestra no ve puede
+      verse vieja hasta N frames. Después: cachés del traductor (paletas, draws traducidos, escenas iguales; el traductor
+      gasta ~8–10 ms de CPU por frame).
+- [ ] **Capturador atrasado → vértices basura** (Metal Slug XX, 0.0.8.20): con la copia de texturas en 20–28 ms por
+      frame la compuerta (5 ms como mucho) deja pasar al juego y se copian vértices ya reescritos. 0.0.8.21 no dibuja
+      esos frames (motivo `vertice_fuera`); la causa la ataca el caché. Revisar con el caché si siguen apareciendo.
+- [ ] Metal Slug XX: casi todos los frames revisados salen "distintos de la imagen normal" (KOF ~0) aunque se ve bien.
+      Entender por qué (¿filtro, atraso de un frame a 30 fps?) antes de confiar en `volcado auto` con este juego.
+- [ ] `tools/compilar.sh` no se detiene si NativeDraw no compila (muestra el md5 del `.suprx` anterior; pasó en 0.0.8.14
+      y 0.0.8.19). Compilar aparte con `nativedraw/build.sh` o revisar que el md5 cambie.
 - [ ] **Volver a poner el seguro de pantalla negra** (quitado en NativeDraw 0.0.8.18 a pedido del usuario: si algo sale
       mal, cierra el juego). Hasta 0.0.8.17 dejaba la imagen normal hasta cerrar Adrenaline si la superficie salía negra y
       la imagen del juego no; en KOF 96 se activaba en las peleas porque revisaba la superficie con la GPU sin terminar
@@ -57,13 +69,12 @@ Los números viejos (devNN, vNN) se explican en `docs/dev/versiones.md`. Los `et
       detecta el diálogo comparando con la imagen normal) solo mira la superficie si la GPU ya la terminó; en las peleas
       casi nunca (~360 revisiones saltadas y 6–12 hechas cada 10 s). Prioridad baja: si vuelve a pasar, resolverlo.
 - [ ] **Posibles errores anotados en la limpieza de comentarios** (sin tocar; confirmar antes de cambiar):
-      `volcado.c` `volFrame`: el `else` que marca "no se usó en este frame" parece pegado al `if` equivocado (en
-      `secuencia`/`auto` f1 y f2 saldrían sin `.bin`; confirmar con un volcado de secuencia). `reproduccion.c`
+      `volcado.c` `volFrame`: el `else` que marca "no se usó en este frame" parece pegado al `if` equivocado
+      (confirmado en 0.0.8.20: en `secuencia` f1 y f2 salen sin `.bin` y su texto dice "no se usó en este frame"). `reproduccion.c`
       `repCargar`: con texturas más grandes que el buffer sigue con datos basura y al fallar no libera la memoria.
       `captura.c` `markRt`: no protege `n == 0` (`want` sí); podría marcar las 512 páginas de la VRAM. Instalador:
       `lineaEn()` cuenta como activada una línea comentada, "Desinstalar" borra los volcados sin avisar y "Limpiar
-      restos" informa como borrados archivos sin comprobarlo. `traductor.c` `trPrueba` corre en el primer frame de cada
-      juego y deja ~1 MB sin liberar (¿quitarla o ponerla detrás de un interruptor?). NativeLink: `game_id`,
+      restos" informa como borrados archivos sin comprobarlo. NativeLink: `game_id`,
       `DRAW_NATIVE` y `SB[0x4B]`/`SB[0x4C]` podrían no usarse. `instalar.cmd`/`instalar.sh` usan la rama `dev`, pero la
       rama por defecto es `master`.
 - [ ] Línea de puntos fija sobre la fecha del menú de Adrenaline con el presentador (solo en el menú). Ver si sale con

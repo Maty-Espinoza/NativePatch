@@ -69,6 +69,20 @@ o `auto`. Qué guarda cada uno, cuánto cuesta y cómo se leen con `tools/volcad
   distintos N ms | revisiones de la superficie saltadas (GPU sin terminar) N` (NativeDraw 0.0.7): frames que no se le
   mandaron a la GPU porque no terminó el de hace 2 (se repite la superficie), tiempo esperándola antes de reescribir y
   tiempo de CPU del traductor y de la revisión.
+- `gpu tiempos: <tipo>: escenas, GPU ms (promedio, max) | draws por escena (con swizzle), miles de píxeles por escena |
+  en cola | histograma de ms` y `gpu tiempos: ocupada N ms de M (%)` (cronómetro, interruptor `medir_gpu`, desde
+  0.0.8.13): cuánto tarda la GPU en cada tipo de escena (Adrenaline, imagen normal, traductor en la superficie, imagen
+  intermedia). `gpu tiempos: detalle`: 16 escenas seguidas (A Adrenaline, N imagen normal, T traductor, I intermedia:
+  draws, ms de GPU / ms en cola).
+- `gpu: escena lenta: <tipo>, draws, miles de píxeles, ms` (0.0.8.20): cada escena nuestra de más de 30 ms; las 3
+  primeras piden un volcado. `traductor: draw gigante`: los primeros 40 draws de más de 2 pantallas de área.
+- Motivo `vertice_fuera` (0.0.8.21): un vértice fuera de ±4096 o NaN (datos leídos tarde): el frame va con la imagen normal.
+- `pantalla:` (0.0.8.13, cada 1 s y solo si algo cambia): escenas y frames a la pantalla de Adrenaline y de ScePspemu,
+  diálogo del sistema, estado de la superficie. `notificaciones:`: otro escribió una palabra de notificación de GXM.
+- En `nativedraw_captura.log`, línea `texturas (por frame):` (0.0.8.19): copias, KB y tiempo de DMA y de ordenar de la
+  RAM y de la VRAM; llamadas al DMA; copias por tamaño; KB con swizzle por ancho de fila; KB iguales, cambiados o nuevos
+  respecto de la última copia de ese grupo de 8 filas (huella por grupo: lo que ahorraría un caché); KB sin swizzle;
+  texturas distintas por frame.
 - Cómo se sabe cuándo termina la GPU: cada escena propia escribe su número en una palabra de las notificaciones de GXM
   (la última que Adrenaline no usa, de 511 hacia abajo; el log la anota al empezar: `gpu: fin de escenas en la
   notificación N`). Leer una superficie que la GPU no terminó da resultados falsos y `sceGxmFinish` para esperarla
