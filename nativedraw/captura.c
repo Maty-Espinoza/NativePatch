@@ -1292,6 +1292,13 @@ static int repThread(SceSize args, void *argp) {
              gr.us_e / g, gr.us_v / g, gr.us_t / g, gr.t_b / g >> 10, gr.us_l / g, gr.o_b / g >> 10, gr.us_o / g, gr.pis, gr.tarde, gr.gpu, gr.us_p / g,
              gr.d3 * 100 / dd, gr.clear * 100 / dd, gr.blend * 100 / dd, gr.atest * 100 / dd, gr.swz * 100 / dd,
              gr.fmt[0], gr.fmt[1], gr.fmt[2], gr.fmt[3], gr.fmt[4], gr.fmt[5], gr.fmt[6], gr.fmt[7], gr.fmt[8], gr.fmt[9], gr.fmt[10]);
+        clog("  texturas (por frame): de la RAM %u copias %u KB (DMA %u us, ordenar %u us) | de la VRAM %u copias %u KB (DMA %u us, ordenar %u us) | "
+             "llamadas al DMA %u | copias de <1K %u, 1-4K %u, 4-16K %u, 16-64K %u, 64K+ %u | KB con swizzle por bytes de fila: 16 %u, 32 %u, "
+             "64 %u, 128 %u, 256 %u, 512+ %u | KB con swizzle respecto de la ultima copia: iguales %u, cambiaron %u, nuevas %u | KB sin swizzle %u | "
+             "texturas distintas %u\n", gr.t_n[0] / g, gr.t_kb[0] / g >> 10, gr.t_dma[0] / g, gr.t_ord[0] / g, gr.t_n[1] / g, gr.t_kb[1] / g >> 10,
+             gr.t_dma[1] / g, gr.t_ord[1] / g, gr.t_ll / g, gr.t_tam[0] / g, gr.t_tam[1] / g, gr.t_tam[2] / g, gr.t_tam[3] / g, gr.t_tam[4] / g,
+             gr.t_rb[0] / g >> 10, gr.t_rb[1] / g >> 10, gr.t_rb[2] / g >> 10, gr.t_rb[3] / g >> 10, gr.t_rb[4] / g >> 10, gr.t_rb[5] / g >> 10,
+             gr.t_igual / g >> 10, gr.t_cambio / g >> 10, gr.t_nueva / g >> 10, gr.t_lin / g >> 10, gr.t_tex / g);
       }
       clog("  draws/f: 3d=%u 2d=%u clear=%u vacios=%u | tri=%u tira=%u abanico=%u rect=%u lineas=%u puntos=%u curvas=%u | vertices/f=%u\n",
            PF(d3d), PF(dthr), PF(dclear), PF(dempty), PF(prim[3]), PF(prim[4]), PF(prim[5]), PF(prim[6]), PF(prim[1]) + PF(prim[2]),

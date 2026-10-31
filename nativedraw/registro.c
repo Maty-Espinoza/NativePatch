@@ -16,8 +16,13 @@ static void clog(const char *fmt, ...);
 enum { R_MEMO = 1, R_LEER = 2, R_TOPE = 4, R_CURVA = 8 };
 // Estadisticas por segundo para la linea "registro:" del log (ga se acumula, gr es la copia que se escribe; us_*:
 // tiempos de estados, vertices, texturas, paletas y copias por DMA; gpu: texturas escritas en un registro que la
-// GPU podia estar leyendo; o_b/us_o: bytes con swizzle ordenados y su tiempo, que va dentro de us_l)
-static struct { uint32_t fr, ok, memo, leer, tope, curva, draws, st, kb, cl, us, d3, clear, blend, atest, swz, fmt[16], us_e, us_v, us_t, us_p, t_b, us_l, pis, tarde, gpu, o_b, us_o; } ga, gr;
+// GPU podia estar leyendo; o_b/us_o: bytes con swizzle ordenados y su tiempo, que va dentro de us_l). t_*: linea
+// "texturas:" (rgTexCopia): copias, bytes, us de DMA y de ordenar, por origen (0 RAM, 1 VRAM); llamadas al DMA; copias
+// por tamano (<1K, <4K, <16K, <64K, mas); bytes con swizzle por ancho de fila (16, 32, 64, 128, 256, 512+ bytes) y
+// comparados con la ultima vez que se copio ese grupo de 8 filas (igual, cambio, nueva); bytes sin swizzle; texturas
+// distintas por frame
+static struct { uint32_t fr, ok, memo, leer, tope, curva, draws, st, kb, cl, us, d3, clear, blend, atest, swz, fmt[16], us_e, us_v, us_t, us_p, t_b, us_l, pis, tarde, gpu, o_b, us_o,
+  t_n[2], t_kb[2], t_dma[2], t_ord[2], t_ll, t_tam[5], t_rb[6], t_igual, t_cambio, t_nueva, t_lin, t_tex; } ga, gr;
 // RN registros: con menos, el que la GPU acaba de leer seria a veces el unico libre y se sobrescribirian sus texturas
 #define RN 4
 static RFrame *rf[RN];                       // (LPDDR con cache + texturas sin cache: ~2,4 MB cada uno)
@@ -62,6 +67,11 @@ void *sceDmacMemcpy(void *dst, const void *src, SceSize size);
 #define OR_N (256 << 10)
 static uint8_t *rg_ord;
 static int rg_ordc;
+// Medicion de repeticion: para cada grupo de 8 filas copiado, la direccion en el PSP y una huella de su contenido (y
+// del largo), en una tabla de RH_N casillas por direccion (una casilla ocupada por otra direccion cuenta como nueva).
+// Dice cuanto se ahorraria un cache de texturas entre frames.
+#define RH_N 16384
+static struct { uint32_t a, h; } *rg_hu;
 // 1 si una copia por DMA a la memoria con cache c (desde u, sin cache) se ve al leerla despues, aunque c ya este en la
 // cache (si el sistema no la invalida, se leeria lo de antes)
 static int rgCoherente(uint8_t *c, uint8_t *u) {
@@ -72,24 +82,42 @@ static int rgCoherente(uint8_t *c, uint8_t *u) {
   }
   return 1;
 }
-// Copia m bytes de s (memoria del PSP) a d (texturas del registro). rb: bytes por fila si la textura tiene swizzle (0:
-// tal cual por DMA); entonces m son grupos de 8 filas enteros y cada grupo se ordena: el bloque b (16 bytes de ancho) de
-// la fila r esta en s + b * 128 + r * 16 y va a d + r * rb + b * 16 (d se escribe en orden: es memoria sin cache).
-static void rgTexCopia(uint8_t *d, const void *s, uint32_t m, uint32_t rb) {
-  if (!rb) { sceDmacMemcpy(d, s, m); return; }
-  uint32_t gb = 8 * rb, max = OR_N / gb * gb, t0 = now();
+// Copia m bytes de s (memoria del PSP; pa: su direccion en el PSP) a d (texturas del registro). rb: bytes por fila si
+// la textura tiene swizzle (0: tal cual por DMA); entonces m son grupos de 8 filas enteros y cada grupo se ordena: el
+// bloque b (16 bytes de ancho) de la fila r esta en s + b * 128 + r * 16 y va a d + r * rb + b * 16 (d se escribe en
+// orden: es memoria sin cache). Anota las mediciones t_* de la linea "texturas:".
+static void rgTexCopia(uint8_t *d, const void *s, uint32_t m, uint32_t rb, uint32_t pa) {
+  uint32_t v = isVram(pa), t0 = now(), td = 0, k;
+  ga.t_n[v]++; ga.t_kb[v] += m;
+  for (k = 0; k < 4 && m >= 1024u << 2 * k; k++) {}
+  ga.t_tam[k]++;
+  if (!rb) { sceDmacMemcpy(d, s, m); ga.t_ll++; ga.t_lin += m; ga.t_dma[v] += now() - t0; return; }
+  for (k = 0; k < 5 && rb > 16u << k; k++) {}
+  ga.t_rb[k] += m;
+  uint32_t gb = 8 * rb, max = OR_N / gb * gb;
   for (uint32_t o = 0; o < m; o += max) {
-    uint32_t l = m - o < max ? m - o : max;
+    uint32_t l = m - o < max ? m - o : max, t1 = now();
     sceDmacMemcpy(rg_ord, (const uint8_t *)s + o, l);
-    for (uint32_t g = 0; g < l; g += gb)
+    ga.t_ll++; td += now() - t1;
+    for (uint32_t g = 0; g < l; g += gb) {
+      uint32_t h = 2166136261u ^ gb;
       for (uint32_t r = 0; r < 8; r++)
         for (uint32_t b = 0; b < rb; b += 16) {
-          const uint64_t *i = (const uint64_t *)(rg_ord + g + b * 8 + r * 16);
-          uint64_t *x = (uint64_t *)(d + o + g + r * rb + b);
-          x[0] = i[0]; x[1] = i[1];
+          const uint32_t *i = (const uint32_t *)(rg_ord + g + b * 8 + r * 16);
+          uint32_t *x = (uint32_t *)(d + o + g + r * rb + b);
+          x[0] = i[0]; x[1] = i[1]; x[2] = i[2]; x[3] = i[3];
+          h = ((((h ^ i[0]) * 16777619u ^ i[1]) * 16777619u ^ i[2]) * 16777619u ^ i[3]) * 16777619u;
         }
+      if (rg_hu) {  // repeticion: igual / cambio / nueva respecto de la ultima copia de este grupo
+        uint32_t a = pa + o + g, c = (a >> 7 ^ a >> 17) & (RH_N - 1);
+        if (rg_hu[c].a != a) ga.t_nueva += gb; else if (rg_hu[c].h == h) ga.t_igual += gb; else ga.t_cambio += gb;
+        rg_hu[c].a = a; rg_hu[c].h = h;
+      }
+    }
   }
-  ga.o_b += m; ga.us_o += now() - t0;
+  uint32_t t = now() - t0;
+  ga.t_dma[v] += td; ga.t_ord[v] += t - td;
+  ga.o_b += m; ga.us_o += t;
 }
 // Reserva los RN registros: la parte principal en memoria con cache y las texturas en memoria sin cache (la lee la
 // GPU), y la memoria de paso para ordenar las texturas con swizzle. Sin memoria apaga el registro (reg_on = 0).
@@ -114,6 +142,8 @@ static void regInit(void) {
     if (b < 0 || sceKernelGetMemBlockBase(b, &p) < 0) { reg_on = 0; clog("registro del frame: sin memoria para ordenar texturas (%08x)\n", b); return; }
     rg_ord = p;
   }
+  b = sceKernelAllocMemBlock("nativedraw_huellas", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, 0x20000, 0);  // (RH_N x 8 bytes)
+  if (b >= 0 && sceKernelGetMemBlockBase(b, &p) >= 0) { rg_hu = p; sceClibMemset(p, 0, 0x20000); }
   clog("registro del frame: activo (dibujar), %u x %u KB; texturas con swizzle ordenadas por la CPU desde memoria %s\n", RN,
        (unsigned)(sizeof(RFrame) >> 10), rg_ordc ? "con cache (el DMA la deja al dia)" : "sin cache (el DMA no deja al dia la cache: lento)");
 }
@@ -201,7 +231,7 @@ static uint32_t rgTex(uint32_t r0, uint32_t r1) {
       uint32_t sa = rgSrc(ta + o, m), t0 = now();
       rgGpu(rg_w, "de la RAM");
       if (!sa) { f->flags |= R_LEER; return 0; }
-      rgTexCopia(f->tx + f->to[i] + o, (const void *)PSP(sa), m, swz ? rb : 0);
+      rgTexCopia(f->tx + f->to[i] + o, (const void *)PSP(sa), m, swz ? rb : 0, ta + o);
       ga.t_b += m; ga.us_l += now() - t0;
     }
     f->tm[i] |= ((h - g < 64 ? (1ull << (h - g)) : 0) - 1) << g;
@@ -235,7 +265,7 @@ static void regPend(void) {
       while (h < 64 && (m >> h & 1)) h++;
       uint32_t o = g * gb, l = (h * gb > n ? n : h * gb) - o, a = (f->ta[i] + o) & 0x1FFFFF;
       for (uint32_t pg = a >> 12, pe = (a + l - 1) >> 12; pg <= pe; pg++) { uint32_t q = CPY(b, pg); if (q < f->tq[i]) f->tq[i] = q; }
-      rgTexCopia(f->tx + f->to[i] + o, (const void *)PSP(base + a), l, f->tn[i] >> 31 ? gb / 8 : 0);
+      rgTexCopia(f->tx + f->to[i] + o, (const void *)PSP(base + a), l, f->tn[i] >> 31 ? gb / 8 : 0, f->ta[i] + o);
       ga.t_b += l;
       g = h;
     }
@@ -354,7 +384,7 @@ static void regFlip(uint32_t fb, uint32_t fbw, uint32_t draws_contados) {
   regPend();
   // Draws que no pasaron por regDraw: curvas, listas cortadas
   if (f->draws_vistos < draws_contados) f->flags |= R_LEER;
-  ga.fr++; ga.us += rg_t; ga.st += f->ne; ga.kb += f->na;
+  ga.fr++; ga.us += rg_t; ga.st += f->ne; ga.kb += f->na; ga.t_tex += f->nt;
   if (f->flags & R_MEMO) ga.memo++;
   if (f->flags & R_LEER) ga.leer++;
   if (f->flags & R_TOPE) ga.tope++;

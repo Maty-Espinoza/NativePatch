@@ -551,7 +551,8 @@ static int presThread(SceSize args, void *argp) {
       alog("presentador: textura del juego %p (512x272, formato %08x, filtros %x/%x)\n", psp_tex,
            sceGxmTextureGetFormat(psp_tex), sceGxmTextureGetMinFilter(psp_tex), sceGxmTextureGetMagFilter(psp_tex));
     if (t_on) {
-      uint32_t h = t_hd, nn = t_nat, dr = t_draws; t_hd = t_nat = t_draws = 0;
+      static uint32_t dr0;  // (t_draws no se borra: el traductor lo usa a mitad de un frame para el cronometro)
+      uint32_t h = t_hd, nn = t_nat, dr = t_draws - dr0; t_hd = t_nat = 0; dr0 += dr;
       char b[200]; int k = 0;
       for (int i = 1; i < TN; i++) if (t_cnt[i]) { k += sceClibSnprintf(b + k, sizeof b - k, " %s=%u", tnom[i], t_cnt[i]); t_cnt[i] = 0; }
       b[k] = 0;
