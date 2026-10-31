@@ -118,7 +118,7 @@ class Tex:
                         if m >> g & 1: buf[g * 8 * rb:(g + 1) * 8 * rb] = G['tx'][og + g * 8 * rb:og + (g + 1) * 8 * rb]
                     data = bytes(buf[:rb * s.th])
         raw = np.frombuffer(data.ljust(rb * s.th, b'\0'), np.uint8).reshape(s.th, rb)
-        if F['ver'] >= 2 and RE(F, e, 0xC2) & 1 and s.th >= 8:  # la copia con swizzle va tal cual: se ordena aca
+        if 2 <= F['ver'] < 4 and RE(F, e, 0xC2) & 1 and s.th >= 8:  # (versiones 2 y 3: la copia con swizzle va tal cual)
             raw = raw.reshape(s.th // 8, rb // 16, 8, 16).transpose(0, 2, 1, 3).reshape(s.th, rb)
         if fmt == 4: s.idx = np.stack([raw & 15, raw >> 4], 2).reshape(s.th, rb * 2)
         elif fmt == 5: s.idx = raw

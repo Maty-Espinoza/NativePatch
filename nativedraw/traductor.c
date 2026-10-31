@@ -8,7 +8,6 @@
 // - mezcla con el alfa del destino o con factores al doble (hoy: motivo "mezcla")
 // - recortar al scissor tambien triangulos y tiras (hoy solo los rectangulos)
 // - imagen intermedia dibujada en un frame y usada como textura en otro (hoy: imagen normal)
-// - texturas con swizzle con filtro bilineal (el sombreador nd_fs lee sin filtro)
 // - repetir las copias de bloque (TRANSFER) del GE a la VRAM
 // - juntar draws con el mismo estado (menos llamadas a la GPU)
 #include "registro.h"
@@ -62,19 +61,20 @@ static RT *rtDe(uint32_t fb, uint32_t frame, int crear) {
 // Direccion de la textura 0 del estado e (registros 0xA0 y 0xA8 del GE)
 static uint32_t texAddr(const uint32_t *e) { return (RE(e, 0xA0) & 0xFFFFF0) | ((RE(e, 0xA8) << 8) & 0x0F000000); }
 
-// --- programas: uno de vertices (nd_v) y tres de fragmentos: nd_fc sin textura, nd_ft con textura, nd_fs con textura
-// con swizzle. Cada programa de fragmentos se arma una vez por cada mezcla que aparece (fps, hasta 64) ---
+// --- programas: uno de vertices (nd_v) y dos de fragmentos: nd_fc sin textura y nd_ft con textura (las con swizzle ya
+// llegan ordenadas del registro). Cada programa de fragmentos se arma una vez por cada mezcla que aparece (fps, hasta
+// 64) ---
 static SceGxmVertexProgram *nvp;
-static const SceGxmProgram *pft, *pfc, *pfs, *pv;
-static SceGxmShaderPatcherId ift, ifc, ifs;
-static const SceGxmProgramParameter *n_wvp, *n_tf, *n_atx, *n_atc, *n_tfs, *n_ats, *n_sws;  // (*s: los de nd_fs)
+static const SceGxmProgram *pft, *pfc, *pv;
+static SceGxmShaderPatcherId ift, ifc;
+static const SceGxmProgramParameter *n_wvp, *n_tf, *n_atx, *n_atc;
 typedef struct { uint32_t key; SceGxmFragmentProgram *p; } FP;
 static FP fps[64];
 static uint32_t nfps;
-// Programa de fragmentos para tex (0 sin textura, 1 con textura, 2 con swizzle) y key (0 sin mezcla; si no, los 4 bytes
-// de SceGxmBlendInfo + 1, ver blendKey). Lo busca en fps o lo crea con el patcher (sin escribir el alfa); 0 si falla.
+// Programa de fragmentos para tex (0 sin textura, 1 con textura) y key (0 sin mezcla; si no, los 4 bytes de
+// SceGxmBlendInfo + 1, ver blendKey). Lo busca en fps o lo crea con el patcher (sin escribir el alfa); 0 si falla.
 static SceGxmFragmentProgram *fragProg(int tex, uint32_t key) {
-  uint32_t k = key << 2 | tex;
+  uint32_t k = key << 1 | tex;
   for (uint32_t i = 0; i < nfps; i++) if (fps[i].key == k) return fps[i].p;
   if (nfps >= 64) return 0;
   SceGxmBlendInfo b;
@@ -82,7 +82,7 @@ static SceGxmFragmentProgram *fragProg(int tex, uint32_t key) {
   else { sceClibMemset(&b, 0, sizeof b); b.colorFunc = b.alphaFunc = SCE_GXM_BLEND_FUNC_NONE; }
   b.colorMask = SCE_GXM_COLOR_MASK_R | SCE_GXM_COLOR_MASK_G | SCE_GXM_COLOR_MASK_B;  // (alfa del PSP = su stencil)
   SceGxmFragmentProgram *p = 0;
-  int r = sceGxmShaderPatcherCreateFragmentProgram(pat, tex == 2 ? ifs : tex ? ift : ifc, SCE_GXM_OUTPUT_REGISTER_FORMAT_UCHAR4,
+  int r = sceGxmShaderPatcherCreateFragmentProgram(pat, tex ? ift : ifc, SCE_GXM_OUTPUT_REGISTER_FORMAT_UCHAR4,
                                                    SCE_GXM_MULTISAMPLE_NONE, &b, pv, &p);
   if (r < 0) { alog("traductor: programa de fragmentos %u %08x: %08x\n", tex, key, r); return 0; }
   fps[nfps].key = k; fps[nfps++].p = p;
@@ -101,23 +101,20 @@ static int trInit(void) {
   int r = sceGxmShaderPatcherRegisterProgram(pat, (const SceGxmProgram *)nd_v_gxp, &iv);
   if (r >= 0) r = sceGxmShaderPatcherRegisterProgram(pat, (const SceGxmProgram *)nd_ft_gxp, &ift);
   if (r >= 0) r = sceGxmShaderPatcherRegisterProgram(pat, (const SceGxmProgram *)nd_fc_gxp, &ifc);
-  if (r >= 0) r = sceGxmShaderPatcherRegisterProgram(pat, (const SceGxmProgram *)nd_fs_gxp, &ifs);
   if (r < 0) { alog("traductor: registrar sombreadores %08x\n", r); return r; }
   pv = sceGxmShaderPatcherGetProgramFromId(iv); pft = sceGxmShaderPatcherGetProgramFromId(ift); pfc = sceGxmShaderPatcherGetProgramFromId(ifc);
-  pfs = sceGxmShaderPatcherGetProgramFromId(ifs);
   const SceGxmProgramParameter *pa = sceGxmProgramFindParameterByName(pv, "aPosition"), *pt = sceGxmProgramFindParameterByName(pv, "aTexcoord"),
                                *pc = sceGxmProgramFindParameterByName(pv, "aColor");
   n_wvp = sceGxmProgramFindParameterByName(pv, "wvp");
   n_tf = sceGxmProgramFindParameterByName(pft, "tf"); n_atx = sceGxmProgramFindParameterByName(pft, "at");
   n_atc = sceGxmProgramFindParameterByName(pfc, "at");
-  n_tfs = sceGxmProgramFindParameterByName(pfs, "tf"); n_ats = sceGxmProgramFindParameterByName(pfs, "at"); n_sws = sceGxmProgramFindParameterByName(pfs, "sw");
-  if (!pa || !pt || !pc || !n_wvp || !n_tf || !n_atx || !n_atc || !n_tfs || !n_ats || !n_sws) { alog("traductor: parametros de los sombreadores no encontrados\n"); return -2; }
+  if (!pa || !pt || !pc || !n_wvp || !n_tf || !n_atx || !n_atc) { alog("traductor: parametros de los sombreadores no encontrados\n"); return -2; }
   SceGxmVertexAttribute at[3] = { { 0, 0, SCE_GXM_ATTRIBUTE_FORMAT_F32, 3, sceGxmProgramParameterGetResourceIndex(pa) },
                                   { 0, 12, SCE_GXM_ATTRIBUTE_FORMAT_F32, 2, sceGxmProgramParameterGetResourceIndex(pt) },
                                   { 0, 20, SCE_GXM_ATTRIBUTE_FORMAT_U8N, 4, sceGxmProgramParameterGetResourceIndex(pc) } };
   SceGxmVertexStream st = { sizeof(TV), SCE_GXM_INDEX_SOURCE_INDEX_16BIT };
   if ((r = sceGxmShaderPatcherCreateVertexProgram(pat, iv, at, 3, &st, 1, &nvp)) < 0) { alog("traductor: programa de vertices %08x\n", r); return r; }
-  if (!fragProg(0, 0) || !fragProg(1, 0) || !fragProg(2, 0)) return -3;
+  if (!fragProg(0, 0) || !fragProg(1, 0)) return -3;
   for (int i = 0; i < 2; i++) rtMem(&rts[i]);
   // RAM del PSP (0x08000000-0x0A000000) para la GPU (con 0x72000000 falla)
   int r1 = sceGxmMapMemory((void *)0x70000000, 0x2000000, RD);
@@ -258,71 +255,6 @@ static float trArea(const TV *o, uint32_t n, uint32_t prim) {
   return n ? (x1 - x0) * (y1 - y0) : 0;
 }
 
-// --- prueba del sombreador con swizzle (trPrueba, una vez al empezar a dibujar): separa un error de nd_fs de uno de
-// los datos. Dibuja en la imagen intermedia 1 una textura T4 de 512x512 conocida (entera 1:1 y los texels 384-511 al
-// doble, para ver la precision), la lee de vuelta y cuenta los pixeles distintos; repite despues de cambiar la textura
-// por DMA (si la GPU usara una copia vieja en su cache, saldria el dibujo anterior). Resultado en el log ---
-void *sceDmacMemcpy(void *dst, const void *src, SceSize size);
-// Indice de paleta (0-15) del texel (u, v) en la version k del dibujo de prueba
-static uint32_t prIx(uint32_t u, uint32_t v, uint32_t k) { return (u * 7 + v * 13 + (u >> 5) * 5 + k * 9) & 15; }
-// Arma en t la T4 512x512 con swizzle del PSP (bloques de 32 texels x 8 filas)
-static void prT4(uint8_t *t, uint32_t k) {
-  for (uint32_t v = 0; v < 512; v++)
-    for (uint32_t u = 0; u < 512; u += 2) {
-      uint32_t o = (((v / 8) * 16 + u / 32) * 8 + v % 8) * 16 + (u % 32) / 2;
-      t[o] = prIx(u, v, k) | prIx(u + 1, v, k) << 4;
-    }
-}
-static void trPrueba(SceGxmContext *c) {  // (no libera su memoria)
-  static int hecho;
-  if (hecho++ || !rts[1].mem) return;
-  uint8_t *t4 = gmem(0x20000, RD), *cpu = gmem(0x20000, RD);
-  uint32_t *pal = gmem(0x1000, RD);
-  TV *q = gmem(0x1000, RD);
-  if (!t4 || !cpu || !pal || !q) { alog("traductor: prueba del sombreador: sin memoria\n"); return; }
-  for (uint32_t i = 0; i < 16; i++) pal[i] = 0xFF000000u | (i * 16) << 16 | (255 - i * 16) << 8 | 0x40;
-  static const float wvp[16] = { 2.0f / LINE, 0, 0, 0, 0, -2.0f / H, 0, 0, 0, 0, -2, 0, -1, 1, 1, 1 };
-  // uniformes de nd_fs: alfa test que siempre pasa, reemplazar con el alfa de la textura, 512x512 de 32 texels/16 B
-  static const float siempre[4] = { 1, 0, 0, 0 }, rep[4] = { 1, 1, 0, 0 }, sw[4] = { 512, 512, 32, 0 };
-  void *u;
-  SceGxmTexture tx;
-  sceGxmTextureInitLinear(&tx, t4, SCE_GXM_TEXTURE_FORMAT_P4_ABGR, 512, 512, 0);
-  sceGxmTextureSetPalette(&tx, pal);
-  sceGxmTextureSetMinFilter(&tx, SCE_GXM_TEXTURE_FILTER_POINT); sceGxmTextureSetMagFilter(&tx, SCE_GXM_TEXTURE_FILTER_POINT);
-  // cuadros: 0 la textura entera 1:1 en (0,0); 1 los texels 384-511 al doble en (520,0)
-  TV v8[8] = { { 0, 0, .5f, 0, 0, ~0u }, { 512, 0, .5f, 1, 0, ~0u }, { 0, 512, .5f, 0, 1, ~0u }, { 512, 512, .5f, 1, 1, ~0u },
-               { 520, 0, .5f, .75f, .75f, ~0u }, { 776, 0, .5f, 1, .75f, ~0u }, { 520, 256, .5f, .75f, 1, ~0u }, { 776, 256, .5f, 1, 1, ~0u } };
-  sceClibMemcpy(q, v8, sizeof v8);
-  uint32_t err[2][2] = { { 0, 0 }, { 0, 0 } }, prim[2] = { 0, 0 };
-  for (uint32_t k = 0; k < 2; k++) {  // k = 1: la textura cambiada por DMA despues del primer dibujo
-    prT4(cpu, k);
-    sceDmacMemcpy(t4, cpu, 0x20000);
-    sceGxmBeginScene(c, 0, rt, 0, 0, 0, &rts[1].cs, &ds);
-    sceGxmSetVertexProgram(c, nvp); sceGxmReserveVertexDefaultUniformBuffer(c, &u); sceGxmSetUniformDataF(u, n_wvp, 0, 16, wvp);
-    sceGxmSetFragmentProgram(c, fragProg(2, 0));
-    for (int r = 0; r < 2; r++) {
-      sceGxmReserveFragmentDefaultUniformBuffer(c, &u);
-      sceGxmSetUniformDataF(u, n_ats, 0, 4, siempre); sceGxmSetUniformDataF(u, n_tfs, 0, 4, rep); sceGxmSetUniformDataF(u, n_sws, 0, 4, sw);
-      sceGxmSetFragmentTexture(c, 0, &tx);
-      sceGxmSetVertexStream(c, 0, q + 4 * r);
-      sceGxmDraw(c, SCE_GXM_PRIMITIVE_TRIANGLE_STRIP, SCE_GXM_INDEX_FORMAT_U16, tib, 4);
-    }
-    sceGxmEndScene(c, 0, 0);
-    sceGxmFinish(c);
-    const uint32_t *m = rts[1].mem;
-    for (uint32_t y = 0; y < 512; y++)
-      for (uint32_t x = 0; x < 776; x++) {
-        int r = x < 512 ? 0 : x >= 520 && y < 256 ? 1 : -1;
-        if (r < 0) continue;
-        uint32_t tu = r ? 384 + (x - 520) / 2 : x, tv = r ? 384 + y / 2 : y, e = pal[prIx(tu, tv, k)] & 0xFFFFFF, g = m[y * LINE + x] & 0xFFFFFF;
-        if (g != e) { if (!err[k][r]++ && !prim[k]) prim[k] = x | y << 16; }
-      }
-  }
-  alog("traductor: prueba del sombreador con swizzle (T4 512x512): 1:1 %u y %u errores de 262144, al doble %u y %u de 65536 "
-       "(antes / despues de cambiar la textura; primer error en %08x %08x)%s\n", err[0][0], err[1][0], err[0][1], err[1][1], prim[0], prim[1],
-       err[0][0] | err[0][1] | err[1][0] | err[1][1] ? "" : ": bien");
-}
-
 // Dibuja el frame f del registro en la superficie s (cs[s]), en el hilo de Adrenaline. base: la imagen normal, que va
 // debajo estirada (lo que el juego no redibuja queda como en el PSP); 0: fondo negro. Primero revisa todos los draws
 // (trCheck, destinos y texturas sin copia): si alguno no se puede, devuelve el motivo sin dibujar nada. Despues abre
@@ -330,7 +262,6 @@ static void trPrueba(SceGxmContext *c) {  // (no libera su memoria)
 // tpal), vertices (trVerts, en tv) y uniformes de cada draw, y lo dibuja. T_OK si quedo listo; si falla a medias
 // devuelve el motivo y la superficie no se usa.
 static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base) {
-  trPrueba(c);
   uint32_t disp = f->fb & 0x1FFFF0, ifb[2], nif = 0, en = 0;  // disp: imagen que se muestra; ifb: imagenes intermedias
   for (uint32_t i = 0; i < f->nd; i++) en += (RE(f->e[f->d[i].st], 0x9C) & 0x1FFFF0) == disp;
   // ningun draw a la imagen que se muestra (juego atrasado: el flip trae la otra del doble buffer): vale la del ultimo
@@ -410,17 +341,11 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     }
     if ((clr & 1) && !(clr >> 8 & 1)) continue;  // borrado solo de profundidad/stencil: nada que ver
     uint32_t key = clr & 1 ? 0 : blendKey(e), mat = (RE(e, 0x55) & 0xFFFFFF) | (RE(e, 0x56) & 0xFF) << 24;
-    float tw = 1, th = 1, sw[4] = { 0, 0, 0, 0 };
+    float tw = 1, th = 1;
     SceGxmTexture t;
     if (tex) {
       uint32_t fmt = RE(e, 0xC3) & 15, a8 = RE(e, 0xA8), b8 = RE(e, 0xB8), tbw = a8 & 0x7FF;
       th = 1u << (b8 >> 8 & 15); tw = tbw;
-      if (d->toff && (RE(e, 0xC2) & 1)) {  // con swizzle: la copia esta tal cual; el sombreador nd_fs busca cada texel
-        static const uint8_t tpb[6] = { 8, 8, 8, 4, 32, 16 };  // texels por 16 bytes de cada formato
-        if (th < 8) th = 8;
-        sw[0] = tw; sw[1] = th; sw[2] = tpb[fmt];
-        tex = 2;
-      }
       RT *src = d->toff ? 0 : rtDe(texAddr(e) & 0x1FFFF0, f->frame, 0);
       if (src) {  // imagen intermedia de este frame: su superficie al doble (512 x 272 del PSP -> 1024 x 544)
         if (sceGxmTextureInitLinear(&t, src->mem, SCE_GXM_TEXTURE_FORMAT_A8B8G8R8, LINE, H, 0) < 0) { res = T_TEX; break; }
@@ -440,9 +365,9 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
         sceGxmTextureSetPalette(&t, pp);
       }
       uint32_t tfl = RE(e, 0xC6), twr = RE(e, 0xC7);
-      // filtro y repeticion del GE (0xC6, 0xC7); con swizzle, siempre sin filtro (nd_fs busca un solo texel)
-      sceGxmTextureSetMinFilter(&t, (tfl & 7) == 1 && tex != 2 ? SCE_GXM_TEXTURE_FILTER_LINEAR : SCE_GXM_TEXTURE_FILTER_POINT);
-      sceGxmTextureSetMagFilter(&t, (tfl >> 8 & 1) && tex != 2 ? SCE_GXM_TEXTURE_FILTER_LINEAR : SCE_GXM_TEXTURE_FILTER_POINT);
+      // filtro y repeticion del GE (0xC6, 0xC7)
+      sceGxmTextureSetMinFilter(&t, (tfl & 7) == 1 ? SCE_GXM_TEXTURE_FILTER_LINEAR : SCE_GXM_TEXTURE_FILTER_POINT);
+      sceGxmTextureSetMagFilter(&t, tfl >> 8 & 1 ? SCE_GXM_TEXTURE_FILTER_LINEAR : SCE_GXM_TEXTURE_FILTER_POINT);
       sceGxmTextureSetUAddrMode(&t, twr & 1 ? SCE_GXM_TEXTURE_ADDR_CLAMP : SCE_GXM_TEXTURE_ADDR_REPEAT);
       sceGxmTextureSetVAddrMode(&t, twr >> 8 & 1 ? SCE_GXM_TEXTURE_ADDR_CLAMP : SCE_GXM_TEXTURE_ADDR_REPEAT);
     }
@@ -452,9 +377,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     if ((res = trVerts(f, d, o + nv, tw, th, mat, sc, &n))) break;
     if (!n) continue;
     if (nv + n > TV_N) { res = T_TOPE; break; }
-    if (c_on) { spx += trArea(o + nv, n, d->prim); ssw += tex == 2; }
-    if (p_on && p_modo == 1) tex = 0;  // (prueba_gpu) sin texturas: el color del vertice
-    if (p_on && p_modo == 2 && tex == 2) tex = 1;  // (prueba_gpu) swizzle leido como lineal
+    if (c_on) { spx += trArea(o + nv, n, d->prim); ssw += tex && d->toff && (RE(e, 0xC2) & 1); }
     SceGxmFragmentProgram *p = fragProg(tex, key);
     if (!p) { res = T_PROG; break; }
     sceGxmSetFragmentProgram(c, p);
@@ -462,12 +385,11 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     // uniformes (ver sombreadores/*.cg): at = funcion del alfa test (1: siempre pasa) y referencia; tf = funcion de
     // textura, TCC y color al doble
     uint32_t db = RE(e, 0xDB), c9 = RE(e, 0xC9);
-    float at[4] = { (clr & 1) || !(RE(e, 0x22) & 1) || (p_on && p_modo == 3) ? 1.0f : (float)(db & 7), (float)(db >> 8 & 0xFF), 0, 0 };
-    sceGxmSetUniformDataF(u, tex == 2 ? n_ats : tex ? n_atx : n_atc, 0, 4, at);
+    float at[4] = { (clr & 1) || !(RE(e, 0x22) & 1) ? 1.0f : (float)(db & 7), (float)(db >> 8 & 0xFF), 0, 0 };
+    sceGxmSetUniformDataF(u, tex ? n_atx : n_atc, 0, 4, at);
     if (tex) {
       float tf[4] = { (c9 & 7) == 3 ? 1.0f : 0.0f, (float)(c9 >> 8 & 1), (float)(c9 >> 16 & 1), 0 };
-      sceGxmSetUniformDataF(u, tex == 2 ? n_tfs : n_tf, 0, 4, tf);
-      if (tex == 2) sceGxmSetUniformDataF(u, n_sws, 0, 4, sw);
+      sceGxmSetUniformDataF(u, n_tf, 0, 4, tf);
       sceGxmSetFragmentTexture(c, 0, &t);
     }
     sceGxmSetVertexStream(c, 0, o + nv);

@@ -52,6 +52,7 @@ static void repCargar(void) {
     LEE(f->d, f->nd * sizeof(RDraw)); LEE(f->e, f->ne * NRS * 4); LEE(f->a, f->na);
 #undef LEE
     if (ok && f->ntx <= TX_N + 0x40000 && sceIoRead(fd, tx, f->ntx) != (int)f->ntx) ok = 0;
+    for (uint32_t i = 0; ok && h[1] < 4 && i < f->nt; i++) if (f->tn[i] >> 31) ok = 0;  // (antes de la 4: con swizzle sin ordenar)
     f->tx = tx;
   }
   sceIoClose(fd);

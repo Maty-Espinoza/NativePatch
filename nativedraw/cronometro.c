@@ -21,15 +21,8 @@ static volatile uint32_t c_n[CN], c_us[CN], c_max[CN], c_dr[CN], c_cola[CN], c_h
 static struct { uint8_t tipo; uint16_t dr; uint32_t cola, us; } c_det[CD];  // detalle: las escenas que siguen al informe
 static volatile uint32_t c_dn = CD;  // escenas ya anotadas en c_det (CD: lleno, esperando que el informe lo imprima)
 
-// Prueba de la GPU (interruptor ux0:data/nativedraw/prueba_gpu, con medir_gpu): cada 10 s el traductor cambia de modo
-// para separar lo que cuesta cada parte del dibujo. Los modos 1 a 3 se ven mal a proposito.
-// 0 normal; 1 sin texturas (cada draw de un color: sin leer texturas ni paletas); 2 las texturas con swizzle leidas por
-// la GPU como si fueran lineales (sombreador nd_ft: se ven revueltas, pero la GPU lee lo mismo sin calcular la posicion
-// de cada texel); 3 sin alfa test (ningun pixel se descarta)
-static uint32_t p_on, p_modo;
-static const char *p_nom[4] = { "normal", "sin texturas", "swizzle leido como lineal", "sin alfa test" };
 // anota en la cola una escena recien mandada (n: su notificacion de fin; dr: draws; px: miles de pixeles dibujados,
-// sumando cada draw; sw: draws con texturas con swizzle)
+// sumando cada draw; sw: draws con texturas que tenian swizzle en el PSP)
 static void cAnota(int tipo, const SceGxmNotification *n, uint32_t dr, uint32_t px, uint32_t sw) {
   if (!c_on || !n) return;
   uint32_t i = c_in;
@@ -80,7 +73,6 @@ static void cInicio(volatile uint32_t *nr, const uint32_t *adr) {
 static void cInforme(uint32_t dt) {
   uint32_t tot = 0, oc = c_ocio, vu = c_vueltas, ll = c_lleno;
   c_ocio = c_vueltas = c_lleno = 0;
-  if (p_on) alog("gpu tiempos: modo de prueba de estos 10 s: %s\n", p_nom[p_modo]);
   for (int k = 0; k < CN; k++) {
     uint32_t n = c_n[k], us = c_us[k], mx = c_max[k], dr = c_dr[k], co = c_cola[k], px = c_px[k], sw = c_sw[k], h[6];
     for (int j = 0; j < 6; j++) { h[j] = c_h[k][j]; c_h[k][j] = 0; }
@@ -104,5 +96,4 @@ static void cInforme(uint32_t dt) {
     alog("gpu tiempos: detalle (tipo y draws: ms de GPU / ms en cola; A Adrenaline, N imagen normal, T traductor, I intermedia):%s\n", b);
   }
   c_dn = 0;
-  if (p_on) p_modo = (p_modo + 1) & 3;  // (los 10 s que siguen, el modo siguiente)
 }

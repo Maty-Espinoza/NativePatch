@@ -1287,9 +1287,9 @@ static int repThread(SceSize args, void *argp) {
       if (!nivel) goto sync;  // (minimo: solo esta linea y la de vram y sync)
       if (reg_on) {  // registro del frame
         uint32_t g = gr.fr ? gr.fr : 1, dd = gr.draws ? gr.draws : 1;
-        clog("  registro: frames=%u completos=%u incompletos: memoria=%u no_leido=%u tope=%u curvas=%u | por frame: draws=%u estados=%u KB=%u paletas=%u us=%u (estados %u vertices %u texturas %u [copiadas %u KB por DMA en %u us; pendientes perdidos %u, sin la copia de su flip %u, con la GPU sin terminar (medido) %u] paletas %u) | de los draws: 3d=%u%% clear=%u%% mezcla=%u%% alfa_test=%u%% swizzle=%u%% | draws por seg con textura 5650/5551/4444/8888/T4/T8/T16/T32/DXT1/3/5: %u %u %u %u %u %u %u %u %u %u %u\n",
+        clog("  registro: frames=%u completos=%u incompletos: memoria=%u no_leido=%u tope=%u curvas=%u | por frame: draws=%u estados=%u KB=%u paletas=%u us=%u (estados %u vertices %u texturas %u [copiadas %u KB por DMA en %u us, de ellas con swizzle %u KB ordenadas en %u us; pendientes perdidos %u, sin la copia de su flip %u, con la GPU sin terminar (medido) %u] paletas %u) | de los draws: 3d=%u%% clear=%u%% mezcla=%u%% alfa_test=%u%% swizzle=%u%% | draws por seg con textura 5650/5551/4444/8888/T4/T8/T16/T32/DXT1/3/5: %u %u %u %u %u %u %u %u %u %u %u\n",
              gr.fr, gr.ok, gr.memo, gr.leer, gr.tope, gr.curva, gr.draws / g, gr.st / g, gr.kb / g >> 10, gr.cl / g, gr.us / g,
-             gr.us_e / g, gr.us_v / g, gr.us_t / g, gr.t_b / g >> 10, gr.us_l / g, gr.pis, gr.tarde, gr.gpu, gr.us_p / g,
+             gr.us_e / g, gr.us_v / g, gr.us_t / g, gr.t_b / g >> 10, gr.us_l / g, gr.o_b / g >> 10, gr.us_o / g, gr.pis, gr.tarde, gr.gpu, gr.us_p / g,
              gr.d3 * 100 / dd, gr.clear * 100 / dd, gr.blend * 100 / dd, gr.atest * 100 / dd, gr.swz * 100 / dd,
              gr.fmt[0], gr.fmt[1], gr.fmt[2], gr.fmt[3], gr.fmt[4], gr.fmt[5], gr.fmt[6], gr.fmt[7], gr.fmt[8], gr.fmt[9], gr.fmt[10]);
       }

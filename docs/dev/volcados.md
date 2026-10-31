@@ -73,5 +73,6 @@ vuelve a dibujar con el mismo traductor y deja `fK_reproduccion.bmp` y `fK_repro
   0.0.7.9: 3 frames, texto armado desde el registro al escribir. 0.0.8.3: imagen intermedia. 0.0.8.4: imagen exacta del
   frame. 0.0.8.5: niveles y reproducción (`reproduccion.c`: `ux0:data/nativedraw/reproducir` con la ruta de un `.bin` lo
   vuelve a dibujar en la Vita). 0.0.8.7: imagen exacta también con L+R+SELECT.
-- Desde 0.0.8 una textura con swizzle va tal cual en el registro (versión del registro ≥ 2): `tools/volcado.py` la
-  desordena en el PC. Si ningún draw va a la imagen que se muestra, se toma la del último draw (como el traductor).
+- En 0.0.8–0.0.8.15 una textura con swizzle va tal cual en el registro (versiones 2 y 3 del registro): `tools/volcado.py`
+  la ordena en el PC. Desde 0.0.8.16 (versión 4) el registro ya la trae ordenada; la reproducción en la Vita no carga
+  volcados de antes de la 4 que tengan texturas con swizzle. Si ningún draw va a la imagen que se muestra, se toma la del último draw (como el traductor).

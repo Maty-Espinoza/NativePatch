@@ -6,7 +6,7 @@
 set -e
 D=$(cd "$(dirname "$0")" && pwd); O=$D/../sombreadores_nd.h
 echo "// Sombreadores del traductor (nativedraw/sombreadores/*.cg), compilados con sombreadores/compilar.sh. No editar." > $O
-for s in nd_v nd_ft nd_fc nd_fs; do
+for s in nd_v nd_ft nd_fc; do
   k=--fragment; [ $s = nd_v ] && k=--vertex
   (cd $SHACC && qemu-arm-static -B 0x100000000 -L /usr/arm-linux-gnueabihf ./shacc $k $D/$s.cg /tmp/$s.gxp)
   echo "static const unsigned char ${s}_gxp[] __attribute__((aligned(16))) = {" >> $O

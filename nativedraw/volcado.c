@@ -51,7 +51,7 @@ static void volBin(RFrame *f) {
   while (k < VN && (!vol_bb[k] || volUsado(k))) k++;
   if (k == VN || !f) return;
   uint8_t *b = vol_bb[k];
-  uint32_t h[16] = { 0x47524E44, 3, f->frame, f->fb, f->fbw, f->nd, f->ne, f->na, f->flags, f->nt, f->ntx, f->esp, f->espf, NRS, sizeof(RDraw), f->nimg }, o = 0;
+  uint32_t h[16] = { 0x47524E44, 4, f->frame, f->fb, f->fbw, f->nd, f->ne, f->na, f->flags, f->nt, f->ntx, f->esp, f->espf, NRS, sizeof(RDraw), f->nimg }, o = 0;
 #define PON(p, n) do { uint32_t n_ = (n); if (o + n_ > VB_N) return; sceClibMemcpy(b + o, p, n_); o += (n_ + 3) & ~3u; } while (0)
   PON(h, sizeof h); PON(RS, NRS);
   PON(f->ta, f->nt * 4); PON(f->tn, f->nt * 4); PON(f->to, f->nt * 4); PON(f->tq, f->nt * 4); PON(f->tm, f->nt * 8);

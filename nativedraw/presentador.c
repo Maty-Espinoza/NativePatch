@@ -597,7 +597,6 @@ static int swOn(const char *p) {  // el archivo existe y no empieza con "no" (co
 void presStart(void) {
   dib = swOn("ux0:data/nativedraw/dibujar");
   c_pedido = swOn("ux0:data/nativedraw/medir_gpu");
-  p_on = c_pedido && swOn("ux0:data/nativedraw/prueba_gpu");  // (modos de prueba: solo con el cronometro)
   repInicio();
   vol_nivel = volNivel();  // volcados: desactivado, pantallazo, frame, secuencia o auto
   if (vol_nivel == 4 && !dib) vol_nivel = 3;  // (auto compara el dibujo de la Vita: sin dibujar no hay que comparar)
