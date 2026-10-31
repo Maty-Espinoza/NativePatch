@@ -210,8 +210,10 @@ static volatile uint32_t fr, listo, n_us;  // fr: escenas de Adrenaline terminad
 static uint32_t usada, dibujada, cur;   // escena en que Adrenaline uso psp_tex / en que se dibujo sup[cur]
 static volatile uint32_t n_pres, n_camb, n_neg_j, n_neg_p, us_sum, us_max;  // (se leen en el hilo del registro)
 static volatile uint32_t n_rev, n_mal;  // frames de la Vita revisados y distintos de la imagen normal
-// solo_mal: frames seguidos con la superficie negra y el juego no; falla: 1 se dejo de reemplazar, 2 ya anotado
-static volatile uint32_t solo_mal, falla;
+// solo_mal: frames seguidos con la superficie negra y el juego no (s_oc: de ellos, leidos con la GPU sin terminar la
+// superficie); falla: 1 se dejo de reemplazar, 2 ya anotado. neg_*: la ultima racha de 30 o mas (la anota el hilo del
+// presentador)
+static volatile uint32_t solo_mal, s_oc, falla, neg_n, neg_largo, neg_oc;
 // dib: interruptor dibujar (reemplazar la imagen siempre; si no, solo con el menu abierto); t_on: traductor listo
 static int dib, t_on, c_pedido;  // c_pedido: cronometro de la GPU (medir_gpu)
 static volatile uint32_t menu, pintado;  // menu abierto; su textura ya tiene el texto
@@ -314,10 +316,11 @@ static int hookEnd(SceGxmContext *c, const SceGxmNotification *v, const SceGxmNo
     if (vol_on == 1 || vol_on == 3) volFrame(c, pj, dibujada == fr && !(tapado && copia == fr));  // volcado
     int nj = negro(pj, 512, 480, 272), np = dibujada == fr && negro(surf[cur], LINE, W, H);  // np: frame anterior
     n_neg_j += nj; n_neg_p += np;
-    solo_mal = np && !nj ? solo_mal + 1 : 0;
-    if (solo_mal >= 30) falla = 1;  // medio segundo de negro sobre una imagen que no lo es: vuelve la imagen normal
     // La superficie que se muestra (surf[cur]) solo se lee con la GPU terminada: a medio dibujar no sirve para comparar
     int sup_lista = !gOcupada(fq[0]);
+    if (np && !nj) { solo_mal++; s_oc += !sup_lista; }
+    else { if (solo_mal >= 30) { neg_largo = solo_mal; neg_oc = s_oc; neg_n++; } solo_mal = s_oc = 0; }
+    if (solo_mal >= 180) falla = 1;  // 3 s de negro sobre una imagen que no lo es: vuelve la imagen normal
     if (t_on && dib && dibujada == fr && cur_hd && !sup_lista) g_salt++;
     if (t_on && dib && dibujada == fr && cur_hd && sup_lista) {  // tapado: la imagen normal no se parece al dibujo de la Vita
       int k = distintos(pj, surf[cur]);
@@ -543,8 +546,11 @@ static int presThread(SceSize args, void *argp) {
     static uint32_t tp0;
     if (tapado != tp0) { tp0 = tapado; alog("traductor: %s\n", tp0 ? "algo tapa la imagen (no esta en el registro): imagen normal" : "vuelve el dibujo de la Vita"); }
     if (aviso < 2 && n_pres >= (aviso ? 60 : 1)) alog("presentador: %s\n", aviso++ ? "60 frames dibujados" : "primer frame dibujado");
-    if (falla == 1) { falla = 2; alog("presentador: la superficie salio negra 30 frames seguidos y la imagen del juego no: se deja la "
-                                      "imagen normal hasta cerrar Adrenaline\n"); }
+    if (falla == 1) { falla = 2; alog("presentador: la superficie salio negra 180 frames seguidos y la imagen del juego no (%u con la GPU sin "
+                                      "terminar la superficie): se deja la imagen normal hasta cerrar Adrenaline\n", s_oc); }
+    static uint32_t nn0;
+    if (neg_n != nn0) { nn0 = neg_n; alog("presentador: superficie negra %u frames seguidos con la imagen del juego no negra (%u con la GPU sin "
+                                          "terminar la superficie)\n", neg_largo, neg_oc); }
     if (++k < 200) continue;
     k = 0;
     uint32_t p = n_pres, m = us_max, s = us_sum, dt = (now() - t) / 1000, nd = n_dma, nr = n_rev, nm = n_mal;

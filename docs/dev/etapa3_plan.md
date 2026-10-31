@@ -50,7 +50,7 @@ Juegos de prueba: **Retro City Rampage DX** (2D), **KOF 96** (2D; [verificar] si
   el banco de la etapa 1). Reconoce `psp_tex` por su tamaño (512x272). La copia de la imagen del PSP que hace Adrenaline
   va a dos texturas propias alternadas (no a `psp_tex`).
 - Memoria: superficies, z y copias en LPDDR física contigua; nada en CDRAM.
-- Seguro: si la superficie sale negra 30 frames seguidos y la imagen del juego no, deja de reemplazarla hasta cerrar
+- Seguro: si la superficie sale negra 180 frames seguidos (3 s; 30 hasta 0.0.8.16, se activaba en las transiciones de KOF 96) y la imagen del juego no, deja de reemplazarla hasta cerrar
   Adrenaline. El log marca "primer frame dibujado" y "60 frames dibujados" (para ver dónde se cuelga si pasa).
 - Después de la escena de Adrenaline, en su hilo y su contexto, dibuja `psp_tex` al doble en una de dos superficies
   propias (LPDDR física, 1024x544 con 960x544 visibles, z D24S8). En el frame siguiente, cuando Adrenaline usa `psp_tex`, se le
