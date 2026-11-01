@@ -68,6 +68,11 @@ NativeDraw 0.0.8.22 + NativeLink 0.0.3.4). How the work is done: `docs/agent/en/
       make the GitHub release (VPK + loose plugins) with tags `nativelink-X.Y.Z` / `nativedraw-X.Y.Z`.
 - [ ] GitHub Actions (`.github/workflows/ci.yml`) builds everything with `tools/preparar.sh` + `tools/compilar.sh`; if it
       fails because of vitasdk downloads, pin the version.
+- [ ] **Ready-made toolchain package** (user to check on his PC first): CI builds pspdev, vitasdk, taiHEN, Adrenaline
+      headers and stubs once and uploads them as a single file to a GitHub release (e.g. `toolchain-1`); `preparar.sh`
+      just downloads and unpacks it (one download per Claude session instead of several, fixed versions for everyone,
+      also for WSL). Docker images do not work for Claude (the container cannot reach ghcr.io; release files do); Docker
+      could still unify the user's environments, but the Mac is ARM64 and not every tool has a build for it.
 - [ ] `tools/windows/instalar.cmd` / `instalar.sh` use the `dev` branch while the default branch is `master`; move
       `dev` to `master` when the first release is made.
 
