@@ -11,6 +11,10 @@ Everything else is indexed in `docs/agent/en/README.md`.
 ## Rules that are easy to break
 - Comments say what a function does and how. No version numbers, dates, test results or history in the code; no TODO
   lists in the code (they live in `TODO.md`).
+- Few comments: one per function or non-obvious block; never one that repeats what the code says.
+- Edit only the lines the task needs: no rewriting whole functions or files, no reordering, renaming or reformatting
+  nearby code. Before each commit check `git diff`; every changed line must come from the request, and the user gets
+  the diff summary with the explanation of the change.
 - Delete what is not used (code, switches, files). Git keeps the history.
 - Every version sent to the Vita gets a fourth number and a "(test)" commit on `dev`; confirmed versions follow the
   last confirmed one on GitHub (`docs/dev/en/versions.md`).

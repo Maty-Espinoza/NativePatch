@@ -7,6 +7,8 @@ moment, the user wins; afterwards this list is updated.
 ## 1. Code comments
 - A comment says **what** the function or block does and **how** it does it. Nothing else.
 - Every file starts with a short comment: what it is, where it is called from, what it includes. No history.
+- **Few comments:** one per function or per block that is not obvious. A comment that repeats what the code already says
+  (`i++; // increment i`) is not written.
 - **Forbidden in the code:** version numbers (`0.0.8.16`, `dev66`, `v13.10`), dates, "it used to be done like…", "in
   test X this happened…", measurement results, game names as a justification, "(test)". All of that goes to the
   documentation (`docs/`) or to `CHANGELOG.md`.
@@ -30,6 +32,15 @@ moment, the user wins; afterwards this list is updated.
 - Nothing speculative: no options, flexibility or handling of impossible errors are added "for later".
 - Before changing something you must understand the origin of the problem (`workflow.md`, "cause first" rule).
 - After every change: build without warnings (`-Wall` is already on in both plugins) and test on the Vita.
+
+### How code is edited
+- **Small, targeted edits:** change only the lines the task needs. A whole function or file is not rewritten when a few
+  lines are enough.
+- **No side changes:** neighboring code is not reordered, renamed or reformatted "while at it", even if it could be
+  better. If it is worth doing, it is a separate task.
+- **Check the diff before each commit** (`git diff --stat` and `git diff`): every changed line must come from the
+  request. Lines that do not are reverted. The user gets the diff summary (files and lines changed) with the explanation
+  of the change.
 
 ## 3. Repo files
 - **What is not used stays out of the repo.** Tools from finished experiments, one-off scripts, dumps,

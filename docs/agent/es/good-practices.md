@@ -7,6 +7,8 @@ choca con lo que pide el usuario en el momento, manda el usuario; después se ac
 ## 1. Comentarios del código
 - Un comentario dice **qué hace** la función o el bloque y **cómo** lo hace. Nada más.
 - Cada archivo empieza con un comentario corto: qué es, de dónde se llama, qué incluye. Sin historia.
+- **Pocos comentarios:** uno por función o por bloque que no sea obvio. No se escribe un comentario que repite lo que el
+  código ya dice (`i++; // suma 1 a i`).
 - **Prohibido en el código:** números de versión (`0.0.8.16`, `dev66`, `v13.10`), fechas, "antes se hacía…", "en la
   prueba X pasó…", resultados de mediciones, nombres de juegos como justificación, "(prueba)". Todo eso va a la
   documentación (`docs/`) o al `CHANGELOG.md`.
@@ -30,6 +32,15 @@ choca con lo que pide el usuario en el momento, manda el usuario; después se ac
 - Nada especulativo: no se agregan opciones, flexibilidad ni manejo de errores imposibles "para después".
 - Antes de cambiar algo hay que entender el origen del problema (`workflow.md`, regla "primero el origen").
 - Después de cada cambio: compilar sin warnings (`-Wall` ya está en los dos plugins) y probar en la Vita.
+
+### Cómo se edita el código
+- **Ediciones chicas y puntuales:** se cambian solo las líneas que la tarea necesita. No se reescribe una función o un
+  archivo entero cuando bastan unas pocas líneas.
+- **Sin cambios de arrastre:** no se reordena, renombra ni reformatea código vecino "de paso", aunque pudiera quedar
+  mejor. Si vale la pena, es otra tarea.
+- **Revisar el diff antes de cada commit** (`git diff --stat` y `git diff`): cada línea cambiada tiene que venir del
+  pedido. Las que no, se revierten. El usuario recibe el resumen del diff (archivos y líneas cambiadas) junto con la
+  explicación del cambio.
 
 ## 3. Archivos del repo
 - **Lo que no se usa, fuera del repo.** Herramientas de experimentos terminados, scripts de una vez, volcados,
