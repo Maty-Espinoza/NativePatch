@@ -13,6 +13,8 @@ what was done is in `CHANGELOG.md`. Updated 2026-11-02 (NativeLink 0.0.3 + Nativ
       (8-bit positions: the PSP does not draw the sprite where the translator does), `paletteRt`, `depthTex`. Animated
       scenes give false differences: the normal image of a dump is caught half drawn (suspected: NPTEST's flip), and
       `layers`, `rtOne` and `lateList` fail the comparator because of that.
+- [ ] **KOF 96, tiles after the SELECT menu (0.0.8.32):** cause unknown; the log has only `ok` frames and all its textures are
+      in VRAM. Not known if it is new. Next: a L+R+SELECT dump while it shows. Metal Slug XX is fine in the logs.
 - [ ] **NPTEST, still open:** `stencilAlpha` and `blendDst` (stencil to alpha at the end of a scene), `blend2x`, `fixGray` and bit
       masks (shaders; no shacc in the container), `readBack` (read the surface mid-scene), `cpuPixels` and `noClear`
       (CPU writes and partial redraws), offsets into intermediate images (`draw()` takes the height from 0xD6, MINZ, not
