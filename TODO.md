@@ -13,11 +13,11 @@ what was done is in `CHANGELOG.md`. Updated 2026-11-02 (NativeLink 0.0.3 + Nativ
       (8-bit positions: the PSP does not draw the sprite where the translator does), `paletteRt`, `depthTex`. Animated
       scenes give false differences: the normal image of a dump is caught half drawn (suspected: NPTEST's flip), and
       `layers`, `rtOne` and `lateList` fail the comparator because of that.
-- [ ] **KOF 96, tiles in the player select (0.0.8.32):** replicated with a record (`stage3_0.0.8.32/kof_d217`). `tools/dump.py` draws
-      the same error on the PC, so the Vita received wrong data, not a drawing error: the list and the VRAM textures seem
-      to come from different moments while the game loads portraits (t3 and t4 from copy 633, list from 632). Not proven,
-      and not known if it is new: the same scene on 0.0.8.29 tells. Suspicion that `dd0456a` caused it is weak: an atlas
-      written by TRANSFER would have failed for good on the old versions.
+- [ ] **KOF 96, tiles in the player select:** the user also sees them on 0.0.8.29, so they are not new (his report; dump 218 of
+      0.0.8.29 caught a clean frame). `tools/dump.py` on the bad dump 217 (`stage3_0.0.8.32/kof_d217`) draws the same error on the
+      PC: the Vita received wrong data. Clue: in 217 two textures come from mirror copy 419 while the list is from 632;
+      in the clean 218 all come from 804. Suspected: a VRAM page used again after a while is read before the mirror
+      refreshes it. Not proven. Next: a dev log of textures whose copy is far older than the frame's.
 - [ ] **NPTEST, still open:** `stencilAlpha` and `blendDst` (stencil to alpha at the end of a scene), `blend2x`, `fixGray` and bit
       masks (shaders; no shacc in the container), `readBack` (read the surface mid-scene), `cpuPixels` and `noClear`
       (CPU writes and partial redraws), offsets into intermediate images (`draw()` takes the height from 0xD6, MINZ, not
