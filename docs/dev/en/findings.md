@@ -101,6 +101,12 @@ proof.
 - **`vertex_out` in Metal Slug XX comes from the capturer running late** (one sample, 0.0.8.25): the vertex memory held GE
   commands of a rewritten list, with the real vertices 20 bytes later, and the gate was at its limit around that frame.
   With the capturer on time (0.0.8.26) the same game had 0 `vertex_out`, 0 frames at the limit and held 30 fps [measured].
+- **Street Fighter Alpha 3 MAX did not open** (C1-2858-3 or 80020148, only with NativeLink): the game changes the image
+  before anything else, and NativeLink read the game ID from the disc in that first call. The crash was inside that
+  function; the ID now comes from kernel data [measured, 0.0.3.10].
+- **Black image with good data missing:** the capturer started at the events present when it saw the mailbox and skipped
+  the game's first lists. This game sets the alpha test only there, so every draw had "never pass". The capturer now
+  walks the ring from its start [measured, 0.0.8.29]. Fights in this game use triangle fans, not drawn yet: normal image.
 - **128 textures per frame was too few:** Metal Slug XX reached it with 0.8 of 1.5 MB in use and lost frames. It is 256 now
   [measured, 0.0.8.25–0.0.8.26].
 - Neo Geo games make transparencies by drawing something one frame on and one frame off: if the Vita repeats or skips

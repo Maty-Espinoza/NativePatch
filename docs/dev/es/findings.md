@@ -98,6 +98,13 @@ directa.
   comandos del GE de una lista reescrita, con los vértices reales 20 bytes más adelante, y la compuerta estaba en su tope
   alrededor de ese frame. Con el capturador a tiempo (0.0.8.26) el mismo juego tuvo 0 `vertex_out`, 0 frames en el tope y
   mantuvo 30 fps [medido].
+- **Street Fighter Alpha 3 MAX no abría** (C1-2858-3 o 80020148, solo con NativeLink): el juego cambia la imagen antes
+  que cualquier otra cosa, y NativeLink leía el ID del juego desde el disco en esa primera llamada. La caída estaba dentro
+  de esa función; el ID ahora sale de los datos del kernel [medido, 0.0.3.10].
+- **Imagen negra por datos faltantes:** el capturador partía desde los eventos que había al ver el buzón y se saltaba las
+  primeras listas del juego. Este juego configura la prueba de alfa solo ahí, así que cada draw tenía "nunca pasa". Ahora
+  el capturador recorre el anillo desde el inicio [medido, 0.0.8.29]. Las peleas de este juego usan abanicos de triángulos,
+  que aún no se dibujan: imagen normal.
 - **128 texturas por frame eran pocas:** Metal Slug XX llegaba al tope con 0,8 de 1,5 MB en uso y perdía frames. Ahora son
   256 [medido, 0.0.8.25–0.0.8.26].
 - Los juegos de Neo Geo hacen transparencias dibujando algo un frame sí y otro no: si la Vita repite o salta frames,

@@ -50,6 +50,7 @@ NativeLink (lado PSP) y NativeDraw (lado Vita) son proyectos hermanos: cada uno 
 | (prueba 0.0.3.6) | (prueba 0.0.8.24) | `8cd1ff4`…`b76c030` | Todo el proyecto en inglés: código, nombres de fuentes y herramientas, textos de log, nombres en disco, relay e instalador (nombres antiguos abajo); objetivo de fps por juego en `run_summary.py --check`; el relay parte despierto. Debe verse y andar igual |
 | (prueba 0.0.3.6) | (prueba 0.0.8.25–0.0.8.26) | `3d33be9`…`845ff84` | Copias chicas de texturas con CPU y 256 texturas por frame; logs de `vertex_out`, giant draws, frames atrasados y límite de texturas |
 | (prueba 0.0.3.6) | (prueba 0.0.8.27) | `3522a99` | Cada juego tiene sus propios logs de NativeDraw |
+| (prueba 0.0.3.7–0.0.3.11) | (prueba 0.0.8.28–0.0.8.29) | `f9669cc`…`924332b` | ID del juego sin leer el disco (abre Street Fighter Alpha 3 MAX); el capturador recorre las primeras listas |
 
 Probadas en la Vita con Gran Turismo: `../../changelog/es/etapa3_preparacion.md`.
 
