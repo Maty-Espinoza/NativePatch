@@ -108,7 +108,7 @@ static void build(int frame) {
 static uint32_t stateSum(void) { uint32_t h = 0; for (int i = 0; i < 256; i++) h = h * 31 + reg[i]; for (int m = 0; m < 5; m++) for (int i = 0; i < 96; i++) h = h * 31 + mtx[m][i]; return h * 31 + vaddr * 7 + iaddr; }
 // Result of one case, in memory shared with the process that compares them. col: columns before "|" per frame, without
 // and with state; the rest are totals of what each case must exercise.
-typedef struct { char col[8][64]; uint32_t st[8], hit, chk, bad, fail, pre, late, lines, pv, skip, whole, lost, rt1, pal, ok; } Res;
+typedef struct { char col[8][64]; uint32_t st[8], hit, chk, bad, fail, pre, late, lines, pv, skip, whole, lost, rt1, pal, tex2, ok; } Res;
 static Res *res;
 static int report(const char *name, int ok) { printf("%s %s\n", ok ? "ok  " : "FAIL", name); return !ok; }
 // Frames from..7 of case a equal those of b (state too if st).
@@ -160,6 +160,7 @@ static int checkAll(void) {
   bad += report("VRAM per frame: the change is detected, no MISMATCH", same(r + V3, r + V3REF, 0, 1) && r[V3].fail && !r[V3].bad);
   bad += report("frame record: complete without memory, incomplete with it", same(r + REG0, r + RAM, 0, 1) && r[REG0].whole == 8 && r[REG1].whole < 8);
   bad += report("frame record: lost events leave the frame incomplete", r[REG0].lost);
+  bad += report("frame record: a texture rewritten between lists gets a new copy", r[REG0].tex2);
   bad += report("frame record: the loaded palette survives changes in memory", r[REG0].pal);
   bad += report("frame record: an image only counts as drawn in its frame", r[REG0].rt1);
   bad += report("texture copy: right by CPU and by DMA", texCopyOk(1) && texCopyOk(32));
@@ -231,6 +232,13 @@ int main(int argc, char **argv) {
   if (reg_on && res) {
     markRt(0x04100000, 4096); regFlip(0x04000000, 512, 0);
     res->rt1 = !rt_pg[0x100 >> 5];
+    *W(0x08C30000) = 1; reg[0xA0] = 0xC30000; reg[0xA8] = 0x080000 | 8; reg[0xB8] = 3 << 8 | 3; reg[0xC3] = 3;  // 8x8, 8888
+    pub_ord = 100; uint32_t t0 = rgTex(0, 8), t1 = rgTex(0, 8);
+    pub_ord = 101; uint32_t t2 = rgTex(0, 8);
+    *W(0x08C30000) = 2; pub_ord = 102; uint32_t t3 = rgTex(0, 8);
+    res->tex2 = t0 && t0 == t1 && t1 == t2 && t3 != t2 && *(uint32_t *)(rf[rg_w]->tx + t3 - 1) == 2;
+    rf[rg_w]->flags = 1;  // (not published)
+    regFlip(0x04000000, 512, 0);
     *W(0x08C20000) = 0x11223344; reg[0xB0] = 0xC20000; reg[0xB1] = 0x080000; last_clut[0] = CLUTADDR(); regClut(1);
     *W(0x08C20000) = 0; regFlip(0x04000000, 512, 0);
     res->pal = *(uint32_t *)(rf[rg_w]->a + rg_clut - 1) == 0x11223344;

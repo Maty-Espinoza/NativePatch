@@ -196,8 +196,26 @@ static uint32_t rgSrc(uint32_t a, uint32_t n) {
   uint32_t s = vtr(a);
   return vtr(a + n - 1) == s + n - 1 && ramEnd(s) >= s + n ? s : 0;
 }
-// Texture of the current draw (GE registers) in tx: the first time in the frame it reserves its full size; then copies
-// only the missing groups of 8 rows of [r0, r1) (r0 >= r1 or out of range: whole texture). With swizzle a group of 8
+// Check of a RAM texture across lists: list of its last draw and groups of 8 rows known to be current in that list
+static uint32_t rg_tl[TN_N];
+static uint64_t rg_tc[TN_N];
+// 1 if a group of [g0, g1) copied to texture i before this list differs from memory (not for swizzled ones: their copy
+// is sorted). The game may rewrite a texture between two lists of a frame, keeping its address.
+static int rgStale(RFrame *f, uint32_t i, uint32_t g0, uint32_t g1) {
+  if (rg_tl[i] != pub_ord) { rg_tl[i] = pub_ord; rg_tc[i] = 0; }
+  uint32_t gb = f->tr[i], n = f->tn[i], o;
+  if (n >> 31) return 0;
+  for (uint32_t g = g0; g < g1; g++) {
+    if (!(f->tm[i] >> g & 1) || rg_tc[i] >> g & 1 || (o = g * gb) >= n) continue;
+    rg_tc[i] |= 1ull << g;
+    if (ramEnd(f->ta[i] + o) < f->ta[i] + o + (n - o < gb ? n - o : gb)) continue;
+    if (sceClibMemcmp((const void *)PSP(f->ta[i] + o), f->tx + f->to[i] + o, n - o < gb ? n - o : gb)) return 1;
+  }
+  return 0;
+}
+// Texture of the current draw (GE registers) in tx: the first time in the frame it reserves its full size (again, as a
+// new entry, if a RAM texture changed: rgStale); then copies only the missing groups of 8 rows of [r0, r1) (r0 >= r1 or
+// out of range: whole texture). With swizzle a group of 8
 // rows is one contiguous block and sorted takes the same place (rgTexCopy sorts it). RAM ones are copied right away by
 // DMA (the game may change them); VRAM ones are marked and regPend copies them from the flip's mirror.
 // Returns offset + 1 in tx; 0 if not copied (unsupported format, image drawn in this frame, limit or unreadable).
@@ -209,7 +227,9 @@ static uint32_t rgTex(uint32_t r0, uint32_t r1) {
   uint32_t rb = tbw * bp[fmt] / 8, n = rb * (swz && th < 8 ? 8 : th), key = n | swz << 31, i, vr = isVram(ta);
   if (swz && (rb & 15)) { f->flags |= R_READ; return 0; }
   if (r1 > th || r0 >= r1) r0 = 0, r1 = th;
-  for (i = 0; i < f->nt && !(f->ta[i] == ta && f->tn[i] == key); i++) {}
+  for (i = f->nt; i > 0 && !(f->ta[i - 1] == ta && f->tn[i - 1] == key); i--) {}  // (the latest entry of this address)
+  i = i ? i - 1 : f->nt;
+  if (i < f->nt && !vr && rgStale(f, i, r0 / 8, (r1 + 7) / 8)) i = f->nt;
   // First time in this frame: full size is reserved (rows not copied are not read)
   if (i == f->nt) {
     // Image the GE drew in this frame (intermediate image): not copied
@@ -219,6 +239,7 @@ static uint32_t rgTex(uint32_t r0, uint32_t r1) {
       f->flags |= R_LIMIT; return 0;
     }
     f->ta[i] = ta; f->tn[i] = key; f->to[i] = f->ntx; f->tm[i] = 0; f->tq[i] = vr ? ~0u : 0; f->tr[i] = 8 * rb; f->nt++;
+    rg_tl[i] = pub_ord; rg_tc[i] = 0;
     f->ntx += (n + 63) & ~63u;
   }
   uint32_t g0 = r0 / 8, g1 = (r1 + 7) / 8, gb = 8 * rb;  // groups and bytes per group
@@ -237,6 +258,7 @@ static uint32_t rgTex(uint32_t r0, uint32_t r1) {
       ga.t_b += m; ga.us_l += now() - t0;
     }
     f->tm[i] |= ((h - g < 64 ? (1ull << (h - g)) : 0) - 1) << g;
+    if (!vr) rg_tc[i] |= ((h - g < 64 ? (1ull << (h - g)) : 0) - 1) << g;
     g = h;
   }
   return f->to[i] + 1;
