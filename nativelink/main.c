@@ -638,6 +638,16 @@ static int zoneCheck(void) {
   return 0;
 }
 
+#ifdef NP_DEV
+// Diagnosis: ms0:/seplugins/nl_stage holds the digit of the startup step where module_start stops (0: none)
+static int stageRead(void) {
+  char c = '0';
+  SceUID fd = sceIoOpen("ms0:/seplugins/nl_stage", PSP_O_RDONLY, 0);
+  if (fd >= 0) { sceIoRead(fd, &c, 1); sceIoClose(fd); }
+  LOG("startup stops at step %c\n", c);
+  return c - '0';
+}
+#endif
 // Startup: reads the buttons (L/SELECT off, R synchronous log), checks the shared zone, finds the GE and display
 // functions and hooks them. The hooks are installed even if NativeLink is off: then they only call the original.
 int module_start(SceSize args, void *argp) {
@@ -648,6 +658,7 @@ int module_start(SceSize args, void *argp) {
   logInit(pad.Buttons & PSP_CTRL_RTRIGGER);
   if (passive)
     LOG("off (L or SELECT when opening the game): the game runs unchanged and nothing is noted for NativeDraw\n");
+  DEV(int stage = stageRead(); if (stage == 1) return 0;)
   if (zoneCheck() && !passive) {
     passive = 1;
     LOG("WARNING: the game uses the plugin zone (0x0A000000-0x0B000000) -> off\n");
@@ -655,6 +666,7 @@ int module_start(SceSize args, void *argp) {
   if (!passive) { // NativeDraw writes the log as soon as it responds (log.h)
     VDESC[0] = 0x31565047; VDESC[1] = 0; // "GPV1"
   }
+  DEV(if (stage == 2) return 0;)
 
   _sceGeListUpdateStallAddr = (void *)FindProc("sceGE_Manager", "sceGe_driver", 0xE0D68148);
   _sceGeListEnQueue = (void *)FindProc("sceGE_Manager", "sceGe_driver", 0xAB49E76A);
@@ -672,6 +684,7 @@ int module_start(SceSize args, void *argp) {
   sctrlHENPatchSyscall((u32)_sceGeListEnQueueHead, sceGeListEnQueueHeadPatched);
   sctrlHENPatchSyscall((u32)_sceGeDrawSync, sceGeDrawSyncPatched);
   sctrlHENPatchSyscall((u32)_sceGeListSync, sceGeListSyncPatched);
+  DEV(if (stage == 3) return 0;)
   t4t6Install(); // (the hooks only note if NativeLink is active)
   sctrlHENPatchSyscall((u32)_sceDisplaySetFrameBuf, sceDisplaySetFrameBufPatched);
 
