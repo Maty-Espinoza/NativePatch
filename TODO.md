@@ -6,11 +6,10 @@ what was done is in `CHANGELOG.md`. Updated 2026-11-02 (NativeLink 0.0.3 + Nativ
 `docs/agent/en/stage3-plan.md`.
 
 ## Next
-- [ ] **Test KOF 96 on NativeDraw 0.0.8.29 + NativeLink 0.0.3.11** (the capturer now walks the first lists of every game).
 - [ ] **Triangle fans (prim 5) in the translator:** Street Fighter Alpha 3 MAX fights fall to the normal image with reason
       `primitive`. With them it is the 2D benchmark at 60 fps (~600 draws per frame).
 - [ ] A test for "state set only in the game's first lists", as a NPTEST scene (nothing cheaper can reproduce it).
-- [ ] KOF 96 fights: seconds at 47–57 fps with the GPU at 95–98 %; suspected GPU limit, not proven.
+- [ ] KOF 96 fights: seconds at 42–57 fps with the GPU at 90–98 % and the capturer at ~11 ms; suspected GPU limit, not proven.
 - [ ] **Synthetic battery NPTEST** (standardization goes before the texture cache): a homebrew based on the old GEPTEST
       runner (tag `gepatch-dev66`). About 12 2D scenes (clear, 4 sprite formats, CLUT4/8, swizzle, blending, alpha test,
       scissor, layers, TRANSFER, intermediate image, texture in VRAM), a cache scene, later 3D scenes (~12–15), plus the
