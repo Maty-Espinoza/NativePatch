@@ -86,13 +86,13 @@ A reasonable suspicion is not enough: it is stated as a suspicion and confirmed 
 ## 6. Saving and reading results
 - At the end of each run, **before the user opens another game** (logs get replaced): wait for the relay to download
   them (15–30 s after closing the game) and copy from `received/` `nativelink.log`, `nativelink_prev.log`,
-  `nativedraw_capture.log`, `nativedraw_capture_prev.log`, `nativedraw.log` (in a dev build with extreme log level, also
+  `nativedraw_capture.log`, `nativedraw_capture_prev.log`, `nativedraw.log`, `nativedraw_prev.log` (in a dev build with extreme log level, also
   `nativedraw_frames.log` and `nativedraw_late.log`) to `vitabridge/stage<N>_<version>/<game><n>/` (e.g.
   `stage3_0.0.8.22/metalslug1`). The relay deletes what is in `received/` after 7 days: what was not copied is lost.
+- **Each game has its own logs.** Opening another game without closing Adrenaline moves the logs of the one before to
+  `*_prev.log` (only one game back is kept). `nativedraw_prev.log` is new and goes with the others.
 - **Verify the version in the logs before analyzing:** `head -1 nativelink.log`, the first line of
-  `nativedraw_capture.log` and the last "NativeDraw 0.0.x built ..." line of `nativedraw.log` (this file is
-  appended to, not replaced: the analysis starts at that line). The "prev" of the capturer log only rotates when opening
-  Adrenaline: if the user changes game without closing Adrenaline, both end up in the same log.
+  `nativedraw_capture.log` and the "NativeDraw 0.0.x built ..." line of `nativedraw.log`.
 - First check that the components talked: `python3 tools/test_link.py <folder> [version.txt]`. Performance verdict:
   `sh tools/test_local.sh <folder> [ref]`.
 - Summary without reading the whole logs: `python3 tools/run_summary.py <folder>`. With extreme log level:

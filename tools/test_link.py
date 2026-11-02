@@ -23,7 +23,6 @@ def check(name, ok, detail=''):
 
 want = dict(re.findall(r'(Native\w+) (\S+)', open(sys.argv[2]).read())) if len(sys.argv) > 2 else {}
 game = 'game=' in nl
-# The last session of each log: nativedraw.log can hold several.
 for name, text, rx, needed in (('NativeDraw', nd, r'NativeDraw (\S+) built', True), ('NativeLink', nl, r'NativeLink (\S+) \(build', game)):
     v = re.findall(rx, text)
     if needed: check(name + ' version', v and v[-1] == want.get(name, v[-1]), '%s, build %s' % (v[-1] if v else 'not in the log', want.get(name, 'not given')))
@@ -32,6 +31,7 @@ if not game: print('--   no game in this run: link checks skipped')
 else:
     check('mailbox written by NativeLink', 'NativeLink active' in nl)
     check('mailbox seen by NativeDraw', 'NativeLink mailbox (shadow mode) found' in cap)
+    check('the logs hold a single game', cap.count('NativeLink mailbox (shadow mode) found') == 1, '%d in the capturer log' % cap.count('NativeLink mailbox (shadow mode) found'))
     alive = re.findall(r'stats shadow: .*?vita=(\w+)', nl)
     check('Vita answers the mailbox', alive and alive[-1] == 'yes', 'last vita=%s' % (alive[-1] if alive else '?'))
     frames, lists, cmds = nums(r'sec: frames=(\d+)', cap), nums(r'sec: .*?lists/f=(\d+)', cap), nums(r'sec: .*?commands/f=(\d+)', cap)

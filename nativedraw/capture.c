@@ -1192,6 +1192,8 @@ static void event(volatile uint32_t *e) {
   }
 }
 
+void alogNew(void);  // nativedraw.c
+static volatile int logs_new;  // the capturer asks the log thread for new logs (a new game) and waits for it
 // Capturer thread: waits for the NativeLink mailbox, gives the heartbeat (SB[4]), processes new ring events
 // (SB[2] head, own tail; SB[5] processed), walks the lists and sleeps briefly if there is no work
 static int capThread(SceSize args, void *argp) {
@@ -1203,6 +1205,8 @@ static int capThread(SceSize args, void *argp) {
       continue;
     }
     if (!on) {
+      static uint32_t sessions;  // the mailbox comes back with each game: every game after the first starts new logs
+      if (sessions++) { logs_new = 1; while (logs_new) sceKernelDelayThread(10000); }
       on = 1; tail = SB[2]; resetQueue(); sec_t0 = now(); sceClibMemset(&acc, 0, sizeof acc);
       for (int w = 0; w < 16; w++) want_l[w] = want_d[w] = rt_pg[w] = mir_ok[0][w] = mir_ok[1][w] = 0;
       mir_u = 0; mir_reset = 1; mir_on = SB[1] >= 4;
@@ -1277,10 +1281,43 @@ static void rflush(int k) {
 // Log thread (low priority): every 0.2 s, if the capturer left a second ready (rep), writes it as lines of
 // text by level; drains the rings every 2 s (or at half full) and nativedraw_capture.log every 5 s (or at
 // half of the buffer)
+// Moves what is pending in lbuf to the capturer log
+static void logWrite(void) {
+  SceUID fd = sceIoOpen(LOGC, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_APPEND, 0666);
+  uint32_t n = lpos;
+  if (fd >= 0) { sceIoWrite(fd, lbuf, n); sceIoClose(fd); }
+  lpos = 0;  // (what arrives during the write may be lost: it is statistics)
+}
+// The current capturer logs become *_prev.log
+static void logsRotate(void) {
+  sceIoRemove("ux0:pspemu/nativedraw_capture_prev.log");
+  sceIoRename(LOGC, "ux0:pspemu/nativedraw_capture_prev.log");
+#ifdef NP_DEV
+  static const char *rot[2][2] = { { "ux0:pspemu/nativedraw_frames.log", "ux0:pspemu/nativedraw_frames_prev.log" },
+                                   { "ux0:pspemu/nativedraw_late.log", "ux0:pspemu/nativedraw_late_prev.log" } };
+  for (int k = 0; k < 2; k++) { sceIoRemove(rot[k][1]); sceIoRename(rot[k][0], rot[k][1]); }
+#endif
+}
+// First lines of the capturer logs
+static void logsHead(void) {
+  clog("NativeDraw " NATIVEDRAW_VERSION ": capturer (sublist memory, VRAM mirror, frame record)\n");
+#ifdef NP_DEV
+  if (level >= 2) rput(0, "t_ms,frame_us,gate_us,waits,no_wait,sync_GE_us,cpu_idle_x1000,mirror_us,mirror_pages,hooks_us,"
+          "commands,draws,capture_us,capture_cpu_us,applied,checked_readers,own_reads,from_readers,pending_lists,late_syncs,"
+          "list_addr,list_kb,memory_us,apply_us\n");
+  if (level >= 2) rput(1, "t_ms,type,wait_us,list,delay_us,commands,lists_before,enqueued_ago_us,last_stall_ago_us,vita_started_after_us,"
+          "vita_walked_us,work_us,own_reads,from_readers,applied,processor_us\n");
+#endif
+}
 static int repThread(SceSize args, void *argp) {
   uint32_t last_write = 0;
   for (;;) {
     sceKernelDelayThread(200000);
+    if (logs_new) {  // new game: what is pending goes to the old logs
+      logWrite(); DEV(rflush(0); rflush(1);)
+      logsRotate(); logsHead(); alogNew();
+      logs_new = 0;
+    }
     static uint32_t nrep;
     if (rep_ready && !level && ++nrep % 10) rep_ready = 0;  // minimum: 1 in 10 seconds
     if (rep_ready) {
@@ -1400,10 +1437,7 @@ static int repThread(SceSize args, void *argp) {
     if (RG[0].w - RG[0].r > RG[0].n / 2 || RG[1].w - RG[1].r > RG[1].n / 2 || now() - rg_t > 2000000) { rflush(0); rflush(1); rg_t = now(); }
 #endif
     if (lpos && (now() - last_write > 5000000 || lpos > sizeof lbuf / 2)) {
-      SceUID fd = sceIoOpen(LOGC, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_APPEND, 0666);
-      uint32_t n = lpos;
-      if (fd >= 0) { sceIoWrite(fd, lbuf, n); sceIoClose(fd); }
-      lpos = 0;  // (what arrives during the write may be lost: it is statistics)
+      logWrite();
       last_write = now();
     }
   }
@@ -1553,8 +1587,7 @@ static int swOn(const char *p) {
 // cache (each one turns itself off if memory is short) and starts the capturer, the mirror thread and both readers
 void capStart(void) {
   SceIoStat st;
-  sceIoRemove("ux0:pspemu/nativedraw_capture_prev.log");
-  sceIoRename(LOGC, "ux0:pspemu/nativedraw_capture_prev.log");
+  logsRotate();
   SceUID r = sceKernelCreateThread("nativedraw_capture_log", repThread, 0xB0, 0x2000, 0, 0, NULL);  // first: so the
   if (r >= 0) sceKernelStartThread(r, 0, NULL);                                                      // log survives
   {  // log level
@@ -1563,17 +1596,7 @@ void capStart(void) {
     if (fd >= 0) { sceIoRead(fd, b, 7); sceIoClose(fd); level = DEV(b[0] == 'e' ? 2 :) b[0] == 'm' && b[1] == 'i' ? 0 : 1; }
   }
   if (EXTREME) { uint32_t t0 = now(), x = 0; for (int i = 0; i < 10000; i++) x += now(); clog("clock read cost: %u ns (%u)\n", (now() - t0) / 10, x & 1); }
-  clog("NativeDraw " NATIVEDRAW_VERSION ": capturer (sublist memory, VRAM mirror, frame record)\n");
-#ifdef NP_DEV
-  static const char *rot[2][2] = { { "ux0:pspemu/nativedraw_frames.log", "ux0:pspemu/nativedraw_frames_prev.log" },
-                                   { "ux0:pspemu/nativedraw_late.log", "ux0:pspemu/nativedraw_late_prev.log" } };
-  for (int k = 0; k < 2; k++) { sceIoRemove(rot[k][1]); sceIoRename(rot[k][0], rot[k][1]); }
-  if (level >= 2) rput(0, "t_ms,frame_us,gate_us,waits,no_wait,sync_GE_us,cpu_idle_x1000,mirror_us,mirror_pages,hooks_us,"
-          "commands,draws,capture_us,capture_cpu_us,applied,checked_readers,own_reads,from_readers,pending_lists,late_syncs,"
-          "list_addr,list_kb,memory_us,apply_us\n");
-  if (level >= 2) rput(1, "t_ms,type,wait_us,list,delay_us,commands,lists_before,enqueued_ago_us,last_stall_ago_us,vita_started_after_us,"
-          "vita_walked_us,work_us,own_reads,from_readers,applied,processor_us\n");
-#endif
+  logsHead();
   static const char *sw[] = { "ux0:data/nativedraw/no_gate", "ux0:data/nativedraw/no_mirror" DEV(, "ux0:data/nativedraw/no_idle", "ux0:data/nativedraw/gate_sync") };
   for (int k = 0; k < (int)(sizeof sw / sizeof *sw); k++) if (swOn(sw[k])) gp_flags |= 1u << k;
   if (swOn("ux0:data/nativedraw/mirror_wait")) gp_flags |= 32;  // the PSP flip waits for the mirror copy

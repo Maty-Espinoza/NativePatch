@@ -19,6 +19,7 @@
 #include "version.h"
 
 #define LOGF "ux0:pspemu/nativedraw.log"
+#define LOGP "ux0:pspemu/nativedraw_prev.log"
 #define PSP(a) (0x68000000u + ((a) & 0x0FFFFFFFu))  // uncached view of PSP RAM (CONVERT_ADDRESS)
 #define DESC ((volatile uint32_t *)PSP(0x0A7FF000u))
 
@@ -160,10 +161,18 @@ static SceUID hookCT(const char *name, SceKernelThreadEntry entry, int prio, int
   return r;
 }
 
+// Starts a new log: the current one becomes nativedraw_prev.log and the new one begins with the version line
+void alogNew(void) {
+  sceIoRemove(LOGP);
+  sceIoRename(LOGF, LOGP);
+  nlog = 0;
+  alog("NativeDraw " NATIVEDRAW_VERSION " built %s %s (datum %d)\n", __DATE__, __TIME__, datum);
+}
+
 void _start() __attribute__((weak, alias("module_start")));
 // Plugin startup: NativeLink log writer thread, emulator threads hook and main thread.
 int module_start(SceSize args, void *argp) {
-  alog("NativeDraw " NATIVEDRAW_VERSION " built %s %s (datum %d)\n", __DATE__, __TIME__, datum);
+  alogNew();
   SceUID wt = sceKernelCreateThread("nativedraw_writer", writerThread, 0xA0, 0x2000, 0, 0, NULL);
   if (wt >= 0 && sceKernelStartThread(wt, 0, NULL) >= 0) writer = 1;
   alog("NativeLink log: %s\n", writer ? "ring + writer thread" : "direct write");

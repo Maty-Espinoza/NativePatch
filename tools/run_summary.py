@@ -63,7 +63,6 @@ def fpsOf(r): return [float(m.group(1)) for l in load('nativelink.log', r) if (m
 def hdOf(r):
     hd = nat = out = 0
     for l in load('nativedraw.log', r):
-        if ' built ' in l: hd = nat = out = 0  # (this log is appended to: only the last session counts)
         if m := re.search(r'translator: HD frames (\d+), normal image (\d+)', l): hd += int(m.group(1)); nat += int(m.group(2))
         if m := re.search(r'vertex_out=(\d+)', l): out += int(m.group(1))
     return hd, nat, out

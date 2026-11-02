@@ -6,6 +6,11 @@ se explican en `versions.md`). Pendiente: cambiar los interruptores desde el men
 mientras tanto son archivos. Después de 0.0.8.24 los archivos de interruptores antiguos ya no se leen: los nombres
 son los de aquí (antiguos: `versions.md`) y "Clean test leftovers" del instalador borra los archivos viejos.
 
+Cada juego tiene sus propios logs (0.0.8.27): abrir Adrenaline u otro juego pasa `nativedraw.log` y
+`nativedraw_capture.log` a `*_prev.log`, igual que los de NativeLink. Solo se guarda un juego hacia atrás. Las líneas de "primera
+vez" y las de detalle con tope (`translator: first frame with`, `giant draw`, `vertex_out (n)`, `late frame`) se cuentan por sesión
+de Adrenaline, así que un segundo juego puede no repetirlas.
+
 Los registros sirven para entender qué pasa, pero también cuestan rendimiento. Por eso hay tres niveles. Se elige uno en
 la Vita con el archivo `ux0:data/nativedraw/log_level` (contenido `minimum`, `medium` o `extreme`; **sin archivo: mediano**).
 NativeDraw lo lee al abrir Adrenaline y se lo pasa a NativeLink por el buzón (`SB[0x4E]`: 0, 1 o 2), así que vale para los dos.

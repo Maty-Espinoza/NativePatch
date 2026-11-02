@@ -6,6 +6,11 @@ explained in `versions.md`). Pending item: change the switches from the L+R+STAR
 for now they are files. After 0.0.8.24 the old Spanish switch files are no longer read: the names
 are the ones here (old names: `versions.md`), and the installer's "Clean test leftovers" removes the old files.
 
+Each game has its own logs (0.0.8.27): opening Adrenaline or another game moves `nativedraw.log` and
+`nativedraw_capture.log` to `*_prev.log`, like NativeLink's. Only one game back is kept. "First time" lines and the capped
+detail lines (`translator: first frame with`, `giant draw`, `vertex_out (n)`, `late frame`) are counted per Adrenaline
+session, so a second game may not repeat them.
+
 Logs help to understand what is going on, but they also cost performance. That is why there are three levels. One is
 chosen on the Vita with the file `ux0:data/nativedraw/log_level` (content `minimum`, `medium` or `extreme`; **no file: medium**).
 NativeDraw reads it when Adrenaline opens and passes it to NativeLink through the mailbox (`SB[0x4E]`: 0, 1 or 2), so it applies to both.
