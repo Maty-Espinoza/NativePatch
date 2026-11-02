@@ -13,10 +13,11 @@ what was done is in `CHANGELOG.md`. Updated 2026-11-02 (NativeLink 0.0.3 + Nativ
       (8-bit positions: the PSP does not draw the sprite where the translator does), `paletteRt`, `depthTex`. Animated
       scenes give false differences: the normal image of a dump is caught half drawn (suspected: NPTEST's flip), and
       `layers`, `rtOne` and `lateList` fail the comparator because of that.
-- [ ] **KOF 96, tiles in the player select (0.0.8.32):** seen in a screenshot dump (`stage3_0.0.8.32/kof_dumps/215`): the frame is
-      drawn as ok but the tile textures in VRAM are wrong, right when the character portraits appear. Cause unknown; not
-      known if it is new. Suspected: `dd0456a` (TRANSFER destinations read from the mirror). Next: a `sequence` dump (with
-      record) of that moment, `tools/dump.py`, and if it is not enough the same scene on 0.0.8.29.
+- [ ] **KOF 96, tiles in the player select (0.0.8.32):** replicated with a record (`stage3_0.0.8.32/kof_d217`). `tools/dump.py` draws
+      the same error on the PC, so the Vita received wrong data, not a drawing error: the list and the VRAM textures seem
+      to come from different moments while the game loads portraits (t3 and t4 from copy 633, list from 632). Not proven,
+      and not known if it is new: the same scene on 0.0.8.29 tells. Suspicion that `dd0456a` caused it is weak: an atlas
+      written by TRANSFER would have failed for good on the old versions.
 - [ ] **NPTEST, still open:** `stencilAlpha` and `blendDst` (stencil to alpha at the end of a scene), `blend2x`, `fixGray` and bit
       masks (shaders; no shacc in the container), `readBack` (read the surface mid-scene), `cpuPixels` and `noClear`
       (CPU writes and partial redraws), offsets into intermediate images (`draw()` takes the height from 0xD6, MINZ, not
