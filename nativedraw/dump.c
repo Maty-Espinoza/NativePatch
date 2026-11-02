@@ -11,6 +11,7 @@ void *sceDmacMemcpy(void *dst, const void *src, SceSize size);
 // dump_req: L+R+SELECT request; dump_on: 0 nothing, 3 armed (auto), 1 capturing, 2 to write; dump_k: frames ready
 static volatile uint32_t dump_req, dump_on, dump_k;
 extern volatile uint32_t nd_exact_until;  // (capture.c) until when the record carries the exact PSP image
+DEV(extern volatile uint32_t nd_dump_mark;)  // (capture.c) the running program asked for a dump
 // whether automatic; dumps made; time of the last; bad blocks of the one that triggered the automatic; request time
 static uint32_t dump_auto, dump_n, dump_t, dump_dif, dump_t0;
 // Level (0 off, 1 screenshot, 2 frame, 3 sequence, 4 auto) and frames per dump
@@ -257,6 +258,7 @@ static void dumpFree(void) {  // frees all the dump memory
 // L+R+SELECT request it takes the memory and starts capturing; when capture ends (dump_on = 2) it writes the
 // files to the first free dumps/NNN folder and frees the memory (except in automatic).
 static void dumpTick(void) {
+  DEV(if (nd_dump_mark) { nd_dump_mark = 0; if (!dump_on || dump_on == 3) dump_req = 1; })
   if (dump_auto && !dump_on && dump_n < 10) {  // automatic: armed (the memory stays taken)
     if (!dump_mem && !dumpAlloc()) { dump_auto = 0; return; }
     dump_k = 0; dump_dif = 0; dump_lastn = 0; dump_on = 3;

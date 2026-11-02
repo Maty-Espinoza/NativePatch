@@ -305,6 +305,7 @@ static int reg_on;  // frame record (switch draw)
 // Until when (Vita time) each frame carries the exact PSP image: set by dump.c for an
 // L+R+SELECT dump and used by record.c
 volatile uint32_t nd_exact_until;
+DEV(volatile uint32_t nd_dump_mark;)  // a GE NOP carrying 0x4E5044 asks for a dump (NPTEST); dumpTick takes it
 static void regDraw(uint32_t n, uint32_t type, uint32_t vt, uint32_t idx), regClut(uint32_t d), regMemo(uint32_t draws);
 // PRIM (command 0x04, d: count and primitive type): records the draw, counts its class and the state changes since
 // the previous one, advances vaddr/iaddr, notes new textures, requests VRAM textures from the mirror and marks the
@@ -796,7 +797,7 @@ static int __attribute__((noinline)) walkList(List *l) {
     l->n++; l->pc = pc + 4; l->prev = op; acc.cmds++; f_cmds++; budget--;
 #define TOUCH(c) if (rec) rec_touch[(c) >> 5] |= 1u << ((c) & 31)
     switch (c) {
-    case 0x00: break;
+    case 0x00: DEV(if (d == 0x4E5044) nd_dump_mark = 1;) break;
     case 0x01: vaddr = rel(l, d); vset = 1; if (rec) rec->flags |= M_VABS; break;
     case 0x02: iaddr = rel(l, d); if (rec) rec->flags |= M_IABS; break;
     case 0x04: draw(d); break;

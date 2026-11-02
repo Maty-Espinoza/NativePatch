@@ -54,6 +54,7 @@ The development measurements are inside `#ifdef NP_DEV`. A normal build has them
 - Dumps, MISMATCHES and the minimum and medium levels stay. The mailbox layout does not change (`how-it-works.md`).
 
 ## Dumps (NativeDraw 0.0.8.5)
+- Development builds: a GE NOP carrying `0x4E5044` asks for a dump, like L+R+SELECT (NPTEST).
 Dump levels in `ux0:data/nativedraw/dump`: `off`, `screenshot`, `frame`, `sequence` (without the file)
 or `auto` (3 letters are compared; `no` also turns it off). What each one saves, how much it costs and how they are read with `tools/dump.py`: `dumps.md`.
 

@@ -49,3 +49,12 @@ confirmar: UV de 8 bits en coordenadas directas (`vertFmts`, celda 0), `bboxJump
 obtenido (necesita compilación de desarrollo). `ok` solo dice que el frame se dibujó en HD, no que la imagen esté bien. Un
 frame sin registro nuevo (`no_new_frame`, por ejemplo `limit`) no sale en esas líneas: mirar las líneas `record:` de
 `nativedraw_capture.log`.
+
+## Comparar las imágenes
+Con `ms0:/nptest_dumps` empezando con `y` (`send/ux0/pspemu/nptest_dumps`), cada escena dura 5 s (unos 9 min) y en su frame
+60 manda un NOP del GE con `0x4E5044`, que hace que un NativeDraw de desarrollo saque un volcado. Usar el nivel `screenshot`
+(`ux0:data/nativedraw/dump`, se lee al abrir Adrenaline) y dejarlo como estaba al terminar.
+`python3 tools/nptest_compare.py <volcados> <corrida> <salida>` asocia cada volcado a su escena por el código de barras,
+reduce la imagen de la Vita y compara en bloques de 4x4: `same`, `DIFF`, `normal (motivo)` o `no dump`. Deja `compare.txt` y
+páginas con PSP, Vita y diferencias. Las escenas animadas pueden diferir en un frame. Las que no mandan lista del GE
+(`ramShown`) no generan volcado.

@@ -53,6 +53,7 @@ Las mediciones de desarrollo están dentro de `#ifdef NP_DEV`. Una compilación 
 - Los volcados, MISMATCHES y los niveles mínimo y mediano se quedan. La disposición del buzón no cambia (`how-it-works.md`).
 
 ## Volcados (NativeDraw 0.0.8.5)
+- Compilación de desarrollo: un NOP del GE con `0x4E5044` pide un volcado, como L+R+SELECT (NPTEST).
 Niveles de volcado en `ux0:data/nativedraw/dump`: `off`, `screenshot`, `frame`, `sequence` (sin el archivo)
 o `auto` (se comparan 3 letras; `no` también lo apaga). Qué guarda cada uno, cuánto cuesta y cómo se leen con `tools/dump.py`: `dumps.md`.
 

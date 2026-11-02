@@ -3,7 +3,8 @@
 // Buttons: RIGHT/LEFT next/previous, CROSS pause on a scene (for a L+R+SELECT dump), START exit. Each scene shows its
 // number top right and as a bar code on the bottom line (8 bits, usable in dumps). ms0:/native_test.log gets one line per
 // scene: number, name, expected reason, first frame, and a hash of the PSP image at frames 30 and 119 (they must not
-// change between versions of the plugins, or with the plugins off).
+// change between versions of the plugins, or with the plugins off). If ms0:/nptest_dumps starts with y, each scene lasts
+// 5 s and at its frame 60 asks NativeDraw for a dump with a GE NOP (tools/nptest_compare.py reads them).
 #include "nptest.h"
 #include <pspctrl.h>
 #include <stdio.h>
@@ -13,7 +14,7 @@ PSP_HEAP_SIZE_KB(1024);
 
 static u32 __attribute__((aligned(16))) list[0x40000];
 static void *fbs[2] = { (void *)0, (void *)0x88000 };
-static int back, cur;
+static int back, cur, frame_s, dumps;
 u32 fb_psm = GU_PSM_8888;
 
 void *backBuf(void) { return fbs[back]; }
@@ -72,6 +73,7 @@ void begin(void) {
 void end(void) {
   if (!(scenes[cur].flags & F_RAW)) reset();
   digits(cur);
+  if (dumps && frame_s == 60) sceGuSendCommandi(0, 0x4E5044);
   for (int b = 0; b < 8; b++) rect(b * 8, 268, 8, 4, cur >> b & 1 ? WHITE : 0xFF000000);
   sceGuFinish();
   sceGuSync(0, 0);
@@ -101,6 +103,8 @@ int main(void) {
 #ifdef SHOTS
   sceIoMkdir("ms0:/nptest_shots", 0777);
 #endif
+  SceUID fd = sceIoOpen("ms0:/nptest_dumps", PSP_O_RDONLY, 0);
+  if (fd >= 0) { char c = 0; sceIoRead(fd, &c, 1); sceIoClose(fd); dumps = c == 'y'; }
   sceCtrlSetSamplingMode(PSP_CTRL_MODE_DIGITAL);
   sceGuInit();
   sceGuStart(GU_DIRECT, list);
@@ -121,7 +125,8 @@ int main(void) {
     u32 h0 = 0, h1 = 0, first = frame;
     int step = 1, f = 0;
     fb_psm = s->psm;
-    for (; f < 120 || paused; f++, frame++) {
+    for (; f < (dumps ? 300 : 120) || paused; f++, frame++) {
+      frame_s = f;
       if (!(s->flags & F_SELF)) { begin(); s->fn(f); end(); }
       else s->fn(f);
       if (f == 30) h0 = hash();
