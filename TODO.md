@@ -9,6 +9,10 @@ what was done is in `CHANGELOG.md`. Updated 2026-11-02 (NativeLink 0.0.3 + Nativ
 - [ ] **Triangle fans (prim 5) in the translator:** Street Fighter Alpha 3 MAX fights fall to the normal image with reason
       `primitive`. With them it is the 2D benchmark at 60 fps (~600 draws per frame).
 - [ ] KOF 96 fights: seconds at 42–57 fps with the GPU at 90–98 % and the capturer at ~11 ms; suspected GPU limit, not proven.
+- [ ] **NPTEST on 0.0.8.32, real differences left:** `firstState` (alpha test set only in the first lists is lost), `vertFmts`
+      (8-bit positions: the PSP does not draw the sprite where the translator does), `paletteRt`, `depthTex`. Animated
+      scenes give false differences: the normal image of a dump is caught half drawn (suspected: NPTEST's flip), and
+      `layers`, `rtOne` and `lateList` fail the comparator because of that.
 - [ ] **NPTEST, still open:** `stencilAlpha` and `blendDst` (stencil to alpha at the end of a scene), `blend2x`, `fixGray` and bit
       masks (shaders; no shacc in the container), `readBack` (read the surface mid-scene), `cpuPixels` and `noClear`
       (CPU writes and partial redraws), offsets into intermediate images (`draw()` takes the height from 0xD6, MINZ, not
