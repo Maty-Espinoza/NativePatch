@@ -4,7 +4,8 @@
 // each flip; the presenter (translator.c) takes the last complete frame with regTake/regRelease.
 // Saved per frame: copied vertices and indices (the game may reuse that memory), the GE state (RS) only when it changes,
 // palettes when loaded and the texture rows the draws use (copied to uncached memory the GPU reads; those with PSP
-// swizzle end up sorted, with rows in sequence: rgTexCopy). There are RN records taking turns: one is written, another
+// swizzle end up sorted, with rows in sequence: rgTexCopy; RAM textures stay in a cache between frames: RC). There are RN
+// records taking turns: one is written, another
 // stays published (rg_pub) and those the GPU may be reading are not touched.
 // Complete = every command of the frame was walked and all its draws went through regDraw and fit.
 static void clog(const char *fmt, ...);
@@ -18,11 +19,13 @@ enum { R_MEMO = 1, R_READ = 2, R_LIMIT = 4, R_CURVE = 8 };
 // (same, changed, new); unswizzled bytes; distinct textures
 // per frame
 static struct { uint32_t fr, ok, memo, rd_fail, limit, curve, draws, st, kb, cl, us, d3, clear, blend, atest, swz, fmt[16], us_e, us_v, us_t, us_p, t_b, us_l, stomped, n_late, gpu, o_b, us_o,
-  t_n[2], t_kb[2], t_dma[2], t_ord[2], t_calls, t_size[5], t_rb[6], t_same, t_changed, t_fresh, t_lines, t_tex; } ga, gr;
+  t_n[2], t_kb[2], t_dma[2], t_ord[2], t_calls, t_size[5], t_rb[6], t_same, t_changed, t_fresh, t_lines, t_tex,
+  c_hit, c_fill, c_chg, c_rec, c_fail, c_us; } ga, gr;
 // RN records: with fewer, the one the GPU just read would at times be the only free one, overwriting its textures
 #define RN 4
 static RFrame *rf[RN];                       // (cached LPDDR + uncached textures: ~2.4 MB each)
 static int rg_w;  // the one being written
+static uint32_t rg_seq[RN], rg_s;  // number of each record's turn, and the last one given
 static volatile int rg_pub = -1, rg_using = -1;  // last complete; the one the presenter is reading
 static volatile int rg_last = -1;  // last one taken by the presenter
 // (presenter) Reserves the last complete frame until regRelease; 0 if none or if the capturer is reusing it.
@@ -118,8 +121,110 @@ static void rgTexCopy(uint8_t *d, const void *s, uint32_t m, uint32_t rb, uint32
   ga.t_dma[v] += td; ga.t_ord[v] += t - td;
   ga.o_b += m; ga.us_o += t;
 }
+// Texture cache between frames, only for RAM textures: an entry keeps a whole texture, sorted, in rc_tx (uncached, read
+// by the GPU), and a draw uses it without copying. Bit g of m: group of 8 rows g is valid; s and h: its sample and hash.
+// d: groups that changed while a record could still be reading them; they stay out of use until no record reads the
+// entry (use: the last record's turn that used it), and then are copied in place. In the meantime the texture goes to
+// the record's tx as a normal copy, so no row the GPU may read is ever rewritten.
+#define RC_N (4 << 20)  // bytes of textures
+#define RC_E 256        // entries
+typedef struct { uint32_t a, key, gb, o, use; uint64_t m, d; uint32_t s[64], h[64]; } RC;  // key 0: free
+static RC *rc;
+static uint8_t *rc_tx;
+static uint32_t rc_pos;  // where the next new entry is looked for (the memory is used in a ring)
+#define RC_B(e) ((((e)->key & 0x7FFFFFFF) + 63) & ~63u)
+static volatile int rg_pend;
+// Turn of the oldest record that the presenter or the GPU can still read
+static uint32_t rcOldest(void) {
+  uint32_t o = rg_seq[rg_w];
+  for (int k = 0; k < RN; k++)
+    if ((k == rg_pub || k == rg_using || k == rg_pend || rgBusy(k)) && (int)(rg_seq[k] - o) < 0) o = rg_seq[k];
+  return o;
+}
+#define RC_LIVE(e, old) ((int)((e)->use - (old)) >= 0)
+// Offset in rc_tx for n bytes, or ~0u: walks the ring skipping the entries still read and, on the first pass, those used
+// in the last 32 turns; the entries it lands on are dropped.
+static uint32_t rcAlloc(uint32_t n) {
+  uint32_t old = rcOldest();
+  n = (n + 63) & ~63u;
+  for (int pass = 0; pass < 2 && n <= RC_N; pass++) {
+    uint32_t p = rc_pos, w = 0;
+    while (w < 2) {
+      if (p + n > RC_N) { p = 0; w++; continue; }
+      RC *x = 0;
+      for (int i = 0; i < RC_E && !x; i++) {
+        RC *e = &rc[i];
+        if (e->key && e->o < p + n && p < e->o + RC_B(e) && (RC_LIVE(e, old) || (!pass && (int)(e->use - rg_s + 32) >= 0))) x = e;
+      }
+      if (x) { p = x->o + RC_B(x); continue; }
+      for (int i = 0; i < RC_E; i++) if (rc[i].key && rc[i].o < p + n && p < rc[i].o + RC_B(&rc[i])) rc[i].key = 0;
+      rc_pos = p + n;
+      return p;
+    }
+  }
+  return ~0u;
+}
+// Entry of the texture at a (a new one if it has none), or 0 if there is no room. Clears d once nobody reads the entry.
+static RC *rcGet(uint32_t a, uint32_t key, uint32_t gb) {
+  if (!rc) return 0;
+  RC *e = 0, *f = 0;
+  for (int i = 0; i < RC_E && !e; i++) if (rc[i].key == key && rc[i].a == a && rc[i].gb == gb) e = &rc[i];
+  if (e) { if (e->d && !RC_LIVE(e, rcOldest())) e->d = 0; return e; }
+  uint32_t o = rcAlloc(key & 0x7FFFFFFF), old = rcOldest();
+  if (o == ~0u) { ga.c_fail++; return 0; }
+  for (int i = 0; i < RC_E && !f; i++) if (!rc[i].key) f = &rc[i];
+  for (int i = 0; i < RC_E && !f; i++) if (!RC_LIVE(&rc[i], old)) f = &rc[i];  // (no free slot: one nobody reads)
+  if (!f) { ga.c_fail++; return 0; }
+  f->a = a; f->key = key; f->gb = gb; f->o = o; f->m = f->d = 0; f->use = rg_seq[rg_w];
+  return f;
+}
+// Sample of l bytes at p: 8 words spread along it, read directly (a few reads per group, not the whole group)
+static uint32_t rcSample(const uint8_t *p, uint32_t l) {
+  uint32_t h = l, s = (l / 8) & ~3u;
+  for (uint32_t i = 0; i < 8; i++) h = (h ^ *(const uint32_t *)(p + i * s)) * 16777619u;
+  return h;
+}
+// Hash of the l bytes at p, read through the transit memory
+static uint32_t rcHash(const void *p, uint32_t l) {
+  if (l >= 8192) sceDmacMemcpy(rg_ord, p, l); else sceClibMemcpy(rg_ord, p, l);
+  uint32_t h = l;
+  for (uint32_t i = 0; i + 4 <= l; i += 4) h = (h ^ *(const uint32_t *)(rg_ord + i)) * 16777619u;
+  return h;
+}
+// Size of group g of e, and where it starts in the texture
+static uint32_t rcLen(RC *e, uint32_t g) { uint32_t n = e->key & 0x7FFFFFFF, o = g * e->gb; return n - o < e->gb ? n - o : e->gb; }
+// 1 if a group of [g0, g1) is out of use or changed (then it is marked in d). Every group is sampled; in turns, 1 of
+// every 16 groups per frame is also hashed whole, for changes the sample does not see.
+static int rcCheck(RC *e, uint32_t g0, uint32_t g1) {
+  uint32_t t0 = now(), k = e - rc, r = 0;
+  for (uint32_t g = g0; g < g1 && !r; g++) {
+    const uint8_t *p = (const uint8_t *)PSP(e->a + g * e->gb);
+    if (e->d >> g & 1) r = 1;
+    else if ((e->m >> g & 1) && (rcSample(p, rcLen(e, g)) != e->s[g] || (!((g + k + gen) & 15) && rcHash(p, rcLen(e, g)) != e->h[g]))) {
+      e->m &= ~(1ull << g); e->d |= 1ull << g; ga.c_chg++; r = 1;
+    }
+  }
+  ga.c_us += now() - t0;
+  return r;
+}
+// Groups [g0, g1) were just copied to e: notes their sample and hash
+static void rcNote(RC *e, uint32_t g0, uint32_t g1) {
+  for (uint32_t g = g0; g < g1; g++) {
+    const uint8_t *p = (const uint8_t *)PSP(e->a + g * e->gb);
+    e->s[g] = rcSample(p, rcLen(e, g)); e->h[g] = rcHash(p, rcLen(e, g)); e->m |= 1ull << g;
+    ga.c_fill += rcLen(e, g);
+  }
+}
+// The GE will write [a, a + n) (block copy): the entries it touches go out of use
+static void rcInval(uint32_t a, uint32_t n) {
+  for (int i = 0; rc && i < RC_E; i++) {
+    RC *e = &rc[i];
+    if (e->key && e->a < a + n && a < e->a + (e->key & 0x7FFFFFFF)) { e->d |= e->m; e->m = 0; }
+  }
+}
 // Reserves the RN records: the main part in cached memory and the textures in uncached memory (read by the GPU), and
-// the transit memory for sorting swizzled textures. Without memory it turns the record off (reg_on = 0).
+// the transit memory for sorting swizzled textures. Without memory it turns the record off (reg_on = 0). Without
+// memory for the texture cache, every texture goes to the record.
 static void regInit(void) {
   for (int i = 0; i < RN; i++) {
     void *p = 0;
@@ -143,6 +248,12 @@ static void regInit(void) {
   }
   b = sceKernelAllocMemBlock("nativedraw_hashes", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, 0x20000, 0);  // (RH_N x 8 bytes)
   if (b >= 0 && sceKernelGetMemBlockBase(b, &p) >= 0) { rg_hash = p; sceClibMemset(p, 0, 0x20000); }
+  void *q = 0;
+  b = sceKernelAllocMemBlock("nativedraw_tex_cache", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW_UNCACHE, RC_N, 0);
+  SceUID c = sceKernelAllocMemBlock("nativedraw_tex_index", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, (sizeof(RC) * RC_E + 0x3FFFF) & ~0x3FFFFu, 0);
+  if (b >= 0 && c >= 0 && sceKernelGetMemBlockBase(b, &p) >= 0 && sceKernelGetMemBlockBase(c, &q) >= 0) {
+    rc_tx = p; rc = q; sceClibMemset(rc, 0, sizeof(RC) * RC_E);
+  } else clog("texture cache: no memory (%08x %08x)\n", b, c);
   clog("frame record: active (draw), %u x %u KB; swizzled textures sorted by the CPU from memory %s\n", RN,
        (unsigned)(sizeof(RFrame) >> 10), rg_ordc ? "with cache (the DMA keeps it up to date)" : "without cache (the DMA does not keep the cache up to date: slow)");
 }
@@ -185,6 +296,7 @@ int sceGxmMapMemory(void *base, SceSize size, int attr);
 int regMapGpu(void) {
   int r = 0;
   for (int i = 0; i < RN && rf[i] && r >= 0; i++) r = sceGxmMapMemory(rf[i]->tx, TX_N, 1);  // (1: read)
+  if (r >= 0 && rc_tx) r = sceGxmMapMemory(rc_tx, RC_N, 1);
   return r;
 }
 // Where to read [a, a + n) from: the same address if it is readable RAM; if VRAM, its copy in the mirror, only if all
@@ -199,13 +311,20 @@ static uint32_t rgSrc(uint32_t a, uint32_t n) {
 // Check of a RAM texture across lists: list of its last draw and groups of 8 rows known to be current in that list
 static uint32_t rg_tl[TN_N];
 static uint64_t rg_tc[TN_N];
-// 1 if a group of [g0, g1) copied to texture i before this list differs from memory (not for swizzled ones: their copy
-// is sorted). The game may rewrite a texture between two lists of a frame, keeping its address.
+// 1 if a group of [g0, g1) copied to texture i before this list differs from memory (not for swizzled ones in the
+// record: their copy is sorted; the cache has their sample and hash). The game may rewrite a texture between two lists
+// of a frame, keeping its address.
 static int rgStale(RFrame *f, uint32_t i, uint32_t g0, uint32_t g1) {
   if (rg_tl[i] != pub_ord) { rg_tl[i] = pub_ord; rg_tc[i] = 0; }
-  uint32_t gb = f->tr[i], n = f->tn[i], o;
-  if (n >> 31) return 0;
+  uint32_t gb = f->tr[i], n = f->tn[i], o, c = f->tc[i];
+  if ((n >> 31) && !c) return 0;
   for (uint32_t g = g0; g < g1; g++) {
+    if (c) {
+      if (rg_tc[i] >> g & 1) continue;
+      rg_tc[i] |= 1ull << g;
+      if (rcCheck(&rc[c - 1], g, g + 1)) return 1;
+      continue;
+    }
     if (!(f->tm[i] >> g & 1) || rg_tc[i] >> g & 1 || (o = g * gb) >= n) continue;
     rg_tc[i] |= 1ull << g;
     if (ramEnd(f->ta[i] + o) < f->ta[i] + o + (n - o < gb ? n - o : gb)) continue;
@@ -213,8 +332,9 @@ static int rgStale(RFrame *f, uint32_t i, uint32_t g0, uint32_t g1) {
   }
   return 0;
 }
-// Texture of the current draw (GE registers) in tx: the first time in the frame it reserves its full size (again, as a
-// new entry, if a RAM texture changed: rgStale); then copies only the missing groups of 8 rows of [r0, r1) (r0 >= r1 or
+// Texture of the current draw (GE registers) in tx or, if from RAM and unchanged, in the texture cache: the first time
+// in the frame it takes its place (full size in tx; again, as a new entry in tx, if a RAM texture changed: rgStale); then
+// copies only the missing groups of 8 rows of [r0, r1) (r0 >= r1 or
 // out of range: whole texture). With swizzle a group of 8
 // rows is one contiguous block and sorted takes the same place (rgTexCopy sorts it). RAM ones are copied right away by
 // DMA (the game may change them); VRAM ones are marked and regPend copies them from the flip's mirror.
@@ -229,20 +349,30 @@ static uint32_t rgTex(uint32_t r0, uint32_t r1) {
   if (r1 > th || r0 >= r1) r0 = 0, r1 = th;
   for (i = f->nt; i > 0 && !(f->ta[i - 1] == ta && f->tn[i - 1] == key); i--) {}  // (the latest entry of this address)
   i = i ? i - 1 : f->nt;
-  if (i < f->nt && !vr && rgStale(f, i, r0 / 8, (r1 + 7) / 8)) i = f->nt;
+  int stale = i < f->nt && !vr && rgStale(f, i, r0 / 8, (r1 + 7) / 8);
+  if (stale) i = f->nt;
+  RC *e = 0;
   // First time in this frame: full size is reserved (rows not copied are not read)
   if (i == f->nt) {
     // Image the GE drew in this frame (intermediate image): not copied
     if (vr) { uint32_t p = (ta & 0x1FFFFF) >> 12; if (rt_pg[p >> 5] >> (p & 31) & 1) return 0; }
-    if (f->nt >= TN_N || f->ntx + n > TX_N) {
+    if (!vr && !stale && (e = rcGet(ta, key, 8 * rb)) && rcCheck(e, r0 / 8, (r1 + 7) / 8)) e = 0;
+    if (!vr && !e) ga.c_rec++;
+    if (f->nt >= TN_N || (!e && f->ntx + n > TX_N)) {
       DEV(static uint32_t lim_n; if (lim_n < 20) { lim_n++; clog("record: texture limit at frame %u: %u textures, %u of %u bytes, %u more wanted\n", gen, f->nt, f->ntx, TX_N, n); })
       f->flags |= R_LIMIT; return 0;
     }
-    f->ta[i] = ta; f->tn[i] = key; f->to[i] = f->ntx; f->tm[i] = 0; f->tq[i] = vr ? ~0u : 0; f->tr[i] = 8 * rb; f->nt++;
+    f->ta[i] = ta; f->tn[i] = key; f->to[i] = e ? (uint32_t)(rc_tx + e->o - f->tx) : f->ntx; f->tm[i] = 0; f->tq[i] = vr ? ~0u : 0; f->tr[i] = 8 * rb; f->nt++;
+    f->tc[i] = e ? e - rc + 1 : 0;
     rg_tl[i] = pub_ord; rg_tc[i] = 0;
-    f->ntx += (n + 63) & ~63u;
+    if (e) e->use = rg_seq[rg_w]; else f->ntx += (n + 63) & ~63u;
   }
   uint32_t g0 = r0 / 8, g1 = (r1 + 7) / 8, gb = 8 * rb;  // groups and bytes per group
+  if (f->tc[i]) {  // what the cache holds of these rows, already checked, needs no copy
+    e = &rc[f->tc[i] - 1];
+    uint64_t have = e->m & ~f->tm[i] & ((g1 - g0 < 64 ? (1ull << (g1 - g0)) : 0) - 1) << g0;
+    f->tm[i] |= have; ga.c_hit += __builtin_popcountll(have) * gb;
+  }
   for (uint32_t g = g0; g < g1; g++) {
     if (f->tm[i] >> g & 1) continue;
     uint32_t h = g + 1;
@@ -252,9 +382,10 @@ static uint32_t rgTex(uint32_t r0, uint32_t r1) {
     if (vr) { if (!rgSrc(ta + o, m)) { f->flags |= R_READ; return 0; } f->dv = 1; }
     else {  // from RAM: now (the game may change it), by DMA
       uint32_t sa = rgSrc(ta + o, m), t0 = now();
-      rgGpu(rg_w, "from RAM");
+      if (!e) rgGpu(rg_w, "from RAM");
       if (!sa) { f->flags |= R_READ; return 0; }
       rgTexCopy(f->tx + f->to[i] + o, (const void *)PSP(sa), m, swz ? rb : 0, ta + o);
+      if (e) rcNote(e, g, h);
       ga.t_b += m; ga.us_l += now() - t0;
     }
     f->tm[i] |= ((h - g < 64 ? (1ull << (h - g)) : 0) - 1) << g;
@@ -409,7 +540,7 @@ static void regXfer(uint32_t s, uint32_t t, uint32_t bp) {
   uint32_t sw = reg[0xB3] & 0x7FF, dw = reg[0xB5] & 0x7FF, sx = reg[0xEB] & 0x3FF, sy = reg[0xEB] >> 10 & 0x3FF, dx = reg[0xEC] & 0x3FF,
            dy = reg[0xEC] >> 10 & 0x3FF, w = (reg[0xEE] & 0x3FF) + 1, h = (reg[0xEE] >> 10 & 0x3FF) + 1, r = sy * sw * bp;
   uint32_t sa = (s + r) & ~15u, u = sx + ((s + r) & 15) / bp, da = t + dy * dw * bp, sn = h * sw * bp, dn = h * dw * bp;
-  if (!isVram(t)) return;
+  if (!isVram(t)) { rcInval(da, dn); return; }
   for (uint32_t i = 0; i < f->nt; i++)
     if (isVram(f->ta[i]) && f->ta[i] < da + dn && da < f->ta[i] + (f->tn[i] & 0x7FFFFFFF)) f->flags |= R_READ;
   uint32_t st = reg[0x9D] & 0x7FF, fbp = (reg[0xD2] & 3) == 3 ? 4 : 2, o = (t & 0x1FFFFF) - (reg[0x9C] & 0x1FFFF0);
@@ -480,7 +611,7 @@ static void regFlip(uint32_t fb, uint32_t fbw, uint32_t draws_counted) {
     for (int i = 0; i < RN && w < 0; i++) if (i != rg_pub && i != rg_using && i != rg_pend && i != rg_last) w = i;
     if (w < 0) for (int i = 0; i < RN && w < 0; i++) if (i != rg_pub && i != rg_using && i != rg_pend) w = i;
     if (w < 0) { w = rg_pend; rg_pend = -1; ga.stomped++; }  // (none free: the pending one is lost)
-    rg_w = w; rg_gv[w] = 0;
+    rg_w = w; rg_gv[w] = 0; rg_seq[w] = ++rg_s;
   }
   // Only what the GE draws from now on is held in HD; any other read of those pages comes from the mirror. A sublist
   // the memory applied did not go through draw(): its marks stay

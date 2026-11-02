@@ -42,22 +42,35 @@ static int dump_bf[VN] = { VN, VN, VN };     // record block of each captured fr
 static int dumpUsed(int b) { for (int i = 0; i < (int)dump_k; i++) if (dump_bf[i] == b) return 1; return 0; }
 // In the Adrenaline thread: copies record f to a free block (taken by the coming frame, dumpFrame). Format: a
 // header of 16 words and then each RFrame array aligned to 4 (read by replay.c and tools/dump.py; if
-// it changes, change both). If it does not fit in VB_N it stays without a record.
+// it changes, change both). Textures in the texture cache go after tx, so the dump stands alone. If it does not fit in
+// VB_N it stays without a record.
 static void dumpBin(RFrame *f) {
   dump_bpend = VN;
   int k = 0;
   while (k < VN && (!dump_bb[k] || dumpUsed(k))) k++;
   if (k == VN || !f) return;
   uint8_t *b = dump_bb[k];
-  uint32_t h[16] = { 0x47524E44, 4, f->frame, f->fb, f->fbw, f->nd, f->ne, f->na, f->flags, f->nt, f->ntx, f->mir, f->mirf, NRS, sizeof(RDraw), f->nimg }, o = 0;
+  static uint32_t to[TN_N];
+  uint32_t ntx = f->ntx;
+  for (uint32_t i = 0; i < f->nt; i++) {
+    to[i] = f->to[i];
+    if (f->tc[i]) { to[i] = ntx; ntx += ((f->tn[i] & 0x7FFFFFFF) + 63) & ~63u; }
+  }
+  uint32_t h[16] = { 0x47524E44, 4, f->frame, f->fb, f->fbw, f->nd, f->ne, f->na, f->flags, f->nt, ntx, f->mir, f->mirf, NRS, sizeof(RDraw), f->nimg }, o = 0;
 #define PUT(p, n) do { uint32_t n_ = (n); if (o + n_ > VB_N) return; sceClibMemcpy(b + o, p, n_); o += (n_ + 3) & ~3u; } while (0)
   PUT(h, sizeof h); PUT(RS, NRS);
-  PUT(f->ta, f->nt * 4); PUT(f->tn, f->nt * 4); PUT(f->to, f->nt * 4); PUT(f->tq, f->nt * 4); PUT(f->tm, f->nt * 8);
+  PUT(f->ta, f->nt * 4); PUT(f->tn, f->nt * 4); PUT(to, f->nt * 4); PUT(f->tq, f->nt * 4); PUT(f->tm, f->nt * 8);
+  RDraw *dd = (RDraw *)(b + o);
   PUT(f->d, f->nd * sizeof(RDraw)); PUT(f->e, f->ne * NRS * 4); PUT(f->a, f->na);
 #undef PUT
-  if (o + f->ntx > VB_N) return;
+  if (o + ntx > VB_N) return;
   sceDmacMemcpy(b + o, f->tx, f->ntx);
-  dump_bbn[k] = o + f->ntx; dump_bpend = k;
+  for (uint32_t i = 0; i < f->nt; i++) {
+    if (!f->tc[i]) continue;
+    sceDmacMemcpy(b + o + to[i], f->tx + f->to[i], f->tn[i] & 0x7FFFFFFF);
+    for (uint32_t j = 0; j < f->nd; j++) if (dd[j].toff == f->to[i] + 1) dd[j].toff = to[i] + 1;
+  }
+  dump_bbn[k] = o + ntx; dump_bpend = k;
 }
 static uint8_t *dump_nat;          // the exact PSP image of the last drawn frame (from the record); 0: none
 static uint32_t dump_natf, dump_natw, dump_natok;  // format (0 5650, 1 5551, 2 4444, 3 8888), width, present

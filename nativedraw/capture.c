@@ -1342,6 +1342,8 @@ static int repThread(SceSize args, void *argp) {
              gr.t_dma[1] / g, gr.t_ord[1] / g, gr.t_calls / g, gr.t_size[0] / g, gr.t_size[1] / g, gr.t_size[2] / g, gr.t_size[3] / g, gr.t_size[4] / g,
              gr.t_rb[0] / g >> 10, gr.t_rb[1] / g >> 10, gr.t_rb[2] / g >> 10, gr.t_rb[3] / g >> 10, gr.t_rb[4] / g >> 10, gr.t_rb[5] / g >> 10,
              gr.t_same / g >> 10, gr.t_changed / g >> 10, gr.t_fresh / g >> 10, gr.t_lines / g >> 10, gr.t_tex / g);
+        clog("  texture cache (per frame): reused %u KB, copied %u KB, changed groups %u, textures in the record %u, no room %u, check %u us\n",
+             gr.c_hit / g >> 10, gr.c_fill / g >> 10, gr.c_chg / g, gr.c_rec / g, gr.c_fail / g, gr.c_us / g);
       }
       clog("  draws/f: 3d=%u 2d=%u clear=%u empty=%u | tri=%u strip=%u fan=%u rect=%u lines=%u points=%u curves=%u | vertices/f=%u\n",
            PF(d3d), PF(dthr), PF(dclear), PF(dempty), PF(prim[3]), PF(prim[4]), PF(prim[5]), PF(prim[6]), PF(prim[1]) + PF(prim[2]),

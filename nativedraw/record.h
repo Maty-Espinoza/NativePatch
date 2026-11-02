@@ -25,6 +25,7 @@ typedef struct {
   uint64_t tm[TN_N];              // bit g: group of 8 rows g copied or requested (only the rows the draws use)
   uint32_t tq[TN_N];              // the oldest mirror copy its rows came from (0: from RAM)
   uint32_t tr[TN_N];              // bytes of a group of 8 rows
+  uint16_t tc[TN_N];              // texture cache entry + 1 (0: its rows are in tx); to[] then reaches the cache from tx
   uint32_t dv, tgt;               // has VRAM textures to copy; mirror copy of its flip
   uint32_t nimg;                  // (dumps) its PSP image (from the mirror, same flip): offset + 1 in tx
   RDraw d[RD_N];

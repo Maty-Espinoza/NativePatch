@@ -108,7 +108,7 @@ static void build(int frame) {
 static uint32_t stateSum(void) { uint32_t h = 0; for (int i = 0; i < 256; i++) h = h * 31 + reg[i]; for (int m = 0; m < 5; m++) for (int i = 0; i < 96; i++) h = h * 31 + mtx[m][i]; return h * 31 + vaddr * 7 + iaddr; }
 // Result of one case, in memory shared with the process that compares them. col: columns before "|" per frame, without
 // and with state; the rest are totals of what each case must exercise.
-typedef struct { char col[8][64]; uint32_t st[8], hit, chk, bad, fail, pre, late, lines, pv, skip, whole, lost, rt1, pal, tex2, xf, ok; } Res;
+typedef struct { char col[8][64]; uint32_t st[8], hit, chk, bad, fail, pre, late, lines, pv, skip, whole, lost, rt1, pal, tex2, tc, xf, ok; } Res;
 static Res *res;
 static int report(const char *name, int ok) { printf("%s %s\n", ok ? "ok  " : "FAIL", name); return !ok; }
 // Frames from..7 of case a equal those of b (state too if st).
@@ -162,6 +162,7 @@ static int checkAll(void) {
   bad += report("frame record: lost events leave the frame incomplete", r[REG0].lost);
   bad += report("frame record: a TRANSFER on the drawn image becomes a draw", r[REG0].xf);
   bad += report("frame record: a texture rewritten between lists gets a new copy", r[REG0].tex2);
+  bad += report("texture cache: reused between frames, a change goes to the record, then back", r[REG0].tc);
   bad += report("frame record: the loaded palette survives changes in memory", r[REG0].pal);
   bad += report("frame record: an image only counts as drawn in its frame", r[REG0].rt1);
   bad += report("texture copy: right by CPU and by DMA", texCopyOk(1) && texCopyOk(32));
@@ -240,6 +241,22 @@ int main(int argc, char **argv) {
     res->tex2 = t0 && t0 == t1 && t1 == t2 && t3 != t2 && *(uint32_t *)(rf[rg_w]->tx + t3 - 1) == 2;
     rf[rg_w]->flags = 1;  // (not published)
     regFlip(0x04000000, 512, 0);
+    // The same texture in frames in a row: copied once; changed, it goes to the record until nobody reads the entry
+    *W(0x08C31000) = 5; reg[0xA0] = 0xC31000;
+    uint8_t *p0 = rf[rg_w]->tx + rgTex(0, 8) - 1;
+    uint32_t cp = ga.t_n[0];
+#define NEXT() do { rf[rg_w]->nd = 1; rf[rg_w]->draws_seen = ~0u; regFlip(0x04000000, 512, 0); } while (0)
+    NEXT();
+    uint8_t *p1 = rf[rg_w]->tx + rgTex(0, 8) - 1;
+    res->tc = p0 == p1 && ga.t_n[0] == cp;
+    *W(0x08C31000) = 6; NEXT();
+    uint8_t *p2 = rf[rg_w]->tx + rgTex(0, 8) - 1;
+    res->tc = res->tc && p2 != p1 && *(uint32_t *)p2 == 6;
+    for (int k = 0; k < RN + 1; k++) { NEXT(); }
+    uint8_t *p3 = rf[rg_w]->tx + rgTex(0, 8) - 1;
+    res->tc = res->tc && p3 == p1 && *(uint32_t *)p3 == 6;
+#undef NEXT
+    rf[rg_w]->flags = 1; regFlip(0x04000000, 512, 0);
     RFrame *x = rf[rg_w];  // 64x64 from RAM to (8, 14) of the image being drawn, and one that is not on it
     reg[0x9C] = 0x88000; reg[0x9D] = 512; reg[0xD2] = 3; reg[0xD5] = 479 | 271 << 10; reg[0xB3] = 64 | 0x080000; reg[0xB2] = 0xC30000;
     reg[0xB4] = 0x88000; reg[0xB5] = 512 | 0x040000; reg[0xEB] = 0; reg[0xEC] = 8 | 14 << 10; reg[0xEE] = 63 | 63 << 10;

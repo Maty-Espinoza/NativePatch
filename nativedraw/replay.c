@@ -52,7 +52,7 @@ static void repLoad(void) {
 #undef READ
     if (ok && f->ntx <= TX_N + 0x40000 && sceIoRead(fd, tx, f->ntx) != (int)f->ntx) ok = 0;
     for (uint32_t i = 0; ok && h[1] < 4 && i < f->nt; i++) if (f->tn[i] >> 31) ok = 0;  // (before format 4: swizzled unsorted)
-    f->tx = tx;
+    f->tx = tx; sceClibMemset(f->tc, 0, sizeof f->tc);
   }
   sceIoClose(fd);
   if (!ok) { alog("replay: the file is not a record of this version\n"); rep_on = 0; return; }
