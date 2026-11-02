@@ -115,6 +115,7 @@ static int same(Res *a, Res *b, int from, int st) {
   return 1;
 }
 // Runs each case in a child process (the capturer's state is global; a hang ends with the alarm) and compares them.
+int main(int argc, char **argv);
 static int checkAll(void) {
   enum { RAM, MEMO, ALL, RD1, RD2, RD3, V1REF, V1, V2REF, V2, V3REF, V3, REG0, REG1, N };
   static const int C[N][4] = { {0,0,0,0}, {1,0,0,0}, {2,0,0,0}, {1,0,1,0}, {1,0,2,0}, {1,0,3,0}, {0,1,0,0}, {2,1,0,0}, {0,2,0,0}, {2,2,0,0},
