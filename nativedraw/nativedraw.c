@@ -1,10 +1,10 @@
 // nativedraw.c: startup of NativeDraw (nativedraw.suprx), the Vita side plugin.
 // User plugin in the Adrenaline process (taiHEN, section *PSPEMUCFW of ur0:tai/config.txt). NativeLink (PSP side)
-// notes in a mailbox in PSP RAM what the game asks of the GE; captura.c walks and records it, and
-// presentador.c draws it with the Vita GPU. This file: startup (module_start), own log (alog), the NativeLink log
+// notes in a mailbox in PSP RAM what the game asks of the GE; capture.c walks and records it, and
+// presenter.c draws it with the Vita GPU. This file: startup (module_start), own log (alog), the NativeLink log
 // (written by the Vita, so the PSP does not wait for the card), the NativeLink version for the menu and the hook
 // that notes the emulator threads. With ux0:data/nativedraw/off nothing is hooked.
-// Logs: ux0:pspemu/nativedraw.log (this one), nativedraw_captura.log (captura.c) and nativelink.log (NativeLink's).
+// Logs: ux0:pspemu/nativedraw.log (this one), nativedraw_captura.log (capture.c) and nativelink.log (NativeLink's).
 // NativeLink log channel (page 0x0A7FF000 of PSP RAM, see nativelink/log.h): +0 "GPV1" (NativeLink),
 // +0x20 "LOGV" (this plugin: serves the mailbox), +0x40 seq, done, bytes (text at 0x0A7FA000).
 #include <psp2/kernel/modulemgr.h>
@@ -36,7 +36,7 @@ void alog(const char *fmt, ...) {
   if (fd >= 0) { sceIoWrite(fd, b, n); sceIoClose(fd); }
 }
 static volatile int datum __attribute__((aligned(64))) = 1;  // non-empty .data (valid RW segment)
-// No libc: the compiler may generate calls to these two (structure copies in captura.c)
+// No libc: the compiler may generate calls to these two (structure copies in capture.c)
 void *memset(void *d, int c, unsigned n) { char *p = d; while (n--) *p++ = c; return d; }
 void *memcpy(void *d, const void *s, unsigned n) { char *p = d; const char *q = s; while (n--) *p++ = *q++; return d; }
 
@@ -112,8 +112,8 @@ static void serveLog(void) {
   DESC[VLOG + 1] = seq;
 }
 
-void capStart(void);  // captura.c
-void presStart(void), presStop(void);  // presentador.c
+void capStart(void);  // capture.c
+void presStart(void), presStop(void);  // presenter.c
 
 // Main thread: starts the presenter, waits until PSP RAM is mapped, starts the capturer and from then on
 // serves the NativeLink log (every 0.2 ms if there is work, otherwise every 2 ms).
@@ -147,11 +147,11 @@ static int mainThread(SceSize args, void *argp) {
 }
 
 // Hook on ScePspemu's sceKernelCreateThread: logs each thread the emulator creates (priority, cores) and
-// keeps it in emu_th/emu_aff so captura.c can measure how much CPU each one uses. Does not see threads created before
+// keeps it in emu_th/emu_aff so capture.c can measure how much CPU each one uses. Does not see threads created before
 // NativeDraw loads.
 static tai_hook_ref_t ref_ct;
 static SceUID hk_ct = -1;
-SceUID emu_th[256]; int emu_aff[256], emu_n;  // (read by captura.c: EMU_N must be equal)
+SceUID emu_th[256]; int emu_aff[256], emu_n;  // (read by capture.c: EMU_N must be equal)
 static SceUID hookCT(const char *name, SceKernelThreadEntry entry, int prio, int stack, SceUInt attr, int aff,
                      const SceKernelThreadOptParam *opt) {
   SceUID r = TAI_CONTINUE(SceUID, ref_ct, name, entry, prio, stack, attr, aff, opt);

@@ -40,16 +40,16 @@ L+R+START abierto; además activa el registro del frame y su línea `registro:` 
 
 ## Compilación de desarrollo y de producción
 Las mediciones de desarrollo están dentro de `#ifdef NP_DEV`. Una compilación normal las tiene; `PROD=1`
-(`tools/compilar.sh`, `nativedraw/build.sh`, `nativelink/Makefile`) las deja fuera. En producción:
+(`tools/build.sh`, `nativedraw/build.sh`, `nativelink/Makefile`) las deja fuera. En producción:
 - `extremo` cae a mediano: sin `nativedraw_frames.log`, sin `nativedraw_tarde.log`, sin medir la vida de la lista.
-- T4 y T6 (`medir_ge`) y el cronómetro de la GPU (`cronometro.c`, `medir_gpu`, sus líneas `gpu tiempos:` y `gpu: escena
+- T4 y T6 (`medir_ge`) y el cronómetro de la GPU (`gpu_timer.c`, `medir_gpu`, sus líneas `gpu tiempos:` y `gpu: escena
   lenta:`) no existen.
 - Los interruptores `sin_captura`, `sin_adelanto`, `sin_libre` y `compuerta_sync` no hacen nada.
 - Los volcados, DISTINTAS y los niveles mínimo y mediano se quedan. La disposición del buzón no cambia (`how-it-works.md`).
 
 ## Volcados (NativeDraw 0.0.8.5)
 Niveles de volcado en `ux0:data/nativedraw/volcado`: `desactivado`, `pantallazo`, `frame`, `secuencia` (sin el archivo)
-o `auto`. Qué guarda cada uno, cuánto cuesta y cómo se leen con `tools/volcado.py`: `dumps.md`.
+o `auto`. Qué guarda cada uno, cuánto cuesta y cómo se leen con `tools/dump.py`: `dumps.md`.
 
 ## Interruptores de la fase de análisis (`ux0:data/nativedraw/`; se apagan con `no` adentro, el relevo no borra)
 | Archivo | Qué hace |
@@ -123,4 +123,4 @@ de los lectores; `tarde` = veces que un lector se encontró con el capturador). 
   `atraso_us`, `comandos`, `listas_antes`, `encolada_hace_us` y `ultimo_stall_hace_us` (respecto del sync),
   `vita_empezo_tras_us` (desde el encolado), `vita_recorrio_us`, `trabajo_us`, `lecturas_propias`, `de_lectores`,
   `aplicadas`, `procesador_us`. Las horas de la Vita se pasan a horas del PSP con la diferencia mínima de relojes.
-- Resumen: `python3 tools/analisis_fase1.py <carpeta> [<carpeta> ...] [--tabla]` (una columna por corrida).
+- Resumen: `python3 tools/phase1_analysis.py <carpeta> [<carpeta> ...] [--tabla]` (una columna por corrida).

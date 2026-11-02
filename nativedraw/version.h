@@ -1,4 +1,4 @@
-// version.h: NativeDraw version. Used by nativedraw.c and captura.c (logs) and presentador.c (menu).
+// version.h: NativeDraw version. Used by nativedraw.c and capture.c (logs) and presenter.c (menu).
 #define NATIVEDRAW_VERSION "0.0.8.23"
 // Development builds (-DNP_DEV, the default; PROD=1 in build.sh leaves it out) carry the measurements: DEV(x) is x
 // there and nothing in production.

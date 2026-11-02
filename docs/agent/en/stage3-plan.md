@@ -44,14 +44,14 @@ and LocoRoco.
   is hooked). New GPU work is turned on on purpose: in stage 1 an experiment shut down the whole Vita.
 - **Own translator**, with PPSSPP as a reference and copying specific functions when it saves time (compatible license,
   noted in `THIRD_PARTY_NOTICES.md`).
-- **Shaders:** for 3.0 and the menu, vita2d's already compiled ones (`nativedraw/sombreadores.h`, the same ones Adrenaline
+- **Shaders:** for 3.0 and the menu, vita2d's already compiled ones (`nativedraw/shaders.h`, the same ones Adrenaline
   uses). For 3.3, own precompiled shaders with the FSR toolchain (Sony's compiler under qemu,
   `JagerDesu/vita-shaders`, documented in `../../changelog/en/conversaciones/resumen_conversacion_2026-10-27f.md`).
 - **Scale:** 2x (960x544 visible). More (3x reduced = antialiasing) is a later option.
 - **Latency:** the HD image is seen one frame after the native one (the Vita draws frame N while the game builds
   N+1). Step 3.0 already works this way.
 
-## Step 3.0: transparent presenter (`nativedraw/presentador.c`, NativeDraw 0.0.3)
+## Step 3.0: transparent presenter (`nativedraw/presenter.c`, NativeDraw 0.0.3)
 - Hooks `AdrenalineUser`'s imports `sceGxmSetFragmentTexture`, `sceGxmEndScene` and `sceDmacMemcpy` (like
   the stage 1 bench). It recognizes `psp_tex` by its size (512x272). The copy of the PSP's image that Adrenaline makes
   goes to two own alternating textures (not to `psp_tex`).
@@ -102,7 +102,7 @@ whether it also appears without NativeDraw (`dibujar` with `no`).
 - Tested in Adrenaline's menu, Retro City Rampage and Gran Turismo: it opens, closes, blocks the buttons, no jumps.
 
 ## Step 3.2: frame record (NativeDraw 0.0.5, tested on 2026-10-29) [measured]
-`nativedraw/registro.c` (included in `captura.c`), active with `dibujar`. Per draw: type, count, vertex type,
+`nativedraw/record.c` (included in `capture.c`), active with `dibujar`. Per draw: type, count, vertex type,
 vertices (and indices) copied at that moment, the state (56 GE registers, `RS`) only when it changes and the loaded
 palette (copied at every C4). Frames closed at the flip, 4 records that take turns (`rg_pub` = last complete one; there were 3 until test 0.0.8.6:
 the last one the Vita drew is not rewritten until it draws another, because the GPU reads it later). Complete =
@@ -121,7 +121,7 @@ cache: copying from the PSP's uncached RAM). With cache and no longer copying an
 Retro City does not gain resolution (its image already comes finished at 480x272): it serves as the first drawing test (1 draw).
 
 ## Step 3.3, first version: 2D translator (NativeDraw 0.0.6, tested on 2026-10-30) [measured]
-`nativedraw/traductor.c` (included in `presentador.c`): in Adrenaline's thread, instead of copying the PSP's image,
+`nativedraw/translator.c` (included in `presenter.c`): in Adrenaline's thread, instead of copying the PSP's image,
 it draws the last complete frame of the record at double size. This version: through mode, rectangles/triangles/strips,
 5650/5551/4444/8888/T4/T8 texture without swizzle, no blending or alpha test, no color. If a frame contains anything else,
 normal image.
@@ -141,7 +141,7 @@ normal image.
 KOF 96 (NeoGeo Station, NPUH-10119) drawn by the Vita in the fights, without broken frames, ~40 fps from the Vita with the
 game at 59.9. What was learned along the way (the test numbers serve to locate the logs in
 `vitabridge\etapa3_<version>\` and the dumps):
-- **Own shaders** (`nativedraw/sombreadores/*.cg` → `sombreadores_nd.h`, 0.0.7): color per vertex or from the
+- **Own shaders** (`nativedraw/shaders/*.cg` → `shaders_nd.h`, 0.0.7): color per vertex or from the
   material, texture function modulate/replace (TCC, color at double), alpha test, clears (rectangle of the requested
   color; without the color bit it draws nothing), blending (one fragment program per combination). The surface's alpha
   is always 255: the PSP's alpha is its stencil and Adrenaline does not use it.
@@ -183,7 +183,7 @@ game at 59.9. What was learned along the way (the test numbers serve to locate t
   because it is behind; the translator spends ~7 ms of CPU per frame. Measure GPU time per scene before changing anything.
 
 ## GPU performance and Metal Slug XX (NativeDraw tests 0.0.8.13–0.0.8.21, 2026-10-30) [measured]
-GPU timer (`cronometro.c`, switch `medir_gpu`, `gpu tiempos:` lines of `../../dev/en/logs-and-switches.md`): each scene
+GPU timer (`gpu_timer.c`, switch `medir_gpu`, `gpu tiempos:` lines of `../../dev/en/logs-and-switches.md`): each scene
 (ours and Adrenaline's) marks its end with a GXM notification (510 for Adrenaline's, 511 ours); a thread
 calculates how long each one took.
 - **KOF 96, before:** GPU at 96–99 %, ~26 ms per PSP frame (intermediate image ~16 ms with ~430 draws, two surface

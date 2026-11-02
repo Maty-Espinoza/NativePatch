@@ -1,5 +1,5 @@
 // NativePatch installer (Vita app, NativePatch.vpk): install/update, uninstall and clean test leftovers.
-// The VPK carries nativelink.prx, nativedraw.suprx and version.txt (added by tools/compilar.sh) and leaves them where
+// The VPK carries nativelink.prx, nativedraw.suprx and version.txt (added by tools/build.sh) and leaves them where
 // Adrenaline 8 and taiHEN load them:
 //   - NativeLink: ux0:pspemu/seplugins/nativelink.prx, enabled with LINK_LINE in plugins.txt (or EPIplugins.txt).
 //   - NativeDraw: ux0:data/nativedraw/nativedraw.suprx, under *PSPEMUCFW in taiHEN's config.txt (needs a reboot).

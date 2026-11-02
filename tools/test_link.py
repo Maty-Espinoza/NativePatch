@@ -2,7 +2,7 @@
 """Execution test: from the logs of a Vita run, checks that NativeLink and NativeDraw talked to each other.
 
 Usage: python3 test_link.py <run folder> [version.txt]
-Reads nativelink.log, nativedraw.log and nativedraw_captura.log. version.txt (build/instalador/version.txt, or the one
+Reads nativelink.log, nativedraw.log and nativedraw_captura.log. version.txt (build/installer/version.txt, or the one
 inside the installer) makes it also compare the versions with that build. A run with no game (no "juego=" line) only
 checks NativeDraw and says the rest was skipped. Exit code 1 if a check fails.
 It finds the lines with regular expressions: if the text of a log line changes, it must be changed here.

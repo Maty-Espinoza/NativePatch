@@ -20,7 +20,7 @@ comparte código con él (detalle en "Origen", abajo). Licencia GPLv3.
 | **NativeLink** (`nativelink.prx`) | lado PSP, dentro de Adrenaline, junto al juego | No cambia nada del juego: anota en una memoria compartida ("buzón") cada lista de dibujo que el juego le manda a su chip gráfico (el GE), copia para la Vita lo que la Vita no puede ver (la memoria de video del PSP, con el "espejo") y, si la Vita va atrasada, hace esperar un poco al juego (la "compuerta"). |
 | **NativeDraw** (`nativedraw.suprx`) | lado Vita, plugin de taiHEN en el proceso de Adrenaline | Lee el buzón, recorre las mismas listas desde la Vita (el "capturador"), guarda lo que cada frame necesita (el "registro del frame") y lo dibuja con la GPU de la Vita al doble (el "traductor"); reemplaza la imagen que Adrenaline muestra por la suya (el "presentador"). Si un frame trae algo que no sabe dibujar, muestra la imagen normal del juego. |
 
-Además: un **instalador** (`NativePatch.vpk`, `instalador/`) que copia los dos plugins a su lugar y los activa, y
+Además: un **instalador** (`NativePatch.vpk`, `installer/`) que copia los dos plugins a su lugar y los activa, y
 **herramientas del PC** (`tools/`): el relevo con la Vita, scripts de compilación y lectores de logs y volcados.
 
 Cómo funciona cada parte: `how-it-works.md`.
@@ -56,10 +56,10 @@ Para actualizar: instalar el VPK nuevo y volver a usar **Instalar / actualizar**
 - Con el filtro "Original" de Adrenaline la Vita no dibuja con GXM y NativeDraw no puede actuar: usar Bilinear.
 
 ## Compilar
-Linux x86_64 (o WSL en Windows; en Windows: `tools/windows/instalar.cmd` lo deja todo listo):
+Linux x86_64 (o WSL en Windows; en Windows: `tools/windows/install.cmd` lo deja todo listo):
 ```sh
-sh tools/preparar.sh     # una vez: compiladores del PSP (pspdev) y de la Vita (vitasdk) en ~/tc
-sh tools/compilar.sh     # deja nativelink.prx, nativedraw.suprx y NativePatch.vpk en build/
+sh tools/setup.sh     # una vez: compiladores del PSP (pspdev) y de la Vita (vitasdk) en ~/tc
+sh tools/build.sh     # deja nativelink.prx, nativedraw.suprx y NativePatch.vpk en build/
 ```
 Detalle de los ambientes (contenedor, VM del Mac, WSL, GitHub Actions): `../../agent/en/environment.md`.
 

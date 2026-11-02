@@ -1,8 +1,8 @@
 #!/bin/sh
 # Instala en $T ($HOME/tc) los compiladores de NativeLink (pspdev + encabezados de Adrenaline) y NativeDraw (vitasdk,
 # paquete taihen y stubs de vita-libs-gen-2) en Linux x86_64: contenedor de Claude, Ubuntu en WSL o GitHub Actions.
-# Escribe $T/env.sh, que carga tools/compilar.sh. Se puede correr de nuevo: salta lo que ya esta.
-# Uso: sh tools/preparar.sh ; despues: sh tools/compilar.sh (la VM ARM64 del Mac usa tools/mac/preparar_vm.sh)
+# Escribe $T/env.sh, que carga tools/build.sh. Se puede correr de nuevo: salta lo que ya esta.
+# Uso: sh tools/setup.sh ; despues: sh tools/build.sh (la VM ARM64 del Mac usa tools/mac/setup_vm.sh)
 # By default it unpacks the ready-made package of the release named in tools/toolchain-version (built by
 # .github/workflows/toolchain.yml; a copy already in $T is used as is). If that package is missing, or with
 # FROM_SOURCE=1, it fetches each part. The package has no absolute paths: stubs, nb/ and env.sh are always made here.

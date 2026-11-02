@@ -52,7 +52,7 @@ renamed at the end: the relay may pick up a half-written file.
   again. Consecutive "timed out" = the Vita does not respond (asleep or hung). "Host is down" = the Vita's wifi dropped;
   the requests stay waiting and are fulfilled by themselves when it comes back.
 - On Windows the relay that is opened is the copy in `Descargas\` (`vitabridge.cmd` + `vitabridge.py`): if
-  `tools/vitabridge.py` changes, it must be copied there again (`tools/windows/instalar.sh` does it).
+  `tools/vitabridge.py` changes, it must be copied there again (`tools/windows/install.sh` does it).
 
 ## Results folders
 `vitabridge/etapa<N>_<version>/<game><n>/` stores the logs of each run (`workflow.md` §6) and, inside it, `volcados/`

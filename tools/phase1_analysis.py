@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Summarizes nativedraw_frames.log and nativedraw_tarde.log (NativeDraw extreme record, CSV) of one or more runs.
-# Usage: python3 tools/analisis_fase1.py <folder> [<folder> ...] [--tabla]
+# Usage: python3 tools/phase1_analysis.py <folder> [<folder> ...] [--tabla]
 # Counts only "race" frames (over 30,000 commands). Per folder: fps, slow frames and what each part
 # cost the game per frame; with several, one column per folder. --tabla: also every 10 s of each
 # run. Log columns: docs/dev/<language>/logs-and-switches.md (language: en or es).

@@ -1,4 +1,4 @@
-# NativeLink (PSP side). Normally built with tools/compilar.sh, which leaves nativelink.prx in build/.
+# NativeLink (PSP side). Normally built with tools/build.sh, which leaves nativelink.prx in build/.
 # Path to the Adrenaline code (for systemctrl.h and libpspsystemctrl_kernel.a). By default, cloned next to the repo:
 # git clone https://github.com/TheOfficialFloW/Adrenaline
 ADRENALINE ?= ../../Adrenaline/cef

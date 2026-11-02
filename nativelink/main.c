@@ -77,7 +77,7 @@ static struct { u32 frames, frame_us, spin, gate_us, gate_n, nowait, sync_us, po
 static u32 sb_x[3];  // e[5..7] of EV_FRAME
 // List life: NativeDraw leaves a sample of 64-byte lines of the last list it captured (SB[0x50] sample number,
 // 0 while writing it; SB[0x51] how many, up to 32; SB[0x52] how many are top level; SB[0x53]
-// list sequence number; SB[0x60+k] address, SB[0x80+k] FNV hash of its 16 words, like lineHash in captura.c).
+// list sequence number; SB[0x60+k] address, SB[0x80+k] FNV hash of its 16 words, like lineHash in capture.c).
 // Before each enqueue and on each sync, NativeLink recomputes the hashes through the cache (what the game CPU sees) and
 // notes EV_LIFE: datum = 0 enqueue / 1 drawsync / 2 listsync, a = sample number, b = changed top-level lines |
 // changed sublist lines << 8, c = last list enqueued. The same sample serves the gate's

@@ -1,7 +1,7 @@
 #!/bin/sh
-# Como tools/preparar.sh, pero para la VM Linux ARM64 que usa Claude en el Mac (Ubuntu 22.04 sin root, se borra con
+# Como tools/setup.sh, pero para la VM Linux ARM64 que usa Claude en el Mac (Ubuntu 22.04 sin root, se borra con
 # cada sesion): instala pspdev, Adrenaline, vitasdk, taihen y stubs en $HOME/tc y escribe $HOME/tc/env.sh.
-# Uso: sh tools/mac/preparar_vm.sh ; despues: V=$HOME/mnt/Downloads/vitabridge sh tools/compilar.sh [version]
+# Uso: sh tools/mac/setup_vm.sh ; despues: V=$HOME/mnt/Downloads/vitabridge sh tools/build.sh [version]
 # - pspdev para ARM64 pide glibc 2.38: se usa la de conda-forge (sysroot 2.39) y un envoltorio por programa que lo lanza
 #   con ese cargador. No usar patchelf: rompe cc1.
 # - vitasdk: paquete "core" aarch64-linux-gnu de vitasdk/autobuilds (corre con la glibc del sistema).

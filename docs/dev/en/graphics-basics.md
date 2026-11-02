@@ -236,7 +236,7 @@ and what the plugin turned it into.
   - The number at the start of each line is the frame (NativeLink) or the ms since start-up (NativeDraw).
 - **Dump** (`ux0:data/nativedraw/volcados/NNN/`, L+R+SELECT or automatic): what happened on screen in one or more
   frames: the PSP's image, the one the Vita drew, a text with how it was done and everything the Vita received in order to
-  draw it (`dumps.md`). With that `tools/volcado.py` draws the frame on the PC and says whether the error is in the data or in
+  draw it (`dumps.md`). With that `tools/dump.py` draws the frame on the PC and says whether the error is in the data or in
   how the Vita draws.
 - Tips for a good dump:
   - Capture **right when the error is on screen**. If the error lasts a short time, use the `auto` level (it fires by itself).
@@ -246,9 +246,9 @@ and what the plugin turned it into.
 
 ## 14. The minimum about the PC tools
 
-- `python3 tools/resumen_corrida.py <folder>`: summary of a run (fps every 10 s, waits at the sync, mirror,
+- `python3 tools/run_summary.py <folder>`: summary of a run (fps every 10 s, waits at the sync, mirror,
   seconds where the Vita cannot keep up, DISTINTAS) without reading the whole logs.
-- `python3 tools/volcado.py <dump folder> [K]`: draws frame K on the PC and leaves `fK_pc.png` with
+- `python3 tools/dump.py <dump folder> [K]`: draws frame K on the PC and leaves `fK_pc.png` with
   **reference | PC | Vita | differences**. It is the fastest way to see where the error is.
 
 ## 15. Quick glossary

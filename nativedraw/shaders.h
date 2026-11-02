@@ -1,5 +1,5 @@
 // Sombreadores ya compilados (gxp) de vita2d, tomados de vita-shader-collection (VitaArchive, la misma biblioteca que
-// usa Adrenaline 8 para dibujar). Los incluye presentador.c para la imagen del PSP estirada y el menu.
+// usa Adrenaline 8 para dibujar). Los incluye presenter.c para la imagen del PSP estirada y el menu.
 // texture_v: aPosition (float3), aTexcoord (float2), uniform float4x4 wvp (por columnas, mul(pos, wvp));
 // texture_f: tex2D(tex, uv). Licencia: THIRD_PARTY_NOTICES.md.
 static const unsigned char texture_v[] __attribute__((aligned(16))) = {  // 344 bytes

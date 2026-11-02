@@ -30,7 +30,7 @@ NativeLink (lado PSP) y NativeDraw (lado Vita) son proyectos hermanos: cada uno 
 - El primer release (0.1.0) se marca con etiqueta y release en GitHub cuando el usuario lo decida.
   Antes de la 1.0 se quita la opción "Limpiar restos de pruebas" del instalador.
 - Dónde está el número: NativeLink en `nativelink/log.h` (`NATIVELINK_VERSION`); NativeDraw en `nativedraw/version.h`
-  (`NATIVEDRAW_VERSION`). `tools/compilar.sh` los lee para el instalador (`version.txt` dentro del VPK).
+  (`NATIVEDRAW_VERSION`). `tools/build.sh` los lee para el instalador (`version.txt` dentro del VPK).
 - Etiquetas de git: `nativelink-X.Y.Z` / `nativedraw-X.Y.Z` cuando se publique algo. Las etiquetas `v0.1`…`v0.2` y `0.1`
   del repo son del GePatch original de TheFlow; `gepatch-dev66` es el último estado con los nombres viejos.
 

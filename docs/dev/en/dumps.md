@@ -39,12 +39,12 @@ information is needed and how much it can cost.
 | `fK_registro.bin` | Everything the Vita received to draw that frame: draws, states, vertices, palettes, copied textures and (in `auto`) the exact PSP image of that frame |
 | `f0_intermedia_XXXXXX.bmp` | The intermediate image (the one KOF 96 draws hidden and then stretches), drawn by the Vita at double size |
 
-## How they are read (`tools/volcado.py`)
+## How they are read (`tools/dump.py`)
 
 1. Download the folder: a `listar_*.txt` with `ux0:/data/nativedraw/volcados` and a `bajar_*.txt` with the files
    (`../../agent/en/relay.md`). **Write the request under another name and rename it at the end**: the relay may pick up a
    half-written file.
-2. `python3 tools/volcado.py <dump folder> [K] [--texturas-de <other .bin>] [--salida <folder>]` (numpy and
+2. `python3 tools/dump.py <dump folder> [K] [--texturas-de <other .bin>] [--salida <folder>]` (numpy and
    Pillow; it also runs in the Windows VM). It draws the frame on the PC imitating the PSP's GE, with the same data the Vita
    received, and leaves `fK_pc.png` (reference | PC / Vita | PC differences in magenta) in the output folder
    (by default the dump's own; never in the repo).
@@ -68,10 +68,10 @@ draws it again with the same translator and leaves `fK_reproduccion.bmp` and `fK
 
 ## History
 - 0.0.7.4: L+R+SELECT, 4 frames, images and text. 0.0.7.5: fast writing and compact text. 0.0.7.7: `.bin` record
-  and `tools/volcado.py`. 0.0.7.8–0.0.7.10: automatic (points → blocks; confirmed with the GPU finished).
+  and `tools/dump.py`. 0.0.7.8–0.0.7.10: automatic (points → blocks; confirmed with the GPU finished).
   0.0.7.9: 3 frames, text built from the record when writing. 0.0.8.3: intermediate image. 0.0.8.4: exact image of the
-  frame. 0.0.8.5: levels and replay (`reproduccion.c`: `ux0:data/nativedraw/reproducir` with the path of a `.bin` draws it
+  frame. 0.0.8.5: levels and replay (`replay.c`: `ux0:data/nativedraw/reproducir` with the path of a `.bin` draws it
   again on the Vita). 0.0.8.7: exact image also with L+R+SELECT.
-- In 0.0.8–0.0.8.15 a swizzled texture goes as is in the record (record versions 2 and 3): `tools/volcado.py`
+- In 0.0.8–0.0.8.15 a swizzled texture goes as is in the record (record versions 2 and 3): `tools/dump.py`
   sorts it on the PC. Since 0.0.8.16 (version 4) the record already carries it sorted; the replay on the Vita does not load
   dumps from before version 4 that have swizzled textures. If no draw goes to the image that is shown, the one from the last draw is taken (like the translator).

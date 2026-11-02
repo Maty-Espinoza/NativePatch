@@ -1,6 +1,6 @@
 #!/bin/bash
-# Ambiente de NativePatch en Windows + WSL (lo llama instalar.cmd): paquetes de Ubuntu, nombre/correo de git, clon del
-# repo (rama dev), compiladores (tools/preparar.sh), relevo en Descargas y una primera compilacion.
+# Ambiente de NativePatch en Windows + WSL (lo llama install.cmd): paquetes de Ubuntu, nombre/correo de git, clon del
+# repo (rama dev), compiladores (tools/setup.sh), relevo en Descargas y una primera compilacion.
 # Se puede correr de nuevo: salta lo que ya esta. Todo lo que necesita PATH queda en Ubuntu (~/tc, con Adrenaline);
 # en Windows solo se crean: Documents\GitHub\NativePatch y Downloads\{vitabridge.py,vitabridge.cmd,vitabridge\}
 set -e
@@ -28,11 +28,11 @@ git -C NativePatch config user.name  "$(git config --global user.name)"    # val
 git -C NativePatch config user.email "$(git config --global user.email)"
 
 echo "== 4/5 compiladores del PSP y de la Vita en ~/tc (~3 min la primera vez)"
-sh NativePatch/tools/preparar.sh
+sh NativePatch/tools/setup.sh
 
 echo "== 5/5 relevo con la Vita y primera compilacion"
 mkdir -p "$DL/vitabridge"
 cp NativePatch/tools/vitabridge.py NativePatch/tools/windows/vitabridge.cmd "$DL/"
-V="$DL/vitabridge" sh NativePatch/tools/compilar.sh
+V="$DL/vitabridge" sh NativePatch/tools/build.sh
 echo
-echo "Listo. Compilar: Documents\\GitHub\\NativePatch\\tools\\windows\\compilar.cmd   Relevo: Descargas\\vitabridge.cmd"
+echo "Listo. Compilar: Documents\\GitHub\\NativePatch\\tools\\windows\\build.cmd   Relevo: Descargas\\vitabridge.cmd"

@@ -20,7 +20,7 @@ shares code with it (details in "Origin", below). GPLv3 license.
 | **NativeLink** (`nativelink.prx`) | PSP side, inside Adrenaline, next to the game | It changes nothing in the game: it notes in a shared memory (the "mailbox") every display list the game sends to its graphics chip (the GE), copies for the Vita what the Vita cannot see (the PSP's video memory, with the "mirror") and, if the Vita falls behind, makes the game wait a little (the "gate"). |
 | **NativeDraw** (`nativedraw.suprx`) | Vita side, taiHEN plugin in the Adrenaline process | It reads the mailbox, walks the same lists from the Vita (the "capturer"), saves what each frame needs (the "frame record") and draws it with the Vita's GPU at double size (the "translator"); it replaces the image Adrenaline shows with its own (the "presenter"). If a frame has something it does not know how to draw, it shows the game's normal image. |
 
-Also: an **installer** (`NativePatch.vpk`, `instalador/`) that copies the two plugins to their place and enables them, and
+Also: an **installer** (`NativePatch.vpk`, `installer/`) that copies the two plugins to their place and enables them, and
 **PC tools** (`tools/`): the relay with the Vita, build scripts and readers for logs and dumps.
 
 How each part works: `how-it-works.md`.
@@ -56,10 +56,10 @@ To update: install the new VPK and use **Install / update** again. The installer
 - With Adrenaline's "Original" filter the Vita does not draw with GXM and NativeDraw cannot act: use Bilinear.
 
 ## Build
-Linux x86_64 (or WSL on Windows; on Windows, `tools/windows/instalar.cmd` sets everything up):
+Linux x86_64 (or WSL on Windows; on Windows, `tools/windows/install.cmd` sets everything up):
 ```sh
-sh tools/preparar.sh     # once: PSP (pspdev) and Vita (vitasdk) compilers in ~/tc
-sh tools/compilar.sh     # leaves nativelink.prx, nativedraw.suprx and NativePatch.vpk in build/
+sh tools/setup.sh     # once: PSP (pspdev) and Vita (vitasdk) compilers in ~/tc
+sh tools/build.sh     # leaves nativelink.prx, nativedraw.suprx and NativePatch.vpk in build/
 ```
 Details of the environments (container, Mac VM, WSL, GitHub Actions): `../../agent/en/environment.md`.
 

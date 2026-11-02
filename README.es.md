@@ -51,10 +51,10 @@ Para actualizar: instalar el VPK nuevo y volver a usar **Instalar / actualizar**
 - Con el filtro "Original" de Adrenaline la Vita no dibuja con GXM y NativeDraw no puede actuar: usar Bilinear.
 
 ## Compilar
-Linux x86_64 (o WSL en Windows; en Windows `tools/windows/instalar.cmd` lo deja todo listo):
+Linux x86_64 (o WSL en Windows; en Windows `tools/windows/install.cmd` lo deja todo listo):
 ```sh
-sh tools/preparar.sh     # una vez: compiladores del PSP (pspdev) y de la Vita (vitasdk) en ~/tc
-sh tools/compilar.sh     # deja nativelink.prx, nativedraw.suprx y NativePatch.vpk en build/
+sh tools/setup.sh     # una vez: compiladores del PSP (pspdev) y de la Vita (vitasdk) en ~/tc
+sh tools/build.sh     # deja nativelink.prx, nativedraw.suprx y NativePatch.vpk en build/
 ```
 
 ## Documentación

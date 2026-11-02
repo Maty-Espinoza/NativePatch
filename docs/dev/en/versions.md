@@ -30,7 +30,7 @@ NativeLink (PSP side) and NativeDraw (Vita side) are sibling projects: each one 
 - The first release (0.1.0) is marked with a tag and release on GitHub when the user decides.
   Before 1.0 the "Clean test leftovers" option is removed from the installer.
 - Where the number lives: NativeLink in `nativelink/log.h` (`NATIVELINK_VERSION`); NativeDraw in `nativedraw/version.h`
-  (`NATIVEDRAW_VERSION`). `tools/compilar.sh` reads them for the installer (`version.txt` inside the VPK).
+  (`NATIVEDRAW_VERSION`). `tools/build.sh` reads them for the installer (`version.txt` inside the VPK).
 - Git tags: `nativelink-X.Y.Z` / `nativedraw-X.Y.Z` when something is published. The `v0.1`…`v0.2` and `0.1` tags
   in the repo belong to the original GePatch by TheFlow; `gepatch-dev66` is the last state with the old names.
 

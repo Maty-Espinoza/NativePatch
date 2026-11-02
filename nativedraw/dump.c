@@ -1,8 +1,8 @@
-// volcado.c: frame dumps to debug what is seen on screen. Included inside presentador.c: the Adrenaline thread
+// dump.c: frame dumps to debug what is seen on screen. Included inside presenter.c: the Adrenaline thread
 // (hookEnd) calls dumpText and dumpFrame to capture each frame; the presenter thread calls dumpTick
 // to build the dump (L+R+SELECT or automatic) and write it to ux0:data/nativedraw/volcados/NNN/. Saves per frame
-// the PSP image, the Vita image, a text with how it was made and a copy of the frame record (registro.h) for
-// tools/volcado.py and reproduccion.c. Level in ux0:data/nativedraw/volcado (dumpLevel).
+// the PSP image, the Vita image, a text with how it was made and a copy of the frame record (record.h) for
+// tools/dump.py and replay.c. Level in ux0:data/nativedraw/volcado (dumpLevel).
 #include <psp2/io/stat.h>
 void *sceDmacMemcpy(void *dst, const void *src, SceSize size);
 #define VN 3            // frames per dump (at most)
@@ -10,7 +10,7 @@ void *sceDmacMemcpy(void *dst, const void *src, SceSize size);
 #define VB_N (2 << 20)  // record per frame
 // dump_req: L+R+SELECT request; dump_on: 0 nothing, 3 armed (auto), 1 capturing, 2 to write; dump_k: frames ready
 static volatile uint32_t dump_req, dump_on, dump_k;
-extern volatile uint32_t nd_exact_until;  // (captura.c) until when the record carries the exact PSP image
+extern volatile uint32_t nd_exact_until;  // (capture.c) until when the record carries the exact PSP image
 // whether automatic; dumps made; time of the last; bad blocks of the one that triggered the automatic; request time
 static uint32_t dump_auto, dump_n, dump_t, dump_dif, dump_t0;
 // Level (0 disabled, 1 pantallazo, 2 frame, 3 secuencia, 4 auto) and frames per dump
@@ -40,7 +40,7 @@ static int dump_bf[VN] = { VN, VN, VN };     // record block of each captured fr
 // 1 if record block b already belongs to a captured frame
 static int dumpUsed(int b) { for (int i = 0; i < (int)dump_k; i++) if (dump_bf[i] == b) return 1; return 0; }
 // In the Adrenaline thread: copies record f to a free block (taken by the coming frame, dumpFrame). Format: a
-// header of 16 words and then each RFrame array aligned to 4 (read by reproduccion.c and tools/volcado.py; if
+// header of 16 words and then each RFrame array aligned to 4 (read by replay.c and tools/dump.py; if
 // it changes, change both). If it does not fit in VB_N it stays without a record.
 static void dumpBin(RFrame *f) {
   dump_bpend = VN;

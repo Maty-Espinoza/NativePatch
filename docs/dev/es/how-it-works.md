@@ -28,13 +28,13 @@ y qué límites se encontraron: `findings.md`. Cómo se llegó a cada pieza, ver
 | Log de NativeLink (el texto lo escribe NativeDraw a la tarjeta) | `nativelink/log.c`, `log.h` | PSP |
 | Listas propias del GE (copias del espejo) | `nativelink/gu.c` | PSP |
 | Arranque, log de NativeLink, hilos del emulador | `nativedraw/nativedraw.c` | Vita (ARM), proceso de Adrenaline |
-| Capturador, lectores, memoria de sublistas, pedidos al espejo, logs de la captura | `nativedraw/captura.c` | Vita |
-| Registro del frame (lo que cada frame necesita para dibujarse) | `nativedraw/registro.c`, `registro.h` | Vita (dentro de `captura.c`) |
-| Presentador: toma la pantalla de Adrenaline, menú L+R+START | `nativedraw/presentador.c` | Vita, hilo de dibujo de Adrenaline |
-| Traductor: dibuja el registro con la GPU de la Vita | `nativedraw/traductor.c`, `sombreadores/` | Vita (dentro de `presentador.c`) |
-| Cronómetro de la GPU, volcados, reproducción de volcados | `cronometro.c`, `volcado.c`, `reproduccion.c` | Vita (dentro de `presentador.c`) |
-| Prueba del capturador fuera de la Vita (qemu) | `nativedraw/prueba_memoria.c` | PC |
-| Instalador (`NativePatch.vpk`) | `instalador/main.c` | Vita (app) |
+| Capturador, lectores, memoria de sublistas, pedidos al espejo, logs de la captura | `nativedraw/capture.c` | Vita |
+| Registro del frame (lo que cada frame necesita para dibujarse) | `nativedraw/record.c`, `record.h` | Vita (dentro de `capture.c`) |
+| Presentador: toma la pantalla de Adrenaline, menú L+R+START | `nativedraw/presenter.c` | Vita, hilo de dibujo de Adrenaline |
+| Traductor: dibuja el registro con la GPU de la Vita | `nativedraw/translator.c`, `shaders/` | Vita (dentro de `presenter.c`) |
+| Cronómetro de la GPU, volcados, reproducción de volcados | `gpu_timer.c`, `dump.c`, `replay.c` | Vita (dentro de `presenter.c`) |
+| Prueba del capturador fuera de la Vita (qemu) | `nativedraw/capture_test.c` | PC |
+| Instalador (`NativePatch.vpk`) | `installer/main.c` | Vita (app) |
 | Herramientas del PC: relevo con la Vita, resúmenes de logs, dibujo de volcados | `tools/` | PC |
 
 ## Cómo se cargan
@@ -141,19 +141,19 @@ quedan sin usar: `SB[0x47]`, los bits 4 y 8 de 0x4A y los eventos 7, 8, 9, 10 y 
 - La espera es de hasta 5 ms; si la Vita no responde (latido parado 0,5 s), no se espera.
 
 ## Lado Vita: dibujo
-- **Registro del frame** (`registro.c`): 4 registros que se turnan (uno se escribe, otro queda publicado y los que la
+- **Registro del frame** (`record.c`): 4 registros que se turnan (uno se escribe, otro queda publicado y los que la
   GPU puede estar leyendo no se tocan). Por frame: draws, estados del GE (solo cuando cambian), vértices e índices
   copiados, paletas y las filas de textura que usan los draws. Las texturas con el "swizzle" del PSP (bloques de 16 bytes
   x 8 filas) la CPU las deja ordenadas al copiarlas, así la GPU las lee como una textura común. Las texturas de la RAM se
   copian al momento (el juego las puede cambiar); las de la VRAM se copian después del flip, de la copia del espejo de
   ese flip.
-- **Traductor** (`traductor.c`): solo 2D en modo "through" (coordenadas en píxeles): rectángulos, triángulos y tiras;
+- **Traductor** (`translator.c`): solo 2D en modo "through" (coordenadas en píxeles): rectángulos, triángulos y tiras;
   texturas 5650/5551/4444/8888 y paletas de 4 y 8 bits; borrados; color por vértice o del material; funciones de textura
   modular y reemplazar; alfa test; mezcla (las combinaciones que GXM tiene); scissor en los rectángulos; **imágenes
   intermedias** (un juego dibuja en una imagen escondida de la VRAM y después la estira: cada una va a una superficie
   propia al doble, hasta 2). Primero revisa todos los draws del frame; si alguno no se puede, no dibuja nada y devuelve el
-  motivo. Sombreadores propios en `nativedraw/sombreadores/*.cg`, compilados a `sombreadores_nd.h`.
-- **Presentador** (`presentador.c`): engancha `sceGxmSetFragmentTexture`, `sceGxmEndScene` y `sceDmacMemcpy` de
+  motivo. Sombreadores propios en `nativedraw/shaders/*.cg`, compilados a `shaders_nd.h`.
+- **Presentador** (`presenter.c`): engancha `sceGxmSetFragmentTexture`, `sceGxmEndScene` y `sceDmacMemcpy` de
   AdrenalineUser. Reconoce la textura de 512x272 de Adrenaline y la reemplaza por su superficie, que es el doble exacto:
   Adrenaline la ubica y escala igual que siempre (se respetan su escala, posición y proporción). La copia de la imagen
   del PSP que hace Adrenaline se desvía a 4 copias propias alternadas (la GPU la lee para NativeDraw después que para

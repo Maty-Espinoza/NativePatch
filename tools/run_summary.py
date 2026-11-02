@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Short summary of a run on the Vita (NativeLink + NativeDraw), to avoid reading the whole logs.
 
-Usage: python3 resumen_corrida.py <run folder> [fps threshold, default 58] [--check [--ref <run folder>]]
+Usage: python3 run_summary.py <run folder> [fps threshold, default 58] [--check [--ref <run folder>]]
 Reads nativelink.log (one stats line every 600 vblanks = 10 s) and nativedraw_captura.log (every 1 s). Shows:
   1. per 10 s: game fps | waits at the sync (late, >5 ms, us per sync, max) | mirror copies and KB/frame
   2. capture seconds with fewer frames than the threshold or over 60,000 commands: where the Vita falls short

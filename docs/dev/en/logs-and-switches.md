@@ -39,17 +39,17 @@ L+R+START menu open; it also turns on the frame record and its `registro:` line 
 `captura_sin_lectores`, `off`, `medir_gpu` (GPU timer) and `reproducir` (`dumps.md`).
 
 ## Development and production builds
-The development measurements are inside `#ifdef NP_DEV`. A normal build has them; `PROD=1` (`tools/compilar.sh`,
+The development measurements are inside `#ifdef NP_DEV`. A normal build has them; `PROD=1` (`tools/build.sh`,
 `nativedraw/build.sh`, `nativelink/Makefile`) leaves them out. In production:
 - `extremo` falls back to medium: no `nativedraw_frames.log`, no `nativedraw_tarde.log`, no measuring of list lifetime.
-- T4 and T6 (`medir_ge`) and the GPU timer (`cronometro.c`, `medir_gpu`, its `gpu tiempos:` and `gpu: escena lenta:` lines)
+- T4 and T6 (`medir_ge`) and the GPU timer (`gpu_timer.c`, `medir_gpu`, its `gpu tiempos:` and `gpu: escena lenta:` lines)
   are not there.
 - The switches `sin_captura`, `sin_adelanto`, `sin_libre` and `compuerta_sync` do nothing.
 - Dumps, DISTINTAS and the minimum and medium levels stay. The mailbox layout does not change (`how-it-works.md`).
 
 ## Dumps (NativeDraw 0.0.8.5)
 Dump levels in `ux0:data/nativedraw/volcado`: `desactivado`, `pantallazo`, `frame`, `secuencia` (without the file)
-or `auto`. What each one saves, how much it costs and how they are read with `tools/volcado.py`: `dumps.md`.
+or `auto`. What each one saves, how much it costs and how they are read with `tools/dump.py`: `dumps.md`.
 
 ## Analysis phase switches (`ux0:data/nativedraw/`; turned off with `no` inside, the relay does not delete)
 | File | What it does |
@@ -123,4 +123,4 @@ v13.12: the memory line adds `| adelanto/f: plan= comprobadas= no_iguales= tarde
   `atraso_us`, `comandos`, `listas_antes`, `encolada_hace_us` and `ultimo_stall_hace_us` (relative to the sync),
   `vita_empezo_tras_us` (since the enqueue), `vita_recorrio_us`, `trabajo_us`, `lecturas_propias`, `de_lectores`,
   `aplicadas`, `procesador_us`. The Vita's times are converted to PSP times using the minimum clock difference.
-- Summary: `python3 tools/analisis_fase1.py <folder> [<folder> ...] [--tabla]` (one column per run).
+- Summary: `python3 tools/phase1_analysis.py <folder> [<folder> ...] [--tabla]` (one column per run).

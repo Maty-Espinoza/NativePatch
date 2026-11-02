@@ -9,9 +9,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Compiladores (pspdev y vitasdk)
-        run: sh tools/preparar.sh
+        run: sh tools/setup.sh
       - name: Compilar
-        run: sh tools/compilar.sh
+        run: sh tools/build.sh
       - name: Pruebas (capturador en qemu, logs, compilacion de produccion)
         run: |
           sudo apt-get update

@@ -26,7 +26,7 @@ Cleanup rules: `good-practices.md`. How the plugins work: `../../dev/en/how-it-w
 | In Claude's VM (`device_bash`), if access is requested | `$HOME/mnt/GitHub/NativePatch` | `$HOME/mnt/GitHub/NativePatch` |
 | Relay (opened by the user) | `Descargas\vitabridge.cmd` (double click) | `python3 ~/Documents/GitHub/NativePatch/tools/vitabridge.py` in the Terminal |
 | Relay folder | `Descargas\vitabridge\` | `~/Downloads/vitabridge/` (in the VM: `$HOME/mnt/vitabridge`) |
-| Build by hand (user) | `NativePatch\tools\windows\compilar.cmd` (WSL; the first time `instalar.cmd`) | `sh tools/compilar.sh` |
+| Build by hand (user) | `NativePatch\tools\windows\build.cmd` (WSL; the first time `install.cmd`) | `sh tools/build.sh` |
 
 Remote: `origin` = https://github.com/Maty-Espinoza/NativePatch (public). Branches: `dev` (work) and `master` (the
 latest confirmed). The tag `gepatch-dev66` is the last state with the old names.
@@ -46,8 +46,8 @@ latest confirmed). The tag `gepatch-dev66` is the last state with the old names.
   with its full number (user's decision, 2026-10-30). What matters is that each commit says which version it brings.
 
 ## 3. Build and send to the Vita
-- Build: `environment.md` (in the container: `T=/home/claude/tc sh tools/preparar.sh` once per session and
-  `T=/home/claude/tc sh tools/compilar.sh <test version>`).
+- Build: `environment.md` (in the container: `T=/home/claude/tc sh tools/setup.sh` once per session and
+  `T=/home/claude/tc sh tools/build.sh <test version>`).
 - Send: `relay.md`. In short: binaries go to `vitabridge/enviar/ux0/...`, NativeDraw needs Adrenaline to be closed
   (`cmd_*.txt` with `destroy`), and the md5 of what reached the Vita is verified before asking for the test.
 - **After every change it is built and sent to the Vita** (user's rule). Graphics are only tested on the Vita: there is
@@ -78,7 +78,7 @@ said) is not enough to explain it:
 2. **See whether it can be obtained.** If it can, it is added first (a log line, a counter, a dump with more data)
    and tested again, without fixing anything yet.
 3. **If it cannot be done that way, research how**: documentation and reference code (Adrenaline, PPSSPP, vitasdk) and, if
-   needed, small programs that run the test (on the PC with qemu, like `nativedraw/prueba_memoria.c`, or a bench on the
+   needed, small programs that run the test (on the PC with qemu, like `nativedraw/capture_test.c`, or a bench on the
    Vita).
 4. **Only with the origin clear is the change made**, and the next test confirms it was that.
 A reasonable suspicion is not enough: it is stated as a suspicion and confirmed with data before changing the code.
@@ -95,9 +95,9 @@ A reasonable suspicion is not enough: it is stated as a suspicion and confirmed 
   Adrenaline: if the user changes game without closing Adrenaline, both end up in the same log.
 - First check that the components talked: `python3 tools/test_link.py <folder> [version.txt]`. Performance verdict:
   `sh tools/test_local.sh <folder> [ref]`.
-- Summary without reading the whole logs: `python3 tools/resumen_corrida.py <folder>`. With extreme log level:
-  `python3 tools/analisis_fase1.py <folder> [<folder> ...]`. The log lines: `../../dev/en/logs-and-switches.md`.
-- Visual errors: dumps (`../../dev/en/dumps.md`) and `tools/volcado.py` to draw the frame on the PC and find out whether
+- Summary without reading the whole logs: `python3 tools/run_summary.py <folder>`. With extreme log level:
+  `python3 tools/phase1_analysis.py <folder> [<folder> ...]`. The log lines: `../../dev/en/logs-and-switches.md`.
+- Visual errors: dumps (`../../dev/en/dumps.md`) and `tools/dump.py` to draw the frame on the PC and find out whether
   the error is in the data or in the Vita's drawing. **Videos only when necessary** (Vitastream + OBS): logs and dumps
   first.
 - The logs can be read from the computer's VM (`device_bash`, grep/python3) or brought to the container

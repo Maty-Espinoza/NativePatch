@@ -91,7 +91,7 @@ moment, the user wins; afterwards this list is updated.
 ## 7. Tests
 Three kinds. When each one runs: `workflow.md`; how: `environment.md`.
 1. **Automatic on GitHub: no functional regression.** `tools/test_ci.sh` (capturer under qemu, log parsers against
-   `tests/corrida/`, production builds), on every push.
+   `tests/run/`, production builds), on every push.
 2. **Local: performance did not regress.** `sh tools/test_local.sh <run> [ref]` judges a saved run. A 60 fps game may
    be at most 5 fps lower than without the plugin, a 30 fps game about 2 lower. `ref` is the same game with
    `ux0:data/nativedraw/off` or another version. Without it the target is guessed and a game that mixes 60 fps menus
@@ -106,7 +106,7 @@ Rules:
 - Test tooling does not mix with the plugins: NativeLink is not touched for tests, NativeDraw only provides dumps. If a
   plugin is really needed, one single test plugin.
 - A game bug becomes a synthetic scene when it can be reproduced.
-- A change in a log's format also updates `tools/test_link.py`, `tools/resumen_corrida.py` and `tests/corrida/`.
+- A change in a log's format also updates `tools/test_link.py`, `tools/run_summary.py` and `tests/run/`.
 
 ## 8. How to maintain this
 - If a rule here no longer serves or one is missing, this file is changed in the same task.

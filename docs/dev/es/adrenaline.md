@@ -19,7 +19,7 @@ de Adrenaline 7 (TheOfficialFloW/Adrenaline, commit 7d382b7, revisado el 2026-10
 - **Plugins de la Vita (taiHEN):** `ux0:tai/config.txt` si existe; si no, `ur0:tai/config.txt`. La sección `*PSPEMUCFW`
   carga plugins en el proceso de Adrenaline (ahí va NativeDraw). Un cambio en `config.txt` necesita reiniciar la Vita
   (o refrescar taiHEN desde la configuración de HENkaku).
-- El instalador (`instalador/main.c`) sigue estas reglas.
+- El instalador (`installer/main.c`) sigue estas reglas.
 
 ## Adrenaline 8: cómo dibuja la pantalla (`user/menu.c`, función `AdrenalineDraw`)
 - **Juegos de PSP:** en cada vuelta copia la imagen del PSP (0x74000000, 512x272 8888) a su textura `psp_tex` con
@@ -32,7 +32,7 @@ de Adrenaline 7 (TheOfficialFloW/Adrenaline, commit 7d382b7, revisado el 2026-10
 - **Proporción (4:3 / 16:9):** como la superficie de NativeDraw es el doble exacto de `psp_tex`, Adrenaline la ubica y
   escala igual, así que se respetan su escala, su posición y la proporción que tenga el juego.
 - Los sombreadores compilados que usa Adrenaline (vita2d, de vita-shader-collection) son los mismos que NativeDraw usa
-  para el presentador (`nativedraw/sombreadores.h`).
+  para el presentador (`nativedraw/shaders.h`).
 
 ## Arquitectura (Adrenaline 7, código de TheOfficialFloW/Adrenaline, commit 7d382b7)
 - La Vita trae el hardware del PSP dentro de su chip: CPU MIPS Allegrex y GE (motor gráfico). El código del juego y el de NativeLink corren en ese MIPS real, no en un emulador por software.

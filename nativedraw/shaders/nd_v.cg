@@ -1,4 +1,4 @@
-// Translator vertices (traductor.c): position in surface pixels, normalized texture coordinates and
+// Translator vertices (translator.c): position in surface pixels, normalized texture coordinates and
 // color (u8 x 4). wvp: column-major orthographic, like vita2d's.
 void main(float3 aPosition, float2 aTexcoord, float4 aColor, uniform float4x4 wvp,
           float4 out vPosition : POSITION, float2 out vTexcoord : TEXCOORD0, float4 out vColor : COLOR)

@@ -1,6 +1,6 @@
-// registro.h: format of the frame record. Written by the capturer (registro.c, inside captura.c) and read by the
-// translator (drawing on the Vita), volcado.c (saves it to the card) and reproduccion.c (loads it from a dump).
-// If RFrame or RDraw change, the dump format must be reviewed (volcado.c, reproduccion.c, tools/volcado.py).
+// record.h: format of the frame record. Written by the capturer (record.c, inside capture.c) and read by the
+// translator (drawing on the Vita), dump.c (saves it to the card) and replay.c (loads it from a dump).
+// If RFrame or RDraw change, the dump format must be reviewed (dump.c, replay.c, tools/dump.py).
 // RS: the GE registers saved in each state, in this order (RE(e, 0xDF) = the value of 0xDF in state
 // e).
 #include <stdint.h>
@@ -36,7 +36,7 @@ static inline uint32_t RE(const uint32_t *e, uint32_t r) {  // value of register
   return 0;
 }
 #define TX_N (3 << 19)  // texture bytes per frame (1.5 MB)
-// registro.c functions used by the presenter
+// record.c functions used by the presenter
 RFrame *regTake(void);  // reserves the last complete frame (0 if none)
 int regMapGpu(void);  // (with GXM initialized) maps the copied textures for the GPU
 void regRelease(void);  // releases it

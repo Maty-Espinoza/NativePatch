@@ -1,14 +1,14 @@
-// registro.c: frame record. Saves every draw of the frame so the Vita can draw it later with its GPU.
-// Included inside captura.c (uses its GE state: reg, vaddr, iaddr, vtr, the VRAM mirror) and only works with
+// record.c: frame record. Saves every draw of the frame so the Vita can draw it later with its GPU.
+// Included inside capture.c (uses its GE state: reg, vaddr, iaddr, vtr, the VRAM mirror) and only works with
 // ux0:data/nativedraw/dibujar. The capturer calls regDraw/regClut/regCurve/regMemo while walking the list and regFlip on
-// each flip; the presenter (traductor.c) takes the last complete frame with regTake/regRelease.
+// each flip; the presenter (translator.c) takes the last complete frame with regTake/regRelease.
 // Saved per frame: copied vertices and indices (the game may reuse that memory), the GE state (RS) only when it changes,
 // palettes when loaded and the texture rows the draws use (copied to uncached memory the GPU reads; those with PSP
 // swizzle end up sorted, with rows in sequence: rgTexCopy). There are RN records taking turns: one is written, another
 // stays published (rg_pub) and those the GPU may be reading are not touched.
 // Complete = all counted draws went through regDraw and fit.
 static void clog(const char *fmt, ...);
-#include "registro.h"
+#include "record.h"
 enum { R_MEMO = 1, R_READ = 2, R_LIMIT = 4, R_CURVE = 8 };
 // Per-second statistics for the "registro:" log line (ga accumulates, gr is the copy being written; us_*: time for
 // states, vertices, textures, palettes and DMA copies; gpu: textures written to a record the GPU could be reading;

@@ -1,4 +1,4 @@
-# Salidas de compilacion (tools/compilar.sh deja todo en build/)
+# Salidas de compilacion (tools/build.sh deja todo en build/)
 build/
 *.o
 *.elf

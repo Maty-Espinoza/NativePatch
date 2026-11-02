@@ -1,7 +1,7 @@
-// reproduccion.c: draws again on the Vita, with the same translator (trFrame), a frame saved by a dump
-// (fK_registro.bin, dumpBin format in volcado.c). Used to separate an error that depends on timing (changing data,
+// replay.c: draws again on the Vita, with the same translator (trFrame), a frame saved by a dump
+// (fK_registro.bin, dumpBin format in dump.c). Used to separate an error that depends on timing (changing data,
 // races with the GPU) from one that always appears with the same data (translator, shaders).
-// Included inside presentador.c: presStart calls repStart, the presenter thread repTick and the Adrenaline thread
+// Included inside presenter.c: presStart calls repStart, the presenter thread repTick and the Adrenaline thread
 // repDraw. Usage: ux0:data/nativedraw/reproducir with the .bin path. Leaves fK_reproduccion.bmp and
 // fK_reproduccion_intermedia.bmp next to the .bin and writes "no" to the file (once per game).
 static char rep_path[128];
@@ -23,7 +23,7 @@ static void repStart(void) {
   if (n > 4 && !(rep_path[0] == 'n' && rep_path[1] == 'o')) { rep_on = 1; alog("reproduccion: %s\n", rep_path); }
 }
 
-// In the presenter thread: reads the .bin into its own RFrame (header, checked against the registro.h limits, and each
+// In the presenter thread: reads the .bin into its own RFrame (header, checked against the record.h limits, and each
 // array aligned to 4) and the textures into memory the GPU reads. On success, rep_on = 2; otherwise rep_on = 0.
 static void repLoad(void) {
   SceUID fd = sceIoOpen(rep_path, SCE_O_RDONLY, 0);

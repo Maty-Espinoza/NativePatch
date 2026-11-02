@@ -1,9 +1,9 @@
-// prueba_memoria.c: test of the capturer (captura.c, included below) outside the Vita, on ARM under qemu on the PC.
+// capture_test.c: test of the capturer (capture.c, included below) outside the Vita, on ARM under qemu on the PC.
 // Builds synthetic lists in a fake "PSP RAM" (mmap at the Vita addresses), walks them for 8 frames and
 // prints the capture counters per frame. The Vita functions are replaced by the ones below. Without arguments it runs
 // every case and decides pass/fail by itself (exit code = failed checks): this is what tools/test_ci.sh runs.
 // Build (<inc>: folder with only psp2* and vitasdk* of the vitasdk headers; with the whole include it clashes with libc):
-// arm-linux-gnueabihf-gcc -static -O2 -mthumb -mfpu=neon -mfloat-abi=hard -w -I<inc> -o prueba prueba_memoria.c
+// arm-linux-gnueabihf-gcc -static -O2 -mthumb -mfpu=neon -mfloat-abi=hard -w -I<inc> -o prueba capture_test.c
 // Usage: qemu-arm-static ./prueba [<mode> [<vram> [<readers>]]]
 // - mode: 0 no sublist memory, 1 with memory, 2 checking all. The columns before "|" must be equal.
 // - vram: 1 puts the sublists in VRAM (their content in the mirror): in frame 0 they are skipped and requested, from 1 on
@@ -14,7 +14,7 @@
 //   those applied with a reader's check). 2: they run after the capturer and skip all CALLs of the
 //   top level (tarde=) without reading lines. 3: they only do the plan (advance check of what was applied in the
 //   previous list) before the capturer.
-// Variables: REG=1 frame record (registro.c): checks each frame that recorded draws = counted (no memory:
+// Variables: REG=1 frame record (record.c): checks each frame that recorded draws = counted (no memory:
 // complete; with memory: incomplete because of the applied sublists). NIVEL=0|1|2 log level (default 2,
 // extreme: list life and TARDE need it). PVMIN=n minimum plan streak (default 1). VIDA=1 data
 // life (samples that change 1 or 2 flips later; "vida:" lines). TARDE=1 simulates a late sync (line of
@@ -23,7 +23,7 @@
 // used by the next frame (like the flip event). Sublists are written to both mirrors (except vram 3).
 // Does not simulate the Vita's notice to the PSP (the mirror copy the Vita announces in SB[0x48]).
 #define NP_DEV  // the test needs the extreme level (data and list life, delays)
-#include "captura.c"
+#include "capture.c"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>

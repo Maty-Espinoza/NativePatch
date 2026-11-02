@@ -10,7 +10,7 @@ Para entender NativePatch sin saber nada de antemano. Versión en inglés: `../e
 | 4 | `findings.md` | Qué se midió, qué se descubrió, qué se descartó y qué límites tiene |
 | 5 | `architecture-and-roadmap.md` | El análisis que decidió la arquitectura y la hoja de ruta por etapas (se conserva tal como se escribió) |
 | — | `logs-and-switches.md` | Qué escribe cada log, línea por línea, e interruptores de `ux0:data/nativedraw/` |
-| — | `dumps.md` | Volcados de frames: niveles, archivos, cómo leerlos con `tools/volcado.py`, reproducción en la Vita |
+| — | `dumps.md` | Volcados de frames: niveles, archivos, cómo leerlos con `tools/dump.py`, reproducción en la Vita |
 | — | `adrenaline.md` | Lo que hay que saber de Adrenaline: carga de plugins, cómo dibuja, mapa de memoria, canal PSP–ARM |
 | — | `versions.md` | Reglas de versiones, historial de commits y equivalencia con los nombres viejos (GePatch, gepresent) |
 

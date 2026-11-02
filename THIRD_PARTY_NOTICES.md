@@ -5,11 +5,11 @@ NativePatch is free software under the [GPLv3](LICENSE). It includes or uses the
 | What | Where | License |
 |---|---|---|
 | Minimal `sceGu` functions (GE block copies), based on the PSPSDK | `nativelink/gu.c` | BSD (notice below) |
-| GE rules (vertex size, commands) taken from how PPSSPP implements them | `nativedraw/captura.c` | PPSSPP is GPL 2.0 or later: compatible with GPLv3 |
-| 8x16 font generated from DejaVu Sans Mono Bold | `instalador/font.h` | Bitstream Vera / DejaVu (allows modification and redistribution) |
-| Compiled shaders `texture_v`/`texture_f` from vita2d (the ones from vita-shader-collection, which Adrenaline 8 uses) | `nativedraw/sombreadores.h` | vita2d (xerpi): MIT [verify the vita-shader-collection license before the release] |
-| Adrenaline headers and library (`systemctrl.h`, `libpspsystemctrl_kernel.a`), only to build | downloaded by `tools/preparar.sh` | GPLv3 (Adrenaline) |
-| pspdev, vitasdk, taiHEN | downloaded by `tools/preparar.sh` | their own licenses |
+| GE rules (vertex size, commands) taken from how PPSSPP implements them | `nativedraw/capture.c` | PPSSPP is GPL 2.0 or later: compatible with GPLv3 |
+| 8x16 font generated from DejaVu Sans Mono Bold | `installer/font.h` | Bitstream Vera / DejaVu (allows modification and redistribution) |
+| Compiled shaders `texture_v`/`texture_f` from vita2d (the ones from vita-shader-collection, which Adrenaline 8 uses) | `nativedraw/shaders.h` | vita2d (xerpi): MIT [verify the vita-shader-collection license before the release] |
+| Adrenaline headers and library (`systemctrl.h`, `libpspsystemctrl_kernel.a`), only to build | downloaded by `tools/setup.sh` | GPLv3 (Adrenaline) |
+| pspdev, vitasdk, taiHEN | downloaded by `tools/setup.sh` | their own licenses |
 
 The toolchain release (`.github/workflows/toolchain.yml`) redistributes GPL binaries (pspdev, vitasdk) and Adrenaline
 (GPLv3) files, with their licenses included.

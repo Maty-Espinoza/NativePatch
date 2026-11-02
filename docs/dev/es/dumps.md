@@ -40,12 +40,12 @@ información hace falta y cuánto puede costar.
 | `fK_registro.bin` | Todo lo que recibió la Vita para dibujar ese frame: draws, estados, vértices, paletas, texturas copiadas y (en `auto`) la imagen exacta del PSP de ese frame |
 | `f0_intermedia_XXXXXX.bmp` | La imagen intermedia (la que KOF 96 dibuja escondida y después estira), dibujada por la Vita al doble |
 
-## Cómo se leen (`tools/volcado.py`)
+## Cómo se leen (`tools/dump.py`)
 
 1. Bajar la carpeta: un `listar_*.txt` con `ux0:/data/nativedraw/volcados` y un `bajar_*.txt` con los archivos
    (`../../agent/en/relay.md`). **Escribir el pedido con otro nombre y renombrarlo al final**: el relevo puede tomar un
    archivo a medio escribir.
-2. `python3 tools/volcado.py <carpeta del volcado> [K] [--texturas-de <otro .bin>] [--salida <carpeta>]` (numpy y
+2. `python3 tools/dump.py <carpeta del volcado> [K] [--texturas-de <otro .bin>] [--salida <carpeta>]` (numpy y
    Pillow; corre también en la VM de Windows). Dibuja el frame en el PC imitando al GE del PSP, con los mismos datos que
    recibió la Vita, y deja `fK_pc.png` (referencia | PC / Vita | diferencias del PC en magenta) en la carpeta de salida
    (por defecto la del volcado; nunca en el repo).
@@ -69,10 +69,10 @@ vuelve a dibujar con el mismo traductor y deja `fK_reproduccion.bmp` y `fK_repro
 
 ## Historia
 - 0.0.7.4: L+R+SELECT, 4 frames, imágenes y texto. 0.0.7.5: escritura rápida y texto compacto. 0.0.7.7: registro
-  `.bin` y `tools/volcado.py`. 0.0.7.8–0.0.7.10: automático (puntos → bloques; se confirma con la GPU terminada).
+  `.bin` y `tools/dump.py`. 0.0.7.8–0.0.7.10: automático (puntos → bloques; se confirma con la GPU terminada).
   0.0.7.9: 3 frames, texto armado desde el registro al escribir. 0.0.8.3: imagen intermedia. 0.0.8.4: imagen exacta del
-  frame. 0.0.8.5: niveles y reproducción (`reproduccion.c`: `ux0:data/nativedraw/reproducir` con la ruta de un `.bin` lo
+  frame. 0.0.8.5: niveles y reproducción (`replay.c`: `ux0:data/nativedraw/reproducir` con la ruta de un `.bin` lo
   vuelve a dibujar en la Vita). 0.0.8.7: imagen exacta también con L+R+SELECT.
-- En 0.0.8–0.0.8.15 una textura con swizzle va tal cual en el registro (versiones 2 y 3 del registro): `tools/volcado.py`
+- En 0.0.8–0.0.8.15 una textura con swizzle va tal cual en el registro (versiones 2 y 3 del registro): `tools/dump.py`
   la ordena en el PC. Desde 0.0.8.16 (versión 4) el registro ya la trae ordenada; la reproducción en la Vita no carga
   volcados de antes de la 4 que tengan texturas con swizzle. Si ningún draw va a la imagen que se muestra, se toma la del último draw (como el traductor).

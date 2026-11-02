@@ -1,10 +1,10 @@
-// presentador.c: takes over the Adrenaline screen. Hooks its GXM calls (and the PSP image copy) so that, instead of the
+// presenter.c: takes over the Adrenaline screen. Hooks its GXM calls (and the PSP image copy) so that, instead of the
 // PSP's 512x272 image, Adrenaline shows our own double-size surface (1024x544, 960x544 visible) drawn in its thread and
 // context: by the translator (Vita drawing) or as the normal image stretched.
 // Since the surface is exactly twice the texture, Adrenaline places and scales it the same way (seen one frame later).
 // Also draws the L+R+START menu and hides the buttons from the game while it is open.
-// Called by nativedraw.c (presStart/presStop); includes traductor.c, volcado.c and reproduccion.c and reads the frame
-// record (registro.c).
+// Called by nativedraw.c (presStart/presStop); includes translator.c, dump.c and replay.c and reads the frame
+// record (record.c).
 #include <psp2/gxm.h>
 #include <psp2/kernel/sysmem.h>
 #include <psp2/kernel/clib.h>
@@ -13,9 +13,9 @@
 #include <psp2/io/fcntl.h>
 #include <taihen.h>
 #include <psp2/compat.h>
-#include "sombreadores.h"
+#include "shaders.h"
 #include "version.h"
-#include "../instalador/font.h"
+#include "../installer/font.h"
 
 void alog(const char *fmt, ...);  // nativedraw.c
 #define CDRAM SCE_KERNEL_MEMBLOCK_TYPE_USER_CDRAM_RW
@@ -59,7 +59,7 @@ static const char *ty(void *p) {
   return in.type == CDRAM ? "CDRAM" : in.type == PHY ? "LPDDR fisica" : in.type == UNC ? "LPDDR" : "otra";
 }
 
-// --- Programs: own patcher (like vita2d) with texture_v/texture_f from sombreadores.h ---
+// --- Programs: own patcher (like vita2d) with texture_v/texture_f from shaders.h ---
 // heap/halloc/hfree: patcher CPU memory (32 KB handed out in order and never freed).
 static char heap[0x8000] __attribute__((aligned(16)));
 static uint32_t hpos;
@@ -196,14 +196,14 @@ static int initDest(void) {
 }
 
 #ifdef NP_DEV
-#include "cronometro.c"  // how long the GPU takes on each scene (medir_gpu)
+#include "gpu_timer.c"  // how long the GPU takes on each scene (medir_gpu)
 #else
 #define cNote(ty, n, dr, px, sw) ((void)sizeof((dr) + (px) + (sw)))
 #define cAdr(f) (f)
 #define c_on 0
 #define c_slot 0
 #endif
-#include "traductor.c"  // draws the frame record with the Vita GPU
+#include "translator.c"  // draws the frame record with the Vita GPU
 
 // --- Hooks (AdrenalineUser imports) and statistics ---
 static tai_hook_ref_t ref_end, ref_tex, ref_dma;
@@ -274,8 +274,8 @@ static int hookTex(SceGxmContext *c, unsigned int i, const SceGxmTexture *t) {
   return TAI_CONTINUE(int, ref_tex, c, i, t);
 }
 
-#include "volcado.c"  // dumps (L+R+SELECT and automatic)
-#include "reproduccion.c"  // draw a dumped frame again
+#include "dump.c"  // dumps (L+R+SELECT and automatic)
+#include "replay.c"  // draw a dumped frame again
 
 static uint32_t g_adr[16];  // bits: words of the notification region used by Adrenaline (to avoid using the same one)
 // marks the word of notification n as used by Adrenaline
@@ -323,7 +323,7 @@ static int hookEnd(SceGxmContext *c, const SceGxmNotification *v, const SceGxmNo
       if (k >= 32) { surf_ok = 0; if (++surf_dif >= 6 && !covered) { covered = 1; } }
       else { surf_dif = 0; if (k <= 10 && covered && ++surf_ok >= 10) covered = 0; }
     }
-    // Check (1 of every 4 frames): blocks of the Vita drawing different from the normal image (volcado.c); 6 to 8 or
+    // Check (1 of every 4 frames): blocks of the Vita drawing different from the normal image (dump.c); 6 to 8 or
     // more = different frame. 255 or more (half of the 510 blocks) is something on top of the image, not a drawing
     // error: not counted.
     if (t_on && draw_on && drawn == fr && cur_hd && surf_ready && !covered && !(fr & 3)) {
@@ -593,7 +593,7 @@ static int presThread(SceSize args, void *argp) {
   return 0;
 }
 
-static int swOn(const char *p) {  // the file exists and does not start with "no" (like captura.c)
+static int swOn(const char *p) {  // the file exists and does not start with "no" (like capture.c)
   char b[2] = { 0, 0 };
   SceUID fd = sceIoOpen(p, SCE_O_RDONLY, 0);
   if (fd < 0) return 0;

@@ -28,13 +28,13 @@ and what limits were found: `findings.md`. How each piece was reached, version b
 | NativeLink log (the text is written to the card by NativeDraw) | `nativelink/log.c`, `log.h` | PSP |
 | The GE's own lists (mirror copies) | `nativelink/gu.c` | PSP |
 | Start-up, NativeLink log, emulator threads | `nativedraw/nativedraw.c` | Vita (ARM), Adrenaline process |
-| Capturer, readers, sublist memory, mirror requests, capture logs | `nativedraw/captura.c` | Vita |
-| Frame record (what each frame needs to be drawn) | `nativedraw/registro.c`, `registro.h` | Vita (inside `captura.c`) |
-| Presenter: takes Adrenaline's screen, L+R+START menu | `nativedraw/presentador.c` | Vita, Adrenaline's drawing thread |
-| Translator: draws the record with the Vita's GPU | `nativedraw/traductor.c`, `sombreadores/` | Vita (inside `presentador.c`) |
-| GPU timer, dumps, dump replay | `cronometro.c`, `volcado.c`, `reproduccion.c` | Vita (inside `presentador.c`) |
-| Test of the capturer off the Vita (qemu) | `nativedraw/prueba_memoria.c` | PC |
-| Installer (`NativePatch.vpk`) | `instalador/main.c` | Vita (app) |
+| Capturer, readers, sublist memory, mirror requests, capture logs | `nativedraw/capture.c` | Vita |
+| Frame record (what each frame needs to be drawn) | `nativedraw/record.c`, `record.h` | Vita (inside `capture.c`) |
+| Presenter: takes Adrenaline's screen, L+R+START menu | `nativedraw/presenter.c` | Vita, Adrenaline's drawing thread |
+| Translator: draws the record with the Vita's GPU | `nativedraw/translator.c`, `shaders/` | Vita (inside `presenter.c`) |
+| GPU timer, dumps, dump replay | `gpu_timer.c`, `dump.c`, `replay.c` | Vita (inside `presenter.c`) |
+| Test of the capturer off the Vita (qemu) | `nativedraw/capture_test.c` | PC |
+| Installer (`NativePatch.vpk`) | `installer/main.c` | Vita (app) |
 | PC tools: relay with the Vita, log summaries, dump drawing | `tools/` | PC |
 
 ## How they are loaded
@@ -141,19 +141,19 @@ unused: `SB[0x47]`, bits 4 and 8 of 0x4A and events 7, 8, 9, 10 and 12.
 - The wait is up to 5 ms; if the Vita does not respond (heartbeat stopped for 0.5 s), it does not wait.
 
 ## Vita side: drawing
-- **Frame record** (`registro.c`): 4 records that take turns (one is being written, another stays published and the ones the
+- **Frame record** (`record.c`): 4 records that take turns (one is being written, another stays published and the ones the
   GPU may be reading are not touched). Per frame: draws, GE states (only when they change), copied vertices and indices,
   palettes and the texture rows the draws use. Textures with the PSP's "swizzle" (16-byte blocks
   x 8 rows) are left ordered by the CPU when copying them, so the GPU reads them as a common texture. Textures from RAM are
   copied right away (the game may change them); those from VRAM are copied after the flip, from the mirror copy of
   that flip.
-- **Translator** (`traductor.c`): only 2D in "through" mode (coordinates in pixels): rectangles, triangles and strips;
+- **Translator** (`translator.c`): only 2D in "through" mode (coordinates in pixels): rectangles, triangles and strips;
   5650/5551/4444/8888 textures and 4- and 8-bit palettes; clears; color per vertex or from the material; modulate and replace
   texture functions; alpha test; blending (the combinations GXM has); scissor on the rectangles; **intermediate
   images** (a game draws into a hidden VRAM image and then stretches it: each one goes to its own surface at double size,
   up to 2). It first checks all the draws of the frame; if any cannot be done, it draws nothing and returns the
-  reason. Its own shaders are in `nativedraw/sombreadores/*.cg`, compiled to `sombreadores_nd.h`.
-- **Presenter** (`presentador.c`): hooks `sceGxmSetFragmentTexture`, `sceGxmEndScene` and `sceDmacMemcpy` of
+  reason. Its own shaders are in `nativedraw/shaders/*.cg`, compiled to `shaders_nd.h`.
+- **Presenter** (`presenter.c`): hooks `sceGxmSetFragmentTexture`, `sceGxmEndScene` and `sceDmacMemcpy` of
   AdrenalineUser. It recognizes Adrenaline's 512x272 texture and replaces it with its surface, which is exactly double:
   Adrenaline places and scales it as always (its scale, position and aspect ratio are respected). The copy of the PSP's
   image that Adrenaline makes is diverted to 4 alternating copies of its own (the GPU reads it for NativeDraw later than for

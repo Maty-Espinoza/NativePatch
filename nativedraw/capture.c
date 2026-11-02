@@ -1,11 +1,11 @@
-// captura.c: NativeDraw capturer (Vita side). Follows the mailbox NativeLink writes in PSP RAM (SB, at
+// capture.c: NativeDraw capturer (Vita side). Follows the mailbox NativeLink writes in PSP RAM (SB, at
 // 0x0A000000: queued lists, stalls, syncs, flips) and walks each list reading PSP RAM the way the GE would:
-// tracks GE state, counts draws, state changes and textures, and feeds the frame record (registro.c, included
+// tracks GE state, counts draws, state changes and textures, and feeds the frame record (record.c, included
 // here) drawn by the presenter. Publishes in the mailbox the last captured list (SB[3], awaited by the
 // NativeLink gate) and a heartbeat (SB[4]). Also: read-ahead readers, sublist memory, requests to the VRAM
 // mirror and the logs nativedraw_captura.log and, in development builds (NP_DEV), nativedraw_frames.log and
 // nativedraw_tarde.log.
-// Started by nativedraw.c (capStart); prueba_memoria.c includes it to test it on the PC.
+// Started by nativedraw.c (capStart); capture_test.c includes it to test it on the PC.
 #include <psp2/kernel/threadmgr.h>
 #include <psp2/kernel/clib.h>
 #include <psp2/kernel/processmgr.h>
@@ -95,7 +95,7 @@ static inline int isVram(uint32_t a) { return (a & 0x0F000000u) == 0x04000000u; 
 // last copy of page p in mirror b (written by NativeLink)
 #define CPY(b, p) SB[((b) ? 0x8400 : 0x200) + (p)]
 // Bitmaps of 512 pages (2 MB): requested as list, as data, render targets and the displayed image
-// (want_fb, requested by registro.c for dumps)
+// (want_fb, requested by record.c for dumps)
 static uint32_t mir_on, want_l[16], want_d[16], rt_pg[16], want_fb[16];
 static volatile uint32_t mir_ok[2][16], mir_reset;           // pages with a valid copy in each mirror
 // copy the current list is read with (0: none yet)
@@ -302,8 +302,8 @@ static struct { volatile uint32_t n[4], ch1[4], ch2[4], warn[4], wall[4], ms1, m
 #endif
 
 static int reg_on;  // frame record (switch dibujar)
-// Until when (Vita time) each frame carries the exact PSP image: set by volcado.c for an
-// L+R+SELECT dump and used by registro.c
+// Until when (Vita time) each frame carries the exact PSP image: set by dump.c for an
+// L+R+SELECT dump and used by record.c
 volatile uint32_t nd_exact_until;
 static void regDraw(uint32_t n, uint32_t type, uint32_t vt, uint32_t idx), regClut(uint32_t d), regMemo(uint32_t draws);
 // PRIM (command 0x04, d: count and primitive type): records the draw, counts its class and the state changes since
@@ -373,7 +373,7 @@ static void draw(uint32_t d) {
   last_prim = type; last_vend = vaddr; dirty = vset = 0;
 }
 
-#include "registro.c"  // frame record: uses the code above
+#include "record.c"  // frame record: uses the code above
 
 // --- Queued lists (like the GE: one at a time, in order) ---
 // A list queued by the game: position (pc, CALL stack stk/sp, BASE/OFFSET), how far it is written (stall),

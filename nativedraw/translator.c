@@ -1,10 +1,10 @@
-// traductor.c: draws with the Vita GPU (GXM), at double size (960x544), a frame of the record (registro.h: GE draws and
-// states saved by registro.c in the capturer). Included inside presentador.c, it uses its patcher, surfaces and context;
+// translator.c: draws with the Vita GPU (GXM), at double size (960x544), a frame of the record (record.h: GE draws and
+// states saved by record.c in the capturer). Included inside presenter.c, it uses its patcher, surfaces and context;
 // the presenter calls trInit at startup and trFrame in the Adrenaline thread, instead of copying the PSP image. If the
 // frame has something it cannot draw it returns the reason (T_*) and the presenter shows the normal image.
-// Own shaders in sombreadores/*.cg.
-#include "registro.h"
-#include "sombreadores_nd.h"
+// Own shaders in shaders/*.cg.
+#include "record.h"
+#include "shaders_nd.h"
 // Result of trCheck/trFrame: T_OK or the reason the frame was not drawn (tnames: its name in the log)
 enum { T_OK, T_NEW, T_3D, T_PRIM, T_FMT, T_BLEND, T_TFUNC, T_ODD, T_DEST, T_VERT, T_LIMIT, T_TEX, T_PROG, T_OUT, TN };
 static const char *tnames[TN] = { "ok", "sin_frame_nuevo", "3d", "primitiva", "formato", "mezcla", "funcion_textura",
@@ -412,7 +412,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     if (!p) { res = T_PROG; break; }
     sceGxmSetFragmentProgram(c, p);
     sceGxmReserveFragmentDefaultUniformBuffer(c, &u);
-    // uniforms (see sombreadores/*.cg): at = alpha test function (1: always passes) and reference; tf = texture
+    // uniforms (see shaders/*.cg): at = alpha test function (1: always passes) and reference; tf = texture
     // function, TCC and color doubling
     uint32_t db = RE(e, 0xDB), c9 = RE(e, 0xC9);
     float at[4] = { (clr & 1) || !(RE(e, 0x22) & 1) ? 1.0f : (float)(db & 7), (float)(db >> 8 & 0xFF), 0, 0 };

@@ -16,9 +16,9 @@ NativeDraw 0.0.8.23 + NativeLink 0.0.3.5). How the work is done: `docs/agent/en/
       useful GPU tests of pspautotests (from the 112). NPCHECK confirmed that Adrenaline loads NativeLink with a homebrew
       (`archivo=ms0:/PSP/GAME/NPCHECK/EBOOT.PBP` in `nativelink.log`); whether NativeDraw captures it is not confirmed
       (that run had no draws). Open point: image tolerance HD vs normal, calibrated with scenes.
-- [ ] **Simplify the structure** (after the tests): split `captura.c` (1621 lines) into walk, sublist memory, readers and
+- [ ] **Simplify the structure** (after the tests): split `capture.c` (1621 lines) into walk, sublist memory, readers and
       logs; fewer switches; tidy the mailbox; source file names and log texts to English (log format changes also update
-      `tools/test_link.py`, `tools/resumen_corrida.py` and `tests/corrida/`).
+      `tools/test_link.py`, `tools/run_summary.py` and `tests/run/`).
 - [ ] **Texture cache between frames** (user's request: caches everywhere, avoid redoing what did not change). Measured
       in 0.0.8.19: ~98–99 % of the bytes copied each frame equal the previous copy; the DMA is the expensive part
       (~100 µs per call; Metal Slug XX 10–17 ms per frame). Agreed design: textures kept unswizzled in the Vita's own
@@ -54,9 +54,9 @@ NativeDraw 0.0.8.23 + NativeLink 0.0.3.5). How the work is done: `docs/agent/en/
       repeating the GE's block copies (TRANSFER) to VRAM; joining draws with the same state (fewer GPU calls).
 - [ ] Frame record: store the matrices (needed for 3D); copying from the PSP RAM costs ~6 µs per draw (KOF 96, ~2.4 ms
       per frame): make it cheaper if it matters; some KOF 96 frames hit the cap (`R_LIMIT`) in transitions.
-- [ ] Possible bugs noted while cleaning comments (not touched; confirm before changing): `reproduccion.c` `repLoad`
+- [ ] Possible bugs noted while cleaning comments (not touched; confirm before changing): `replay.c` `repLoad`
       goes on with garbage data when a texture is bigger than the buffer and does not free memory on failure;
-      `captura.c` `markRt` does not guard `n == 0` (`want` does) and could mark all 512 VRAM pages; installer: `hasLine()`
+      `capture.c` `markRt` does not guard `n == 0` (`want` does) and could mark all 512 VRAM pages; installer: `hasLine()`
       counts a commented-out line as enabled, "Desinstalar" deletes the dumps without warning and "Limpiar restos" reports
       files as deleted without checking. `dumpFrame`: f1 and f2 of each dump come out without `.bin` (confirmed in 0.0.8.20).
 - [ ] A fixed dotted line over the date of Adrenaline's menu with the presenter (menu only). Check whether it appears
@@ -67,13 +67,13 @@ NativeDraw 0.0.8.23 + NativeLink 0.0.3.5). How the work is done: `docs/agent/en/
       `ux0:data/nativedraw/` today (`docs/dev/en/logs-and-switches.md`), including the dump level, so a user can turn on
       automatic dumps, play and hand us the `volcados/` folder. Decide which are worth it; the ones that only apply when
       Adrenaline opens (`nucleo_captura`, `off`) must say so. Save in `ux0:data/nativedraw/opciones.txt`.
-- [ ] `nativedraw/prueba_memoria.c` does not simulate the Vita's notice to the PSP (the mirror copy the Vita announces
+- [ ] `nativedraw/capture_test.c` does not simulate the Vita's notice to the PSP (the mirror copy the Vita announces
       in `SB[0x48]`).
 - [ ] **Updater** in the installer (future): look in GitHub releases for a new VPK and download it.
 - [ ] **Before 1.0:** remove "Limpiar restos de pruebas" from the installer.
 - [ ] **Before the first release:** remove `docs/changelog/*/conversaciones/` (`CHANGELOG.md` stays as the summary) and
       make the GitHub release (VPK + loose plugins) with tags `nativelink-X.Y.Z` / `nativedraw-X.Y.Z`.
-- [ ] `tools/windows/instalar.cmd` / `instalar.sh` use the `dev` branch while the default branch is `master`; move
+- [ ] `tools/windows/install.cmd` / `install.sh` use the `dev` branch while the default branch is `master`; move
       `dev` to `master` when the first release is made.
 
 ## Capture performance (stage 2 closed with ≥ 58 fps in the heaviest part of GT)
@@ -95,7 +95,7 @@ NativeDraw 0.0.8.23 + NativeLink 0.0.3.5). How the work is done: `docs/agent/en/
 - [ ] Many sublists entering with another state (`otra_entrada`) are walked again: find a way to reuse them.
 - [ ] Since v13.12 a line of a VRAM sublist with no valid copy in the frame's mirror is re-recorded instead of compared
       with the old copy: if other games show many "cambiaron" in VRAM sublists, look at this.
-- [ ] `resumen_corrida.py` still does not show the gate lines ("stats compuerta" in `nativelink.log`) nor the look-ahead
+- [ ] `run_summary.py` still does not show the gate lines ("stats compuerta" in `nativelink.log`) nor the look-ahead
       line (`adelanto/f` in `nativedraw_captura.log`); today they are read with grep.
 
 ## Other games (after stage 2)
@@ -166,14 +166,14 @@ NativeDraw 0.0.8.23 + NativeLink 0.0.3.5). How the work is done: `docs/agent/en/
 - [ ] Vita recovery (the user noticed it "slightly affected" on 2026-10-29; it hangs now and then since the tests that
       moved memory): steps already given (full power off → safe mode → rebuild database → reinstall Adrenaline; never
       update the firmware). When the user wants.
-- [ ] `tools/compilar.sh` and the documents mention the Windows PC paths (`C:\Users\spect`); if the user changes
+- [ ] `tools/build.sh` and the documents mention the Windows PC paths (`C:\Users\spect`); if the user changes
       machines, update `docs/agent/en/workflow.md`.
 
 ## Cleanup
 - [ ] Delete the remote branch `prueba-0.0.8.13` by hand (the session proxy refused it).
 - [ ] Delete by hand on the Windows PC: the empty folders `C:\Users\spect\GePatch` and `Documents\ambientepsp`, and
       `Documents\GitHub\gepatch-lab` (scripts and memstick of the old lab). In WSL, `~/gepatch-lab` (PPSSPP build) and
-      `~/pspdev` (replaced by `~/tc` from `tools/preparar.sh`). On the Mac, `~/Documents/gepatch-lab` and the backup
+      `~/pspdev` (replaced by `~/tc` from `tools/setup.sh`). On the Mac, `~/Documents/gepatch-lab` and the backup
       `~/Documents/GitHub/_respaldo_mac_nativedraw_0.0.7.2/` once it is clear nothing is needed from it.
 - [ ] The Windows relay folder (`Descargas\vitabridge`) still has the GePatch-era folders, patches and git bundles:
       delete them as was done on the Mac on 2026-10-31.

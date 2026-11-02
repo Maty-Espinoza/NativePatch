@@ -7,32 +7,32 @@ how the capturer is tested outside the Vita. Everything that needs PATH stays in
 ## Compilers needed
 | For | What | From where |
 |---|---|---|
-| NativeLink | pspdev (gcc for MIPS, pspsdk) + `systemctrl.h` and `libpspsystemctrl_kernel.a` from Adrenaline | `tools/preparar.sh` |
-| NativeDraw | vitasdk (gcc for ARM, vita-toolchain, vita-headers) + `taihen` package + stubs generated with `vita-libs-gen-2` | `tools/preparar.sh` |
+| NativeLink | pspdev (gcc for MIPS, pspsdk) + `systemctrl.h` and `libpspsystemctrl_kernel.a` from Adrenaline | `tools/setup.sh` |
+| NativeDraw | vitasdk (gcc for ARM, vita-toolchain, vita-headers) + `taihen` package + stubs generated with `vita-libs-gen-2` | `tools/setup.sh` |
 | Installer (VPK) | vitasdk (`vita-make-fself`, `vita-mksfoex`, `vita-pack-vpk`) | same |
-| Translator shaders (`nativedraw/sombreadores/*.cg`) | Sony's compiler under qemu (JagerDesu/vita-shaders) | only when a `.cg` changes; the compiled `.h` is in the repo (`sombreadores/compilar.sh`) |
+| Translator shaders (`nativedraw/shaders/*.cg`) | Sony's compiler under qemu (JagerDesu/vita-shaders) | only when a `.cg` changes; the compiled `.h` is in the repo (`shaders/build.sh`) |
 
-vitasdk's GCC 15 uses C23 by default and `taihen.h` does not compile: the `arm-none-eabi-gcc` wrapper that `preparar.sh`
+vitasdk's GCC 15 uses C23 by default and `taihen.h` does not compile: the `arm-none-eabi-gcc` wrapper that `setup.sh`
 leaves adds `-std=gnu17`.
 
 ## Where it is built
 | Place | Prepare (once) | Build | Notes |
 |---|---|---|---|
-| **Claude's container** (Linux x86_64; the normal place) | `T=/home/claude/tc sh tools/preparar.sh` (~15 s; in the container `$HOME` is `/root`, hence `T`) | `T=/home/claude/tc sh tools/compilar.sh <test version>` | The container is wiped between sessions: prepare in every conversation. |
-| Mac's Linux ARM64 VM (`device_bash`, Ubuntu 22.04 without root) | `sh tools/mac/preparar_vm.sh` | `V=$HOME/mnt/Downloads/vitabridge sh tools/compilar.sh <version>` | pspdev for ARM64 requires glibc 2.38: the script uses conda-forge's with per-program wrappers (not patchelf: it breaks cc1). It is wiped with every session |
-| WSL on the Windows PC (user) | `tools/windows/instalar.cmd` (leaves the repo, compilers in Ubuntu's `~/tc` and the relay in Descargas) | `tools/windows/compilar.cmd [version]` | Uses `V` = `Descargas\vitabridge` |
-| User's Linux / native Mac | `sh tools/preparar.sh` | `sh tools/compilar.sh` | |
-| GitHub Actions (`.github/workflows/ci.yml`) | `tools/preparar.sh` | `tools/compilar.sh` | On every push; the binaries stay as an artifact. Also runs `tools/test_ci.sh` |
+| **Claude's container** (Linux x86_64; the normal place) | `T=/home/claude/tc sh tools/setup.sh` (~15 s; in the container `$HOME` is `/root`, hence `T`) | `T=/home/claude/tc sh tools/build.sh <test version>` | The container is wiped between sessions: prepare in every conversation. |
+| Mac's Linux ARM64 VM (`device_bash`, Ubuntu 22.04 without root) | `sh tools/mac/setup_vm.sh` | `V=$HOME/mnt/Downloads/vitabridge sh tools/build.sh <version>` | pspdev for ARM64 requires glibc 2.38: the script uses conda-forge's with per-program wrappers (not patchelf: it breaks cc1). It is wiped with every session |
+| WSL on the Windows PC (user) | `tools/windows/install.cmd` (leaves the repo, compilers in Ubuntu's `~/tc` and the relay in Descargas) | `tools/windows/build.cmd [version]` | Uses `V` = `Descargas\vitabridge` |
+| User's Linux / native Mac | `sh tools/setup.sh` | `sh tools/build.sh` | |
+| GitHub Actions (`.github/workflows/ci.yml`) | `tools/setup.sh` | `tools/build.sh` | On every push; the binaries stay as an artifact. Also runs `tools/test_ci.sh` |
 
 ## Toolchain package
-`tools/preparar.sh` downloads and unpacks one pinned package, named by `tools/toolchain-version` (`toolchain-1`), from a
+`tools/setup.sh` downloads and unpacks one pinned package, named by `tools/toolchain-version` (`toolchain-1`), from a
 GitHub release built by `.github/workflows/toolchain.yml` on push.
 - If the package gives a 404, or with `FROM_SOURCE=1`, it fetches each part from source, with vitasdk pinned to
   `sdk-snapshot-20261015.850.1`.
 - To change it: bump `tools/toolchain-version` and push. To use a new pin, delete `$T` first.
-- The package is x86_64 only: the Mac's ARM64 VM keeps `tools/mac/preparar_vm.sh`.
+- The package is x86_64 only: the Mac's ARM64 VM keeps `tools/mac/setup_vm.sh`.
 
-## What `tools/compilar.sh` leaves
+## What `tools/build.sh` leaves
 - `build/nativelink.prx`, `build/nativedraw.suprx`, `build/NativePatch.vpk` (the installer with both plugins and a
   `version.txt`), plus the md5s on screen.
 - With a version: copies `build/<plugin>_<version>.*`, `NativePatch_<version>.vpk` and `cambios_<version>.patch` (the
@@ -47,34 +47,34 @@ GitHub release built by `.github/workflows/toolchain.yml` on push.
 - `nativedraw/build.sh` links twice, the second with `-Tdata` one page beyond the code: `vita-elf-create`
   adds ~1.1 KB at the end of the code segment and failed when the data one started too close.
 - Versions: `NATIVELINK_VERSION` in `nativelink/log.h`; `NATIVEDRAW_VERSION` in `nativedraw/version.h`.
-  `compilar.sh` reads them for the installer's `version.txt`.
+  `build.sh` reads them for the installer's `version.txt`.
 
 ## Tools in `tools/`
 | Script | What it does |
 |---|---|
-| `preparar.sh`, `mac/preparar_vm.sh` | Install the compilers (above) and write `$T/env.sh` |
-| `compilar.sh`, `windows/compilar.cmd` | Build everything (above) |
-| `windows/instalar.cmd`, `windows/instalar.sh` | Complete environment on Windows + WSL; `instalar.cmd` works on its own (downloads `instalar.sh` from the `dev` branch) |
+| `setup.sh`, `mac/setup_vm.sh` | Install the compilers (above) and write `$T/env.sh` |
+| `build.sh`, `windows/build.cmd` | Build everything (above) |
+| `windows/install.cmd`, `windows/install.sh` | Complete environment on Windows + WSL; `install.cmd` works on its own (downloads `install.sh` from the `dev` branch) |
 | `vitabridge.py`, `windows/vitabridge.cmd` | Relay with the Vita (`relay.md`) |
-| `resumen_corrida.py <folder>` | Summary of a run: fps every 10 s, sync waits, mirror, seconds where the Vita falls short, DISTINTAS. `--check [--ref <folder>]` judges it. It finds the lines with regular expressions: if a log's text changes, change it there too |
+| `run_summary.py <folder>` | Summary of a run: fps every 10 s, sync waits, mirror, seconds where the Vita falls short, DISTINTAS. `--check [--ref <folder>]` judges it. It finds the lines with regular expressions: if a log's text changes, change it there too |
 | `test_ci.sh`, `test_local.sh`, `test_link.py` | The three tests (below) |
-| `analisis_fase1.py <folder>...` | Summarizes `nativedraw_frames.log` and `nativedraw_tarde.log` (extreme log level): fps, slow frames and the cost of each part per frame |
-| `volcado.py <dump folder> [K]` | Draws a dumped frame on the PC imitating the GE and compares it with the normal image and the Vita's (`../../dev/en/dumps.md`). Needs numpy and Pillow |
+| `phase1_analysis.py <folder>...` | Summarizes `nativedraw_frames.log` and `nativedraw_tarde.log` (extreme log level): fps, slow frames and the cost of each part per frame |
+| `dump.py <dump folder> [K]` | Draws a dumped frame on the PC imitating the GE and compares it with the normal image and the Vita's (`../../dev/en/dumps.md`). Needs numpy and Pillow |
 
 ## Tests
 Rules: `good-practices.md` §7. When to run them: `workflow.md` §3.
 
 | Test | Command | Where |
 |---|---|---|
-| Automatic: no functional regression | `sh tools/test_ci.sh` | `.github/workflows/ci.yml`, or anywhere after `preparar.sh` with the apt packages `qemu-user` and `gcc-arm-linux-gnueabihf` |
-| Local: performance did not regress | `sh tools/test_local.sh <run> [ref]` (`resumen_corrida.py --check [--ref]`) | PC, on a saved run |
+| Automatic: no functional regression | `sh tools/test_ci.sh` | `.github/workflows/ci.yml`, or anywhere after `setup.sh` with the apt packages `qemu-user` and `gcc-arm-linux-gnueabihf` |
+| Local: performance did not regress | `sh tools/test_local.sh <run> [ref]` (`run_summary.py --check [--ref]`) | PC, on a saved run |
 | Execution: components communicate | `python3 tools/test_link.py <run> [version.txt]` | PC, on the logs after a Vita run |
 
-`test_ci.sh` runs the capturer test, the parsers against the `tests/corrida/` fixture (and a damaged copy, which must
+`test_ci.sh` runs the capturer test, the parsers against the `tests/run/` fixture (and a damaged copy, which must
 fail) and the production builds.
 
 ### Capturer test outside the Vita (qemu)
-`nativedraw/prueba_memoria.c` includes `captura.c` and runs it on ARM under qemu on the PC with a fake PSP RAM:
+`nativedraw/capture_test.c` includes `capture.c` and runs it on ARM under qemu on the PC with a fake PSP RAM:
 synthetic lists, 8 frames, simulated double mirror, readers. It is for the capture logic (sublist memory,
 readers, look-ahead check, frame record); not for graphics. With no arguments it runs 14 cases with 9 pass/fail checks
 and returns an exit code. How to build it and what modes it has is in the file's header. The headers are taken from a

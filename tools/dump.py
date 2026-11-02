@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Draws on the PC a frame dumped by NativeDraw (fK_registro.bin) and compares it with the normal image.
 
-  python3 tools/volcado.py <dump folder> [K] [--texturas-de <other .bin>] [--salida <folder>]
+  python3 tools/dump.py <dump folder> [K] [--texturas-de <other .bin>] [--salida <folder>]
 
 Imitates the PSP GE in 2D (through mode: rectangles, triangles and strips; 5650/5551/4444/8888/T4/T8 textures with the
 copy the record made; palettes; texture function; alpha test; blending; clears; scissor; intermediate images)
