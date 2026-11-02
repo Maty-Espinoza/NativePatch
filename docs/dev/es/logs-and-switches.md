@@ -15,7 +15,7 @@ Para cambiarlo: subir el archivo con el relevo (`enviar/ux0/data/nativedraw/regi
 |---|---|---|
 | **mínimo** | la versión que se publique | casi nada |
 | **mediano** | el desarrollo de todos los días (por defecto) | bajo: contadores, una línea por segundo |
-| **extremo** | análisis (fase 1 y similares) | se nota: con todo encendido (corrida 5) los frames lentos de GT en carrera subieron de ~17 % a 27 % |
+| **extremo** | análisis (fase 1 y similares; solo en compilación de desarrollo) | se nota: con todo encendido (corrida 5) los frames lentos de GT en carrera subieron de ~17 % a 27 % |
 
 ## Qué hace cada nivel
 | | mínimo | mediano | extremo |
@@ -35,8 +35,17 @@ Para cambiarlo: subir el archivo con el relevo (`enviar/ux0/data/nativedraw/regi
 | T4: avisos de la CPU del juego (vaciar caché, DMA) al buzón | no (solo cuenta) | no (solo cuenta) | sí |
 
 Siguen aparte, con su propio archivo: `dibujar` (presentador de la etapa 3: con el archivo reemplaza la imagen siempre; sin él, solo con el menú
-L+R+START abierto; además activa el registro del frame y su línea `registro:` en `nativedraw_captura.log`; ver `../../agent/es/stage3-plan.md`), T6 (`medir_ge`), `memo_revisar` (revisar todas), `sin_memoria`,
+L+R+START abierto; además activa el registro del frame y su línea `registro:` en `nativedraw_captura.log`; ver `../../agent/en/stage3-plan.md`), T6 (`medir_ge`), `memo_revisar` (revisar todas), `sin_memoria`,
 `captura_sin_lectores`, `off`, `medir_gpu` (cronómetro de la GPU) y `reproducir` (`dumps.md`).
+
+## Compilación de desarrollo y de producción
+Las mediciones de desarrollo están dentro de `#ifdef NP_DEV`. Una compilación normal las tiene; `PROD=1`
+(`tools/compilar.sh`, `nativedraw/build.sh`, `nativelink/Makefile`) las deja fuera. En producción:
+- `extremo` cae a mediano: sin `nativedraw_frames.log`, sin `nativedraw_tarde.log`, sin medir la vida de la lista.
+- T4 y T6 (`medir_ge`) y el cronómetro de la GPU (`cronometro.c`, `medir_gpu`, sus líneas `gpu tiempos:` y `gpu: escena
+  lenta:`) no existen.
+- Los interruptores `sin_captura`, `sin_adelanto`, `sin_libre` y `compuerta_sync` no hacen nada.
+- Los volcados, DISTINTAS y los niveles mínimo y mediano se quedan. La disposición del buzón no cambia (`how-it-works.md`).
 
 ## Volcados (NativeDraw 0.0.8.5)
 Niveles de volcado en `ux0:data/nativedraw/volcado`: `desactivado`, `pantallazo`, `frame`, `secuencia` (sin el archivo)

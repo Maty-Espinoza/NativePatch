@@ -2,7 +2,7 @@
 
 Lo que se aprendió probando en la Vita, resumido y ordenado por tema. Cada punto dice en qué versión o etapa se vio;
 el detalle (números completos, logs, versiones de prueba) está en `../../changelog/` y, para la etapa 3, en
-`../../agent/es/stage3-plan.md`. Marcas: **[medido]** comprobado en la Vita; **[deducido]** conclusión sin prueba
+`../../agent/en/stage3-plan.md`. Marcas: **[medido]** comprobado en la Vita; **[deducido]** conclusión sin prueba
 directa.
 
 ## El hardware

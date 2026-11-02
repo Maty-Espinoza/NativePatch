@@ -7,7 +7,8 @@ Cleanup rules: `good-practices.md`. How the plugins work: `../../dev/en/how-it-w
 ## 1. At the start of a conversation
 1. Read `good-practices.md` and this document. Then the latest `claude/resumen_conversacion_*.md` of the claude.ai
    project: it says where everything stands, what is on the Vita and what comes next. Then whatever that summary points
-   to and `../../../TODO.md`.
+   to and `../../../TODO.md`. The rules live only in `CLAUDE.md` and the documents it points to, not in the instructions
+   of the claude.ai project.
 2. See which computer is linked: `get_device_info` (`platform`: `win32` = Windows PC, `darwin` = Mac). If none is
    linked, the `mcp__remote-devices__*` tools do not appear: ask the user to link the computer from the desktop app.
 3. Request access to the relay folder (once per conversation, with `device_request_folder_access`): `~/Downloads/vitabridge`.
@@ -49,9 +50,13 @@ latest confirmed). The tag `gepatch-dev66` is the last state with the old names.
   `T=/home/claude/tc sh tools/compilar.sh <test version>`).
 - Send: `relay.md`. In short: binaries go to `vitabridge/enviar/ux0/...`, NativeDraw needs Adrenaline to be closed
   (`cmd_*.txt` with `destroy`), and the md5 of what reached the Vita is verified before asking for the test.
-- **After every change it is built and sent to the Vita** (user's rule). Tests are only on the Vita: there is no
-  PC lab since NativeLink 0.0.2 (NativeLink does nothing visible without the Vita). The capturer test with
-  qemu (`environment.md`) is for the capture logic, not for graphics.
+- **After every change it is built and sent to the Vita** (user's rule). Graphics are only tested on the Vita: there is
+  no PC lab since NativeLink 0.0.2 (NativeLink does nothing visible without the Vita). The capturer test with qemu
+  (`environment.md`) is for the capture logic, not for graphics.
+- **When to run each test** (`good-practices.md` §7): the automatic one runs on every push, look at its result on GitHub
+  (or run `sh tools/test_ci.sh` before pushing); the execution one on the logs of every Vita run, before analyzing them;
+  the local one on a saved run when a change can touch performance and before confirming a version, with `ref` for a
+  real verdict.
 
 ## 4. Asking the user for tests
 - Say **which game, what to do and what to look at**, and at the end a summary of which game goes with which option. The
@@ -81,13 +86,15 @@ A reasonable suspicion is not enough: it is stated as a suspicion and confirmed 
 ## 6. Saving and reading results
 - At the end of each run, **before the user opens another game** (logs get replaced): wait for the relay to download
   them (15–30 s after closing the game) and copy from `recibidos/` `nativelink.log`, `nativelink_prev.log`,
-  `nativedraw_captura.log`, `nativedraw_captura_prev.log`, `nativedraw.log` (with extreme log level, also
+  `nativedraw_captura.log`, `nativedraw_captura_prev.log`, `nativedraw.log` (in a dev build with extreme log level, also
   `nativedraw_frames.log` and `nativedraw_tarde.log`) to `vitabridge/etapa<N>_<version>/<game><n>/` (e.g.
   `etapa3_0.0.8.22/metalslug1`). The relay deletes what is in `recibidos/` after 7 days: what was not copied is lost.
 - **Verify the version in the logs before analyzing:** `head -1 nativelink.log`, the first line of
   `nativedraw_captura.log` and the last "NativeDraw 0.0.x ... compilado" line of `nativedraw.log` (this file is
   appended to, not replaced: the analysis starts at that line). The "prev" of the capturer log only rotates when opening
   Adrenaline: if the user changes game without closing Adrenaline, both end up in the same log.
+- First check that the components talked: `python3 tools/test_link.py <folder> [version.txt]`. Performance verdict:
+  `sh tools/test_local.sh <folder> [ref]`.
 - Summary without reading the whole logs: `python3 tools/resumen_corrida.py <folder>`. With extreme log level:
   `python3 tools/analisis_fase1.py <folder> [<folder> ...]`. The log lines: `../../dev/en/logs-and-switches.md`.
 - Visual errors: dumps (`../../dev/en/dumps.md`) and `tools/volcado.py` to draw the frame on the PC and find out whether
@@ -98,13 +105,15 @@ A reasonable suspicion is not enough: it is stated as a suspicion and confirmed 
 
 ## 7. When finishing the task
 1. Build, send to the Vita and leave the Vita ready (close Adrenaline with `destroy` if NativeDraw changed).
-2. Update the affected repo documents, **in English and in Spanish**: `docs/dev/`, `docs/agent/` (including
+2. Tests: add or change the one for the feature or bug (`good-practices.md` §7), run the ones that apply (§3) and delete
+   those of what was removed.
+3. Update the affected repo documents: `docs/dev/` **in English and in Spanish**, `docs/agent/` in English only (including
    `stage3-plan.md` if anything about the stage changed), `TODO.md` (remove what is done, add what is new), `CHANGELOG.md`
    (when confirming a version) and `versions.md` (history row).
-3. Commit with the version and push to `dev` (§2).
-4. Write the conversation summary in the claude.ai project (`claude/resumen_conversacion_<date>_<stage>.md`):
+4. Commit with the version and push to `dev` (§2); check the automatic test on GitHub.
+5. Write the conversation summary in the claude.ai project (`claude/resumen_conversacion_<date>_<stage>.md`):
    status (commits, what is on the Vita, switches), what was done, what comes next, pending items.
-5. Memory: note the user's new decisions (not technical details: those go to the documents).
+6. Memory: note the user's new decisions (not technical details: those go to the documents).
 
 ## 8. User's rules
 - Versions (`../../dev/en/versions.md`): a change in one plugin = bumps its PATCH; a change that needs both = bumps the

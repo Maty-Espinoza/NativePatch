@@ -2,7 +2,7 @@
 # Automatic test (GitHub, .github/workflows/ci.yml): no functional regression. Runs the capturer test on ARM under qemu
 # (nativedraw/prueba_memoria.c decides pass/fail), the log parsers against tests/corrida/, and builds both plugins in
 # production (PROD=1, on a copy of nativelink so a dev build in the repo does not mix with it).
-# Needs: tools/preparar.sh done, and apt packages qemu-user-static and gcc-arm-linux-gnueabihf (the capturer test uses
+# Needs: tools/preparar.sh done, and apt packages qemu-user and gcc-arm-linux-gnueabihf (the capturer test uses
 # the Linux libc, which vitasdk does not have).
 # Usage: sh tools/test_ci.sh
 set -e
@@ -12,7 +12,7 @@ for d in $VH/include/psp2* $VH/include/vitasdk*; do ln -s $d $B/inc/; done  # (o
 
 echo "== capturer"
 (cd $R/nativedraw && arm-linux-gnueabihf-gcc -static -O2 -mthumb -mfpu=neon -mfloat-abi=hard -w -I$B/inc -o $B/prueba prueba_memoria.c)
-qemu-arm-static $B/prueba
+$(command -v qemu-arm-static || command -v qemu-arm) $B/prueba
 
 echo "== log parsers"
 C=$R/tests/corrida; X=$B/corrida

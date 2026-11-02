@@ -89,6 +89,6 @@ GePatch and for Adrenaline, and to isage for Adrenaline 8. Third-party parts: `.
 | Folder | For whom | What is in it |
 |---|---|---|
 | `docs/dev/` (en, es) | developers | this document, `how-it-works.md`, `architecture-and-roadmap.md`, `logs-and-switches.md`, `dumps.md`, `adrenaline.md`, `findings.md`, `versions.md`, `graphics-basics.md` |
-| `docs/agent/` (en, es) | the AI working on the project (and anyone who wants to repeat its flow) | how the work is done, environments, relay with the Vita, good practices, plan of the current stage |
+| `docs/agent/` (en) | the AI working on the project (and anyone who wants to repeat its flow) | how the work is done, environments, relay with the Vita, good practices, plan of the current stage |
 | `docs/changelog/` (en, es) | history | what was done and measured in each version, as it was at the time (not updated) |
 | root | everyone | `README.md`, `TODO.md`, `CHANGELOG.md`, `THIRD_PARTY_NOTICES.md`, `CLAUDE.md` (instructions for the AI) |

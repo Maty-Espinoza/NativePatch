@@ -20,12 +20,11 @@ every conversation. The documentation for humans is in `../../dev/`.
 |---|---|
 | `good-practices.md` | Rules so that code, comments, files and documentation do not get messy |
 | `workflow.md` | Complete workflow with the user and with the repo |
-| `environment.md` | Build environments and tools (`tools/`), capturer test with qemu |
+| `environment.md` | Build environments and tools (`tools/`), the three tests |
 | `relay.md` | The relay with the Vita (`tools/vitabridge.py`): file protocol, what to do and what not to do |
 | `stage3-plan.md` | Stage 3: plan, steps, what was learned in each test version and status |
 
 ## Languages
-The documents in `docs/dev/` and `docs/agent/` exist in English (`en/`) and Spanish (`es/`) with the same file names.
-Spanish is the working language with the user; English is the reference for third parties. When one is changed, the
-other is changed in the same task (`good-practices.md`). `TODO.md`, `CHANGELOG.md` and `README.md` in the root exist
+The documents in `docs/agent/` exist only in English. Those in `docs/dev/` exist in English (`en/`) and Spanish (`es/`)
+with the same file names: when one is changed, the other is changed in the same task (`good-practices.md`). `TODO.md`, `CHANGELOG.md` and `README.md` in the root exist
 only in English (`README.es.md` is the Spanish version of the README).

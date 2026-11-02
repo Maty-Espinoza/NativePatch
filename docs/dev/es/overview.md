@@ -34,7 +34,7 @@ Cómo funciona cada parte: `how-it-works.md`.
 | 4–6 | 3D, framebuffers en HD, rendimiento (reusar lo grabado, juntar draws) | pendiente |
 
 Hoja de ruta completa, con las preguntas de cada etapa: `architecture-and-roadmap.md` §6. Plan y resultados de la
-etapa 3: `../../agent/es/stage3-plan.md`.
+etapa 3: `../../agent/en/stage3-plan.md`.
 
 Juegos con los que se prueba: Gran Turismo (UCUS-98632), Ridge Racer (ULJS-00001), Silent Hill Shattered Memories
 (ULUS-10450), LocoRoco (NPEG-00024), Retro City Rampage DX (NPUH-10199), KOF 96 (NeoGeo Station, NPUH-10119) y
@@ -61,7 +61,7 @@ Linux x86_64 (o WSL en Windows; en Windows: `tools/windows/instalar.cmd` lo deja
 sh tools/preparar.sh     # una vez: compiladores del PSP (pspdev) y de la Vita (vitasdk) en ~/tc
 sh tools/compilar.sh     # deja nativelink.prx, nativedraw.suprx y NativePatch.vpk en build/
 ```
-Detalle de los ambientes (contenedor, VM del Mac, WSL, GitHub Actions): `../../agent/es/environment.md`.
+Detalle de los ambientes (contenedor, VM del Mac, WSL, GitHub Actions): `../../agent/en/environment.md`.
 
 ## Versiones
 NativeLink y NativeDraw llevan cada uno su versión `0.MENOR.PARCHE`; hasta el primer release (0.1.0) todo es 0.0.x.
@@ -89,6 +89,6 @@ GePatch y por Adrenaline, y a isage por Adrenaline 8. Partes de terceros: `../..
 | Carpeta | Para quién | Qué hay |
 |---|---|---|
 | `docs/dev/` (en, es) | desarrolladores | este documento, `how-it-works.md`, `architecture-and-roadmap.md`, `logs-and-switches.md`, `dumps.md`, `adrenaline.md`, `findings.md`, `versions.md`, `graphics-basics.md` |
-| `docs/agent/` (en, es) | la IA que trabaja en el proyecto (y quien quiera repetir su flujo) | cómo se trabaja, ambientes, relevo con la Vita, buenas prácticas, plan de la etapa en curso |
+| `docs/agent/` (en) | la IA que trabaja en el proyecto (y quien quiera repetir su flujo) | cómo se trabaja, ambientes, relevo con la Vita, buenas prácticas, plan de la etapa en curso |
 | `docs/changelog/` (en, es) | historia | lo que se hizo y se midió en cada versión, tal como quedó en su momento (no se actualiza) |
 | raíz | todos | `README.md`, `TODO.md`, `CHANGELOG.md`, `THIRD_PARTY_NOTICES.md`, `CLAUDE.md` (instrucciones para la IA) |

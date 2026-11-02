@@ -45,7 +45,7 @@ renamed at the end: the relay may pick up a half-written file.
   querying it every second all day hung the Vita inside and outside Adrenaline (at ~600 downloads it answered
   "550 Could not allocate memory").
 - **Automatic cleanup (since 2026-10-31):** once an hour it deletes from `enviados/`, `recibidos/` and `respuestas/`
-  whatever is older than 7 days (`LIMPIAR_DIAS` in the script), the `.parcial` files older than a day and the folders
+  whatever is older than 7 days (`CLEAN_DAYS` in the script), the `.parcial` files older than a day and the folders
   left empty. That is why what is worth keeping from a test is copied beforehand to `vitabridge/etapa<N>_<version>/`.
   `respaldo/` and the `etapaN_*` folders are not touched.
 - **If it gets stuck** (the heartbeat of `estado.txt` stops advancing): ask the user to close the window and open it

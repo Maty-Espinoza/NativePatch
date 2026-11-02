@@ -2,7 +2,7 @@
 
 Un volcado guarda lo que pasó en pantalla en uno o más frames: la imagen del PSP, la que dibujó la Vita y lo que la Vita
 recibió para dibujarla. Sirve para encontrar el origen de un error visual sin adivinar (regla "primero el origen" de
-`../../agent/es/workflow.md`). Los niveles funcionan como los del registro (`logs-and-switches.md`): se elige uno según cuánta
+`../../agent/en/workflow.md`). Los niveles funcionan como los del registro (`logs-and-switches.md`): se elige uno según cuánta
 información hace falta y cuánto puede costar.
 
 ## Niveles (`ux0:data/nativedraw/volcado`, una palabra; sin el archivo: `secuencia`)
@@ -43,7 +43,7 @@ información hace falta y cuánto puede costar.
 ## Cómo se leen (`tools/volcado.py`)
 
 1. Bajar la carpeta: un `listar_*.txt` con `ux0:/data/nativedraw/volcados` y un `bajar_*.txt` con los archivos
-   (`../../agent/es/relay.md`). **Escribir el pedido con otro nombre y renombrarlo al final**: el relevo puede tomar un
+   (`../../agent/en/relay.md`). **Escribir el pedido con otro nombre y renombrarlo al final**: el relevo puede tomar un
    archivo a medio escribir.
 2. `python3 tools/volcado.py <carpeta del volcado> [K] [--texturas-de <otro .bin>] [--salida <carpeta>]` (numpy y
    Pillow; corre también en la VM de Windows). Dibuja el frame en el PC imitando al GE del PSP, con los mismos datos que

@@ -23,7 +23,7 @@ What the relay writes:
 Awake / asleep: it only works until 30 min after the last request or since a log grew. Awake it asks the Vita for
 "nosleep on"; asleep it leaves it alone and sends "nosleep off" so that it sleeps and saves battery.
 It opens the FTP only when there is something to do and closes it when done: vitacompanion's FTP leaks memory on each
-use and querying it often ends up hanging the Vita. Details: docs/agent/<language>/testing.md.
+use and querying it often ends up hanging the Vita. Details: docs/agent/en/relay.md.
 Cleanup: once an hour it deletes from enviados/, recibidos/ and respuestas/ whatever is older than CLEAN_DAYS days (and
 old .parcial files and folders left empty). Whatever is to be kept from a test is first copied to its
 etapaN_<version>/ folder (respaldo/ is not touched).

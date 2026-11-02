@@ -60,7 +60,7 @@ sh tools/compilar.sh     # leaves nativelink.prx, nativedraw.suprx and NativePat
 | Folder | For | Contents |
 |---|---|---|
 | [`docs/dev/`](docs/dev/en/README.md) (`en`, `es`) | developers | what it is, how it works, architecture and roadmap, logs and switches, dumps, Adrenaline notes, findings and limits, versions, graphics basics |
-| [`docs/agent/`](docs/agent/en/README.md) (`en`, `es`) | the AI that works on the project (and anyone who wants to repeat its workflow) | workflow, build environments, the relay with the Vita, good practices, current stage plan |
+| [`docs/agent/`](docs/agent/en/README.md) (`en`) | the AI that works on the project (and anyone who wants to repeat its workflow) | workflow, build environments, the relay with the Vita, good practices, current stage plan |
 | [`docs/changelog/`](docs/changelog/en/README.md) (`en`, `es`) | history | what was done and measured in each version, as it was written at the time (not updated) |
 | [`TODO.md`](TODO.md), [`CHANGELOG.md`](CHANGELOG.md) | everyone | pending items; changes of each version |
 | [`CLAUDE.md`](CLAUDE.md) | the AI | what to read first in every conversation |

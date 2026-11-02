@@ -15,7 +15,7 @@ jobs:
       - name: Pruebas (capturador en qemu, logs, compilacion de produccion)
         run: |
           sudo apt-get update
-          sudo apt-get install -y qemu-user-static gcc-arm-linux-gnueabihf
+          sudo apt-get install -y qemu-user gcc-arm-linux-gnueabihf
           sh tools/test_ci.sh
       - uses: actions/upload-artifact@v4
         with:

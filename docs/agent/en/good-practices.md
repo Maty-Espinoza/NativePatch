@@ -19,12 +19,15 @@ moment, the user wins; afterwards this list is updated.
   discovered while testing is not added to them.
 - Log texts are part of the behavior, not comments: no versions or history inside them ("stats
   compuerta:" and not "stats compuerta (dev66):"). If a script reads them (`tools/*.py`), change both.
-- Language: the code and its comments are in Spanish, without accents (accents break some compilers and
-  terminals). Function and variable names are short and consistent with the file.
+- Language: the code is in English, identifiers and comments, without accents (accents break some compilers and
+  terminals). Log texts, on-disk file names (switches, logs) and source file names stay in Spanish for now (`TODO.md`).
+  Function and variable names are short and consistent with the file.
 
 ## 2. Dead code and simplicity
 - What is not used gets deleted: functions, variables, switches, parameters, `if` branches that can no longer happen,
   code files that nobody includes anymore. Git keeps the history; the code does not.
+- Exception: measurements that only serve development are not deleted: they stay behind `#ifdef NP_DEV`, off in
+  production (`PROD=1`; `../../dev/en/logs-and-switches.md`).
 - A switch or test mode that has served its purpose is removed in the same task that discarded it (or in the next
   confirmed version). It is not left "just in case".
 - Compact code, but understandable to a human reading it for the first time. Simplicity and readability are preferred
@@ -49,7 +52,8 @@ moment, the user wins; afterwards this list is updated.
 - Build outputs go to `build/` (ignored by git). Binaries and `.o` files are never committed.
 - Documents have a single place: current ones in `docs/dev/` and `docs/agent/`; history in `docs/changelog/`. No new
   folders and no "v2" copies of a document are created: the existing one is edited.
-- File names are in English and lowercase, with hyphens (`how-it-works.md`); the same names in `en/` and `es/`.
+- New file names are in English and lowercase; documents with hyphens (`how-it-works.md`), with the same names in
+  `docs/dev/en/` and `docs/dev/es/`. Existing source files keep their Spanish names for now (`TODO.md`).
 - When finishing a task, check with `git status` that no loose files (patches, logs, tests) are left in the repo.
 
 ## 4. Relay folder (`vitabridge/`) and the Vita
@@ -67,21 +71,43 @@ moment, the user wins; afterwards this list is updated.
   tests). Every bug fixed = one commit with its version. No versions should be lost.
 - A commit says which version it brings and what changed, in one line. The detail goes to `CHANGELOG.md` when the
   version is confirmed.
-- Documentation-only commits are not made if they can be merged with the change they accompany.
+- Documentation-only commits are not made if they can be merged with the change they accompany. A change of rules can
+  go in its own documentation-only commit.
 - The version number lives in a single place per plugin: `nativelink/log.h` and `nativedraw/version.h`.
 
 ## 6. Documentation
 - `docs/dev/` is for humans (what it is, how it works, what was measured, limits); `docs/agent/` for the AI (how work
   is done); `docs/changelog/` is an archive and is not updated. `TODO.md` is the only list of pending items;
   `CHANGELOG.md`, the per-version summary.
-- When finishing each task, the affected documents are updated **in English and in Spanish**, with the findings and
-  decisions (not in the code). If something was left pending, it goes to `TODO.md`.
+- When finishing each task, the affected documents are updated with the findings and decisions (not in the code):
+  `docs/dev/` **in English and in Spanish**, `docs/agent/` in English only. If something was left pending, it goes to
+  `TODO.md`.
 - Current documents are written for someone who knows nothing about the project: short sentences, no unexplained
   jargon, no version history unless it matters for understanding the present.
 - Conversation summaries (`claude/resumen_conversacion_*.md` in the claude.ai project) say where everything stands and
   what comes next; those before 2026-10-30 are also in `docs/changelog/*/conversaciones/`. They are removed from the
   repo before the first release.
 
-## 7. How to maintain this
-- If a rule here no longer serves or one is missing, this file is changed (in both languages) in the same task.
+## 7. Tests
+Three kinds. When each one runs: `workflow.md`; how: `environment.md`.
+1. **Automatic on GitHub: no functional regression.** `tools/test_ci.sh` (capturer under qemu, log parsers against
+   `tests/corrida/`, production builds), on every push.
+2. **Local: performance did not regress.** `sh tools/test_local.sh <run> [ref]` judges a saved run. A 60 fps game may
+   be at most 5 fps lower than without the plugin, a 30 fps game about 2 lower. `ref` is the same game with
+   `ux0:data/nativedraw/off` or another version. Without it the target is guessed and a game that mixes 60 fps menus
+   with 30 fps play is misjudged: a real verdict needs `ref`.
+3. **Execution: the components communicate.** `python3 tools/test_link.py <run> [version.txt]`, on the logs after a Vita
+   run.
+
+Rules:
+- Every feature or bug fixed adds or changes a test, in the cheapest kind that covers it. Few tests.
+- A test for something removed is deleted with it.
+- A failing test is never "fixed" by changing its expectation without knowing the cause.
+- Test tooling does not mix with the plugins: NativeLink is not touched for tests, NativeDraw only provides dumps. If a
+  plugin is really needed, one single test plugin.
+- A game bug becomes a synthetic scene when it can be reproduced.
+- A change in a log's format also updates `tools/test_link.py`, `tools/resumen_corrida.py` and `tests/corrida/`.
+
+## 8. How to maintain this
+- If a rule here no longer serves or one is missing, this file is changed in the same task.
 - `CLAUDE.md` in the repo root requires reading this file at the start; that requirement is not removed.

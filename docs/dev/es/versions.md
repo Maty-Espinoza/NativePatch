@@ -40,12 +40,13 @@ NativeLink (lado PSP) y NativeDraw (lado Vita) son proyectos hermanos: cada uno 
 | 0.0.1 | 0.0.1 | `4faaa2b` | Cambio de nombre y carpetas. Mismo comportamiento que GePatch 0.2-dev66 + gepresent v13.13 |
 | 0.0.2 | | `b5d4a56` | NativeLink: se quita lo heredado de GePatch (arquitectura A, menú, volcados) |
 | | 0.0.2 | `6992890` | NativeDraw: se quita la presentación vieja, el banco de GXM y los volcados |
-| | 0.0.3 | `34dee77` | Etapa 3, paso 3.0: presentador transparente, apagado por defecto (`../../agent/es/stage3-plan.md`) |
+| | 0.0.3 | `34dee77` | Etapa 3, paso 3.0: presentador transparente, apagado por defecto (`../../agent/en/stage3-plan.md`) |
 | | 0.0.4 | `a0d85da` | Etapa 3, paso 3.1: menú L+R+START dibujado por NativeDraw (por ahora, las versiones) |
 | | 0.0.5 | `1ae7191` | Etapa 3, paso 3.2: registro del frame (con `dibujar`) |
 | | 0.0.6 | `da1daa0` | Etapa 3, paso 3.3 (primera versión): la Vita dibuja el registro (Retro City); "tapado" |
 | 0.0.3 | 0.0.7 | `f6384f7` | Etapa 3, paso 3.3 en KOF 96 (sombreadores propios, texturas por DMA, volcados) y cuadros rotos arreglados. Pruebas: NativeDraw 0.0.7.1–0.0.8.12 y NativeLink 0.0.3.1–0.0.3.3 (`8573486` era un commit de prueba, 0.0.8.10 + 0.0.3.2) |
 | | (pruebas 0.0.8.15–0.0.8.22) | `a045974`…`3ab3b91` | Commits de prueba de la etapa 3: cronómetro de la GPU, texturas ordenadas por la CPU, una escena para la superficie (KOF 96 a 60 fps), Metal Slug XX, diagnóstico del glitch blanco; 0.0.8.22 + NativeLink 0.0.3.4: limpieza del código. El commit que confirme este trabajo será **NativeDraw 0.0.9** |
+| (prueba 0.0.3.5) | (prueba 0.0.8.23) | `8cd1ff4`…`5f70fe0` | Compilaciones de desarrollo, commits de prueba: código en inglés, paquete de herramientas listo, mediciones tras `NP_DEV`, las tres pruebas. Debe verse y correr igual |
 
 Probadas en la Vita con Gran Turismo: `../../changelog/es/etapa3_preparacion.md`.
 

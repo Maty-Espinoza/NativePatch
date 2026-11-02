@@ -191,10 +191,10 @@ calculates how long each one took.
   intermediate one dropped to ~6.5 ms and with the swizzle read as linear to ~7.9 ms → **~8 ms were the swizzle
   calculation in the** `nd_fs` **shader**. The surfaces' memory (CDRAM or LPDDR) hardly mattered. Lesson (0.0.8.14): reserving the
   intermediate one in CDRAM left 1 MB free and Adrenaline showed static in the previews: **never CDRAM**.
-- **0.0.8.16: swizzled textures sorted by the CPU** when copying them into the record (`rgTexCopia`: DMA to a cached
+- **0.0.8.16: swizzled textures sorted by the CPU** when copying them into the record (`rgTexCopy`: DMA to a cached
   staging memory and the CPU leaves each group of 8 rows sorted; the GPU reads them with `nd_ft`, with filter if the game
   asks for it). `nd_fs` and `trPrueba` were removed. At start-up it is checked that the DMA leaves the cached memory up to date
-  (`rgCoherente`: yes). Dumps version 4 (textures already sorted). KOF's intermediate: ~16 → ~7–8.7 ms.
+  (`rgCoherent`: yes). Dumps version 4 (textures already sorted). KOF's intermediate: ~16 → ~7–8.7 ms.
 - **0.0.8.18: a single scene for the surface.** If only the draws to the surface read intermediate images and
   none is drawn after being read, first go all the intermediate ones and then the surface in one scene (each
   scene reads and writes its whole surface: KOF goes from T → I → T to I → T, ~3 ms less). **KOF 96 at 60 fps in the

@@ -11,6 +11,9 @@ NativePatch is free software under the [GPLv3](LICENSE). It includes or uses the
 | Adrenaline headers and library (`systemctrl.h`, `libpspsystemctrl_kernel.a`), only to build | downloaded by `tools/preparar.sh` | GPLv3 (Adrenaline) |
 | pspdev, vitasdk, taiHEN | downloaded by `tools/preparar.sh` | their own licenses |
 
+The toolchain release (`.github/workflows/toolchain.yml`) redistributes GPL binaries (pspdev, vitasdk) and Adrenaline
+(GPLv3) files, with their licenses included.
+
 The project started as a fork of [GePatch](https://github.com/TheOfficialFloW/GePatch) by TheFlow; the code that
 remained from it (scaling on the PSP) was removed in NativeLink 0.0.2 and is in the repo history (tag `gepatch-dev66`).
 

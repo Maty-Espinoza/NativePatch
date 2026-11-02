@@ -2,14 +2,23 @@
 
 The only list of pending work. Ordered from what comes next to what can wait. Each item says where it came from
 (a document in `docs/dev/en/`, `docs/agent/en/`, `docs/changelog/en/` or the claude.ai project). Done items are removed;
-what was done is in `CHANGELOG.md`. Updated 2026-10-31 (NativeLink 0.0.3 + NativeDraw 0.0.7 confirmed; tests up to
-NativeDraw 0.0.8.22 + NativeLink 0.0.3.4). How the work is done: `docs/agent/en/workflow.md`; stage 3 plan and results:
+what was done is in `CHANGELOG.md`. Updated 2026-11-02 (NativeLink 0.0.3 + NativeDraw 0.0.7 confirmed; tests up to
+NativeDraw 0.0.8.23 + NativeLink 0.0.3.5). How the work is done: `docs/agent/en/workflow.md`; stage 3 plan and results:
 `docs/agent/en/stage3-plan.md`.
 
 ## Next
-- [ ] **Test on the Vita: NativeDraw 0.0.8.22 + NativeLink 0.0.3.4** (code cleanup, no behavior change) and the
-      pending test of 0.0.8.21: Metal Slug XX to the end of the level; check whether `vertice_fuera` appears in the log
-      and whether the white screen comes back.
+- [ ] **Test on the Vita: NativeDraw 0.0.8.23 + NativeLink 0.0.3.5** (rename, comments, `NP_DEV`: must look and run the
+      same) and the pending test of 0.0.8.21: Metal Slug XX to the end of the level; check whether `vertice_fuera`
+      appears in the log and whether the white screen comes back.
+- [ ] **Synthetic battery NPTEST** (standardization goes before the texture cache): a homebrew based on the old GEPTEST
+      runner (tag `gepatch-dev66`). About 12 2D scenes (clear, 4 sprite formats, CLUT4/8, swizzle, blending, alpha test,
+      scissor, layers, TRANSFER, intermediate image, texture in VRAM), a cache scene, later 3D scenes (~12–15), plus the
+      useful GPU tests of pspautotests (from the 112). NPCHECK confirmed that Adrenaline loads NativeLink with a homebrew
+      (`archivo=ms0:/PSP/GAME/NPCHECK/EBOOT.PBP` in `nativelink.log`); whether NativeDraw captures it is not confirmed
+      (that run had no draws). Open point: image tolerance HD vs normal, calibrated with scenes.
+- [ ] **Simplify the structure** (after the tests): split `captura.c` (1621 lines) into walk, sublist memory, readers and
+      logs; fewer switches; tidy the mailbox; source file names and log texts to English (log format changes also update
+      `tools/test_link.py`, `tools/resumen_corrida.py` and `tests/corrida/`).
 - [ ] **Texture cache between frames** (user's request: caches everywhere, avoid redoing what did not change). Measured
       in 0.0.8.19: ~98–99 % of the bytes copied each frame equal the previous copy; the DMA is the expensive part
       (~100 µs per call; Metal Slug XX 10–17 ms per frame). Agreed design: textures kept unswizzled in the Vita's own
@@ -25,7 +34,7 @@ NativeDraw 0.0.8.22 + NativeLink 0.0.3.4). How the work is done: `docs/agent/en/
 - [ ] Metal Slug XX: almost every checked frame comes out "different from the normal image" (KOF ~0) although it looks
       fine. Understand why (filter? one-frame delay at 30 fps?) before trusting `volcado auto` with this game.
 - [ ] When the performance work is confirmed, the commit is **NativeDraw 0.0.9** (user's decision): update
-      `docs/dev/*/versions.md` (history row), `CHANGELOG.md` and `docs/agent/*/stage3-plan.md`.
+      `docs/dev/*/versions.md` (history row), `CHANGELOG.md` and `docs/agent/en/stage3-plan.md`.
 
 ## Stage 3: drawing on the Vita
 - [ ] **Put the black-screen safety back** (removed in 0.0.8.18 at the user's request: if something goes wrong, he
@@ -44,12 +53,12 @@ NativeDraw 0.0.8.22 + NativeLink 0.0.3.4). How the work is done: `docs/agent/en/
       and strips (only rectangles today); an intermediate image drawn in one frame and used as a texture in another;
       repeating the GE's block copies (TRANSFER) to VRAM; joining draws with the same state (fewer GPU calls).
 - [ ] Frame record: store the matrices (needed for 3D); copying from the PSP RAM costs ~6 µs per draw (KOF 96, ~2.4 ms
-      per frame): make it cheaper if it matters; some KOF 96 frames hit the cap (`R_TOPE`) in transitions.
-- [ ] Possible bugs noted while cleaning comments (not touched; confirm before changing): `reproduccion.c` `repCargar`
+      per frame): make it cheaper if it matters; some KOF 96 frames hit the cap (`R_LIMIT`) in transitions.
+- [ ] Possible bugs noted while cleaning comments (not touched; confirm before changing): `reproduccion.c` `repLoad`
       goes on with garbage data when a texture is bigger than the buffer and does not free memory on failure;
-      `captura.c` `markRt` does not guard `n == 0` (`want` does) and could mark all 512 VRAM pages; installer: `lineaEn()`
+      `captura.c` `markRt` does not guard `n == 0` (`want` does) and could mark all 512 VRAM pages; installer: `hasLine()`
       counts a commented-out line as enabled, "Desinstalar" deletes the dumps without warning and "Limpiar restos" reports
-      files as deleted without checking. `volFrame`: f1 and f2 of each dump come out without `.bin` (confirmed in 0.0.8.20).
+      files as deleted without checking. `dumpFrame`: f1 and f2 of each dump come out without `.bin` (confirmed in 0.0.8.20).
 - [ ] A fixed dotted line over the date of Adrenaline's menu with the presenter (menu only). Check whether it appears
       with `dibujar` set to `no`.
 - [ ] Run **Ridge Racer** and the other installed games with NativeDraw 0.0.2 or later (only GT was retested after the
@@ -58,21 +67,12 @@ NativeDraw 0.0.8.22 + NativeLink 0.0.3.4). How the work is done: `docs/agent/en/
       `ux0:data/nativedraw/` today (`docs/dev/en/logs-and-switches.md`), including the dump level, so a user can turn on
       automatic dumps, play and hand us the `volcados/` folder. Decide which are worth it; the ones that only apply when
       Adrenaline opens (`nucleo_captura`, `off`) must say so. Save in `ux0:data/nativedraw/opciones.txt`.
-- [ ] `tools/compilar.sh` does not stop if NativeDraw fails to build (it shows the md5 of the previous `.suprx`; happened
-      in 0.0.8.14 and 0.0.8.19). Build NativeDraw separately with `nativedraw/build.sh` or check that the md5 changed.
 - [ ] `nativedraw/prueba_memoria.c` does not simulate the Vita's notice to the PSP (the mirror copy the Vita announces
       in `SB[0x48]`).
 - [ ] **Updater** in the installer (future): look in GitHub releases for a new VPK and download it.
 - [ ] **Before 1.0:** remove "Limpiar restos de pruebas" from the installer.
 - [ ] **Before the first release:** remove `docs/changelog/*/conversaciones/` (`CHANGELOG.md` stays as the summary) and
       make the GitHub release (VPK + loose plugins) with tags `nativelink-X.Y.Z` / `nativedraw-X.Y.Z`.
-- [ ] GitHub Actions (`.github/workflows/ci.yml`) builds everything with `tools/preparar.sh` + `tools/compilar.sh`; if it
-      fails because of vitasdk downloads, pin the version.
-- [ ] **Ready-made toolchain package** (user to check on his PC first): CI builds pspdev, vitasdk, taiHEN, Adrenaline
-      headers and stubs once and uploads them as a single file to a GitHub release (e.g. `toolchain-1`); `preparar.sh`
-      just downloads and unpacks it (one download per Claude session instead of several, fixed versions for everyone,
-      also for WSL). Docker images do not work for Claude (the container cannot reach ghcr.io; release files do); Docker
-      could still unify the user's environments, but the Mac is ARM64 and not every tool has a build for it.
 - [ ] `tools/windows/instalar.cmd` / `instalar.sh` use the `dev` branch while the default branch is `master`; move
       `dev` to `master` when the first release is made.
 
@@ -149,6 +149,9 @@ NativeDraw 0.0.8.22 + NativeLink 0.0.3.4). How the work is done: `docs/agent/en/
 - [ ] Reading the clock on the Vita costs 390 ns: the full extreme log alters what it measures.
 
 ## Low priority
+- [ ] **Battery, heat and Vita memory**: measure them later (a 30-minute session, same game, with and without the plugin,
+      or log the battery percent). The optimizations overlap with the caches, not redrawing identical frames and waking
+      threads only when there is work.
 - [ ] **PS1 games in high resolution** (user's request, 2026-10-30). Today NativeDraw does not touch them: in
       Adrenaline 8 the PS1 image comes from Sony's PS1 emulator built into the Vita (`pops_tex`, `user/menu.c`), not from
       the PSP's graphics chip, so NativeLink has nothing to capture; Adrenaline only stretches and filters it. Possible in
@@ -164,9 +167,10 @@ NativeDraw 0.0.8.22 + NativeLink 0.0.3.4). How the work is done: `docs/agent/en/
       moved memory): steps already given (full power off → safe mode → rebuild database → reinstall Adrenaline; never
       update the firmware). When the user wants.
 - [ ] `tools/compilar.sh` and the documents mention the Windows PC paths (`C:\Users\spect`); if the user changes
-      machines, update `docs/agent/*/workflow.md`.
+      machines, update `docs/agent/en/workflow.md`.
 
 ## Cleanup
+- [ ] Delete the remote branch `prueba-0.0.8.13` by hand (the session proxy refused it).
 - [ ] Delete by hand on the Windows PC: the empty folders `C:\Users\spect\GePatch` and `Documents\ambientepsp`, and
       `Documents\GitHub\gepatch-lab` (scripts and memstick of the old lab). In WSL, `~/gepatch-lab` (PPSSPP build) and
       `~/pspdev` (replaced by `~/tc` from `tools/preparar.sh`). On the Mac, `~/Documents/gepatch-lab` and the backup

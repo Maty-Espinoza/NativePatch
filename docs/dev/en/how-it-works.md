@@ -87,6 +87,9 @@ occupies it, NativeLink stays off. The Vita sees it at `0x68000000 + (address & 
 Events: 1 enqueue, 2 enqueue at the front, 3 stall, 4 DrawSync, 5 ListSync, 6 flip, 7 end of a GE segment (T6), 8 end
 of a sync, 9 CPU write (T4), 10 T4 summary, 11 frame cost for the game, 12 list lifetime.
 
+The layout is the same in development and production builds (`NP_DEV`, `logs-and-switches.md`). In production these go
+unused: `SB[0x47]`, bits 4 and 8 of 0x4A and events 7, 8, 9, 10 and 12.
+
 ## One frame, step by step
 1. The game enqueues a list (`sceGeListEnQueue`). Before letting it through, NativeLink waits for the Vita if needed
    (gate), notes the event with the list's sequence number and lets it continue.
@@ -112,11 +115,11 @@ of a sync, 9 CPU write (T4), 10 T4 summary, 11 frame cost for the game, 12 list 
 |---|---|---|
 | capturer | any of the 3 (0x61; `nucleo_captura` pins it) | follows the mailbox, walks each list and builds the frame record |
 | reader 0 and 1 | 0 and 2 (0xB0, only what is left over) | fetch ahead the 64-byte lines of the list into a shared cache and check stored sublists |
-| mirror | 0 (0xBE) | passes the switches and the level to NativeLink; at extreme, measures how much the mirror changes |
+| mirror | 0 (0xBE) | passes the switches and the level to NativeLink; at extreme (development build), measures how much the mirror changes |
 | log | (0xB0) | writes `nativedraw_captura.log` every second |
 | writer | (0xA0) | writes the NativeLink log to the card |
 | presenter | (0xA0) | hooks Adrenaline, paints the menu, handles dumps and replay, writes `nativedraw.log` every 10 s |
-| GPU timer | (0x40) | with `medir_gpu`: measures how long the GPU takes in each scene |
+| GPU timer | (0x40) | development build, with `medir_gpu`: measures how long the GPU takes in each scene |
 | Adrenaline's drawing thread | Adrenaline's own | the translator and the presenter proper run here (in the GXM hooks) |
 
 - **Reading the PSP's RAM is the expensive part** (~2 µs per uncached line): hence the look-ahead readers and the reads of

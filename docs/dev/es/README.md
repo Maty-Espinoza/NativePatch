@@ -14,5 +14,5 @@ Para entender NativePatch sin saber nada de antemano. Versión en inglés: `../e
 | — | `adrenaline.md` | Lo que hay que saber de Adrenaline: carga de plugins, cómo dibuja, mapa de memoria, canal PSP–ARM |
 | — | `versions.md` | Reglas de versiones, historial de commits y equivalencia con los nombres viejos (GePatch, gepresent) |
 
-Cómo se trabaja en el proyecto (flujo, ambientes, pruebas): `../../agent/es/`. Historia versión por versión:
+Cómo se trabaja en el proyecto (flujo, ambientes, pruebas): `../../agent/en/` (solo en inglés). Historia versión por versión:
 `../../changelog/es/`.

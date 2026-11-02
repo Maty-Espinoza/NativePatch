@@ -61,7 +61,7 @@ sh tools/compilar.sh     # deja nativelink.prx, nativedraw.suprx y NativePatch.v
 | Carpeta | Para quién | Qué hay |
 |---|---|---|
 | [`docs/dev/`](docs/dev/es/README.md) (`en`, `es`) | desarrolladores | qué es, cómo funciona, arquitectura y hoja de ruta, logs e interruptores, volcados, notas de Adrenaline, descubrimientos y límites, versiones, manual básico de gráficos |
-| [`docs/agent/`](docs/agent/es/README.md) (`en`, `es`) | la IA que trabaja en el proyecto (y quien quiera repetir su flujo) | flujo de trabajo, ambientes de compilación, relevo con la Vita, buenas prácticas, plan de la etapa en curso |
+| [`docs/agent/`](docs/agent/en/README.md) (`en`) | la IA que trabaja en el proyecto (y quien quiera repetir su flujo) | flujo de trabajo, ambientes de compilación, relevo con la Vita, buenas prácticas, plan de la etapa en curso |
 | [`docs/changelog/`](docs/changelog/es/README.md) (`en`, `es`) | historia | lo que se hizo y se midió en cada versión, tal como quedó en su momento (no se actualiza) |
 | [`TODO.md`](TODO.md), [`CHANGELOG.md`](CHANGELOG.md) | todos | pendientes; cambios de cada versión (en inglés) |
 | [`CLAUDE.md`](CLAUDE.md) | la IA | qué leer primero en cada conversación |

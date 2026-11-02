@@ -15,7 +15,7 @@ To change it: upload the file with the relay (`enviar/ux0/data/nativedraw/regist
 |---|---|---|
 | **minimum** | the version that gets published | almost nothing |
 | **medium** | everyday development (default) | low: counters, one line per second |
-| **extreme** | analysis (phase 1 and similar) | noticeable: with everything on (run 5) the slow frames of GT during a race went up from ~17 % to 27 % |
+| **extreme** | analysis (phase 1 and similar; development build only) | noticeable: with everything on (run 5) the slow frames of GT during a race went up from ~17 % to 27 % |
 
 ## What each level does
 | | minimum | medium | extreme |
@@ -37,6 +37,15 @@ To change it: upload the file with the relay (`enviar/ux0/data/nativedraw/regist
 These stay separate, each with its own file: `dibujar` (the stage 3 presenter: with the file it always replaces the image; without it, only with the
 L+R+START menu open; it also turns on the frame record and its `registro:` line in `nativedraw_captura.log`; see `../../agent/en/stage3-plan.md`), T6 (`medir_ge`), `memo_revisar` (check all), `sin_memoria`,
 `captura_sin_lectores`, `off`, `medir_gpu` (GPU timer) and `reproducir` (`dumps.md`).
+
+## Development and production builds
+The development measurements are inside `#ifdef NP_DEV`. A normal build has them; `PROD=1` (`tools/compilar.sh`,
+`nativedraw/build.sh`, `nativelink/Makefile`) leaves them out. In production:
+- `extremo` falls back to medium: no `nativedraw_frames.log`, no `nativedraw_tarde.log`, no measuring of list lifetime.
+- T4 and T6 (`medir_ge`) and the GPU timer (`cronometro.c`, `medir_gpu`, its `gpu tiempos:` and `gpu: escena lenta:` lines)
+  are not there.
+- The switches `sin_captura`, `sin_adelanto`, `sin_libre` and `compuerta_sync` do nothing.
+- Dumps, DISTINTAS and the minimum and medium levels stay. The mailbox layout does not change (`how-it-works.md`).
 
 ## Dumps (NativeDraw 0.0.8.5)
 Dump levels in `ux0:data/nativedraw/volcado`: `desactivado`, `pantallazo`, `frame`, `secuencia` (without the file)

@@ -46,6 +46,7 @@ NativeLink (PSP side) and NativeDraw (Vita side) are sibling projects: each one 
 | | 0.0.6 | `da1daa0` | Stage 3, step 3.3 (first version): the Vita draws the frame record (Retro City); "covered" |
 | 0.0.3 | 0.0.7 | `f6384f7` | Stage 3, step 3.3 in KOF 96 (own shaders, textures through DMA, dumps) and broken frames fixed. Tests: NativeDraw 0.0.7.1–0.0.8.12 and NativeLink 0.0.3.1–0.0.3.3 (`8573486` was a test commit, 0.0.8.10 + 0.0.3.2) |
 | | (tests 0.0.8.15–0.0.8.22) | `a045974`…`3ab3b91` | Stage 3 test commits: GPU timer, textures sorted by the CPU, one scene for the surface (KOF 96 at 60 fps), Metal Slug XX, diagnosis of the white glitch; 0.0.8.22 + NativeLink 0.0.3.4: code cleanup. The commit that confirms this work will be **NativeDraw 0.0.9** |
+| (test 0.0.3.5) | (test 0.0.8.23) | `8cd1ff4`…`5f70fe0` | Dev builds, test commits: code in English, ready-made toolchain, measurements behind `NP_DEV`, the three tests. Must look and run the same |
 
 Tested on the Vita with Gran Turismo: `../../changelog/en/etapa3_preparacion.md`.
 

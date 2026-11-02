@@ -1,8 +1,8 @@
 # CLAUDE.md — instructions for the AI working on this repo
 
 Read these two files before doing anything else in every conversation, in this order:
-1. `docs/agent/en/good-practices.md` (or `docs/agent/es/good-practices.md`) — rules for comments, dead code, old files,
-   versions and documentation. Non-negotiable.
+1. `docs/agent/en/good-practices.md` — rules for comments, dead code, old files, versions, documentation and tests.
+   Non-negotiable.
 2. `docs/agent/en/workflow.md` — how a conversation starts and ends, repo, build, tests on the Vita, user's rules.
 
 Then the latest conversation summary in the claude.ai project (`claude/resumen_conversacion_*.md`) and `TODO.md`.
@@ -15,13 +15,20 @@ Everything else is indexed in `docs/agent/en/README.md`.
 - Edit only the lines the task needs: no rewriting whole functions or files, no reordering, renaming or reformatting
   nearby code. Before each commit check `git diff`; every changed line must come from the request, and the user gets
   the diff summary with the explanation of the change.
-- Delete what is not used (code, switches, files). Git keeps the history.
+- Code is in English (identifiers and comments). Log texts, on-disk file names and source file names stay Spanish for
+  now.
+- Delete what is not used (code, switches, files). Git keeps the history. Exception: dev-only measurements stay behind
+  `#ifdef NP_DEV`, off in production (`PROD=1`).
 - Every version sent to the Vita gets a fourth number and a "(test)" commit on `dev`; confirmed versions follow the
   last confirmed one on GitHub (`docs/dev/en/versions.md`).
 - After every change: build, send to the Vita, and explain to the user in plain words what was done and how.
 - Never change code without a clear cause for the problem (`workflow.md`, "cause first").
-- Update the docs in English **and** Spanish at the end of each task; `TODO.md`, `CHANGELOG.md` and the conversation
-  summary too.
+- Update the docs at the end of each task: `docs/dev/` in English **and** Spanish, `docs/agent/` in English only;
+  `TODO.md`, `CHANGELOG.md` and the conversation summary too.
+- Tests, three kinds (`good-practices.md` §7, when to run them in `workflow.md`): automatic on GitHub (`tools/test_ci.sh`,
+  no functional regression), local (`tools/test_local.sh`, performance), execution (`tools/test_link.py`, the components
+  communicate on a Vita run). Every feature or bug fixed adds or changes a test in the cheapest kind. A failing test is
+  never "fixed" by changing its expectation without knowing the cause. Test tooling does not mix with the plugins.
 - Ask before anything that costs many tokens, changes the test environment or was not requested. Answer in Spanish.
 
 ## General coding behavior

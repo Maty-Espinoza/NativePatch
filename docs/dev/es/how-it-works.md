@@ -87,6 +87,9 @@ ocupa, NativeLink queda apagado. La Vita la ve en `0x68000000 + (dirección & 0x
 Eventos: 1 encolar, 2 encolar al frente, 3 stall, 4 DrawSync, 5 ListSync, 6 flip, 7 fin de un tramo del GE (T6), 8 fin
 de un sync, 9 escritura de la CPU (T4), 10 resumen de T4, 11 costo del frame para el juego, 12 vida de la lista.
 
+La disposición es la misma en compilación de desarrollo y de producción (`NP_DEV`, `logs-and-switches.md`). En producción
+quedan sin usar: `SB[0x47]`, los bits 4 y 8 de 0x4A y los eventos 7, 8, 9, 10 y 12.
+
 ## Un frame, paso a paso
 1. El juego encola una lista (`sceGeListEnQueue`). NativeLink, antes de dejarla pasar, espera a la Vita si toca
    (compuerta), anota el evento con el número de orden de la lista y la deja seguir.
@@ -112,11 +115,11 @@ de un sync, 9 escritura de la CPU (T4), 10 resumen de T4, 11 costo del frame par
 |---|---|---|
 | capturador | cualquiera de los 3 (0x61; `nucleo_captura` lo fija) | sigue el buzón, recorre cada lista y arma el registro del frame |
 | lector 0 y 1 | 0 y 2 (0xB0, solo lo que sobra) | traen por adelantado las líneas de 64 bytes de la lista a una caché compartida y comprueban sublistas guardadas |
-| espejo | 0 (0xBE) | pasa a NativeLink los interruptores y el nivel; en extremo mide cuánto cambia el espejo |
+| espejo | 0 (0xBE) | pasa a NativeLink los interruptores y el nivel; en extremo (compilación de desarrollo) mide cuánto cambia el espejo |
 | registro | (0xB0) | escribe `nativedraw_captura.log` cada segundo |
 | escritor | (0xA0) | escribe el log de NativeLink a la tarjeta |
 | presentador | (0xA0) | engancha a Adrenaline, pinta el menú, atiende volcados y reproducción, escribe `nativedraw.log` cada 10 s |
-| cronómetro | (0x40) | con `medir_gpu`: mide cuánto tarda la GPU en cada escena |
+| cronómetro | (0x40) | compilación de desarrollo, con `medir_gpu`: mide cuánto tarda la GPU en cada escena |
 | hilo de dibujo de Adrenaline | el de Adrenaline | ahí corren el traductor y el presentador propiamente dichos (en los ganchos de GXM) |
 
 - **Leer la RAM del PSP es lo caro** (~2 µs por línea sin caché): por eso los lectores adelantados y las lecturas de a

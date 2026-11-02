@@ -5,7 +5,7 @@
 > **gepresent** = NativeDraw (lado Vita); "modo sombra" = lo que hoy hace NativeLink siempre; "GePatch actual (A)" = el
 > escalado en el PSP, que se quitó en NativeLink 0.0.2 (no queda como modo de respaldo). Los documentos que cita
 > (`contexto_ia.md`, `etapaN_*.md`, `errores_conocidos.md`...) están en `../../changelog/es/` o en el proyecto de
-> claude.ai. **Etapas 0, 1 y 2 hechas**; la etapa 3 está en curso (`../../agent/es/stage3-plan.md`). Cómo funciona hoy:
+> claude.ai. **Etapas 0, 1 y 2 hechas**; la etapa 3 está en curso (`../../agent/en/stage3-plan.md`). Cómo funciona hoy:
 > `how-it-works.md`; qué se midió: `findings.md`.
 
 Conversación de análisis (sin cambios de código, sin tocar la Vita ni el laboratorio). Pregunta del usuario: revisar
