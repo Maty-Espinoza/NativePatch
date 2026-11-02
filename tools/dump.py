@@ -202,6 +202,7 @@ def draw(F, base, textures_from=None):
                 tris.append(('r', a, b))
         elif d['prim'] == 3: tris = [('t', V[k], V[k + 1], V[k + 2]) for k in range(0, len(V) - 2, 3)]
         elif d['prim'] == 4: tris = [('t', V[k], V[k + 1], V[k + 2]) for k in range(len(V) - 2)]
+        elif d['prim'] == 5: tris = [('t', V[0], V[k + 1], V[k + 2]) for k in range(len(V) - 2)]
         else: continue
         for t in tris:
             xs = [p[0] for p in t[1:]]; ys = [p[1] for p in t[1:]]

@@ -590,11 +590,11 @@ static void cache2(int f) {  // the whole texture changes at frame 60
 const Scene scenes[] = {
   { "firstState", "ok", firstState, F_RAW, GU_PSM_8888 },  // must stay first: it tests the first lists of the program
   S(sync, "primitive"),  // lines: a known fall, used to line up the logs
-  S(clearS, "ok"), S(prims, "ok"), S(vertFmts, "ok"), S(texFmts, "ok"), S(texSwz, "ok"), S(filterWrap, "ok"), S(palettes, "ok"),
+  S(clearS, "ok"), S(prims, "ok"), S(fan, "ok"), S(vertFmts, "ok"), S(texFmts, "ok"), S(texSwz, "ok"), S(filterWrap, "ok"), S(palettes, "ok"),
   S(texFuncs, "ok"), S(blendOps, "ok"), S(blendFactors, "ok"), S(alphaTest, "ok"), S(scissorRect, "ok"), S(layers, "ok"),
   S(rtOne, "ok"), S(rtTwo, "ok"), S(rtFmts, "ok"), S(xferRam, "ok"), S(xferVram, "ok"),
   { "fb565", "ok", fbPlain, 0, GU_PSM_5650 }, { "fb5551", "ok", fbPlain, 0, GU_PSM_5551 }, { "lateList", "ok", lateList, F_SELF, GU_PSM_8888 },
-  S(fan, "primitive"), S(points, "primitive"), S(lineStrip, "primitive"), S(bezier, "?"), S(spline, "?"), S(ortho, "3d"),
+  S(points, "primitive"), S(lineStrip, "primitive"), S(bezier, "?"), S(spline, "?"), S(ortho, "3d"),
   S(weights, "vertex"), S(morph, "vertex"), S(decal, "texture_function"), S(tfxBlend, "texture_function"), S(tfxAdd, "texture_function"),
   S(dxt1, "format"), S(dxt3, "format"), S(dxt5, "format"), S(t16, "format"), S(t32p, "format"),
   S(colorTest, "color_test_or_logic"), S(logicOp, "color_test_or_logic"), S(fixGray, "blend"), S(blendAbs, "blend"), S(blendDst, "blend"), S(blend2x, "blend"),

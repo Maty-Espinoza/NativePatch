@@ -186,7 +186,7 @@ static int trCheck(RFrame *f, RDraw *d) {
   const uint32_t *e = f->e[d->st];
   uint32_t vt = d->vt, clr = RE(e, 0xD3) & 1, afn, aref;
   if (!(vt >> 23 & 1)) return T_3D;
-  if (d->prim != 3 && d->prim != 4 && d->prim != 6) return T_PRIM;  // triangles, strip, rectangles
+  if (d->prim < 3 || d->prim > 6) return T_PRIM;  // triangles, strip, fan, rectangles
   if ((vt >> 9 & 3) || (vt >> 18 & 7)) return T_VERT;  // weights or morph
   if ((RE(e, 0x9D) & 0x7FF) > 512) return T_DEST;
   if (colorMask(e) == ~0u) return T_MASK;
@@ -333,7 +333,7 @@ static uint32_t trClipTri(const TV *p, const float *sc, TV *o) {
   return n;
 }
 
-// Triangles or strip (*prim 3 or 4) of *np vertices at o, room for room: if a vertex is outside the scissor or flat is
+// Triangles, strip or fan (*prim 3, 4 or 5) of *np vertices at o, room for room: if a vertex is outside the scissor or flat is
 // set (each triangle takes the color of its last vertex), rewrites them as a clipped triangle list (*prim = 3) and
 // updates *np. T_OK or T_LIMIT.
 static int trTris(TV *o, uint32_t *np, uint32_t room, uint32_t *prim, const float *sc, int flat) {
@@ -342,7 +342,7 @@ static int trTris(TV *o, uint32_t *np, uint32_t room, uint32_t *prim, const floa
   if (!cut) return T_OK;
   for (uint32_t i = 0; i + 2 < n; i += *prim == 3 ? 3 : 1) {
     if (n + m + 15 > room) return T_LIMIT;
-    TV t[3] = { o[i], o[i + 1], o[i + 2] };
+    TV t[3] = { o[*prim == 5 ? 0 : i], o[i + 1], o[i + 2] };
     if (flat) t[0].c = t[1].c = t[2].c;
     m += trClipTri(t, sc, o + n + m);
   }
@@ -605,7 +605,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     }
     zsSet(c, e, o[nv + n - 1].c >> 24);
     sceGxmSetVertexStream(c, 0, o + nv);
-    sceGxmDraw(c, prim == 3 ? SCE_GXM_PRIMITIVE_TRIANGLES : SCE_GXM_PRIMITIVE_TRIANGLE_STRIP, SCE_GXM_INDEX_FORMAT_U16, tib, n);
+    sceGxmDraw(c, prim == 3 ? SCE_GXM_PRIMITIVE_TRIANGLES : prim == 5 ? SCE_GXM_PRIMITIVE_TRIANGLE_FAN : SCE_GXM_PRIMITIVE_TRIANGLE_STRIP, SCE_GXM_INDEX_FORMAT_U16, tib, n);
     nv += n; t_draws++;
   }
   if (!has_base && res == T_OK) OPEN(0);  // (frame with no draws to the surface: it still gets the image underneath)

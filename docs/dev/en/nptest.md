@@ -18,11 +18,11 @@ Buttons: RIGHT/LEFT next/previous, CROSS stay on a scene (to take a L+R+SELECT d
 Scene 0 must stay first: it tests state set only in the first lists of the program.
 
 ## All the scenes
-- **Primitives and vertices:** clear with scissor (`clearS`); triangles, strips, rectangles, 8, 16 and 32-bit indices (`prims`); position, color and UV formats, material color (`vertFmts`).
+- **Primitives and vertices:** clear with scissor (`clearS`); triangles, strips, rectangles, 8, 16 and 32-bit indices (`prims`); fans (`fan`); position, color and UV formats, material color (`vertFmts`).
 - **Textures:** 5650, 5551, 4444, 8888, T4, T8 (`texFmts`); swizzle (`texSwz`); point and linear filter, repeat and clamp (`filterWrap`); palette shift, mask and start, 4 palette formats (`palettes`).
 - **Pixel operations:** modulate, replace, TCC, doubling (`texFuncs`); add, subtract, reverse subtract, min, max (`blendOps`); blend factors and fixed 0 or white (`blendFactors`); the 8 alpha test functions (`alphaTest`); scissor (`scissorRect`); 200 layers (`layers`).
 - **Targets and copies:** one and two intermediate images (`rtOne`, `rtTwo`); drawing in 565 and 5551 (`rtFmts`, `fb565`, `fb5551`); TRANSFER from RAM and VRAM (`xferRam`, `xferVram`); list sent after the flip (`lateList`); state set only in the first lists (`firstState`).
-- **Rejected primitives and vertices:** lines (`sync`), `fan`, `points`, `lineStrip`, `bezier`, `spline`, `primKeep`; orthographic 3D (`ortho`); `weights`, `morph`.
+- **Rejected primitives and vertices:** lines (`sync`), `points`, `lineStrip`, `bezier`, `spline`, `primKeep`; orthographic 3D (`ortho`); `weights`, `morph`.
 - **Rejected texture and pixel work:** `decal`, `tfxBlend`, `tfxAdd`, `dxt1`, `dxt3`, `dxt5`, `t16`, `t32p`; `colorTest`, `logicOp`; gray fixed color (`fixGray`), `blendAbs`, destination alpha (`blendDst`), 2x alpha (`blend2x`).
 - **Limits:** target over 512 wide (`wideTarget`), 3 intermediates (`threeRt`), draw on an image already read (`rtReread`), position over 4096 (`offscreen`), 5000 draws (`manyDraws`), 300 textures (`manyTex`), 512 rows (`tallTex`).
 - **Depth, stencil and masks:** `depth2d`, `stencilMask`, `stencilAlpha`, `alphaMask`, `pixelMask`, `regionClip`, empty scissor (`scissorEmpty`), scissor on triangles (`scissorTri`).
