@@ -48,6 +48,7 @@ NativeLink (lado PSP) y NativeDraw (lado Vita) son proyectos hermanos: cada uno 
 | | (pruebas 0.0.8.15–0.0.8.22) | `a045974`…`3ab3b91` | Commits de prueba de la etapa 3: cronómetro de la GPU, texturas ordenadas por la CPU, una escena para la superficie (KOF 96 a 60 fps), Metal Slug XX, diagnóstico del glitch blanco; 0.0.8.22 + NativeLink 0.0.3.4: limpieza del código. El commit que confirme este trabajo será **NativeDraw 0.0.9** |
 | (prueba 0.0.3.5) | (prueba 0.0.8.23) | `8cd1ff4`…`5f70fe0` | Compilaciones de desarrollo, commits de prueba: código en inglés, paquete de herramientas listo, mediciones tras `NP_DEV`, las tres pruebas. Debe verse y correr igual |
 | (prueba 0.0.3.6) | (prueba 0.0.8.24) | `8cd1ff4`…`b76c030` | Todo el proyecto en inglés: código, nombres de fuentes y herramientas, textos de log, nombres en disco, relay e instalador (nombres antiguos abajo); objetivo de fps por juego en `run_summary.py --check`; el relay parte despierto. Debe verse y andar igual |
+| (prueba 0.0.3.6) | (prueba 0.0.8.25–0.0.8.26) | `3d33be9`…`845ff84` | Copias chicas de texturas con CPU y 256 texturas por frame; logs de `vertex_out`, giant draws, frames atrasados y límite de texturas |
 
 Probadas en la Vita con Gran Turismo: `../../changelog/es/etapa3_preparacion.md`.
 

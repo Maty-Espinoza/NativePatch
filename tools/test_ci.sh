@@ -28,6 +28,10 @@ for t in "test_link.py $X $X/version.txt" "run_summary.py $X --check"; do
   n=$(python3 $R/tools/$t | grep -c FAIL || true); python3 $R/tools/$t >/dev/null && { echo "FAIL: $t did not fail"; exit 1; }
   echo "ok   $t: $n FAIL lines"
 done
+# Older sessions in nativedraw.log (appended to) do not count
+Y=$B/sesiones; cp -r $C $Y
+{ echo '  100 NativeDraw 0.0.0 built x'; echo '  200 translator: HD frames 1, normal image 9 | reasons: vertex_out=9 | draws drawn 0'; cat $C/nativedraw.log; } > $Y/nativedraw.log
+python3 $R/tools/run_summary.py $Y --check --ref $C >/dev/null && echo "ok   run_summary.py: only the last session counts"
 rm $X/nativelink.log; python3 $R/tools/test_link.py $X | grep 'no game'
 python3 $R/tools/test_link.py $X >/dev/null || { echo "FAIL: a run with no game must pass"; exit 1; }
 

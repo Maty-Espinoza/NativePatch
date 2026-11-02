@@ -89,7 +89,17 @@ directa.
   30). El capturador tarda ~25 ms de cada frame de 33 ms (p90 30 ms); copias de texturas: 358 KB por frame, DMA ~5 ms +
   ordenar el swizzle ~3 ms. 2 puntos lentos: ~2 s a 38–40 ms por frame con picos de 70 ms. Una ráfaga de 174.353 comandos
   en un frame: 182 ms, 25.054 draws, 2 frames llegaron al tope del registro; 44 frames `vertex_out` en esa ventana
-  [medido]. El arreglo previsto es el caché de texturas.
+  [medido].
+- **Costo de copiar texturas** (Metal Slug XX, 27 segundos de 0.0.8.24): DMA ≈ 98 µs por llamada + 2 µs por KB (R² 0,998).
+  La mayoría de las copias pesa menos de 1 KB, así que el costo son las llamadas, no los bytes. Bajo 8 KB copia la CPU
+  [medido, 0.0.8.26]: en segundos con ~390 draws el capturador bajó de 34 ms a 22 ms por frame. Ordenar se hizo más lento
+  (~5,9 → 8,4 ms), porque lee directo la memoria del PSP, pero la ganancia total es de ~11 ms.
+- **`vertex_out` en Metal Slug XX viene del capturador atrasado** (una muestra, 0.0.8.25): en la memoria de vértices había
+  comandos del GE de una lista reescrita, con los vértices reales 20 bytes más adelante, y la compuerta estaba en su tope
+  alrededor de ese frame. Con el capturador a tiempo (0.0.8.26) el mismo juego tuvo 0 `vertex_out`, 0 frames en el tope y
+  mantuvo 30 fps [medido].
+- **128 texturas por frame eran pocas:** Metal Slug XX llegaba al tope con 0,8 de 1,5 MB en uso y perdía frames. Ahora son
+  256 [medido, 0.0.8.25–0.0.8.26].
 - Los juegos de Neo Geo hacen transparencias dibujando algo un frame sí y otro no: si la Vita repite o salta frames,
   destella. Se mide con la línea `translator: pace` del log.
 - **Grabar la pantalla** (Vitastream + OBS a 60 fps) encontró los cuadros rotos de un frame que ningún volcado capturaba.

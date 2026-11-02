@@ -2,12 +2,11 @@
 
 The only list of pending work. Ordered from what comes next to what can wait. Each item says where it came from
 (a document in `docs/dev/en/`, `docs/agent/en/`, `docs/changelog/en/` or the claude.ai project). Done items are removed;
-what was done is in `CHANGELOG.md`. Updated 2026-11-02 (NativeLink 0.0.3 + NativeDraw 0.0.7 confirmed; tests up to NativeDraw 0.0.8.24 + NativeLink 0.0.3.6). How the work is done: `docs/agent/en/workflow.md`; stage 3 plan and results:
+what was done is in `CHANGELOG.md`. Updated 2026-11-02 (NativeLink 0.0.3 + NativeDraw 0.0.7 confirmed; tests up to NativeDraw 0.0.8.26 + NativeLink 0.0.3.6). How the work is done: `docs/agent/en/workflow.md`; stage 3 plan and results:
 `docs/agent/en/stage3-plan.md`.
 
 ## Next
-- [ ] **Test on the Vita: NativeDraw 0.0.8.24 + NativeLink 0.0.3.6** (everything in English: must look and run the same, with
-      the new switch files). Metal Slug XX on 0.0.8.23: `docs/dev/en/findings.md`.
+- [ ] **Test KOF 96 on NativeDraw 0.0.8.26 + NativeLink 0.0.3.6.** Metal Slug XX is done: `docs/dev/en/findings.md`.
 - [ ] **Synthetic battery NPTEST** (standardization goes before the texture cache): a homebrew based on the old GEPTEST
       runner (tag `gepatch-dev66`). About 12 2D scenes (clear, 4 sprite formats, CLUT4/8, swizzle, blending, alpha test,
       scissor, layers, TRANSFER, intermediate image, texture in VRAM), a cache scene, later 3D scenes (~12–15), plus the
@@ -18,19 +17,14 @@ what was done is in `CHANGELOG.md`. Updated 2026-11-02 (NativeLink 0.0.3 + Nativ
       logs; fewer switches; tidy the mailbox.
 - [ ] **Texture cache between frames** (user's request: caches everywhere, avoid redoing what did not change). Measured
       in 0.0.8.19: ~98–99 % of the bytes copied each frame equal the previous copy; the DMA is the expensive part
-      (~100 µs per call; Metal Slug XX 10–17 ms per frame). Agreed design: textures kept unswizzled in the Vita's own
+      (~98 µs per call; since 0.0.8.26 only copies of 8 KB or more use it). Agreed design: textures kept unswizzled in the Vita's own
       memory across frames; a cheap sampled check every frame, a full check in turns (1 of every N groups of 8 rows per
       frame), immediate invalidation when the GE writes there (block copies, intermediate images); no 128-textures-per-frame
       cap. Accepted risk: a texture changed only in bytes the sample misses may look stale for up to N frames. Take care
       that the GPU never reads an entry while it is rewritten. Afterwards: translator caches (palettes, translated draws,
       identical scenes; the translator spends ~8–10 ms of CPU per frame).
-- [ ] **Metal Slug XX burst** (0.0.8.24, same spot in every run): `vertex_out` frames (44 in the run) and "giant draw" lines
-      (y -4127) go with the normal image; one frame of ~174000 commands took 182 ms in 0.0.8.23. `tools/test_local.sh`
-      stays red on `vertex_out` until this is solved. Find what the game does there before changing anything.
-- [ ] **Capturer running late → garbage vertices** (Metal Slug XX, 0.0.8.20): with texture copies taking 20–28 ms per
-      frame, the gate (5 ms at most) lets the game go on and already-rewritten vertices get copied. 0.0.8.21 sends those
-      frames with the normal image (`vertex_out`); the cause is attacked by the cache. Check with the cache whether
-      they still appear.
+- [ ] **Giant draws in Metal Slug XX** (y -4127, target intermediate): 2 in the 0.0.8.24 run, none in 0.0.8.25 or 0.0.8.26.
+      Dev builds log their bytes (`translator: giant draw bytes`): read them when they show up, before changing anything.
 - [ ] Metal Slug XX: almost every checked frame comes out "different from the normal image" (KOF ~0) although it looks
       fine. Understand why (filter? one-frame delay at 30 fps?) before trusting `dump auto` with this game.
 - [ ] When the performance work is confirmed, the commit is **NativeDraw 0.0.9** (user's decision): update

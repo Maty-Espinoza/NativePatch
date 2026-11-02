@@ -93,8 +93,16 @@ proof.
 - **Metal Slug XX on 0.0.8.23** (run `stage3_0.0.8.23/ms`): 30 fps held through gameplay (121 s, none below 30). The
   capturer takes ~25 ms of each 33 ms frame (p90 30 ms); texture copies: 358 KB per frame, DMA ~5 ms + unswizzle ~3 ms.
   2 slow spots: ~2 s at 38–40 ms per frame with peaks of 70 ms. One burst of 174,353 commands in a frame: 182 ms, 25,054
-  draws, 2 frames hit the record cap; 44 `vertex_out` frames in that window [measured]. The planned fix is the texture
-  cache.
+  draws, 2 frames hit the record cap; 44 `vertex_out` frames in that window [measured].
+- **Cost of copying textures** (Metal Slug XX, 27 seconds of 0.0.8.24): DMA ≈ 98 µs per call + 2 µs per KB (R² 0.998). Most
+  copies are under 1 KB, so the calls are the cost, not the bytes. Under 8 KB the CPU copies instead [measured,
+  0.0.8.26]: in seconds with ~390 draws the capturer went from 34 ms to 22 ms per frame. Sorting got slower (~5.9 → 8.4 ms),
+  because it reads the PSP's memory directly, but the total gain is ~11 ms.
+- **`vertex_out` in Metal Slug XX comes from the capturer running late** (one sample, 0.0.8.25): the vertex memory held GE
+  commands of a rewritten list, with the real vertices 20 bytes later, and the gate was at its limit around that frame.
+  With the capturer on time (0.0.8.26) the same game had 0 `vertex_out`, 0 frames at the limit and held 30 fps [measured].
+- **128 textures per frame was too few:** Metal Slug XX reached it with 0.8 of 1.5 MB in use and lost frames. It is 256 now
+  [measured, 0.0.8.25–0.0.8.26].
 - Neo Geo games make transparencies by drawing something one frame on and one frame off: if the Vita repeats or skips
   frames, it flickers. It is measured with the `translator: pace` line of the log.
 - **Recording the screen** (Vitastream + OBS at 60 fps) found the one-frame broken frames that no dump captured. It is
