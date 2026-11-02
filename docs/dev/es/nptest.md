@@ -58,8 +58,8 @@ Fuentes: documentación de PPSSPP (`psp-hardware/gpu`), `assets/compat.ini` y su
 ## En el PC
 `sh tools/emu.sh` compila la batería y la corre en PPSSPP headless (dibujo por software, unos 6 s). Deja en `build/nptest/`
 el log, las imágenes y hojas con todas las escenas. Dice si una escena se cuelga y cómo debería verse; no dice nada de los
-plugins, que solo corren en la Vita. PPSSPP no es la referencia: lo es la imagen normal en la Vita. Diferencias por
-confirmar: UV de 8 bits en coordenadas directas (`vertFmts`, celda 0), `bboxJump` (se ve el rojo), `mipLevel` y `clutStale`.
+plugins, que solo corren en la Vita. PPSSPP no es la referencia: lo es la imagen normal en la Vita. La primera corrida en
+la Vita confirmó que acierta en todo menos en `morph`, `readFront`, `selfBlur` y `clutStale`.
 
 ## Leer una corrida en la Vita
 `python3 tools/nptest_report.py <carpeta> [native_test.log de PPSSPP]` muestra, por escena, el resultado esperado y el

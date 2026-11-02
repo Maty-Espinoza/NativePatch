@@ -9,10 +9,10 @@ what was done is in `CHANGELOG.md`. Updated 2026-11-02 (NativeLink 0.0.3 + Nativ
 - [ ] **Triangle fans (prim 5) in the translator:** Street Fighter Alpha 3 MAX fights fall to the normal image with reason
       `primitive`. With them it is the 2D benchmark at 60 fps (~600 draws per frame).
 - [ ] KOF 96 fights: seconds at 42–57 fps with the GPU at 90–98 % and the capturer at ~11 ms; suspected GPU limit, not proven.
-- [ ] **First NPTEST run (0.0.8.30), causes to confirm before changing code:** MIN/MAX blending fails to build its program
-      (`blendOps`); a TRANSFER to a page that was once a target gives `bad_texture` (`xferRam`, `xferVram`, `xferTwice`:
-      suspected `rt_pg`); 5000 draws in a frame overflow the event ring and the record says complete with ~150 draws
-      (`manyDraws`). Image still to compare: `rectCorners`, `vertFmts` cell 0, `scissorTri`, `texStride`.
+- [ ] **NPTEST, still open:** `stencilAlpha` and `blendDst` (stencil to alpha at the end of a scene), `blend2x`, `fixGray` and bit
+      masks (shaders; no shacc in the container), `readBack` (read the surface mid-scene), `cpuPixels` and `noClear`
+      (CPU writes and partial redraws), offsets into intermediate images (`draw()` takes the height from 0xD6, MINZ, not
+      0xD5: fixing it needs them; `subRt`, `xferIntra`).
 - [ ] **Synthetic battery NPTEST** (`docs/dev/en/nptest.md`, standardization goes before the texture cache): 108 2D scenes
       in `tests/nptest/`, checked on PPSSPP. Pending: first run on the Vita (does NativeDraw capture a homebrew?); the reason
       of each scene is logged (`translator: result at frame`), the report script is missing; comparing images per scene (image tolerance, open); a cache scene

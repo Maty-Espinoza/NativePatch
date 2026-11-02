@@ -59,8 +59,7 @@ Sources: the PPSSPP docs (`psp-hardware/gpu`), `assets/compat.ini` and its issue
 `sh tools/emu.sh` builds the battery and runs it on PPSSPP headless (software renderer, about 6 s). It leaves in
 `build/nptest/` the log, the raw images and sheets with all scenes. It tells whether a scene hangs and what it should look
 like; it says nothing about the plugins, which only run on the Vita. PPSSPP is not the reference: the normal image on the
-Vita is. Known differences to confirm: 8-bit UVs in through mode (`vertFmts`, cell 0), `bboxJump` (red shows), `mipLevel` and
-`clutStale`.
+Vita is. The first Vita run confirmed it is right on all but `morph`, `readFront`, `selfBlur` and `clutStale`.
 
 ## Reading a Vita run
 `python3 tools/nptest_report.py <run folder> [PPSSPP native_test.log]` prints, for each scene, the expected and the obtained
