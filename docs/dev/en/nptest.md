@@ -17,6 +17,23 @@ Buttons: RIGHT/LEFT next/previous, CROSS stay on a scene (to take a L+R+SELECT d
 
 Scene 0 must stay first: it tests state set only in the first lists of the program.
 
+## All the scenes
+- **Primitives and vertices:** clear with scissor (`clearS`); triangles, strips, rectangles, 8, 16 and 32-bit indices (`prims`); position, color and UV formats, material color (`vertFmts`).
+- **Textures:** 5650, 5551, 4444, 8888, T4, T8 (`texFmts`); swizzle (`texSwz`); point and linear filter, repeat and clamp (`filterWrap`); palette shift, mask and start, 4 palette formats (`palettes`).
+- **Pixel operations:** modulate, replace, TCC, doubling (`texFuncs`); add, subtract, reverse subtract, min, max (`blendOps`); blend factors and fixed 0 or white (`blendFactors`); the 8 alpha test functions (`alphaTest`); scissor (`scissorRect`); 200 layers (`layers`).
+- **Targets and copies:** one and two intermediate images (`rtOne`, `rtTwo`); drawing in 565 and 5551 (`rtFmts`, `fb565`, `fb5551`); TRANSFER from RAM and VRAM (`xferRam`, `xferVram`); list sent after the flip (`lateList`); state set only in the first lists (`firstState`).
+- **Rejected primitives and vertices:** lines (`sync`), `fan`, `points`, `lineStrip`, `bezier`, `spline`, `primKeep`; orthographic 3D (`ortho`); `weights`, `morph`.
+- **Rejected texture and pixel work:** `decal`, `tfxBlend`, `tfxAdd`, `dxt1`, `dxt3`, `dxt5`, `t16`, `t32p`; `colorTest`, `logicOp`; gray fixed color (`fixGray`), `blendAbs`, destination alpha (`blendDst`), 2x alpha (`blend2x`).
+- **Limits:** target over 512 wide (`wideTarget`), 3 intermediates (`threeRt`), draw on an image already read (`rtReread`), position over 4096 (`offscreen`), 5000 draws (`manyDraws`), 300 textures (`manyTex`), 512 rows (`tallTex`).
+- **Depth, stencil and masks:** `depth2d`, `stencilMask`, `stencilAlpha`, `alphaMask`, `pixelMask`, `regionClip`, empty scissor (`scissorEmpty`), scissor on triangles (`scissorTri`).
+- **State with no code:** forced mip level (`mipLevel`), UV offset and scale (`uvOffset`), `dither`, `fog`, flat shading (`flat`), rectangle corners (`rectCorners`), odd rectangles (`rectOdd`), buffer wider than the texture (`texStride`), odd width (`texNpot`), linear filter on an atlas (`atlasBleed`), 4444 image (`fb4444`).
+- **Images read in unusual ways:** part of an image by address (`subRt`), taller than the screen (`rtTall`), from the previous frame (`rtPrev`), the shown image (`readFront`), the image being drawn (`readBack`), itself (`selfBlur`), `strideGap`, `overlapRt`, format casts (`cast565`, `castT8`, `castT16`, `blueAlpha`), VRAM mirror (`texMirror`), depth (`depthTex`).
+- **Palettes:** drawn by the GE (`paletteRt`), in VRAM (`clutVram`), changed with no load (`clutStale`), swapped between draws (`clutTwice`).
+- **Data that changes:** texture, copy and vertices rewritten within a frame (`texTwice`, `xferTwice`, `vtxTwice`), sublist patched (`sublist`), texture with 1 texel or all of it changed (`cache1`, `cache2`).
+- **List commands:** no vertex address (`vaddrKeep`), conditional jump (`bboxJump`).
+- **Copies on the image:** `xferFb`, `xferIntra`, `xferSelf`.
+- **CPU and display:** VRAM read (`cpuRead`), pixels written (`cpuPixels`), partial redraw (`noClear`), 30 fps (`fps30`), one image only (`singleBuf`), moved address (`shake`), shown image in RAM (`ramShown`).
+
 ## Rare techniques and where they come from
 | Scene | Technique | Seen in |
 |---|---|---|

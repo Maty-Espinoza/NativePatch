@@ -17,6 +17,23 @@ Botones: DERECHA/IZQUIERDA siguiente/anterior, X quedarse en una escena (para sa
 
 La escena 0 debe seguir primera: prueba el estado configurado solo en las primeras listas del programa.
 
+## Todas las escenas
+- **Primitivas y vértices:** clear con scissor (`clearS`); triángulos, tiras, rectángulos, índices de 8, 16 y 32 bits (`prims`); formatos de posición, color y UV, color de material (`vertFmts`).
+- **Texturas:** 5650, 5551, 4444, 8888, T4, T8 (`texFmts`); swizzle (`texSwz`); filtro punto y lineal, repeat y clamp (`filterWrap`); shift, máscara y start de paleta, 4 formatos de paleta (`palettes`).
+- **Operaciones de píxel:** modulate, replace, TCC, doubling (`texFuncs`); add, subtract, reverse subtract, min, max (`blendOps`); factores de blend y fijos 0 o blanco (`blendFactors`); las 8 funciones de prueba de alfa (`alphaTest`); scissor (`scissorRect`); 200 capas (`layers`).
+- **Destinos y copias:** una y dos imágenes intermedias (`rtOne`, `rtTwo`); dibujo en 565 y 5551 (`rtFmts`, `fb565`, `fb5551`); TRANSFER desde RAM y VRAM (`xferRam`, `xferVram`); lista enviada después del flip (`lateList`); estado configurado solo en las primeras listas (`firstState`).
+- **Primitivas y vértices rechazados:** líneas (`sync`), `fan`, `points`, `lineStrip`, `bezier`, `spline`, `primKeep`; 3D ortográfico (`ortho`); `weights`, `morph`.
+- **Texturas y píxeles rechazados:** `decal`, `tfxBlend`, `tfxAdd`, `dxt1`, `dxt3`, `dxt5`, `t16`, `t32p`; `colorTest`, `logicOp`; color fijo gris (`fixGray`), `blendAbs`, alfa de destino (`blendDst`), alfa 2x (`blend2x`).
+- **Límites:** destino de más de 512 de ancho (`wideTarget`), 3 intermedias (`threeRt`), dibujar sobre una imagen ya leída (`rtReread`), posición sobre 4096 (`offscreen`), 5000 dibujos (`manyDraws`), 300 texturas (`manyTex`), 512 filas (`tallTex`).
+- **Profundidad, stencil y máscaras:** `depth2d`, `stencilMask`, `stencilAlpha`, `alphaMask`, `pixelMask`, `regionClip`, scissor vacío (`scissorEmpty`), scissor en triángulos (`scissorTri`).
+- **Estado sin código:** nivel de mip forzado (`mipLevel`), offset y escala de UV (`uvOffset`), `dither`, `fog`, sombreado plano (`flat`), esquinas de rectángulo (`rectCorners`), rectángulos impares (`rectOdd`), buffer más ancho que la textura (`texStride`), ancho impar (`texNpot`), filtro lineal en atlas (`atlasBleed`), imagen 4444 (`fb4444`).
+- **Imágenes leídas de formas raras:** parte de una imagen por dirección (`subRt`), más alta que la pantalla (`rtTall`), del frame anterior (`rtPrev`), la imagen mostrada (`readFront`), la que se está dibujando (`readBack`), sobre sí misma (`selfBlur`), `strideGap`, `overlapRt`, cambios de formato (`cast565`, `castT8`, `castT16`, `blueAlpha`), espejo de VRAM (`texMirror`), profundidad (`depthTex`).
+- **Paletas:** dibujada por el GE (`paletteRt`), en VRAM (`clutVram`), cambiada sin cargar (`clutStale`), cambiada entre dibujos (`clutTwice`).
+- **Datos que cambian:** textura, copia y vértices reescritos dentro de un frame (`texTwice`, `xferTwice`, `vtxTwice`), sublista parchada (`sublist`), textura con 1 texel o entera cambiada (`cache1`, `cache2`).
+- **Comandos de lista:** sin dirección de vértices (`vaddrKeep`), salto condicional (`bboxJump`).
+- **Copias sobre la imagen:** `xferFb`, `xferIntra`, `xferSelf`.
+- **CPU y pantalla:** lectura de VRAM (`cpuRead`), píxeles escritos (`cpuPixels`), redibujo parcial (`noClear`), 30 fps (`fps30`), una sola imagen (`singleBuf`), dirección movida (`shake`), imagen mostrada en RAM (`ramShown`).
+
 ## Técnicas raras y de dónde salen
 | Escena | Técnica | Visto en |
 |---|---|---|
