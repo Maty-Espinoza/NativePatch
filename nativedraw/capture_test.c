@@ -34,6 +34,7 @@
 SceUInt32 sceKernelGetProcessTimeLow(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec * 1000000 + t.tv_nsec / 1000; }
 void *sceClibMemset(void *d, int c, SceSize n) { return memset(d, c, n); }
 void *sceClibMemcpy(void *d, const void *s, SceSize n) { return memcpy(d, s, n); }
+void *sceClibMemmove(void *d, const void *s, SceSize n) { return memmove(d, s, n); }
 int sceClibMemcmp(const void *a, const void *b, SceSize n) { return memcmp(a, b, n); }
 int sceClibVsnprintf(char *b, SceSize n, const char *f, va_list ap) { return vsnprintf(b, n, f, ap); }
 int sceClibSnprintf(char *b, SceSize n, const char *f, ...) { va_list ap; va_start(ap, f); int r = vsnprintf(b, n, f, ap); va_end(ap); return r; }
@@ -107,7 +108,7 @@ static void build(int frame) {
 static uint32_t stateSum(void) { uint32_t h = 0; for (int i = 0; i < 256; i++) h = h * 31 + reg[i]; for (int m = 0; m < 5; m++) for (int i = 0; i < 96; i++) h = h * 31 + mtx[m][i]; return h * 31 + vaddr * 7 + iaddr; }
 // Result of one case, in memory shared with the process that compares them. col: columns before "|" per frame, without
 // and with state; the rest are totals of what each case must exercise.
-typedef struct { char col[8][64]; uint32_t st[8], hit, chk, bad, fail, pre, late, lines, pv, skip, whole, ok; } Res;
+typedef struct { char col[8][64]; uint32_t st[8], hit, chk, bad, fail, pre, late, lines, pv, skip, whole, lost, rt1, pal, tex2, xf, ok; } Res;
 static Res *res;
 static int report(const char *name, int ok) { printf("%s %s\n", ok ? "ok  " : "FAIL", name); return !ok; }
 // Frames from..7 of case a equal those of b (state too if st).
@@ -158,6 +159,11 @@ static int checkAll(void) {
   bad += report("VRAM page without copy: cut sublists, no hang", same(r + V2, r + V2REF, 0, 1) && r[V2].skip && !r[V2].bad);
   bad += report("VRAM per frame: the change is detected, no MISMATCH", same(r + V3, r + V3REF, 0, 1) && r[V3].fail && !r[V3].bad);
   bad += report("frame record: complete without memory, incomplete with it", same(r + REG0, r + RAM, 0, 1) && r[REG0].whole == 8 && r[REG1].whole < 8);
+  bad += report("frame record: lost events leave the frame incomplete", r[REG0].lost);
+  bad += report("frame record: a TRANSFER on the drawn image becomes a draw", r[REG0].xf);
+  bad += report("frame record: a texture rewritten between lists gets a new copy", r[REG0].tex2);
+  bad += report("frame record: the loaded palette survives changes in memory", r[REG0].pal);
+  bad += report("frame record: an image only counts as drawn in its frame", r[REG0].rt1);
   bad += report("texture copy: right by CPU and by DMA", texCopyOk(1) && texCopyOk(32));
   printf(bad ? "%d FAILED\n" : "all ok\n", bad);
   return bad;
@@ -223,6 +229,29 @@ int main(int argc, char **argv) {
     }
     lifeFlip(); lf_ord_cmds = 0;  // as in the flip
     gen++; ntex = 0;
+  }
+  if (reg_on && res) {
+    markRt(0x04100000, 4096); regFlip(0x04000000, 512, 0);
+    res->rt1 = !rt_pg[0x100 >> 5];
+    *W(0x08C30000) = 1; reg[0xA0] = 0xC30000; reg[0xA8] = 0x080000 | 8; reg[0xB8] = 3 << 8 | 3; reg[0xC3] = 3;  // 8x8, 8888
+    pub_ord = 100; uint32_t t0 = rgTex(0, 8), t1 = rgTex(0, 8);
+    pub_ord = 101; uint32_t t2 = rgTex(0, 8);
+    *W(0x08C30000) = 2; pub_ord = 102; uint32_t t3 = rgTex(0, 8);
+    res->tex2 = t0 && t0 == t1 && t1 == t2 && t3 != t2 && *(uint32_t *)(rf[rg_w]->tx + t3 - 1) == 2;
+    rf[rg_w]->flags = 1;  // (not published)
+    regFlip(0x04000000, 512, 0);
+    RFrame *x = rf[rg_w];  // 64x64 from RAM to (8, 14) of the image being drawn, and one that is not on it
+    reg[0x9C] = 0x88000; reg[0x9D] = 512; reg[0xD2] = 3; reg[0xD5] = 479 | 271 << 10; reg[0xB3] = 64 | 0x080000; reg[0xB2] = 0xC30000;
+    reg[0xB4] = 0x88000; reg[0xB5] = 512 | 0x040000; reg[0xEB] = 0; reg[0xEC] = 8 | 14 << 10; reg[0xEE] = 63 | 63 << 10;
+    regXfer(0x08C30000, 0x04088000, 4);
+    int16_t *xv = (int16_t *)(x->a + x->d[0].voff - 1);
+    res->xf = x->nd == 1 && !x->flags && x->d[0].toff && xv[4] == 8 && xv[5] == 14 && xv[12] == 72 && xv[13] == 78 && xv[8] == 64 && RE(x->e[0], 0x9C) == 0x88000;
+    regXfer(0x08C30000, 0x04154000, 4);
+    res->xf = res->xf && x->nd == 1 && !x->flags;
+    *W(0x08C20000) = 0x11223344; reg[0xB0] = 0xC20000; reg[0xB1] = 0x080000; last_clut[0] = CLUTADDR(); regClut(1);
+    *W(0x08C20000) = 0; regFlip(0x04000000, 512, 0);
+    res->pal = *(uint32_t *)(rf[rg_w]->a + rg_clut - 1) == 0x11223344;
+    resetQueue(); res->lost = rf[rg_w]->flags != 0;  // events lost in the middle of a frame
   }
   printf("list life: flip of its frame %u (top %u, sublists %u) | next flip %u (%u, %u) (expected 8 (0, 0) | 7 (7, 0))\n", lf_n[0], lf_top[0], lf_sub[0], lf_n[1], lf_top[1], lf_sub[1]);
   // A sync arriving 100 us after queuing: the Vita is behind (line in nativedraw_late)

@@ -440,7 +440,8 @@ static void zsSet(SceGxmContext *c, const uint32_t *e, uint32_t sv) {
 // tpal), vertices (trVerts, in tv) and uniforms of each draw, and draws it. T_OK if ready; if it fails midway
 // returns the reason and the surface is not used.
 static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base) {
-  uint32_t disp = f->fb & 0x1FFFF0, ifb[2], nif = 0, n_disp = 0;  // disp: image being shown; ifb: intermediate images
+  // disp: image being shown; ifb, iend, ipsm: intermediate images, where their memory ends, their format
+  uint32_t disp = f->fb & 0x1FFFF0, ifb[2], iend[2], ipsm[2], nif = 0, n_disp = 0;
   // ord: intermediate images first and then, in a single scene, the surface (see trFrame). Valid only if just the
   // draws to the surface read intermediate images and none is drawn after being read (rd_mask: bit per image)
   uint32_t ord = 1, rd_mask = 0;
@@ -454,7 +455,12 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     int kd = -1;  // destination intermediate image (-1: the surface)
     if (!r && fb != disp) {
       for (k = 0; k < nif && ifb[k] != fb; k++) {}
-      if (k == nif) { if (nif < 2) ifb[nif++] = fb; else r = T_DEST; }
+      if (k == nif) {
+        uint32_t end = fb + (RE(e0, 0x9D) & 0x7FF) * ((RE(e0, 0xD2) & 3) == 3 ? 4 : 2) * ((RE(e0, 0xD5) >> 10 & 0x3FF) + 1);
+        // images sharing memory: each surface would miss what is drawn on the other
+        for (uint32_t j = 0; j < nif; j++) if (fb < iend[j] && ifb[j] < end) r = T_DEST;
+        if (nif < 2) { ipsm[nif] = RE(e0, 0xD2) & 3; iend[nif] = end; ifb[nif++] = fb; } else r = T_DEST;
+      }
       kd = k;
       if (rd_mask >> k & 1) ord = 0;
     }
@@ -462,7 +468,8 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
       uint32_t ta = texAddr(e0);
       // only valid if in VRAM (0x04000000) and an intermediate image of an earlier draw of this frame
       for (k = 0; k < nif && !((ta & 0x0F000000) == 0x04000000 && (ta & 0x1FFFF0) == ifb[k]); k++) {}
-      if (k == nif) r = T_TEX;
+      // nor read in another format (its bytes are not in the surface) or while being drawn
+      if (k == nif || (RE(e0, 0xC3) & 15) != ipsm[k] || (int)k == kd) r = T_TEX;
       else { rd_mask |= 1u << k; if (kd >= 0) ord = 0; }
     }
     if (r) {
@@ -554,6 +561,8 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     }
     if ((res = trVerts(f, d, o + nv, tw, th, mat, sc, &n))) break;
     if (nv + n > TV_N) { res = T_LIMIT; break; }
+    if (dst && !(clr & 1)) for (uint32_t j = 0; j < n; j++) if (o[nv + j].y > H) res = T_DEST;  // (past the surface's rows)
+    if (res) break;
     uint32_t prim = d->prim;
     if (prim != 6 && (res = trTris(o + nv, &n, TV_N - nv, &prim, sc, (clr & 1) || !(RE(e, 0x50) & 1)))) break;
     if (!n) continue;

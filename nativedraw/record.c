@@ -6,7 +6,7 @@
 // palettes when loaded and the texture rows the draws use (copied to uncached memory the GPU reads; those with PSP
 // swizzle end up sorted, with rows in sequence: rgTexCopy). There are RN records taking turns: one is written, another
 // stays published (rg_pub) and those the GPU may be reading are not touched.
-// Complete = all counted draws went through regDraw and fit.
+// Complete = every command of the frame was walked and all its draws went through regDraw and fit.
 static void clog(const char *fmt, ...);
 #include "record.h"
 enum { R_MEMO = 1, R_READ = 2, R_LIMIT = 4, R_CURVE = 8 };
@@ -196,11 +196,29 @@ static uint32_t rgSrc(uint32_t a, uint32_t n) {
   uint32_t s = vtr(a);
   return vtr(a + n - 1) == s + n - 1 && ramEnd(s) >= s + n ? s : 0;
 }
-// Texture of the current draw (GE registers) in tx: the first time in the frame it reserves its full size; then copies
-// only the missing groups of 8 rows of [r0, r1) (r0 >= r1 or out of range: whole texture). With swizzle a group of 8
+// Check of a RAM texture across lists: list of its last draw and groups of 8 rows known to be current in that list
+static uint32_t rg_tl[TN_N];
+static uint64_t rg_tc[TN_N];
+// 1 if a group of [g0, g1) copied to texture i before this list differs from memory (not for swizzled ones: their copy
+// is sorted). The game may rewrite a texture between two lists of a frame, keeping its address.
+static int rgStale(RFrame *f, uint32_t i, uint32_t g0, uint32_t g1) {
+  if (rg_tl[i] != pub_ord) { rg_tl[i] = pub_ord; rg_tc[i] = 0; }
+  uint32_t gb = f->tr[i], n = f->tn[i], o;
+  if (n >> 31) return 0;
+  for (uint32_t g = g0; g < g1; g++) {
+    if (!(f->tm[i] >> g & 1) || rg_tc[i] >> g & 1 || (o = g * gb) >= n) continue;
+    rg_tc[i] |= 1ull << g;
+    if (ramEnd(f->ta[i] + o) < f->ta[i] + o + (n - o < gb ? n - o : gb)) continue;
+    if (sceClibMemcmp((const void *)PSP(f->ta[i] + o), f->tx + f->to[i] + o, n - o < gb ? n - o : gb)) return 1;
+  }
+  return 0;
+}
+// Texture of the current draw (GE registers) in tx: the first time in the frame it reserves its full size (again, as a
+// new entry, if a RAM texture changed: rgStale); then copies only the missing groups of 8 rows of [r0, r1) (r0 >= r1 or
+// out of range: whole texture). With swizzle a group of 8
 // rows is one contiguous block and sorted takes the same place (rgTexCopy sorts it). RAM ones are copied right away by
 // DMA (the game may change them); VRAM ones are marked and regPend copies them from the flip's mirror.
-// Returns offset + 1 in tx; 0 if not copied (unsupported format, render target, limit or unreadable).
+// Returns offset + 1 in tx; 0 if not copied (unsupported format, image drawn in this frame, limit or unreadable).
 static uint32_t rgTex(uint32_t r0, uint32_t r1) {
   RFrame *f = rf[rg_w];
   static const uint8_t bp[6] = { 16, 16, 16, 32, 4, 8 };
@@ -209,16 +227,19 @@ static uint32_t rgTex(uint32_t r0, uint32_t r1) {
   uint32_t rb = tbw * bp[fmt] / 8, n = rb * (swz && th < 8 ? 8 : th), key = n | swz << 31, i, vr = isVram(ta);
   if (swz && (rb & 15)) { f->flags |= R_READ; return 0; }
   if (r1 > th || r0 >= r1) r0 = 0, r1 = th;
-  for (i = 0; i < f->nt && !(f->ta[i] == ta && f->tn[i] == key); i++) {}
+  for (i = f->nt; i > 0 && !(f->ta[i - 1] == ta && f->tn[i - 1] == key); i--) {}  // (the latest entry of this address)
+  i = i ? i - 1 : f->nt;
+  if (i < f->nt && !vr && rgStale(f, i, r0 / 8, (r1 + 7) / 8)) i = f->nt;
   // First time in this frame: full size is reserved (rows not copied are not read)
   if (i == f->nt) {
-    // Game render target (intermediate image): not copied
+    // Image the GE drew in this frame (intermediate image): not copied
     if (vr) { uint32_t p = (ta & 0x1FFFFF) >> 12; if (rt_pg[p >> 5] >> (p & 31) & 1) return 0; }
     if (f->nt >= TN_N || f->ntx + n > TX_N) {
       DEV(static uint32_t lim_n; if (lim_n < 20) { lim_n++; clog("record: texture limit at frame %u: %u textures, %u of %u bytes, %u more wanted\n", gen, f->nt, f->ntx, TX_N, n); })
       f->flags |= R_LIMIT; return 0;
     }
     f->ta[i] = ta; f->tn[i] = key; f->to[i] = f->ntx; f->tm[i] = 0; f->tq[i] = vr ? ~0u : 0; f->tr[i] = 8 * rb; f->nt++;
+    rg_tl[i] = pub_ord; rg_tc[i] = 0;
     f->ntx += (n + 63) & ~63u;
   }
   uint32_t g0 = r0 / 8, g1 = (r1 + 7) / 8, gb = 8 * rb;  // groups and bytes per group
@@ -237,6 +258,7 @@ static uint32_t rgTex(uint32_t r0, uint32_t r1) {
       ga.t_b += m; ga.us_l += now() - t0;
     }
     f->tm[i] |= ((h - g < 64 ? (1ull << (h - g)) : 0) - 1) << g;
+    if (!vr) rg_tc[i] |= ((h - g < 64 ? (1ull << (h - g)) : 0) - 1) << g;
     g = h;
   }
   return f->to[i] + 1;
@@ -366,7 +388,6 @@ static void regDraw(uint32_t n, uint32_t type, uint32_t vt, uint32_t idx) {
 static void regClut(uint32_t d) {
   uint32_t n = (d & 0x3F) * 32;
   rg_clut_b = n;
-  if (rf[rg_w]->flags) { rg_clut = 0; return; }
   uint32_t t0 = now();
   rg_clut = n ? rgCopy(CLUTADDR(), n) : 0;
   if (rg_clut) ga.cl++;
@@ -376,6 +397,50 @@ static void regClut(uint32_t d) {
 // walking. They leave the frame incomplete.
 static void regCurve(void) { rf[rg_w]->flags |= R_CURVE; rf[rg_w]->draws_seen++; }
 static void regMemo(uint32_t draws) { if (draws) { rf[rg_w]->flags |= R_MEMO; rf[rg_w]->draws_seen += draws; } }
+// Part of the frame's commands will never be walked (lost events, cut list): its draws are not even counted, so the
+// frame stays incomplete here.
+static void regLost(void) { if (reg_on) rf[rg_w]->flags |= R_READ; }
+// (capturer, command 0xEA) TRANSFER from s to t, bp bytes per pixel. On the image being drawn the HD surface would lose
+// it: it goes in the frame as a draw, a rectangle with no blending whose texture is the source (RAM: copied now; VRAM:
+// from the flip's mirror). A VRAM texture the frame already used, or a copy over itself, would be read with the content
+// left afterwards: the frame stays incomplete.
+static void regXfer(uint32_t s, uint32_t t, uint32_t bp) {
+  RFrame *f = rf[rg_w];
+  uint32_t sw = reg[0xB3] & 0x7FF, dw = reg[0xB5] & 0x7FF, sx = reg[0xEB] & 0x3FF, sy = reg[0xEB] >> 10 & 0x3FF, dx = reg[0xEC] & 0x3FF,
+           dy = reg[0xEC] >> 10 & 0x3FF, w = (reg[0xEE] & 0x3FF) + 1, h = (reg[0xEE] >> 10 & 0x3FF) + 1, r = sy * sw * bp;
+  uint32_t sa = (s + r) & ~15u, u = sx + ((s + r) & 15) / bp, da = t + dy * dw * bp, sn = h * sw * bp, dn = h * dw * bp;
+  if (!isVram(t)) return;
+  for (uint32_t i = 0; i < f->nt; i++)
+    if (isVram(f->ta[i]) && f->ta[i] < da + dn && da < f->ta[i] + (f->tn[i] & 0x7FFFFFFF)) f->flags |= R_READ;
+  uint32_t st = reg[0x9D] & 0x7FF, fbp = (reg[0xD2] & 3) == 3 ? 4 : 2, o = (t & 0x1FFFFF) - (reg[0x9C] & 0x1FFFF0);
+  if (o >= st * fbp * ((reg[0xD5] >> 10 & 0x3FF) + 1)) return;  // not on the image being drawn: the mirror has it
+  if (isVram(s)) want(sa, sn, 0);
+  if (dw != st || bp != fbp || h > 512 || !sw || (isVram(s) && sa < da + dn && da < sa + sn)) f->flags |= R_READ;
+  if (f->flags) return;
+  if (f->nd >= RD_N || f->ne >= RE_N || ((f->na + 15) & ~15u) + 32 > RA_N) { f->flags |= R_LIMIT; return; }
+  dx += o / fbp % st; dy += o / fbp / st;
+  uint32_t v[NRS], lw = 0, lh = 0, toff;
+  while (1u << lw < sw) lw++;
+  while (1u << lh < h) lh++;
+  for (int i = 0; i < NRS; i++) {  // the state of this draw, around the one of the image (0: plain)
+    v[i] = reg[RS[i]];
+    if ((RS[i] & 0xFC) != 0x9C && RS[i] != 0xD2) reg[RS[i]] = 0;
+  }
+  reg[0x1E] = 1; reg[0xA0] = sa & 0xFFFFFF; reg[0xA8] = (sa >> 8 & 0xFF0000) | sw; reg[0xB8] = lh << 8 | lw;
+  reg[0xC3] = bp == 4 ? 3 : reg[0xD2] & 3; reg[0xC7] = 0x101; reg[0xC9] = 0x103; reg[0xD5] = 0x7FDFF;
+  toff = rgTex(0, h);
+  uint32_t e[NRS];
+  for (int i = 0; i < NRS; i++) { e[i] = reg[RS[i]]; reg[RS[i]] = v[i]; }
+  if (!toff) { f->flags |= R_READ; return; }
+  sceClibMemcpy(f->e[f->ne++], e, sizeof e);
+  uint32_t a = (f->na + 15) & ~15u, c = 0xFFFFFFFFu;
+  uint16_t vx[16] = { u, 0, c, c >> 16, dx, dy, 0, 0, u + w, h, c, c >> 16, dx + w, dy + h, 0, 0 };
+  sceClibMemcpy(f->a + a, vx, sizeof vx);
+  f->na = a + 32;
+  RDraw *d = &f->d[f->nd++];
+  sceClibMemset(d, 0, sizeof *d);
+  d->st = f->ne - 1; d->prim = 6; d->n = 2; d->vt = 0x80011E; d->voff = a + 1; d->vlen = 32; d->toff = toff;
+}
 // (capturer, on each flip) Closes the frame. fb/fbw: shown image and width | format << 16; draws_counted: those the
 // capturer counted. If complete it publishes it (or leaves it pending its VRAM textures, regPend), asks the mirror for
 // the PSP image if a dump wants it, and picks another record to write: not the published one, nor the one the presenter
@@ -384,7 +449,7 @@ static void regMemo(uint32_t draws) { if (draws) { rf[rg_w]->flags |= R_MEMO; rf
 static void regFlip(uint32_t fb, uint32_t fbw, uint32_t draws_counted) {
   RFrame *f = rf[rg_w];
   regPend();
-  // Draws that did not go through regDraw: curves, cut lists
+  // Counted draws that did not go through regDraw
   if (f->draws_seen < draws_counted) f->flags |= R_READ;
   ga.fr++; ga.us += rg_t; ga.st += f->ne; ga.kb += f->na; ga.t_tex += f->nt;
   if (f->flags & R_MEMO) ga.memo++;
@@ -417,9 +482,15 @@ static void regFlip(uint32_t fb, uint32_t fbw, uint32_t draws_counted) {
     if (w < 0) { w = rg_pend; rg_pend = -1; ga.stomped++; }  // (none free: the pending one is lost)
     rg_w = w; rg_gv[w] = 0;
   }
+  // Only what the GE draws from now on is held in HD; any other read of those pages comes from the mirror. A sublist
+  // the memory applied did not go through draw(): its marks stay
+  if (!(f->flags & R_MEMO)) { sceClibMemset(rt_pg, 0, sizeof rt_pg); last_fb = ~0u; }
+  const uint8_t *pal = rg_clut ? f->a + rg_clut - 1 : 0;
   f = rf[rg_w];
   f->nd = f->ne = f->na = f->flags = f->draws_seen = f->nt = f->ntx = f->dv = f->nimg = 0;
   rg_t = 0;
-  // The loaded palette is still valid in the GE: it is copied again to the new record (as it is now in memory)
-  rg_clut = rg_clut_b ? rgCopy(last_clut[0], rg_clut_b) : 0;
+  // The GE keeps the palette it loaded whatever the memory holds now: its copy goes on to the new record (from memory
+  // only if there is none)
+  if (pal) { sceClibMemmove(f->a, pal, rg_clut_b); f->na = rg_clut_b; rg_clut = 1; }
+  else rg_clut = rg_clut_b ? rgCopy(last_clut[0], rg_clut_b) : 0;
 }
