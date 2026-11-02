@@ -70,6 +70,8 @@ or `auto` (3 letters are compared; `no` also turns it off). What each one saves,
 | `capture_core` | (v13.13) `0`, `1` or `2` pins the capturer to that core (before v13.13 always core 1); no file or anything else: any of the 3. The `threads: capture` line of the log says which one was used; see `etapa2_ridge_racer.md` |
 
 ## Drawing on the Vita (stage 3, with `draw`; `nativedraw.log`, every 10 s)
+- Development builds only: `translator: result at frame N: <reason>` at each change of a frame's result (`ok` or the
+  reason for the normal image), the first 400. With NPTEST it gives the reason of each scene; scene `sync` lines it up.
 - `presenter: N frames in T ms through the surface (changes, with own copy), CPU us/frame (max) | nearly black: game,
   surface | checked N, different from the normal image M`: frames that went through the NativeDraw surface, their
   cost on the Adrenaline thread, and the check of different frames (1 out of 4, only if the GPU has already finished the surface).

@@ -69,6 +69,8 @@ o `auto` (se comparan 3 letras; `no` también lo apaga). Qué guarda cada uno, c
 | `capture_core` | (v13.13) `0`, `1` o `2` fija el capturador a ese núcleo (antes de v13.13 siempre el 1); sin archivo o cualquier otra cosa: cualquiera de los 3. La línea `threads: capture` del log dice cuál se usó; ver `etapa2_ridge_racer.md` |
 
 ## Dibujo en la Vita (etapa 3, con `draw`; `nativedraw.log`, cada 10 s)
+- Solo en compilación de desarrollo: `translator: result at frame N: <motivo>` en cada cambio del resultado de un frame
+  (`ok` o el motivo de la imagen normal), los primeros 400. Con NPTEST da el motivo de cada escena; la escena `sync` lo alinea.
 - `presenter: N frames in T ms through the surface (changes, with own copy), CPU us/frame (max) | nearly black: game,
   surface | checked N, different from the normal image M`: frames que pasaron por la superficie de NativeDraw, su
   costo en el hilo de Adrenaline y la revisión de frames distintos (1 de cada 4, solo si la GPU ya terminó la superficie).

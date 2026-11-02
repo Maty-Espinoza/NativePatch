@@ -186,6 +186,13 @@ static void trRaw(const char *what, const uint8_t *p, uint32_t n) {
   for (uint32_t i = 0; i + 4 <= n && i < 96; i += 4) k += sceClibSnprintf(b + k, sizeof b - k, " %08x", *(const uint32_t *)(p + i));
   alog("%s:%s\n", what, b);
 }
+// Each change of a frame's result (ok or the reason for the normal image), with its record frame; the first 400
+static void trReason(uint32_t frame, int r) {
+  static int last = -1;
+  static uint32_t cnt;
+  if (r != last && cnt < 400) { cnt++; alog("translator: result at frame %u: %s\n", frame, tnames[r]); }
+  last = r;
+}
 // First 40 vertices rejected as T_OUT: which draw and vertex, and the bytes of the vertex and of the draw
 static void trOutLog(RFrame *f, RDraw *d, uint32_t i, uint32_t k, uint32_t sz, const uint8_t *p) {
   static uint32_t cnt;

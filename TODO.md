@@ -11,7 +11,7 @@ what was done is in `CHANGELOG.md`. Updated 2026-11-02 (NativeLink 0.0.3 + Nativ
 - [ ] KOF 96 fights: seconds at 42–57 fps with the GPU at 90–98 % and the capturer at ~11 ms; suspected GPU limit, not proven.
 - [ ] **Synthetic battery NPTEST** (`docs/dev/en/nptest.md`, standardization goes before the texture cache): 108 2D scenes
       in `tests/nptest/`, checked on PPSSPP. Pending: first run on the Vita (does NativeDraw capture a homebrew?); the reason
-      of each scene (the presenter logs them every 10 s); comparing images per scene (image tolerance, open); a cache scene
+      of each scene is logged (`translator: result at frame`), the report script is missing; comparing images per scene (image tolerance, open); a cache scene
       check; 3D scenes; useful GPU tests of pspautotests.
 - [ ] **Simplify the structure** (after the tests): split `capture.c` (1621 lines) into walk, sublist memory, readers and
       logs; fewer switches; tidy the mailbox.
