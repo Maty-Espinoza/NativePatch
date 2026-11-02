@@ -3,14 +3,21 @@
 # paquete taihen y stubs de vita-libs-gen-2) en Linux x86_64: contenedor de Claude, Ubuntu en WSL o GitHub Actions.
 # Escribe $T/env.sh, que carga tools/compilar.sh. Se puede correr de nuevo: salta lo que ya esta.
 # Uso: sh tools/preparar.sh ; despues: sh tools/compilar.sh (la VM ARM64 del Mac usa tools/mac/preparar_vm.sh)
-# - El proxy del contenedor no deja ver paginas de github.com, solo bajar releases: tag con git ls-remote, nombre fijo.
+# By default it unpacks the ready-made package of the release named in tools/toolchain-version (built by
+# .github/workflows/toolchain.yml; a copy already in $T is used as is). If that package is missing, or with
+# FROM_SOURCE=1, it fetches each part. The package has no absolute paths: stubs, nb/ and env.sh are always made here.
 # - GCC 15 de vitasdk usa C23 por defecto y taihen.h no compila: el envoltorio de arm-none-eabi-gcc agrega -std=gnu17.
 set -e
+V=$(cat "$(dirname "$0")/toolchain-version"); P=$V-linux-x86_64.tar.xz
 T=${T:-$HOME/tc}; mkdir -p $T; cd $T
+if [ -z "$FROM_SOURCE" ] && [ ! -d vcore ]; then
+  [ -f $P ] || curl -fsSL --retry 3 -o $P https://github.com/Maty-Espinoza/NativePatch/releases/download/$V/$P || rm -f $P
+  if [ -f $P ]; then tar xJf $P; rm $P; else echo "no package $V: fetching each part"; fi
+fi
 [ -d pspdev ] || curl -sSL https://github.com/pspdev/pspdev/releases/latest/download/pspdev-ubuntu-latest-x86_64.tar.gz | tar xz
 [ -d Adrenaline ] || git clone -q --depth 1 https://github.com/TheOfficialFloW/Adrenaline
 if [ ! -d vcore ]; then
-  TAG=$(git ls-remote --tags https://github.com/vitasdk/autobuilds | grep -o 'sdk-snapshot-[0-9.]*$' | sort -V | tail -1)
+  TAG=sdk-snapshot-20261015.850.1
   curl -sSL https://github.com/vitasdk/autobuilds/releases/download/$TAG/vitasdk-bootstrap-x86_64-linux-gnu.tar.bz2 | tar xj
   mv vitasdk vcore; echo "vitasdk $TAG"
 fi

@@ -11,8 +11,10 @@
 set -e
 T=${T:-$HOME/tc}; . $T/env.sh
 R=$(cd "$(dirname "$0")/.." && pwd); B=$R/build; mkdir -p $B
-make -s -C $R/nativelink ADRENALINE=$ADRENALINE && cp $R/nativelink/nativelink.prx $B/
-(cd $R/nativedraw && O=$B/nativedraw sh build.sh >/dev/null) && cp $B/nativedraw/nativedraw.suprx $B/
+make -s -C $R/nativelink ADRENALINE=$ADRENALINE || { echo "== NativeLink failed to build"; exit 1; }
+cp $R/nativelink/nativelink.prx $B/
+(cd $R/nativedraw && O=$B/nativedraw sh build.sh >$B/nativedraw.log) || { cat $B/nativedraw.log; echo "== NativeDraw failed to build"; exit 1; }
+cp $B/nativedraw/nativedraw.suprx $B/
 # Instalador: version.txt con la version de cada plugin (sacada de nativelink/log.h y nativedraw/version.h).
 # vita-make-fself sin -s: app no "segura", necesaria para que pueda escribir en ur0:tai.
 VL=$(sed -n 's/.*NATIVELINK_VERSION "\([^"]*\)".*/\1/p' $R/nativelink/log.h)

@@ -1,0 +1,34 @@
+# Builds the toolchain from source (tools/preparar.sh with FROM_SOURCE=1), checks that the package builds the project and
+# publishes it in the GitHub release named in tools/toolchain-version. A published version never changes: to make a new
+# one, change that file. Runs on push because workflow_dispatch only sees the default branch.
+name: Toolchain
+on:
+  workflow_dispatch:
+  push:
+    branches: ['**']
+    paths: [tools/toolchain-version, tools/preparar.sh]
+
+permissions:
+  contents: write
+
+jobs:
+  paquete:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build, check and publish
+        run: |
+          V=$(cat tools/toolchain-version); P=$V-linux-x86_64.tar.xz; T=$HOME/tc
+          if gh release view $V >/dev/null 2>&1; then echo "$V is already published"; exit 0; fi
+          FROM_SOURCE=1 sh tools/preparar.sh
+          { echo "$V"; grep -o 'sdk-snapshot-[0-9.]*' tools/preparar.sh; cat $T/vcore/version_info.txt $T/pspdev/build.txt
+            echo "Adrenaline $(git -C $T/Adrenaline rev-parse HEAD)"; } > $T/versions.txt
+          # Docs, pacman's data and the Adrenaline sources are not needed to build; licenses stay
+          XZ_OPT='-9 -T0' tar cJf $P -C $T --owner=0 --group=0 --exclude=pspdev/var --exclude=pspdev/share/man \
+            --exclude=pspdev/share/info --exclude=pspdev/share/locale \
+            versions.txt pspdev vcore taipkg Adrenaline/LICENSE Adrenaline/cef/include Adrenaline/cef/lib
+          mkdir $HOME/prueba; cp $P $HOME/prueba/
+          T=$HOME/prueba sh tools/preparar.sh; T=$HOME/prueba sh tools/compilar.sh
+          gh release create $V $P --target $GITHUB_SHA --title "Toolchain $V" --notes-file $T/versions.txt
