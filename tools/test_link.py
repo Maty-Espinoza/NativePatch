@@ -42,8 +42,8 @@ else:
     # A few lost lists are normal: a top-level list in VRAM before its first mirror copy.
     check('no events lost', lost and sum(lost) <= sum(captured[-1:]) / 100 and not sum(resets), 'lost_lists %d, resets %d' % (sum(lost), sum(resets)))
     fps = nums(r'stats performance: fps=([\d.]+)', nl)
-    # Rates and not totals: at the minimum log level there is one "sec:" line every 10 s.
-    a, b = statistics.median(frames or [0]), statistics.median(fps or [0])
+    # Means of rates, not totals (minimum log level: one "sec:" line every 10 s) nor medians (menus and gameplay differ).
+    a, b = statistics.mean(frames or [0]), statistics.mean(fps or [0])
     check('flips agree on both sides (within 20%)', a and b and abs(a - b) <= .2 * b, 'NativeDraw %.1f/s, NativeLink %.1f/s' % (a, b))
 print('FAILED: %d' % bad if bad else 'all ok')
 sys.exit(1 if bad else 0)

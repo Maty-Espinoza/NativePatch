@@ -7,7 +7,8 @@ Reads nativelink.log (one stats line every 600 vblanks = 10 s) and nativedraw_ca
   2. capture seconds with fewer frames than the threshold or over 60,000 commands: where the Vita falls short
   3. total of the sublist memory check (reviewed and MISMATCHES)
 With --check it also judges the run (OK/FAIL per metric, exit code 1 on FAIL; "--" if the log does not have it):
-  fps: median of the run (windows outside gameplay do not decide) against the reference: --target, the median of --ref,
+  fps: the slowest 10 % of the seconds with gameplay (>= 500 commands per frame; without "sec:" lines, the median of
+       nativelink.log) against the reference: --target, the median of --ref,
        GAME_FPS by the game= line of nativelink.log or, as a guess, 60/30 from the run's median:
        at most 5 fps lower on a 60 fps game, 2 on a 30 fps game
   MISMATCHES: 0 | HD frames: not lower than --ref by 5 points (without --ref: some) | vertex_out: not above --ref (or 0)
@@ -53,6 +54,11 @@ for l in load('nativedraw_capture.log'):
 print('\n== sublist memory: reviewed=%d MISMATCHES=%d' % (checked, differ))
 
 # Game fps per 10 s of folder r; frames drawn in HD, with the normal image, and with reason vertex_out.
+# Frames per second of the seconds with gameplay. "sec:" lines come every second, or every 10 s at the minimum log level.
+def playFps():
+    rows = [tuple(map(int, m.groups())) for l in load('nativedraw_capture.log') if (m := re.search(r'^\s*(\d+) sec: frames=(\d+) .*?commands/f=(\d+)', l))]
+    return sorted(f if t - p < 2000 else f * 1000 / (t - p) for (p, _, _), (t, f, c) in zip(rows, rows[1:]) if c >= 500 and t > p)
+
 def fpsOf(r): return [float(m.group(1)) for l in load('nativelink.log', r) if (m := re.search(r'stats performance: fps=([\d.]+)', l))]
 def hdOf(r):
     hd = nat = out = 0
@@ -75,8 +81,9 @@ if check:
     elif game and game[-1] in GAME_FPS: base, source = GAME_FPS[game[-1]], 'GAME_FPS ' + game[-1]
     elif fps: base, source = 60 if statistics.median(fps) >= 45 else 30, 'GUESS from the median, not a real verdict: use --target or --ref'
     if fps and base:
-        run, tol = statistics.median(fps), 5 if base >= 45 else 2
-        bad += row('fps', run >= base - tol, 'median %.1f, reference %.1f (%s), at most %d lower' % (run, base, source, tol))
+        play, tol = playFps(), 5 if base >= 45 else 2
+        run = play[len(play) // 10] if play else statistics.median(fps)
+        bad += row('fps', run >= base - tol, '%s %.1f, reference %.1f (%s), at most %d lower' % ('slowest 10% of gameplay' if play else 'median', run, base, source, tol))
     else: bad += row('fps', False, 'no fps lines in nativelink.log')
     bad += row('MISMATCHES', differ == 0 if checked else None, '%d of %d reviewed' % (differ, checked))
     hd, nat, out = hdOf(d)

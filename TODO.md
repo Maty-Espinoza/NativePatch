@@ -24,6 +24,9 @@ what was done is in `CHANGELOG.md`. Updated 2026-11-02 (NativeLink 0.0.3 + Nativ
       cap. Accepted risk: a texture changed only in bytes the sample misses may look stale for up to N frames. Take care
       that the GPU never reads an entry while it is rewritten. Afterwards: translator caches (palettes, translated draws,
       identical scenes; the translator spends ~8–10 ms of CPU per frame).
+- [ ] **Metal Slug XX burst** (0.0.8.24, same spot in every run): `vertex_out` frames (44 in the run) and "giant draw" lines
+      (y -4127) go with the normal image; one frame of ~174000 commands took 182 ms in 0.0.8.23. `tools/test_local.sh`
+      stays red on `vertex_out` until this is solved. Find what the game does there before changing anything.
 - [ ] **Capturer running late → garbage vertices** (Metal Slug XX, 0.0.8.20): with texture copies taking 20–28 ms per
       frame, the gate (5 ms at most) lets the game go on and already-rewritten vertices get copied. 0.0.8.21 sends those
       frames with the normal image (`vertex_out`); the cause is attacked by the cache. Check with the cache whether
