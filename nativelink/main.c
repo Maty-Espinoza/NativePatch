@@ -341,15 +341,6 @@ static void t4Flip(void) { // on the flip: frame totals
   memset(&t4, 0, sizeof(t4));
 }
 #endif
-DEV(static int stage;)
-#ifdef NP_DEV
-// Diagnosis: leaves in memory the last point reached, for NativeDraw to log it even if the game dies right after:
-// point | in interrupt << 8 | display hook calls << 16
-static u32 ck_calls;
-#define CK(n) (*(volatile u32 *)0x4A7FFF00 = (n) | ((int)sceKernelGetThreadId() < 0) << 8 | ck_calls << 16)
-#else
-#define CK(n)
-#endif
 // Development builds: finds sceGeGetReg and the cache and DMA functions, hooks those it finds and starts the T6 thread.
 // All builds: starts the free-CPU thread (after calibrating it). What it found goes to the log.
 static void t4t6Install(void) {
@@ -364,7 +355,6 @@ static void t4t6Install(void) {
     _dcWbA = (void *)FindProc(um[i], "UtilsForUser", 0x79D1C3FA);
     _dcWbIA = (void *)FindProc(um[i], "UtilsForUser", 0xB435DEC5);
   }
-  if (stage == 7) _dcWbR = _dcWbIR = _dcIR = 0, _dcWbA = _dcWbIA = 0;
   if (_dcWbR) { sctrlHENPatchSyscall((u32)_dcWbR, dcWbRPatched); nd++; }
   if (_dcWbIR) { sctrlHENPatchSyscall((u32)_dcWbIR, dcWbIRPatched); nd++; }
   if (_dcIR) { sctrlHENPatchSyscall((u32)_dcIR, dcIRPatched); nd++; }
@@ -379,7 +369,7 @@ static void t4t6Install(void) {
   }
   if (_dmac) { sctrlHENPatchSyscall((u32)_dmac, dmacPatched); nm++; }
   if (_dmacTry) { sctrlHENPatchSyscall((u32)_dmacTry, dmacTryPatched); nm++; }
-  SceUID th = _sceGeGetReg && stage != 6 ? sceKernelCreateThread("NativeLinkGE", geThread, 0x11, 0x800, 0, NULL) : -1;
+  SceUID th = _sceGeGetReg ? sceKernelCreateThread("NativeLinkGE", geThread, 0x11, 0x800, 0, NULL) : -1;
   if (th >= 0) sceKernelStartThread(th, 0, NULL);
 #endif
   // Free-CPU calibration: the thread's same loop, timed here (2 million spins) = spins per ms
@@ -387,7 +377,7 @@ static void t4t6Install(void) {
   for (k = 0; k < 2000000; k++) { spin++; asm volatile("" ::: "memory"); }
   tc = sceKernelGetSystemTimeLow() - tc;
   spin_cal = tc ? 2000000u / (tc / 1000 + 1) : 0;
-  SceUID tl = DEV(stage == 5 ? -1 :) sceKernelCreateThread("NativeLinkIdle", libreThread, 126, 0x400, 0, NULL);
+  SceUID tl = sceKernelCreateThread("NativeLinkIdle", libreThread, 126, 0x400, 0, NULL);
   if (tl >= 0) sceKernelStartThread(tl, 0, NULL);
   LOG("CPU idle: %lu loops/ms = 100%% (thread %08lx)\n", spin_cal, (u32)tl);
 #ifdef NP_DEV
@@ -464,14 +454,10 @@ static void modeDecide(void) {
   mode_done = 1;
   if (passive)
     return;
-  CK(20);
   logGameId();
-  CK(21);
   active = 1;
   *(u32 *)DRAW_NATIVE = 0; // Adrenaline shows the game's image
-  CK(22);
   sbInit();
-  CK(23);
   LOG("NativeLink active: the game runs unchanged; event mailbox at 0x0A000000 for the NativeDraw capturer\n");
 }
 
@@ -532,29 +518,22 @@ static void memSnapshot(const char *why) {
 // Flip hook: restores the mailbox if something erased it, closes the frame (T4 totals, mirror copy, EV_FRAME,
 // EV_FLIP), measures fps and every STATS_EVERY frames writes the stats to the log and zeroes them.
 int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat, int sync) {
-  DEV(ck_calls++;)
-  CK(1);
   if (!mode_done)
     modeDecide();
-  CK(2);
   log_frame++;
   if (log_frame == 30)
     memSnapshot("start");
-  CK(3);
   if (active) {
     if (SB[0] != SB_MAGIC) // (in case something clears the zone, as Adrenaline 8 does when loading the game)
       sbInit();
     if (VDESC[0] != 0x31565047) // "GPV1": NativeDraw writes the log (descriptor mailbox, log.h)
       VDESC[0] = 0x31565047;
-    CK(4);
     DEV(t4Flip();)
-    CK(5);
     int k1e = pspSdkSetK1(0);
     u32 te = sceKernelGetSystemTimeLow(), pg0 = mir_pages;
     mirFlip(); // VRAM copy requested by the Vita
     fr.mir_us += sceKernelGetSystemTimeLow() - te; fr.mir_pages += mir_pages - pg0;
     pspSdkSetK1(k1e);
-    CK(6);
     { // what this frame cost the game (see EV_FRAME)
       static u32 ft, sp0;
       u32 tn = sceKernelGetSystemTimeLow(), sp = spin, fd = ft ? tn - ft : 0;
@@ -569,10 +548,8 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
       memset(&fr, 0, sizeof(fr));
       if (SB[0x4E] >= 1) sbPost(EV_FRAME, gn | nw << 8, fd, gu, su); // (the cost of this sbPost goes to the next frame)
     }
-    CK(7);
     sbPost(EV_FLIP, 0, (u32)topaddr, bufferwidth | pixelformat << 16, log_frame);
   }
-  CK(8);
   // Every distinct buffer the game displays
   LOG_ONCE((u32)topaddr ^ (bufferwidth << 20) ^ (pixelformat << 30), "display %08lx width=%d fmt=%d\n", (u32)topaddr, bufferwidth, pixelformat);
 
@@ -591,7 +568,6 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
     }
   }
   last_flip = now;
-  CK(9);
 
   if (log_frame % STATS_EVERY == 0) {
     LOG("stats lists=%lu head=%lu stall=%lu\n", st.lists, st.heads, st.stalls);
@@ -637,10 +613,7 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
     memset(&st, 0, sizeof(st));
   }
 
-  CK(10);
-  int r = _sceDisplaySetFrameBuf(topaddr, bufferwidth, pixelformat, sync);
-  CK(11);
-  return r;
+  return _sceDisplaySetFrameBuf(topaddr, bufferwidth, pixelformat, sync);
 }
 
 // Adrenaline 8 can give the game memory that reaches the plugin zone (MEMSIZE in the SFO, high memory, 40 MB
@@ -665,17 +638,6 @@ static int zoneCheck(void) {
   return 0;
 }
 
-#ifdef NP_DEV
-// Diagnosis: ms0:/seplugins/nl_stage holds a digit: 1-3 step where module_start stops; 4 no display hook, 5 no idle
-// thread, 6 no GE thread, 7 no cache hooks; 0 everything
-static int stageRead(void) {
-  char c = '0';
-  SceUID fd = sceIoOpen("ms0:/seplugins/nl_stage", PSP_O_RDONLY, 0);
-  if (fd >= 0) { sceIoRead(fd, &c, 1); sceIoClose(fd); }
-  LOG("startup stops at step %c\n", c);
-  return c - '0';
-}
-#endif
 // Startup: reads the buttons (L/SELECT off, R synchronous log), checks the shared zone, finds the GE and display
 // functions and hooks them. The hooks are installed even if NativeLink is off: then they only call the original.
 int module_start(SceSize args, void *argp) {
@@ -686,7 +648,6 @@ int module_start(SceSize args, void *argp) {
   logInit(pad.Buttons & PSP_CTRL_RTRIGGER);
   if (passive)
     LOG("off (L or SELECT when opening the game): the game runs unchanged and nothing is noted for NativeDraw\n");
-  DEV(stage = stageRead(); if (stage == 1) return 0;)
   if (zoneCheck() && !passive) {
     passive = 1;
     LOG("WARNING: the game uses the plugin zone (0x0A000000-0x0B000000) -> off\n");
@@ -694,7 +655,6 @@ int module_start(SceSize args, void *argp) {
   if (!passive) { // NativeDraw writes the log as soon as it responds (log.h)
     VDESC[0] = 0x31565047; VDESC[1] = 0; // "GPV1"
   }
-  DEV(if (stage == 2) return 0;)
 
   _sceGeListUpdateStallAddr = (void *)FindProc("sceGE_Manager", "sceGe_driver", 0xE0D68148);
   _sceGeListEnQueue = (void *)FindProc("sceGE_Manager", "sceGe_driver", 0xAB49E76A);
@@ -712,9 +672,8 @@ int module_start(SceSize args, void *argp) {
   sctrlHENPatchSyscall((u32)_sceGeListEnQueueHead, sceGeListEnQueueHeadPatched);
   sctrlHENPatchSyscall((u32)_sceGeDrawSync, sceGeDrawSyncPatched);
   sctrlHENPatchSyscall((u32)_sceGeListSync, sceGeListSyncPatched);
-  DEV(if (stage == 3) return 0;)
   t4t6Install(); // (the hooks only note if NativeLink is active)
-  DEV(if (stage != 4)) sctrlHENPatchSyscall((u32)_sceDisplaySetFrameBuf, sceDisplaySetFrameBufPatched);
+  sctrlHENPatchSyscall((u32)_sceDisplaySetFrameBuf, sceDisplaySetFrameBufPatched);
 
   sceKernelDcacheWritebackInvalidateAll();
   sceKernelIcacheClearAll();

@@ -1207,7 +1207,8 @@ static int capThread(SceSize args, void *argp) {
     if (!on) {
       static uint32_t sessions;  // the mailbox comes back with each game: every game after the first starts new logs
       if (sessions++) { logs_new = 1; while (logs_new) sceKernelDelayThread(10000); }
-      on = 1; tail = SB[2]; resetQueue(); sec_t0 = now(); sceClibMemset(&acc, 0, sizeof acc);
+      // the ring starts at 0 with the mailbox: the first lists are walked too, they may set state the game never repeats
+      on = 1; tail = 0; resetQueue(); sec_t0 = now(); sceClibMemset(&acc, 0, sizeof acc);
       for (int w = 0; w < 16; w++) want_l[w] = want_d[w] = rt_pg[w] = mir_ok[0][w] = mir_ok[1][w] = 0;
       mir_u = 0; mir_reset = 1; mir_on = SB[1] >= 4;
       clog("NativeLink mailbox (shadow mode) found: events=%u lists=%u -> capture active%s\n", tail, SB[6],
@@ -1493,14 +1494,6 @@ static int mirThread(SceSize args, void *argp) {
   uint32_t n = 0 DEV(, rr = 0);
   for (;;) {
     sceKernelDelayThread(5000);
-#ifdef NP_DEV
-    {  // diagnosis: the last point NativeLink noted, the first 60 changes and each time it stays for 300 ms
-      static uint32_t ck, ck_t, ck_n, ck_said;
-      uint32_t v = *(volatile uint32_t *)PSP(0x0A7FFF00u);
-      if (v != ck) { ck = v; ck_t = now(); ck_said = 0; if (ck_n++ < 60) clog("point %u (intr %u, display call %u)\n", v & 255, v >> 8 & 1, v >> 16); }
-      else if (!ck_said && v && now() - ck_t > 300000) { ck_said = 1; clog("stopped at point %u (intr %u, display call %u)\n", v & 255, v >> 8 & 1, v >> 16); }
-    }
-#endif
     DEV(if (SB[0] == SB_MAGIC && SB[1] >= 3 && SB[0x47] != probe_ge) SB[0x47] = probe_ge;)
     if (SB[0] == SB_MAGIC && SB[1] >= 5 && SB[0x4A] != gp_flags) SB[0x4A] = gp_flags;  // switches for NativeLink
     if (SB[0] == SB_MAGIC && SB[1] >= 5 && SB[0x4E] != level) SB[0x4E] = level;         // log level
