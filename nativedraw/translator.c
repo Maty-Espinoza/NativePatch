@@ -238,19 +238,21 @@ static int trVerts(RFrame *f, RDraw *d, TV *o, float tw, float th, uint32_t col0
     if (!(q.x > -4096 && q.x < 4096 && q.y > -4096 && q.y < 4096)) { DEV(trOutLog(f, d, i, k, sz, p);) return T_OUT; }
     q.x *= 2; q.y *= 2; q.u /= tw; q.v /= th;
     if (d->prim == 6) {  // rectangle: 2 vertices (opposite corners) -> strip of 4, separated from the next with two
-      r[i & 1] = q;      // repeated vertices; the color is the second vertex's (like the GE)
+      r[i & 1] = q;      // repeated vertices; the color is the second vertex's (like the GE). Corners given along the
+                         // other diagonal (rot) rotate the UVs: u follows y and v follows x
       if (i & 1) {
         if (n + 6 > TV_N) return T_LIMIT;
+        int rot = (r[0].x - r[1].x) * (r[0].y - r[1].y) < 0;
         for (int axis = 0; axis < 2; axis++) {  // scissor clipping in x and y; u and v are clipped proportionally
-          float *a0 = axis ? &r[0].y : &r[0].x, *a1 = axis ? &r[1].y : &r[1].x, *t0 = axis ? &r[0].v : &r[0].u, *t1 = axis ? &r[1].v : &r[1].u;
+          float *a0 = axis ? &r[0].y : &r[0].x, *a1 = axis ? &r[1].y : &r[1].x, *t0 = axis != rot ? &r[0].v : &r[0].u, *t1 = axis != rot ? &r[1].v : &r[1].u;
           float lo = sc[axis], hi = sc[axis + 2], d = *a1 - *a0, p0 = *a0, q0 = *t0, k = d != 0 ? (*t1 - *t0) / d : 0;
           if (d >= 0) { if (*a0 < lo) *a0 = lo; if (*a1 > hi) *a1 = hi; if (*a0 >= *a1) goto outside; }
           else { if (*a1 < lo) *a1 = lo; if (*a0 > hi) *a0 = hi; if (*a1 >= *a0) goto outside; }
           *t0 = q0 + (*a0 - p0) * k; *t1 = q0 + (*a1 - p0) * k;
         }
         uint32_t c = r[1].c;
-        TV a = { r[0].x, r[0].y, .5f, r[0].u, r[0].v, c }, b = { r[1].x, r[0].y, .5f, r[1].u, r[0].v, c },
-           cc = { r[0].x, r[1].y, .5f, r[0].u, r[1].v, c }, dd = { r[1].x, r[1].y, .5f, r[1].u, r[1].v, c };
+        TV a = { r[0].x, r[0].y, .5f, r[0].u, r[0].v, c }, b = { r[1].x, r[0].y, .5f, r[!rot].u, r[rot].v, c },
+           cc = { r[0].x, r[1].y, .5f, r[rot].u, r[!rot].v, c }, dd = { r[1].x, r[1].y, .5f, r[1].u, r[1].v, c };
         o[n++] = a; o[n++] = a; o[n++] = b; o[n++] = cc; o[n++] = dd; o[n++] = dd;
       }
     outside:;
