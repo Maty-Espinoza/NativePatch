@@ -6,9 +6,9 @@
 #include "record.h"
 #include "shaders_nd.h"
 // Result of trCheck/trFrame: T_OK or the reason the frame was not drawn (tnames: its name in the log)
-enum { T_OK, T_NEW, T_3D, T_PRIM, T_FMT, T_BLEND, T_TFUNC, T_ODD, T_DEST, T_VERT, T_LIMIT, T_TEX, T_PROG, T_OUT, TN };
+enum { T_OK, T_NEW, T_3D, T_PRIM, T_FMT, T_BLEND, T_TFUNC, T_ODD, T_DEST, T_VERT, T_LIMIT, T_TEX, T_PROG, T_OUT, T_MASK, TN };
 static const char *tnames[TN] = { "ok", "no_new_frame", "3d", "primitive", "format", "blend", "texture_function",
-                                "color_test_or_logic", "other_target", "vertex", "limit", "bad_texture", "program", "vertex_out" };
+                                "color_test_or_logic", "other_target", "vertex", "limit", "bad_texture", "program", "vertex_out", "mask" };
 // counters for the 10 s log (read and cleared by the presenter)
 static volatile uint32_t t_cnt[TN], t_hd, t_nat, t_draws;
 static volatile uint32_t t_skip[6];  // PSP frames advanced by each drawn frame (0: repeated, 5: 5 or more)
@@ -18,6 +18,7 @@ static TV *tv[2];            // translated vertices, one per surface
 static uint32_t *tpal[2];    // translated palettes (8888), aligned to 64: 16 entries (64 bytes) or 256 (1 KB)
 #define TV_N (64 << 10)      // vertices per surface (and limit of the 16-bit indices)
 #define TP_B (256 << 10)     // palette bytes per surface
+#define C_RGB (SCE_GXM_COLOR_MASK_R | SCE_GXM_COLOR_MASK_G | SCE_GXM_COLOR_MASK_B)  // alpha is never written
 // last record frame drawn, whether it came out fine and how many times it was repeated
 static uint32_t t_frame = ~0u, t_ok, t_rep;
 static uint16_t *tib;        // 0, 1, 2... (indices for the GPU)
@@ -64,16 +65,17 @@ static const SceGxmProgramParameter *n_wvp, *n_tf, *n_atx, *n_atc;
 typedef struct { uint32_t key; SceGxmFragmentProgram *p; } FP;
 static FP fps[64];
 static uint32_t nfps;
-// Fragment program for tex (0 no texture, 1 textured) and key (0 no blending; otherwise the 4 bytes of
-// SceGxmBlendInfo + 1, see blendKey). Finds it in fps or creates it with the patcher (no alpha write); 0 on failure.
-static SceGxmFragmentProgram *fragProg(int tex, uint32_t key) {
-  uint32_t k = key << 1 | tex;
+// Fragment program for tex (0 no texture, 1 textured), key (0 no blending; otherwise the 4 bytes of SceGxmBlendInfo + 1,
+// see blendKey) and mask (SCE_GXM_COLOR_MASK_*, see colorMask). Finds it in fps or creates it with the patcher; 0 on
+// failure.
+static SceGxmFragmentProgram *fragProg(int tex, uint32_t key, uint32_t mask) {
+  uint32_t k = key << 1 | mask << 2 | tex;  // (key's low byte is 0 or 1)
   for (uint32_t i = 0; i < nfps; i++) if (fps[i].key == k) return fps[i].p;
   if (nfps >= 64) return 0;
   SceGxmBlendInfo b;
   if (key) sceClibMemcpy(&b, &(uint32_t){ key - 1 }, 4);
   else { sceClibMemset(&b, 0, sizeof b); b.colorFunc = b.alphaFunc = SCE_GXM_BLEND_FUNC_NONE; }
-  b.colorMask = SCE_GXM_COLOR_MASK_R | SCE_GXM_COLOR_MASK_G | SCE_GXM_COLOR_MASK_B;  // (PSP alpha = its stencil)
+  b.colorMask = mask;
   SceGxmFragmentProgram *p = 0;
   int r = sceGxmShaderPatcherCreateFragmentProgram(pat, tex ? ift : ifc, SCE_GXM_OUTPUT_REGISTER_FORMAT_UCHAR4,
                                                    SCE_GXM_MULTISAMPLE_NONE, &b, pv, &p);
@@ -107,7 +109,7 @@ static int trInit(void) {
                                   { 0, 20, SCE_GXM_ATTRIBUTE_FORMAT_U8N, 4, sceGxmProgramParameterGetResourceIndex(pc) } };
   SceGxmVertexStream st = { sizeof(TV), SCE_GXM_INDEX_SOURCE_INDEX_16BIT };
   if ((r = sceGxmShaderPatcherCreateVertexProgram(pat, iv, at, 3, &st, 1, &nvp)) < 0) { alog("translator: vertex program %08x\n", r); return r; }
-  if (!fragProg(0, 0) || !fragProg(1, 0)) return -3;
+  if (!fragProg(0, 0, C_RGB) || !fragProg(1, 0, C_RGB)) return -3;
   for (int i = 0; i < 2; i++) rtMem(&rts[i]);
   // PSP RAM (0x08000000-0x0A000000) for the GPU (fails with 0x72000000)
   int r1 = sceGxmMapMemory((void *)0x70000000, 0x2000000, RD);
@@ -128,7 +130,8 @@ static uint32_t pal8888(uint32_t c, uint32_t f) {
 
 // GE blend of state e (0x21 enable, 0xDF factors and operation, 0xE0/0xE1 fixed colors) -> the 4 bytes of
 // SceGxmBlendInfo + 1 (0: no blending); ~0u if it has no equivalent. Fixed colors only work if 0 or white
-// (factor ZERO or ONE); destination alpha is not computed (not written).
+// (factor ZERO or ONE); destination alpha is not computed (not written). MIN and MAX ignore the factors on the GE and
+// take ONE in GXM.
 static uint32_t blendKey(const uint32_t *e) {
   if (!(RE(e, 0x21) & 1)) return 0;
   uint32_t df = RE(e, 0xDF), s = df & 15, d = df >> 4 & 15, op = df >> 8 & 15;
@@ -139,28 +142,57 @@ static uint32_t blendKey(const uint32_t *e) {
                        fo[5] = { SCE_GXM_BLEND_FUNC_ADD, SCE_GXM_BLEND_FUNC_SUBTRACT, SCE_GXM_BLEND_FUNC_REVERSE_SUBTRACT,
                                  SCE_GXM_BLEND_FUNC_MIN, SCE_GXM_BLEND_FUNC_MAX };
   uint32_t gs, gd, fa = RE(e, 0xE0) & 0xFFFFFF, fb = RE(e, 0xE1) & 0xFFFFFF;
-  if (s < 4) gs = fs[s]; else if (s == 10 && (fa == 0 || fa == 0xFFFFFF)) gs = fa ? SCE_GXM_BLEND_FACTOR_ONE : SCE_GXM_BLEND_FACTOR_ZERO; else return ~0u;
-  if (d < 4) gd = fd[d]; else if (d == 10 && (fb == 0 || fb == 0xFFFFFF)) gd = fb ? SCE_GXM_BLEND_FACTOR_ONE : SCE_GXM_BLEND_FACTOR_ZERO; else return ~0u;
+  if (op == 3 || op == 4) gs = SCE_GXM_BLEND_FACTOR_ONE; else if (s < 4) gs = fs[s]; else if (s == 10 && (fa == 0 || fa == 0xFFFFFF)) gs = fa ? SCE_GXM_BLEND_FACTOR_ONE : SCE_GXM_BLEND_FACTOR_ZERO; else return ~0u;
+  if (op == 3 || op == 4) gd = SCE_GXM_BLEND_FACTOR_ONE; else if (d < 4) gd = fd[d]; else if (d == 10 && (fb == 0 || fb == 0xFFFFFF)) gd = fb ? SCE_GXM_BLEND_FACTOR_ONE : SCE_GXM_BLEND_FACTOR_ZERO; else return ~0u;
   if (op > 4) return ~0u;
   SceGxmBlendInfo b;
   sceClibMemset(&b, 0, sizeof b);
-  b.colorFunc = b.alphaFunc = fo[op]; b.colorSrc = gs; b.colorDst = gd; b.alphaSrc = SCE_GXM_BLEND_FACTOR_ONE; b.alphaDst = SCE_GXM_BLEND_FACTOR_ZERO;
+  b.colorFunc = b.alphaFunc = fo[op]; b.colorSrc = gs; b.colorDst = gd; b.alphaSrc = SCE_GXM_BLEND_FACTOR_ONE;
+  b.alphaDst = op == 3 || op == 4 ? SCE_GXM_BLEND_FACTOR_ONE : SCE_GXM_BLEND_FACTOR_ZERO;
   uint32_t k;
   sceClibMemcpy(&k, &b, 4);
   return k + 1;
+}
+
+// GE alpha test of state e, (alpha & mask) FUNC (ref & mask) (0xDB), as what the shaders compare, the whole alpha: *fn
+// and *ref. A mask of high bits makes values into ranges, which fit one comparison unless EQUAL or NOTEQUAL are in the
+// middle. 0 if there is no equivalent.
+static int alphaFn(const uint32_t *e, uint32_t *fn, uint32_t *ref) {
+  uint32_t db = RE(e, 0xDB), f = db & 7, m = db >> 16 & 0xFF, lo = ~m & 0xFF, r = db >> 8 & m, hi = r + lo;
+  if (f > 1 && lo & (lo + 1)) return 0;
+  *fn = f; *ref = f == 5 || f == 6 ? hi : r;
+  if ((f == 2 || f == 3) && lo) {
+    if (r == 0) { *fn = f == 2 ? 5 : 6; *ref = hi; }
+    else if (hi == 255) *fn = f == 2 ? 7 : 4;
+    else return 0;
+  }
+  return 1;
+}
+
+// Channels the draw of state e writes: GE color mask (0xE8, bits set are not written) and, in a clear, its color bit.
+// ~0u if the mask is not whole channels: GXM masks by channel, per bit needs reading the destination in a shader.
+static uint32_t colorMask(const uint32_t *e) {
+  uint32_t m = RE(e, 0xE8), clr = RE(e, 0xD3), g = 0;
+  for (int i = 0; i < 3; i++) {
+    uint32_t b = m >> i * 8 & 0xFF;
+    if (!b) g |= SCE_GXM_COLOR_MASK_R << i; else if (b != 0xFF) return ~0u;
+  }
+  return (clr & 1) && !(clr >> 8 & 1) ? SCE_GXM_COLOR_MASK_NONE : g;
 }
 
 // Checks whether draw d of frame f can be drawn (through mode, primitive, vertices without weights, destination, blend,
 // texture format and function). T_OK if so; otherwise the reason. What depends on other draws is checked by trFrame.
 static int trCheck(RFrame *f, RDraw *d) {
   const uint32_t *e = f->e[d->st];
-  uint32_t vt = d->vt, clr = RE(e, 0xD3) & 1;
+  uint32_t vt = d->vt, clr = RE(e, 0xD3) & 1, afn, aref;
   if (!(vt >> 23 & 1)) return T_3D;
   if (d->prim != 3 && d->prim != 4 && d->prim != 6) return T_PRIM;  // triangles, strip, rectangles
   if ((vt >> 9 & 3) || (vt >> 18 & 7)) return T_VERT;  // weights or morph
   if ((RE(e, 0x9D) & 0x7FF) > 512) return T_DEST;
+  if (colorMask(e) == ~0u) return T_MASK;
   if (clr) return T_OK;
   if (RE(e, 0x27) & 1 || RE(e, 0x28) & 1) return T_ODD;
+  if ((RE(e, 0x22) & 1) && !alphaFn(e, &afn, &aref)) return T_MASK;
   if (blendKey(e) == ~0u) return T_BLEND;
   if ((RE(e, 0x1E) & 1) && (vt & 3)) {
     uint32_t fmt = RE(e, 0xC3) & 15, tf = RE(e, 0xC9) & 7;
@@ -209,7 +241,8 @@ static void trOutLog(RFrame *f, RDraw *d, uint32_t i, uint32_t k, uint32_t sz, c
 // type (with its alignment), follows the indices if any, and leaves x, y doubled and u, v divided by tw x th.
 // col0: color if the vertex has none; sc: doubled scissor (x0, y0, x1, y1). Rectangles (2 corners) are clipped to the
 // scissor and come out as 4-vertex strips. *nout: vertices written. T_OK, T_VERT (data outside the record), T_LIMIT or
-// T_OUT (position outside +-4096: garbage vertices).
+// T_OUT (position outside +-4096: garbage vertices). The GE's z (integer, 0-65535) comes out as 0.5 down to 0: with the
+// matrix tr_wvp, clip z from 0 to almost 1, growing with the GE's, so the GE comparisons apply as they are.
 static int trVerts(RFrame *f, RDraw *d, TV *o, float tw, float th, uint32_t col0, const float *sc, uint32_t *nout) {
   static const uint8_t s4[4] = { 0, 1, 2, 4 }, cs[8] = { 0, 0, 0, 0, 2, 2, 2, 4 };
   uint32_t vt = d->vt, tc = vt & 3, ct = vt >> 2 & 7, nt = vt >> 5 & 3, pt = vt >> 7 & 3, sz = 0, al = 1, s;
@@ -229,8 +262,12 @@ static int trVerts(RFrame *f, RDraw *d, TV *o, float tw, float th, uint32_t col0
     const uint8_t *p = vb + k * sz;
     TV q = { 0, 0, .5f, 0, 0, ct ? col8888(p + ocol, ct) : col0 };
     if (pt == 1) { q.x = (int8_t)p[opos]; q.y = (int8_t)p[opos + 1]; }
-    else if (pt == 2) { q.x = ((const int16_t *)(p + opos))[0]; q.y = ((const int16_t *)(p + opos))[1]; }
-    else { q.x = ((const float *)(p + opos))[0]; q.y = ((const float *)(p + opos))[1]; }
+    else if (pt == 2) { q.x = ((const int16_t *)(p + opos))[0]; q.y = ((const int16_t *)(p + opos))[1]; q.z = .5f - ((const uint16_t *)(p + opos))[2] / 131072.0f; }
+    else {
+      q.x = ((const float *)(p + opos))[0]; q.y = ((const float *)(p + opos))[1];
+      float z = ((const float *)(p + opos))[2];
+      q.z = .5f - (z >= 65535 ? 65535 : z > 0 ? (int)z : 0) / 131072.0f;
+    }
     if (tc == 1) { q.u = p[otc] / 128.0f; q.v = p[otc + 1] / 128.0f; }  // (8 bits: 128 = 1 texel, also in through mode)
     else if (tc == 2) { q.u = ((const uint16_t *)(p + otc))[0]; q.v = ((const uint16_t *)(p + otc))[1]; }
     else if (tc == 3) { q.u = ((const float *)(p + otc))[0]; q.v = ((const float *)(p + otc))[1]; }
@@ -238,8 +275,8 @@ static int trVerts(RFrame *f, RDraw *d, TV *o, float tw, float th, uint32_t col0
     if (!(q.x > -4096 && q.x < 4096 && q.y > -4096 && q.y < 4096)) { DEV(trOutLog(f, d, i, k, sz, p);) return T_OUT; }
     q.x *= 2; q.y *= 2; q.u /= tw; q.v /= th;
     if (d->prim == 6) {  // rectangle: 2 vertices (opposite corners) -> strip of 4, separated from the next with two
-      r[i & 1] = q;      // repeated vertices; the color is the second vertex's (like the GE). Corners given along the
-                         // other diagonal (rot) rotate the UVs: u follows y and v follows x
+      r[i & 1] = q;      // repeated vertices; color and z are the second vertex's (like the GE). Corners given along
+                         // the other diagonal (rot) rotate the UVs: u follows y and v follows x
       if (i & 1) {
         if (n + 6 > TV_N) return T_LIMIT;
         int rot = (r[0].x - r[1].x) * (r[0].y - r[1].y) < 0;
@@ -251,8 +288,9 @@ static int trVerts(RFrame *f, RDraw *d, TV *o, float tw, float th, uint32_t col0
           *t0 = q0 + (*a0 - p0) * k; *t1 = q0 + (*a1 - p0) * k;
         }
         uint32_t c = r[1].c;
-        TV a = { r[0].x, r[0].y, .5f, r[0].u, r[0].v, c }, b = { r[1].x, r[0].y, .5f, r[!rot].u, r[rot].v, c },
-           cc = { r[0].x, r[1].y, .5f, r[rot].u, r[!rot].v, c }, dd = { r[1].x, r[1].y, .5f, r[1].u, r[1].v, c };
+        float z = r[1].z;
+        TV a = { r[0].x, r[0].y, z, r[0].u, r[0].v, c }, b = { r[1].x, r[0].y, z, r[!rot].u, r[rot].v, c },
+           cc = { r[0].x, r[1].y, z, r[rot].u, r[!rot].v, c }, dd = { r[1].x, r[1].y, z, r[1].u, r[1].v, c };
         o[n++] = a; o[n++] = a; o[n++] = b; o[n++] = cc; o[n++] = dd; o[n++] = dd;
       }
     outside:;
@@ -361,12 +399,37 @@ static uint32_t trBase(SceGxmContext *c, const SceGxmTexture *base, TV *o, uint3
   }
   TV q[4] = { { 0, 0, .5f, 0, 0, 0xFF000000u }, { W, 0, .5f, 0, 0, 0xFF000000u }, { 0, H, .5f, 0, 0, 0xFF000000u }, { W, H, .5f, 0, 0, 0xFF000000u } };
   sceClibMemcpy(o + nv, q, sizeof q);
-  sceGxmSetFragmentProgram(c, fragProg(0, 0));
+  sceGxmSetFragmentProgram(c, fragProg(0, 0, C_RGB));
   sceGxmReserveFragmentDefaultUniformBuffer(c, &u);
   sceGxmSetUniformDataF(u, n_atc, 0, 4, always);
   sceGxmSetVertexStream(c, 0, o + nv);
   sceGxmDraw(c, SCE_GXM_PRIMITIVE_TRIANGLE_STRIP, SCE_GXM_INDEX_FORMAT_U16, tib, 4);
   return nv + 4;
+}
+
+// GE comparison (0-7) -> GXM depth function >> 22, which is also its stencil function >> 25
+static const uint8_t gcmp[8] = { 0, 7, 2, 5, 1, 3, 4, 6 };
+static uint32_t t_zs, t_st, t_sr;  // depth state, stencil state and stencil reference in the context; ~0u: unknown
+// Sets depth and stencil of the draw of state e (0: no tests or writes, for what goes underneath), if they changed. As
+// on the GE, without the depth test nothing is written; a clear writes depth and stencil if their bits are on (stencil:
+// sv, its alpha). The surface's stencil plays the GE's alpha; there is none in 565 and the color mask's alpha (0xE9)
+// is its write mask. Depth and stencil live in one scene only.
+static void zsSet(SceGxmContext *c, const uint32_t *e, uint32_t sv) {
+  uint32_t clr = e ? RE(e, 0xD3) : 0, z = SCE_GXM_DEPTH_FUNC_ALWAYS, w = SCE_GXM_DEPTH_WRITE_DISABLED;
+  if (clr & 1) { if (clr >> 10 & 1) w = SCE_GXM_DEPTH_WRITE_ENABLED; }
+  else if (e && (RE(e, 0x23) & 1)) { z = (uint32_t)gcmp[RE(e, 0xDE) & 7] << 22; if (!(RE(e, 0xE7) & 1)) w = SCE_GXM_DEPTH_WRITE_ENABLED; }
+  if ((z | w) != t_zs) { t_zs = z | w; sceGxmSetFrontDepthFunc(c, z); sceGxmSetFrontDepthWriteEnable(c, w); }
+  static const uint8_t gop[8] = { 0, 1, 2, 5, 3, 4, 0, 0 };  // GE stencil operation (0-5, others keep) -> GXM
+  uint32_t f = 7, sf = 0, zf = 0, zp = 0, cm = 0, wm = 0, r = 0, on = e && (RE(e, 0xD2) & 3);
+  if (e && !(clr & 1) && (RE(e, 0x24) & 1)) {
+    uint32_t dc = RE(e, 0xDC), dd = RE(e, 0xDD);
+    f = gcmp[dc & 7]; r = dc >> 8 & 0xFF; cm = dc >> 16 & 0xFF;
+    sf = gop[dd & 7]; zf = gop[dd >> 8 & 7]; zp = gop[dd >> 16 & 7];
+    if (on) wm = ~RE(e, 0xE9) & 0xFF;
+  } else if (on && (clr & 0x201) == 0x201) { sf = zf = zp = SCE_GXM_STENCIL_OP_REPLACE; r = sv; wm = ~RE(e, 0xE9) & 0xFF; }
+  uint32_t k = f | sf << 3 | zf << 6 | zp << 9 | cm << 12 | wm << 20;
+  if (k != t_st) { t_st = k; sceGxmSetFrontStencilFunc(c, f << 25, sf, zf, zp, cm, wm); }
+  if (r != t_sr) { t_sr = r; sceGxmSetFrontStencilRef(c, r); }
 }
 
 // Draws frame f of the record to surface s (cs[s]), in the Adrenaline thread. base: the normal image, which goes
@@ -421,7 +484,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
   uint32_t *pal = tpal[s], np = 0, nv = 0, pal_prev = ~0u, pn = 0;  // np: words used; pal_prev/pn: the previous palette
   void *u;
   // SCENE: starts a scene on surface surf_tex with the vertex program and the matrix
-#define SCENE(surf_tex) do { sceGxmBeginScene(c, 0, rt, 0, 0, 0, surf_tex, &ds); sceGxmSetVertexProgram(c, nvp); \
+#define SCENE(surf_tex) do { sceGxmBeginScene(c, 0, rt, 0, 0, 0, surf_tex, &ds); t_zs = t_st = t_sr = ~0u; zsSet(c, 0, 0); sceGxmSetVertexProgram(c, nvp); \
     sceGxmReserveVertexDefaultUniformBuffer(c, &u); sceGxmSetUniformDataF(u, n_wvp, 0, 16, tr_wvp); } while (0)
   // OPEN: closes the open scene (if any) and opens one on dst (0: surface s); the first time on the surface,
   // puts the normal image (or black: trBase) underneath
@@ -448,7 +511,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     if (fb != disp && !dst) { res = T_DEST; break; }
     if (ord && (pass ? dst != 0 : dst == 0)) continue;
     if (!opened || dst != cur_rt) OPEN(dst);
-    if ((clr & 1) && !(clr >> 8 & 1)) continue;  // depth/stencil-only clear: nothing to see
+    if ((clr & 1) && !(clr & 0x700)) continue;  // clear of nothing
     uint32_t key = clr & 1 ? 0 : blendKey(e), mat = (RE(e, 0x55) & 0xFFFFFF) | (RE(e, 0x56) & 0xFF) << 24;
     float tw = 1, th = 1;
     SceGxmTexture t;
@@ -516,26 +579,31 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
            (int)(u0 * 1000), (int)(u1 * 1000), (int)(v0 * 1000), (int)(v1 * 1000), dst ? "intermediate" : "surface");
       DEV(alog("translator: giant draw (%u) vt %06x\n", giant, d->vt); trRaw("translator: giant draw bytes", f->a + d->voff - 1, d->vlen);)
     }
-    SceGxmFragmentProgram *p = fragProg(tex, key);
+    SceGxmFragmentProgram *p = fragProg(tex, key, colorMask(e));
     if (!p) { res = T_PROG; break; }
     sceGxmSetFragmentProgram(c, p);
     sceGxmReserveFragmentDefaultUniformBuffer(c, &u);
     // uniforms (see shaders/*.cg): at = alpha test function (1: always passes) and reference; tf = texture
     // function, TCC and color doubling
-    uint32_t db = RE(e, 0xDB), c9 = RE(e, 0xC9);
-    float at[4] = { (clr & 1) || !(RE(e, 0x22) & 1) ? 1.0f : (float)(db & 7), (float)(db >> 8 & 0xFF), 0, 0 };
+    uint32_t afn = 1, aref = 0, c9 = RE(e, 0xC9);
+    if (!(clr & 1) && (RE(e, 0x22) & 1)) alphaFn(e, &afn, &aref);
+    float at[4] = { (float)afn, (float)aref, 0, 0 };
     sceGxmSetUniformDataF(u, tex ? n_atx : n_atc, 0, 4, at);
     if (tex) {
       float tf[4] = { (c9 & 7) == 3 ? 1.0f : 0.0f, (float)(c9 >> 8 & 1), (float)(c9 >> 16 & 1), 0 };
       sceGxmSetUniformDataF(u, n_tf, 0, 4, tf);
       sceGxmSetFragmentTexture(c, 0, &t);
     }
+    zsSet(c, e, o[nv + n - 1].c >> 24);
     sceGxmSetVertexStream(c, 0, o + nv);
     sceGxmDraw(c, prim == 3 ? SCE_GXM_PRIMITIVE_TRIANGLES : SCE_GXM_PRIMITIVE_TRIANGLE_STRIP, SCE_GXM_INDEX_FORMAT_U16, tib, n);
     nv += n; t_draws++;
   }
   if (!has_base && res == T_OK) OPEN(0);  // (frame with no draws to the surface: it still gets the image underneath)
   if (opened) {  // (if something failed midway, the surface keeps what was drawn: not used)
+    sceGxmSetFrontDepthFunc(c, SCE_GXM_DEPTH_FUNC_ALWAYS);  // the context is Adrenaline's: its defaults back
+    sceGxmSetFrontDepthWriteEnable(c, SCE_GXM_DEPTH_WRITE_ENABLED);
+    sceGxmSetFrontStencilFunc(c, SCE_GXM_STENCIL_FUNC_ALWAYS, SCE_GXM_STENCIL_OP_KEEP, SCE_GXM_STENCIL_OP_KEEP, SCE_GXM_STENCIL_OP_KEEP, 0, 0);
     sceGxmEndScene(c, 0, gEnd());
     cNote(cur_rt ? C_INT : C_TR, &gq_n, t_draws - d0, spx / 1000, ssw);
   }

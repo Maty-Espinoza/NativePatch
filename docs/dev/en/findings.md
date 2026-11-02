@@ -135,6 +135,8 @@ proof.
 | Frames with sublists applied from memory | their draws do not go through the record | normal image (2D games hardly use sublists) |
 | A texture changed only in bytes the check does not see may look stale for a few frames | accepted risk of the texture cache (design in progress) | full check in turns |
 | Blends with no direct equivalent in GXM (destination alpha, doubled factors), color test, logic operations | fixed-function GXM does not have them (it does have programmable blending, not used yet) | normal image, reason `blend` / `color_test_or_logic` |
+| Color mask per bit (0xE8) and alpha test masks that are not high bits | GXM masks whole channels and the shaders compare the whole alpha | normal image, reason `mask` |
+| Depth and stencil across scenes | they live in one GXM scene (no force load/store), so they do not survive a change of target or frame | what relies on them is drawn wrong |
 | Dependency on Adrenaline | imports of AdrenalineUser and ScePspemu are hooked | each Adrenaline version may break it; in the future, propose an official hook point |
 
 ## Things that were measured and were not what they seemed
