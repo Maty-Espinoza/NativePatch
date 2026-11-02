@@ -11,7 +11,7 @@
 set -e
 T=${T:-$HOME/tc}; . $T/env.sh
 R=$(cd "$(dirname "$0")/.." && pwd); B=$R/build; mkdir -p $B
-make -s -C $R/nativelink ADRENALINE=$ADRENALINE || { echo "== NativeLink failed to build"; exit 1; }
+make -s -C $R/nativelink clean && make -s -C $R/nativelink ADRENALINE=$ADRENALINE || { echo "== NativeLink failed to build"; exit 1; }
 cp $R/nativelink/nativelink.prx $B/
 (cd $R/nativedraw && O=$B/nativedraw sh build.sh >$B/nativedraw.log) || { cat $B/nativedraw.log; echo "== NativeDraw failed to build"; exit 1; }
 cp $B/nativedraw/nativedraw.suprx $B/

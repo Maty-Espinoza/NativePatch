@@ -10,7 +10,9 @@ OBJS = main.o log.o gu.o exports.o
 
 # Optimization: make OPT=-Os to try the size-optimized build
 OPT ?= -O2
-CFLAGS = $(OPT) -G0 -Wall -fshort-wchar -fno-pic -mno-check-zero-division
+# Production: make PROD=1 leaves out the development measurements (NP_DEV); make clean first when switching
+PROD ?=
+CFLAGS = $(OPT) -G0 -Wall -fshort-wchar -fno-pic -mno-check-zero-division $(if $(PROD),,-DNP_DEV)
 CXXFLAGS = $(CFLAGS) -fno-exceptions -fno-rtti
 ASFLAGS = $(CFLAGS)
 

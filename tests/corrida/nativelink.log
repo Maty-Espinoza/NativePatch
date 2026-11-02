@@ -1,0 +1,19 @@
+000000 NativeLink 0.0.3.4 (build Nov  2 2026 10:00:00) modo=async
+000000 archivo=ms0:/ISO/juego.iso
+000001 juego=ULUS10000 (de UMD_DATA.BIN)
+000001 NativeLink activo: el juego corre sin cambios; buzon de eventos en 0x0A000000 para el capturador de NativeDraw
+000600 stats listas=1200 head=0 stall=2400
+000600 stats rendimiento: fps=59.9 frame_max=18 ms bajo60=2 bajo30=0
+000600 stats sombra: eventos=3600 listas=1200 vita=si capturadas=1200 (faltan 0) leidos=4000
+000600 stats sombra sync: drawsync=600 atrasados=4 (>5 ms: 1) espera=120 us/sync (max 6000) listsync=0 atrasados=0
+000600 stats espejo: pedidas listas=6 datos=0 (24 KB) | copias=600 paginas=3600 (KB/frame 24)
+001200 stats listas=1200 head=0 stall=2400
+001200 stats rendimiento: fps=58.1 frame_max=21 ms bajo60=30 bajo30=0
+001200 stats sombra: eventos=3600 listas=2400 vita=si capturadas=2400 (faltan 0) leidos=8000
+001200 stats sombra sync: drawsync=600 atrasados=9 (>5 ms: 2) espera=150 us/sync (max 7000) listsync=0 atrasados=0
+001200 stats espejo: pedidas listas=6 datos=0 (24 KB) | copias=600 paginas=3600 (KB/frame 24)
+001800 stats listas=1200 head=0 stall=2400
+001800 stats rendimiento: fps=59.9 frame_max=17 ms bajo60=1 bajo30=0
+001800 stats sombra: eventos=3600 listas=3600 vita=si capturadas=3600 (faltan 0) leidos=12000
+001800 stats sombra sync: drawsync=600 atrasados=3 (>5 ms: 0) espera=100 us/sync (max 5000) listsync=0 atrasados=0
+001800 stats espejo: pedidas listas=6 datos=0 (24 KB) | copias=600 paginas=3600 (KB/frame 24)

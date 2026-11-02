@@ -11,7 +11,7 @@
 // sync mode: each line is written at once (slower, but nothing is lost if the game hangs).
 // Each line starts with the frame number (how many times sceDisplaySetFrameBuf was called).
 
-#define NATIVELINK_VERSION "0.0.3.4" // tools/compilar.sh reads it from here
+#define NATIVELINK_VERSION "0.0.3.5" // tools/compilar.sh reads it from here
 
 extern u32 log_frame;
 

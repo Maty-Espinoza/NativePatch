@@ -1,5 +1,5 @@
-// cronometro.c (included in presentador.c): how long the Vita GPU takes on each scene. Only with the switch
-// ux0:data/nativedraw/medir_gpu.
+// cronometro.c (included in presentador.c, development builds only): how long the Vita GPU takes on each scene. Only
+// with the switch ux0:data/nativedraw/medir_gpu.
 // Adrenaline's scenes and ours go through the same context, so the GPU finishes them in the order they were
 // sent. Each sceGxmEndScene notes in a queue the scene type, its draws, the send time and the notification the
 // GPU writes when done (Adrenaline's, which have none, get our own). A thread checks every ~0.1 ms the

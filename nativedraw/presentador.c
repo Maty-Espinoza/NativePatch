@@ -195,7 +195,14 @@ static int initDest(void) {
   return 0;
 }
 
+#ifdef NP_DEV
 #include "cronometro.c"  // how long the GPU takes on each scene (medir_gpu)
+#else
+#define cNote(ty, n, dr, px, sw) ((void)sizeof((dr) + (px) + (sw)))
+#define cAdr(f) (f)
+#define c_on 0
+#define c_slot 0
+#endif
 #include "traductor.c"  // draws the frame record with the Vita GPU
 
 // --- Hooks (AdrenalineUser imports) and statistics ---
@@ -207,7 +214,7 @@ static uint32_t used, drawn, cur;   // scene in which Adrenaline used psp_tex / 
 static volatile uint32_t n_pres, n_swap, n_black_j, n_black_p, us_sum, us_max;  // (read in the record thread)
 static volatile uint32_t n_chk, n_bad;  // Vita frames checked and different from the normal image
 // draw_on: switch dibujar (always replace the image; otherwise only with the menu open); t_on: translator ready
-static int draw_on, t_on, c_wanted;  // c_wanted: GPU timer (medir_gpu)
+static int draw_on, t_on DEV(, c_wanted);  // c_wanted: GPU timer (medir_gpu)
 static volatile uint32_t menu, painted;  // menu open; its texture already has the text
 #define ACTIVE (ready && (draw_on || menu))  // the PSP image is replaced
 static void *psp_data;                // psp_tex data (destination of Adrenaline's copy)
@@ -416,7 +423,7 @@ static void screenLog(void) {
 // system dialog). For ours (gq_slot, c_slot) it logs if someone wrote another value: they can only rise and never
 // exceed what we sent.
 static void notifs(volatile uint32_t *nr) {
-  static uint32_t prior[512], viewed[16], found, n_log, bad_g, bad_c, ug, uc;
+  static uint32_t prior[512], viewed[16], found, n_log, bad_g DEV(, bad_c), ug DEV(, uc);
   if (!nr) return;
   for (uint32_t i = 0; i < 512; i++) {
     uint32_t v = nr[i];
@@ -432,11 +439,13 @@ static void notifs(volatile uint32_t *nr) {
     if (((int)(v - ug) < 0 || (int)(v - gq) > 0) && bad_g++ < 20) alog("notificaciones: la palabra %u (nuestra) tiene %08x: la ultima vista %08x, la ultima mandada %08x\n", gq_slot, v, ug, gq);
     ug = v;
   }
+#ifdef NP_DEV
   if (c_on) {
     uint32_t v = *c_adr.address;
     if (((int)(v - uc) < 0 || (int)(v - c_seq) > 0) && bad_c++ < 20) alog("notificaciones: la palabra %u (del cronometro) tiene %08x: la ultima vista %08x, la ultima mandada %08x\n", c_slot, v, uc, c_seq);
     uc = v;
   }
+#endif
 }
 
 // --- L+R+START menu ---
@@ -522,13 +531,14 @@ static int presThread(SceSize args, void *argp) {
   for (gq_slot = 511; gq_slot > 400 && (g_adr[gq_slot >> 5] >> (gq_slot & 31) & 1); gq_slot--) {}
   if (nr) { gq_done = nr + gq_slot; *gq_done = 0; gq = 0; }
   alog("gpu: fin de escenas en la notificacion %u (%p); Adrenaline usa:%s\n", gq_slot, gq_done, ka ? ua : " ninguna");
-  if (c_wanted) cStart(nr, g_adr);
+  DEV(if (c_wanted) cStart(nr, g_adr);)
   ready = 1;
   for (uint32_t t = now(), seen = 0, k = 0, warned = 0, m0 = 0;;) {  // every 10 s: how many frames and what they cost
     sceKernelDelayThread(50000);
     if (menu && !painted) { paintMenu(); __sync_synchronize(); painted = 1; }
     if (!(k % 20)) screenLog();
     notifs(nr);
+#ifdef NP_DEV
     static uint32_t ln0, vl;  // slow scenes already logged and dumps requested because of them
     while (ln0 != c_ln) {
       uint32_t j = ln0++ % CL;
@@ -536,6 +546,7 @@ static int presThread(SceSize args, void *argp) {
            c_slow[j].px, c_slow[j].us / 1000, c_slow[j].us / 100 % 10, c_slow[j].queue / 1000, c_slow[j].queue / 100 % 10);
       if (vl < 3 && dump_level && !dump_req && (!dump_on || dump_on == 3)) { vl++; dump_req = 1; alog("volcado: pedido por una escena lenta (%u de 3)\n", vl); }
     }
+#endif
     dumpTick();
     repTick();
     if (menu != m0) { m0 = menu; alog("presentador: menu %s\n", m0 ? "abierto" : "cerrado"); }
@@ -573,7 +584,7 @@ static int presThread(SceSize args, void *argp) {
       alog("gpu: frames no mandados por la GPU atrasada %u, esperas a la GPU %u ms | CPU en 10 s: traductor %u ms, "
            "revision de frames distintos %u ms | revisiones de la superficie saltadas (GPU sin terminar) %u\n",
            at, wait_t / 1000, tr / 1000, rv / 1000, sl);
-      if (c_on) cReport(dt);
+      DEV(if (c_on) cReport(dt);)
     }
     alog("presentador: %u frames en %u ms por la superficie (cambios %u en total, %u con copia propia), CPU %u us/frame (max %u) | "
          "casi negros: juego %u, superficie %u | revisados %u, distintos de la imagen normal %u%s\n", p, dt, n_swap, nd, p ? s / p : 0, m, n_black_j, n_black_p, nr, nm,
@@ -594,7 +605,7 @@ static int swOn(const char *p) {  // the file exists and does not start with "no
 // are needed and starts the presenter thread.
 void presStart(void) {
   draw_on = swOn("ux0:data/nativedraw/dibujar");
-  c_wanted = swOn("ux0:data/nativedraw/medir_gpu");
+  DEV(c_wanted = swOn("ux0:data/nativedraw/medir_gpu");)
   repStart();
   dump_level = dumpLevel();  // dumps: desactivado, pantallazo, frame, secuencia or auto
   if (dump_level == 4 && !draw_on) dump_level = 3;  // (auto needs the Vita drawing to compare)

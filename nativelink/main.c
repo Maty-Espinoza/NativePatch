@@ -4,7 +4,8 @@
 // lists from PSP RAM. It also provides:
 //   - VRAM mirror: the Vita cannot see PSP VRAM; on each flip the GE copies the pages the Vita asks for to RAM;
 //   - gate: if the Vita is behind, the game waits for it (up to 5 ms) before reusing a list;
-//   - telemetry for the records (T4/T6, free CPU, cost per frame, list life) and the log (log.c).
+//   - telemetry for the records (free CPU, cost per frame and, in development builds, T4/T6 and list life) and the log
+//     (log.c).
 // Buttons when opening a game: L or SELECT = NativeLink off (the game runs as if without plugin); R = synchronous log.
 // Mailbox and shared zone map: docs/dev/<language>/how-it-works.md; levels and switches: docs/dev/<language>/logs-and-switches.md.
 #include <pspsdk.h>
@@ -20,6 +21,16 @@
 #include "log.h"
 
 PSP_MODULE_INFO("NativeLink", 0x1007, 1, 0);
+
+// Development builds (-DNP_DEV, the default; make PROD=1 leaves it out) carry the measurements: DEV(x) is x there and
+// nothing in production, and DEV_SW(b) reads a comparison-only switch of SB[0x4A] (always off in production).
+#ifdef NP_DEV
+#define DEV(...) __VA_ARGS__
+#define DEV_SW(b) (SB[0x4A] & (b))
+#else
+#define DEV(...)
+#define DEV_SW(b) 0
+#endif
 
 #define DRAW_NATIVE 0xABCDEF00 // != 0: Adrenaline shows the image at 0x0A400000 instead of the game's
 #define ZONE 0x0A000000        // 16 MB for the plugins (mailbox, mirrors, own lists)
@@ -71,6 +82,7 @@ static u32 sb_x[3];  // e[5..7] of EV_FRAME
 // notes EV_LIFE: datum = 0 enqueue / 1 drawsync / 2 listsync, a = sample number, b = changed top-level lines |
 // changed sublist lines << 8, c = last list enqueued. The same sample serves the gate's
 // self-check.
+#ifdef NP_DEV
 static int (*_sceGeGetReg)(int); // NULL if not found (no T6)
 // 1 if the GE has a list in progress, 0 if not, 2 if there is no sceGeGetReg. From a hook it needs k1 = 0.
 static u32 geBusy(void) {
@@ -80,6 +92,7 @@ static u32 geBusy(void) {
   pspSdkSetK1(k1);
   return e;
 }
+#endif
 static u32 sb_ord; // sequence number of the last list enqueued
 static struct { u32 qid, ord; } sb_q[16]; // last lists, for the sceGeListSync gate
 static struct { u32 ev, syncs, late, wait_us, wait_max, timeouts, in_sync_us, lsyncs, llate; } sbs; // (log)
@@ -120,11 +133,13 @@ static u32 lifeHash(u32 *ptop, u32 *psub) {
   *ptop = top; *psub = sub;
   return SB[0x50] == sq ? sq : 0; // (if the Vita changed the sample meanwhile, it is not valid)
 }
+#ifdef NP_DEV
 // At extreme level: notes EV_LIFE (kind: 0 enqueue, 1 drawsync, 2 listsync) if there is a valid sample
 static void lifeCheck(u32 kind) {
   u32 top, sub, sq;
   if (active && SB[0x4E] >= 2 && (sq = lifeHash(&top, &sub))) sbPost(EV_LIFE, kind, sq, top | sub << 8, sb_ord);
 }
+#endif
 // Zeroes the mailbox (header, switches, mirror maps) and writes "SOMB" last, once it is ready
 static void sbInit(void) {
   int i;
@@ -174,7 +189,7 @@ static u32 sbGate(u32 ord) {
 static u32 sync_ord, sync_lo, gate_ord, gate_sq, gate_ok;
 static int gate_mode;
 static struct { u32 checks, bad, n, us, max; } gts; // (log)
-static int gateEnq(void) { return gate_mode == 1 && !(SB[0x4A] & 8); } // 1: the wait goes before enqueuing
+static int gateEnq(void) { return gate_mode == 1 && !DEV_SW(8); } // 1: the wait goes before enqueuing
 static void gateSync(u32 ord) { // at the sync: which list to wait for
   if ((int)(ord - sync_ord) > 0) { sync_lo = sync_ord; sync_ord = ord; }
   if (gateEnq()) gate_ord = sync_ord;
@@ -208,25 +223,25 @@ int (*_sceGeListSync)(int qid, int mode);
 int sceGeDrawSyncPatched(int mode) {
   if (!active || mode)
     return _sceGeDrawSync(mode);
-  lifeCheck(1);
+  DEV(lifeCheck(1);)
   u32 w = gateEnq() ? 0 : sbGate(sb_ord), t0; // with the gate before enqueuing, this only notes
   gateSync(sb_ord);
   sbs.syncs++;
   sbs.late += !!w;
   sbPost(EV_DSYNC, mode, w, SB[3], sb_ord);
-  u32 busy = geBusy();
+  DEV(u32 busy = geBusy();)
   t0 = sceKernelGetSystemTimeLow();
   int r = _sceGeDrawSync(mode);
   u32 dt = sceKernelGetSystemTimeLow() - t0;
   sbs.in_sync_us += dt; fr.sync_us += dt;
-  sbPost(EV_SYNCEND, 0, dt, busy, 0); // how long it really waited for the GE, and whether the GE was working at the call
+  DEV(sbPost(EV_SYNCEND, 0, dt, busy, 0);) // how long it really waited for the GE, and whether the GE was working at the call
   return r;
 }
 int sceGeListSyncPatched(int qid, int mode) {
   if (active && !mode) {
     u32 ord = 0, w;
     int i;
-    lifeCheck(2);
+    DEV(lifeCheck(2);)
     for (i = 0; i < 16; i++) // ord: the last list enqueued with that qid
       if (sb_q[i].qid == (u32)qid && (int)(sb_q[i].ord - ord) > 0)
         ord = sb_q[i].ord;
@@ -235,16 +250,18 @@ int sceGeListSyncPatched(int qid, int mode) {
     sbs.lsyncs++;
     sbs.llate += !!w;
     sbPost(EV_LSYNC, mode, qid, w, SB[3]);
-    u32 busy = geBusy(), t0 = sceKernelGetSystemTimeLow();
+    DEV(u32 busy = geBusy();)
+    u32 t0 = sceKernelGetSystemTimeLow();
     int r = _sceGeListSync(qid, mode);
     u32 dt = sceKernelGetSystemTimeLow() - t0;
     fr.sync_us += dt;
-    sbPost(EV_SYNCEND, 0, dt, busy, 1);
+    DEV(sbPost(EV_SYNCEND, 0, dt, busy, 1);)
     return r;
   }
   return _sceGeListSync(qid, mode);
 }
 
+#ifdef NP_DEV
 // --- T6 and T4 telemetry: when the GE works and what the game CPU leaves ready for it ----
 // T6: a thread looks at the GE every ~250 us with sceGeGetReg only while it has work; with no lists it sleeps 2 ms. Off
 // unless NativeDraw asks for it (SB[0x47] = 1, file medir_ge). For each
@@ -286,16 +303,18 @@ static int geThread(SceSize args, void *argp) {
   }
   return 0;
 }
+#endif
 // PSP free CPU: lowest-priority thread that spins (spin); it only advances when nobody else wants the CPU. A frame's
 // spins against the calibration (spin_cal, from t4t6Install) give the free %. From medium up, unless sin_libre.
 static int libreThread(SceSize args, void *argp) {
   for (;;) {
-    if (!active || SB[0x4A] & 4 || SB[0x4E] < 1) { sceKernelDelayThread(100000); continue; }
+    if (!active || DEV_SW(4) || SB[0x4E] < 1) { sceKernelDelayThread(100000); continue; }
     u32 k;
     for (k = 0; k < 100000; k++) { spin++; asm volatile("" ::: "memory"); }
   }
   return 0;
 }
+#ifdef NP_DEV
 static struct { u32 n, kb, dn, dkb, posted, dropped; } t4;  // of the frame
 static struct { u32 n, kb, dn, dkb; } t4s;                  // (log)
 static void t4Post(u32 kind, u32 a, u32 b, u32 c) { // notes EV_CPU: only at extreme level and up to 96 per frame
@@ -321,9 +340,11 @@ static void t4Flip(void) { // on the flip: frame totals
   t4s.n += t4.n; t4s.kb += t4.kb; t4s.dn += t4.dn; t4s.dkb += t4.dkb;
   memset(&t4, 0, sizeof(t4));
 }
-// Finds sceGeGetReg and the cache and DMA functions and hooks those it finds; starts the T6 thread and the free-CPU
-// thread (after calibrating it). What it found goes to the log.
+#endif
+// Development builds: finds sceGeGetReg and the cache and DMA functions, hooks those it finds and starts the T6 thread.
+// All builds: starts the free-CPU thread (after calibrating it). What it found goes to the log.
 static void t4t6Install(void) {
+#ifdef NP_DEV
   static const char *um[2] = { "sceSystemMemoryManager", "sceKernelUtils" };
   int i, nd = 0, nm = 0;
   _sceGeGetReg = (void *)FindProc("sceGE_Manager", "sceGe_driver", 0xB415364D);
@@ -350,6 +371,7 @@ static void t4t6Install(void) {
   if (_dmacTry) { sctrlHENPatchSyscall((u32)_dmacTry, dmacTryPatched); nm++; }
   SceUID th = _sceGeGetReg ? sceKernelCreateThread("NativeLinkGE", geThread, 0x11, 0x800, 0, NULL) : -1;
   if (th >= 0) sceKernelStartThread(th, 0, NULL);
+#endif
   // Free-CPU calibration: the thread's same loop, timed here (2 million spins) = spins per ms
   u32 k, tc = sceKernelGetSystemTimeLow();
   for (k = 0; k < 2000000; k++) { spin++; asm volatile("" ::: "memory"); }
@@ -358,8 +380,10 @@ static void t4t6Install(void) {
   SceUID tl = sceKernelCreateThread("NativeLinkLibre", libreThread, 126, 0x400, 0, NULL);
   if (tl >= 0) sceKernelStartThread(tl, 0, NULL);
   LOG("CPU libre: %lu vueltas/ms = 100%% (hilo %08lx)\n", spin_cal, (u32)tl);
+#ifdef NP_DEV
   LOG("T4/T6: sceGeGetReg %s, hilo del GE %08lx | ganchos de la cache %d de 5, del DMA %d de 2\n", _sceGeGetReg ? "si" : "NO",
       (u32)th, nd, nm);
+#endif
 }
 
 // --- VRAM mirror ---------
@@ -452,11 +476,11 @@ int sceGeListEnQueuePatched(const void *list, void *stall, int cbid, PspGeListAr
     modeDecide();
   st.lists++;
   u32 gw = active ? gateBeforeEnq() : 0;
-  lifeCheck(0); // before enqueuing: is the previous list still intact?
+  DEV(lifeCheck(0);) // before enqueuing: is the previous list still intact?
   int r = _sceGeListEnQueue(list, stall, cbid, arg);
   if (active && r >= 0) {
     sbPost(EV_ENQ, gw, (u32)list, (u32)stall, r);
-    if (!ge_kick) ge_kick = sceKernelGetSystemTimeLow() | 1;
+    DEV(if (!ge_kick) ge_kick = sceKernelGetSystemTimeLow() | 1;)
   }
   return r;
 }
@@ -469,7 +493,7 @@ int sceGeListEnQueueHeadPatched(const void *list, void *stall, int cbid, PspGeLi
   int r = _sceGeListEnQueueHead(list, stall, cbid, arg);
   if (active && r >= 0) {
     sbPost(EV_HEAD, gw, (u32)list, (u32)stall, r);
-    if (!ge_kick) ge_kick = sceKernelGetSystemTimeLow() | 1;
+    DEV(if (!ge_kick) ge_kick = sceKernelGetSystemTimeLow() | 1;)
   }
   return r;
 }
@@ -504,7 +528,7 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
       sbInit();
     if (VDESC[0] != 0x31565047) // "GPV1": NativeDraw writes the log (descriptor mailbox, log.h)
       VDESC[0] = 0x31565047;
-    t4Flip();
+    DEV(t4Flip();)
     int k1e = pspSdkSetK1(0);
     u32 te = sceKernelGetSystemTimeLow(), pg0 = mir_pages;
     mirFlip(); // VRAM copy requested by the Vita
@@ -561,7 +585,7 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
           sbs.syncs, sbs.late, sbs.timeouts, sbs.wait_us / s, sbs.wait_max, sbs.lsyncs, sbs.llate);
       LOG("stats sombra GE: el juego espera al GE en drawsync %lu us/sync\n", sbs.in_sync_us / s);
       LOG("stats compuerta: %s%s | esperas antes de encolar=%lu (%lu us c/u, max %lu) | autocomprobaciones=%lu cambiaron=%lu\n",
-          gate_mode == 1 ? "antes de encolar" : gate_mode ? "en el sync (la lista cambio 10 veces)" : "en el sync (probando)", SB[0x4A] & 8 ? " [compuerta_sync]" : "",
+          gate_mode == 1 ? "antes de encolar" : gate_mode ? "en el sync (la lista cambio 10 veces)" : "en el sync (probando)", DEV_SW(8) ? " [compuerta_sync]" : "",
           gts.n, gts.n ? gts.us / gts.n : 0, gts.max, gts.checks, gts.bad);
       memset(&gts, 0, sizeof(gts));
       if (frs.frames) { // impact on the game, per frame
@@ -571,10 +595,12 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
             frs.post_us / f, frs.mir_us / f, frs.mir_pages / f);
       }
       memset(&frs, 0, sizeof(frs));
+#ifdef NP_DEV
       LOG("stats T6 (por frame): GE ocupado %lu us en %lu tramos (el mas largo %lu us), en stall %lu%% | T4 (por frame): cache %lu (%lu KB) dma %lu (%lu KB)\n",
           ges.busy_us / STATS_EVERY, ges.runs / STATS_EVERY, ges.run_max, ges.n ? ges.stall_n * 100 / ges.n : 0,
           t4s.n / STATS_EVERY, t4s.kb / STATS_EVERY, t4s.dn / STATS_EVERY, t4s.dkb / STATS_EVERY);
       memset(&ges, 0, sizeof(ges)); memset(&t4s, 0, sizeof(t4s));
+#endif
       u32 pl = 0, pd = 0, i;
       for (i = 0; i < 512; i++) pl += SB[0x20 + (i >> 5)] >> (i & 31) & 1, pd += SB[0x30 + (i >> 5)] >> (i & 31) & 1;
       LOG("stats espejo: pedidas listas=%lu datos=%lu (%lu KB) | copias=%lu paginas=%lu (KB/frame %lu)\n", pl, pd, (pl + pd) * 4,

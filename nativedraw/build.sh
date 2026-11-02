@@ -2,9 +2,11 @@
 # Builds nativedraw.suprx without the full vitasdk: arm-none-eabi-gcc + vita-toolchain + vita-libs-gen-2 stubs
 # (vita-headers/db) and libtaihen_stub.a from the vitasdk taihen package (NOT hand-made taiHEN stubs: with wrong NIDs
 # the plugin does not load and gives no warning). Normally called by tools/compilar.sh (which prepares the variables).
-# Usage: VH=<vita-headers> STUBS=<vita-libs-gen-2 output> TAI=<taihen package> [O=<output folder>] sh build.sh
+# Usage: VH=<vita-headers> STUBS=<vita-libs-gen-2 output> TAI=<taihen package> [O=<output folder>] [PROD=1] sh build.sh
+# PROD=1: production build, without the development measurements (NP_DEV).
 set -e
 F="-mcpu=cortex-a9 -mthumb -mfloat-abi=hard -mfpu=neon -O2 -Wall -Wno-format -nostdlib -fno-builtin -ffreestanding"
+[ -n "$PROD" ] || F="$F -DNP_DEV"
 O=${O:-o}; rm -rf $O; mkdir -p $O
 for c in nativedraw captura presentador; do arm-none-eabi-gcc $F -I$VH/include -I$TAI/include -c $c.c -o $O/$c.o; done
 # Stubs: each missing function comes from the first $STUBS file that has it, in this library order

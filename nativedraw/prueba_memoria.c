@@ -1,9 +1,10 @@
 // prueba_memoria.c: test of the capturer (captura.c, included below) outside the Vita, on ARM under qemu on the PC.
 // Builds synthetic lists in a fake "PSP RAM" (mmap at the Vita addresses), walks them for 8 frames and
-// prints the capture counters per frame. The Vita functions are replaced by the ones below.
+// prints the capture counters per frame. The Vita functions are replaced by the ones below. Without arguments it runs
+// every case and decides pass/fail by itself (exit code = failed checks): this is what tools/test_ci.sh runs.
 // Build (<inc>: folder with only psp2* and vitasdk* of the vitasdk headers; with the whole include it clashes with libc):
 // arm-linux-gnueabihf-gcc -static -O2 -mthumb -mfpu=neon -mfloat-abi=hard -w -I<inc> -o prueba prueba_memoria.c
-// Usage: qemu-arm-static ./prueba <mode> [<vram> [<readers>]]
+// Usage: qemu-arm-static ./prueba [<mode> [<vram> [<readers>]]]
 // - mode: 0 no sublist memory, 1 with memory, 2 checking all. The columns before "|" must be equal.
 // - vram: 1 puts the sublists in VRAM (their content in the mirror): in frame 0 they are skipped and requested, from 1 on
 //   they must give the same as in RAM. 2: also a page with no copy (cut sublists, without hanging). 3: each frame
@@ -21,12 +22,15 @@
 // Double mirror: at the end of each frame f the "GE" copies the requested pages to copy f + 1, in mirror (f + 1) & 1,
 // used by the next frame (like the flip event). Sublists are written to both mirrors (except vram 3).
 // Does not simulate the Vita's notice to the PSP (the mirror copy the Vita announces in SB[0x48]).
+#define NP_DEV  // the test needs the extreme level (data and list life, delays)
 #include "captura.c"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <time.h>
 #include <sys/mman.h>
+#include <sys/wait.h>
+#include <unistd.h>
 SceUInt32 sceKernelGetProcessTimeLow(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec * 1000000 + t.tv_nsec / 1000; }
 void *sceClibMemset(void *d, int c, SceSize n) { return memset(d, c, n); }
 void *sceClibMemcpy(void *d, const void *s, SceSize n) { return memcpy(d, s, n); }
@@ -45,9 +49,10 @@ int sceKernelDelayThread(SceUInt d) { return 0; }
 int sceKernelGetThreadInfo(SceUID t, SceKernelThreadInfo *i) { return -1; }
 void *sceDmacMemcpy(void *d, const void *s, SceSize n) { return memcpy(d, s, n); }
 int sceGxmMapMemory(void *b, SceSize n, int a) { return 0; }
-static void *blk[8]; static int nblk;  // blocks for the frame record
-SceUID sceKernelAllocMemBlock(const char *n, SceKernelMemBlockType t, SceSize s, SceKernelAllocMemBlockOpt *o) { return nblk < 8 && (blk[nblk] = calloc(1, s)) ? nblk++ : -1; }
+static void *blk[16]; static int nblk;  // blocks for the frame record
+SceUID sceKernelAllocMemBlock(const char *n, SceKernelMemBlockType t, SceSize s, SceKernelAllocMemBlockOpt *o) { return nblk < 16 && (blk[nblk] = calloc(1, s)) ? nblk++ : -1; }
 int sceKernelGetMemBlockBase(SceUID u, void **b) { if (u < 0 || u >= nblk) return -1; *b = blk[u]; return 0; }
+int sceKernelFreeMemBlock(SceUID u) { return 0; }
 int sceKernelGetMemBlockInfoByAddr(void *a, SceKernelMemBlockInfo *i) { return -1; }
 SceUID emu_th[EMU_N]; int emu_aff[EMU_N], emu_n;
 
@@ -99,9 +104,50 @@ static void build(int frame) {
 }
 // Checksum of the GE state (registers, matrices, vaddr/iaddr): must match with or without sublist memory
 static uint32_t stateSum(void) { uint32_t h = 0; for (int i = 0; i < 256; i++) h = h * 31 + reg[i]; for (int m = 0; m < 5; m++) for (int i = 0; i < 96; i++) h = h * 31 + mtx[m][i]; return h * 31 + vaddr * 7 + iaddr; }
+// Result of one case, in memory shared with the process that compares them. col: columns before "|" per frame, without
+// and with estado; the rest are totals of what each case must exercise.
+typedef struct { char col[8][64]; uint32_t st[8], hit, chk, bad, fail, pre, late, lines, pv, skip, whole, ok; } Res;
+static Res *res;
+static int report(const char *name, int ok) { printf("%s %s\n", ok ? "ok  " : "FAIL", name); return !ok; }
+// Frames from..7 of case a equal those of b (estado too if st).
+static int same(Res *a, Res *b, int from, int st) {
+  for (int f = from; f < 8; f++) if (strcmp(a->col[f], b->col[f]) || (st && a->st[f] != b->st[f])) return 0;
+  return 1;
+}
+// Runs each case in a child process (the capturer's state is global; a hang ends with the alarm) and compares them.
+static int checkAll(void) {
+  enum { RAM, MEMO, ALL, RD1, RD2, RD3, V1REF, V1, V2REF, V2, V3REF, V3, REG0, REG1, N };
+  static const int C[N][4] = { {0,0,0,0}, {1,0,0,0}, {2,0,0,0}, {1,0,1,0}, {1,0,2,0}, {1,0,3,0}, {0,1,0,0}, {2,1,0,0}, {0,2,0,0}, {2,2,0,0},
+                               {0,3,0,0}, {2,3,0,0}, {0,0,0,1}, {1,0,0,1} };
+  Res *r = mmap(0, N * sizeof(Res), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+  int bad = 0;
+  for (int i = 0; i < N; i++) {
+    if (!fork()) {
+      char a[3][4]; for (int k = 0; k < 3; k++) sprintf(a[k], "%d", C[i][k]);
+      char *av[] = { "prueba", a[0], a[1], a[2], 0 };
+      if (C[i][3]) setenv("REG", "1", 1);
+      res = r + i; alarm(60); freopen("/dev/null", "w", stdout);
+      _exit(main(4, av));
+    }
+    int st; wait(&st); r[i].ok = WIFEXITED(st) && !WEXITSTATUS(st);
+    if (!r[i].ok) { printf("FAIL case %d: the process died or hung\n", i); bad++; }
+  }
+  bad += report("memory on gives the same as off, and it applies sublists", same(r + MEMO, r + RAM, 0, 1) && r[MEMO].hit && !r[MEMO].bad);
+  bad += report("checking all: same, checks them, none DISTINTA", same(r + ALL, r + RAM, 0, 1) && r[ALL].chk && !r[ALL].bad && r[ALL].fail);
+  bad += report("readers ahead: same, their checks are used", same(r + RD1, r + RAM, 0, 1) && r[RD1].pre && !r[RD1].bad);
+  bad += report("readers behind: same, they skip without reading", same(r + RD2, r + RAM, 0, 1) && r[RD2].late && !r[RD2].lines);
+  bad += report("readers plan only: same, the plan is used", same(r + RD3, r + RAM, 0, 1) && r[RD3].pv && !r[RD3].bad);
+  bad += report("VRAM sublists: same as RAM from frame 1, nothing skipped", same(r + V1, r + V1REF, 0, 1) && same(r + V1, r + RAM, 1, 0) && !r[V1].skip && !r[V1].bad);
+  bad += report("VRAM page without copy: cut sublists, no hang", same(r + V2, r + V2REF, 0, 1) && r[V2].skip && !r[V2].bad);
+  bad += report("VRAM per frame: the change is detected, none DISTINTA", same(r + V3, r + V3REF, 0, 1) && r[V3].fail && !r[V3].bad);
+  bad += report("frame record: complete without memory, incomplete with it", same(r + REG0, r + RAM, 0, 1) && r[REG0].whole == 8 && r[REG1].whole < 8);
+  printf(bad ? "%d FAILED\n" : "all ok\n", bad);
+  return bad;
+}
 // Arguments and environment variables: see the header. Per frame: builds, (readers), walks, simulates the mirror
 // copy and prints the counter line; then the optional tests (TARDE, VIDA) and the capture log.
 int main(int argc, char **argv) {
+  if (argc < 2) return checkAll();
   setvbuf(stdout, NULL, _IONBF, 0); int mode = atoi(argv[1]);  // 0 no memory, 1 with memory, 2 checking all
   vram = argc > 2 ? atoi(argv[2]) : 0; int rdr_mode = argc > 3 ? atoi(argv[3]) : 0;
   level = getenv("NIVEL") ? atoi(getenv("NIVEL")) : 2;  // log level: extreme unless NIVEL=0/1
@@ -127,6 +173,7 @@ int main(int argc, char **argv) {
     walk();
     if (rdr_mode == 2) {  // the readers arrive later (behind): they must skip everything the capturer already reached
       for (int id = 0; id < 2; id++) { Rdr s; rdrStart(&s, &RR[id]); while (!s.done) rdrWalk(id, &s, 2000); }
+      if (res) res->late += lv_late[0] + lv_late[1], res->lines += lv_lines[0] + lv_lines[1];
       printf("   lectores atrasados: tarde=%u lineas=%u\n", lv_late[0] + lv_late[1], lv_lines[0] + lv_lines[1]);
     }
     if (vram) {  // what the PSP GE would do: copy the requested pages (with vram 2, all except 0x102)
@@ -139,6 +186,11 @@ int main(int argc, char **argv) {
       SB[0x40] = f + 1;
       printf("   espejo: pedidas listas=%d datos=%d recorridas=%u saltadas=%u cortadas=%u\n", pl, pd, acc.v_ok, acc.vcalls, acc.v_cut);
     }
+    if (res) {
+      sprintf(res->col[f], "%u %u %u %u %u %u %u %u", acc.cmds, acc.draws, acc.verts, acc.vbytes, acc.textures, acc.prim[3], acc.prim[4], acc.calls_ram);
+      res->st[f] = stateSum(); res->hit += acc.memo_hit; res->chk += acc.memo_chk; res->bad += acc.memo_bad; res->fail += acc.memo_fail;
+      res->pre += acc.memo_pre; res->pv += pv_ok[0] + pv_ok[1]; if (f) res->skip += acc.vcalls;
+    }
     printf("f%d cmds=%u draws=%u verts=%u vbytes=%u tex=%u prim3=%u prim4=%u calls=%u estado=%08x | hit=%u miss=%u dep=%u fail=%u no=%u chk=%u BAD=%u lines=%u saltados=%u pre=%u lv=%u/%u/%u pv=%u/%u/%u\n",
            f, acc.cmds, acc.draws, acc.verts, acc.vbytes, acc.textures, acc.prim[3], acc.prim[4], acc.calls_ram, stateSum(),
            acc.memo_hit, acc.memo_miss, acc.memo_dep, acc.memo_fail, acc.memo_no, acc.memo_chk, acc.memo_bad, acc.memo_lines, acc.memo_cmds, acc.memo_pre,
@@ -149,6 +201,7 @@ int main(int argc, char **argv) {
       regFlip(0x04000000, 512, acc.draws);
       printf("   registro: draws=%u (contados %u, vistos %u) estados=%u bytes=%u flags=%x %s publicado=%d\n", nd, acc.draws, n_seen, ne, na, fl,
              !fl && nd == acc.draws ? "COMPLETO" : "incompleto", rg_pub);
+      if (res) res->whole += !fl && nd == acc.draws;
     }
     lifeFlip(); lf_ord_cmds = 0;  // as in the flip
     gen++; ntex = 0;
