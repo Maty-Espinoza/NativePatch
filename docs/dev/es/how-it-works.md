@@ -45,7 +45,7 @@ y qué límites se encontraron: `findings.md`. Cómo se llegó a cada pieza, ver
 - **NativeDraw:** taiHEN lo carga en el proceso de Adrenaline (sección `*PSPEMUCFW` de `config.txt`), al abrir
   Adrenaline. Para que cargue una versión nueva hay que cerrar Adrenaline. Un cambio en `config.txt` necesita reiniciar
   la Vita.
-- Si existe `ux0:data/nativedraw/off`, NativeDraw no hace nada. Sin `ux0:data/nativedraw/dibujar`, NativeDraw captura y
+- Si existe `ux0:data/nativedraw/off`, NativeDraw no hace nada. Sin `ux0:data/nativedraw/draw`, NativeDraw captura y
   mide pero solo reemplaza la imagen mientras el menú L+R+START está abierto.
 
 ## Memoria compartida (zona 0x0A000000–0x0B000000 del PSP)
@@ -74,9 +74,9 @@ ocupa, NativeLink queda apagado. La Vita la ve en `0x68000000 + (dirección & 0x
 | 0x20–0x2F / 0x30–0x3F | Vita | páginas de 4 KB de la VRAM pedidas: "listas" / "datos" (mapas de bits) |
 | 0x40 | GE | última copia del espejo terminada |
 | 0x44, 0x45, 0x46, 0x49 | PSP | copia pedida, páginas copiadas, veces que el GE seguía ocupado, veces que la Vita usaba ese espejo |
-| 0x47 | Vita | 1 = encender T6 (`medir_ge`) |
+| 0x47 | Vita | 1 = encender T6 (`ge_timing`) |
 | 0x48 | Vita | copia del espejo en uso (no se pisa) |
-| 0x4A | Vita | interruptores: 1 sin compuerta, 2 sin espejo, 4 sin CPU libre, 8 compuerta en el sync, 16 espejo completo (lo pone NativeDraw cuando el registro da frames 2D completos), 32 el flip del PSP espera la copia del espejo (`espejo_espera`) |
+| 0x4A | Vita | interruptores: 1 sin compuerta, 2 sin espejo, 4 sin CPU libre, 8 compuerta en el sync, 16 espejo completo (lo pone NativeDraw cuando el registro da frames 2D completos), 32 el flip del PSP espera la copia del espejo (`mirror_wait`) |
 | 0x4D | PSP | calibración de la CPU libre |
 | 0x4E | Vita | nivel de registro (0 mínimo, 1 mediano, 2 extremo) |
 | 0x50–0x53, 0x60+, 0x80+ | Vita | muestra de huellas de la última lista capturada (vida de la lista y autocomprobación de la compuerta) |
@@ -95,7 +95,7 @@ quedan sin usar: `SB[0x47]`, los bits 4 y 8 de 0x4A y los eventos 7, 8, 9, 10 y 
    (compuerta), anota el evento con el número de orden de la lista y la deja seguir.
 2. El juego actualiza el stall (hasta dónde escribió) y llama a los sync: NativeLink anota cada uno.
 3. El capturador de NativeDraw lee el evento y recorre la lista desde la RAM del PSP como lo haría el GE (sigue saltos,
-   sublistas, BASE/OFFSET). Lleva el estado del GE, cuenta lo que habría que dibujar y, con `dibujar`, agrega cada draw
+   sublistas, BASE/OFFSET). Lleva el estado del GE, cuenta lo que habría que dibujar y, con `draw`, agrega cada draw
    al registro del frame: el estado, los vértices e índices copiados, la paleta y las filas de textura que usan los
    vértices (copiadas por DMA a memoria que la GPU puede leer). Al terminar publica en `SB[3]` el número de la lista.
 4. En el flip (`sceDisplaySetFrameBuf`), NativeLink anota el evento, encola la copia del espejo con las páginas pedidas y
@@ -108,18 +108,18 @@ quedan sin usar: `SB[0x47]`, los bits 4 y 8 de 0x4A y los eventos 7, 8, 9, 10 y 
    Adrenaline va a dibujar la imagen del PSP, se le pasa esa superficie en su lugar. La imagen se ve un frame después
    que la del PSP.
 6. Si el frame trae algo que el traductor no sabe dibujar (3D, una mezcla sin equivalente, una textura sin copia...),
-   se muestra la imagen normal y el motivo se cuenta en el log (`traductor:` en `nativedraw.log`).
+   se muestra la imagen normal y el motivo se cuenta en el log (`translator:` en `nativedraw.log`).
 
 ## Lado Vita: hilos
 | Hilo | Núcleo / prioridad | Qué hace |
 |---|---|---|
-| capturador | cualquiera de los 3 (0x61; `nucleo_captura` lo fija) | sigue el buzón, recorre cada lista y arma el registro del frame |
+| capturador | cualquiera de los 3 (0x61; `capture_core` lo fija) | sigue el buzón, recorre cada lista y arma el registro del frame |
 | lector 0 y 1 | 0 y 2 (0xB0, solo lo que sobra) | traen por adelantado las líneas de 64 bytes de la lista a una caché compartida y comprueban sublistas guardadas |
 | espejo | 0 (0xBE) | pasa a NativeLink los interruptores y el nivel; en extremo (compilación de desarrollo) mide cuánto cambia el espejo |
-| registro | (0xB0) | escribe `nativedraw_captura.log` cada segundo |
+| registro | (0xB0) | escribe `nativedraw_capture.log` cada segundo |
 | escritor | (0xA0) | escribe el log de NativeLink a la tarjeta |
 | presentador | (0xA0) | engancha a Adrenaline, pinta el menú, atiende volcados y reproducción, escribe `nativedraw.log` cada 10 s |
-| cronómetro | (0x40) | compilación de desarrollo, con `medir_gpu`: mide cuánto tarda la GPU en cada escena |
+| cronómetro | (0x40) | compilación de desarrollo, con `gpu_timer`: mide cuánto tarda la GPU en cada escena |
 | hilo de dibujo de Adrenaline | el de Adrenaline | ahí corren el traductor y el presentador propiamente dichos (en los ganchos de GXM) |
 
 - **Leer la RAM del PSP es lo caro** (~2 µs por línea sin caché): por eso los lectores adelantados y las lecturas de a
@@ -127,7 +127,7 @@ quedan sin usar: `SB[0x47]`, los bits 4 y 8 de 0x4A y los eventos 7, 8, 9, 10 y 
 - **Memoria de sublistas:** el capturador guarda cada sublista que recorrió (sus líneas y lo que sumó). Si en el frame
   siguiente es idéntica (mismas líneas y mismo estado de entrada), suma lo guardado sin recorrerla. Los lectores la
   comprueban antes (incluso al empezar la lista, "comprobación por adelantado"). 1 de cada 32 se recorre igual para
-  revisar que lo guardado es exacto (si no, el log dice **DISTINTAS**: debe ser 0). Una sublista aplicada así no pasa por
+  revisar que lo guardado es exacto (si no, el log dice **MISMATCHES**: debe ser 0). Una sublista aplicada así no pasa por
   el registro del frame: ese frame queda incompleto y va con la imagen normal (por eso hoy la Vita dibuja juegos 2D, que
   casi no usan sublistas).
 - **Interpretar de a línea:** las comprobaciones (stall, tope, traducción de dirección) se hacen una vez por línea de 16

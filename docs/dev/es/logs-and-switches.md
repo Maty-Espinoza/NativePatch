@@ -3,12 +3,13 @@
 Qué escribe cada plugin en sus logs, qué significa cada línea y qué archivos de `ux0:data/nativedraw/` cambian su
 comportamiento. Los números de versión entre paréntesis dicen desde cuándo existe cada cosa (los viejos, `devNN`/`vNN`,
 se explican en `versions.md`). Pendiente: cambiar los interruptores desde el menú L+R+START (`../../../TODO.md`);
-mientras tanto son archivos.
+mientras tanto son archivos. Después de 0.0.8.24 los archivos de interruptores antiguos ya no se leen: los nombres
+son los de aquí (antiguos: `versions.md`) y "Clean test leftovers" del instalador borra los archivos viejos.
 
 Los registros sirven para entender qué pasa, pero también cuestan rendimiento. Por eso hay tres niveles. Se elige uno en
-la Vita con el archivo `ux0:data/nativedraw/registro` (contenido `minimo`, `mediano` o `extremo`; **sin archivo: mediano**).
+la Vita con el archivo `ux0:data/nativedraw/log_level` (contenido `minimum`, `medium` o `extreme`; **sin archivo: mediano**).
 NativeDraw lo lee al abrir Adrenaline y se lo pasa a NativeLink por el buzón (`SB[0x4E]`: 0, 1 o 2), así que vale para los dos.
-Para cambiarlo: subir el archivo con el relevo (`enviar/ux0/data/nativedraw/registro`) y cerrar las aplicaciones
+Para cambiarlo: subir el archivo con el relevo (`send/ux0/data/nativedraw/log_level`) y cerrar las aplicaciones
 (`cmd_*.txt` con `destroy`).
 
 | Nivel | Para qué | Costo |
@@ -21,106 +22,104 @@ Para cambiarlo: subir el archivo con el relevo (`enviar/ux0/data/nativedraw/regi
 | | mínimo | mediano | extremo |
 |---|---|---|---|
 | Log de NativeLink cada 10 s (`nativelink.log`) | sí | sí | sí |
-| `nativedraw_captura.log` | 2 líneas cada 10 s (frames, comandos, tiempo de la Vita, syncs) | todas las líneas, cada segundo | ídem + espejo (muestreo), T4/vida de los datos, vida de la lista |
-| Revisión de la memoria de sublistas (1 de cada 32, DISTINTAS) | no | sí | sí |
-| Costo por frame para el juego (EV_FRAME: compuerta, espera al GE, espejo, ganchos) | no | sí (línea "impacto en el PSP") | sí |
+| `nativedraw_capture.log` | 2 líneas cada 10 s (frames, comandos, tiempo de la Vita, syncs) | todas las líneas, cada segundo | ídem + espejo (muestreo), T4/vida de los datos, vida de la lista |
+| Revisión de la memoria de sublistas (1 de cada 32, MISMATCHES) | no | sí | sí |
+| Costo por frame para el juego (EV_FRAME: compuerta, espera al GE, espejo, ganchos) | no | sí (línea "PSP impact") | sí |
 | CPU libre del PSP (hilo de prioridad mínima, como vpjuego) | no | sí | sí |
 | Procesador de los hilos del emulador (runClocks, cada segundo) | no | sí | sí |
 | `nativedraw_frames.log` (una línea por frame, PSP + Vita) | no | no | sí |
-| `nativedraw_tarde.log` (cada sync con la Vita atrasada, con sus tiempos) | no | no | sí |
+| `nativedraw_late.log` (cada sync con la Vita atrasada, con sus tiempos) | no | no | sí |
 | Vida de la lista (huellas al flip; NativeLink revisa antes de encolar y en cada sync: EV_VIDA) | no | no | sí |
 | Tiempos de lectura (propia 1/16, caché compartida 1/8) y de la memoria de sublistas (revisar, aplicar) | no | no | sí |
 | Vida de los datos (vértices, texturas, paletas 1 y 2 frames después) | no | no | sí |
 | Muestreo del espejo (cuántas páginas cambian) | no | no | sí |
 | T4: avisos de la CPU del juego (vaciar caché, DMA) al buzón | no (solo cuenta) | no (solo cuenta) | sí |
 
-Siguen aparte, con su propio archivo: `dibujar` (presentador de la etapa 3: con el archivo reemplaza la imagen siempre; sin él, solo con el menú
-L+R+START abierto; además activa el registro del frame y su línea `registro:` en `nativedraw_captura.log`; ver `../../agent/en/stage3-plan.md`), T6 (`medir_ge`), `memo_revisar` (revisar todas), `sin_memoria`,
-`captura_sin_lectores`, `off`, `medir_gpu` (cronómetro de la GPU) y `reproducir` (`dumps.md`).
+Siguen aparte, con su propio archivo: `draw` (presentador de la etapa 3: con el archivo reemplaza la imagen siempre; sin él, solo con el menú
+L+R+START abierto; además activa el registro del frame y su línea `record:` en `nativedraw_capture.log`; ver `../../agent/en/stage3-plan.md`), T6 (`ge_timing`), `memo_check` (revisar todas), `no_memo`,
+`capture_no_readers`, `off`, `gpu_timer` (cronómetro de la GPU) y `replay` (`dumps.md`).
 
 ## Compilación de desarrollo y de producción
 Las mediciones de desarrollo están dentro de `#ifdef NP_DEV`. Una compilación normal las tiene; `PROD=1`
 (`tools/build.sh`, `nativedraw/build.sh`, `nativelink/Makefile`) las deja fuera. En producción:
-- `extremo` cae a mediano: sin `nativedraw_frames.log`, sin `nativedraw_tarde.log`, sin medir la vida de la lista.
-- T4 y T6 (`medir_ge`) y el cronómetro de la GPU (`gpu_timer.c`, `medir_gpu`, sus líneas `gpu tiempos:` y `gpu: escena
-  lenta:`) no existen.
-- Los interruptores `sin_captura`, `sin_adelanto`, `sin_libre` y `compuerta_sync` no hacen nada.
-- Los volcados, DISTINTAS y los niveles mínimo y mediano se quedan. La disposición del buzón no cambia (`how-it-works.md`).
+- `extreme` cae a mediano: sin `nativedraw_frames.log`, sin `nativedraw_late.log`, sin medir la vida de la lista.
+- T4 y T6 (`ge_timing`) y el cronómetro de la GPU (`gpu_timer.c`, `gpu_timer`, sus líneas `gpu times:` y `gpu: slow scene:`) no existen.
+- Los interruptores `no_capture`, `no_lookahead`, `no_idle` y `gate_sync` no hacen nada.
+- Los volcados, MISMATCHES y los niveles mínimo y mediano se quedan. La disposición del buzón no cambia (`how-it-works.md`).
 
 ## Volcados (NativeDraw 0.0.8.5)
-Niveles de volcado en `ux0:data/nativedraw/volcado`: `desactivado`, `pantallazo`, `frame`, `secuencia` (sin el archivo)
-o `auto`. Qué guarda cada uno, cuánto cuesta y cómo se leen con `tools/dump.py`: `dumps.md`.
+Niveles de volcado en `ux0:data/nativedraw/dump`: `off`, `screenshot`, `frame`, `sequence` (sin el archivo)
+o `auto` (se comparan 3 letras; `no` también lo apaga). Qué guarda cada uno, cuánto cuesta y cómo se leen con `tools/dump.py`: `dumps.md`.
 
 ## Interruptores de la fase de análisis (`ux0:data/nativedraw/`; se apagan con `no` adentro, el relevo no borra)
 | Archivo | Qué hace |
 |---|---|
-| `sin_compuerta` | el juego no espera a la Vita en el sync (NativeLink solo cuenta cuántas veces iba atrasada) |
-| `sin_espejo` | NativeLink no copia la VRAM al espejo |
-| `sin_libre` | sin el hilo de CPU libre del PSP |
-| `sin_captura` | la Vita no recorre nada: marca las listas como capturadas (casi NativeLink solo) |
-| `compuerta_sync` | (v13.10) la espera a la Vita se queda en el sync, como antes de dev66 (para comparar); ver `etapa2_fase2_compuerta.md` |
-| `sin_adelanto` | (v13.12) los lectores no comprueban el plan por adelantado (solo al llegar a cada CALL, como antes); ver `etapa2_fase2_adelanto.md` |
-| `espejo_espera` | (NativeLink 0.0.3) el flip del PSP espera a que termine la copia del espejo (interruptor 32 del buzón): en KOF 96 los sprites del frame están copiados cuando la Vita los pide. En la Vita del usuario está en `si` |
-| `nucleo_captura` | (v13.13) `0`, `1` o `2` fija el capturador a ese núcleo (antes de v13.13 siempre el 1); sin archivo o `libre`: cualquiera de los 3. La línea `hilos: captura` del log dice cuál se usó; ver `etapa2_ridge_racer.md` |
+| `no_gate` | el juego no espera a la Vita en el sync (NativeLink solo cuenta cuántas veces iba atrasada) |
+| `no_mirror` | NativeLink no copia la VRAM al espejo |
+| `no_idle` | sin el hilo de CPU libre del PSP |
+| `no_capture` | la Vita no recorre nada: marca las listas como capturadas (casi NativeLink solo) |
+| `gate_sync` | (v13.10) la espera a la Vita se queda en el sync, como antes de dev66 (para comparar); ver `etapa2_fase2_compuerta.md` |
+| `no_lookahead` | (v13.12) los lectores no comprueban el plan por adelantado (solo al llegar a cada CALL, como antes); ver `etapa2_fase2_adelanto.md` |
+| `mirror_wait` | (NativeLink 0.0.3) el flip del PSP espera a que termine la copia del espejo (interruptor 32 del buzón): en KOF 96 los sprites del frame están copiados cuando la Vita los pide. En la Vita del usuario está en `yes` |
+| `capture_core` | (v13.13) `0`, `1` o `2` fija el capturador a ese núcleo (antes de v13.13 siempre el 1); sin archivo o cualquier otra cosa: cualquiera de los 3. La línea `threads: capture` del log dice cuál se usó; ver `etapa2_ridge_racer.md` |
 
-## Dibujo en la Vita (etapa 3, con `dibujar`; `nativedraw.log`, cada 10 s)
-- `presentador: N frames en T ms por la superficie (cambios, con copia propia), CPU us/frame (max) | casi negros: juego,
-  superficie | revisados N, distintos de la imagen normal M`: frames que pasaron por la superficie de NativeDraw, su
+## Dibujo en la Vita (etapa 3, con `draw`; `nativedraw.log`, cada 10 s)
+- `presenter: N frames in T ms through the surface (changes, with own copy), CPU us/frame (max) | nearly black: game,
+  surface | checked N, different from the normal image M`: frames que pasaron por la superficie de NativeDraw, su
   costo en el hilo de Adrenaline y la revisión de frames distintos (1 de cada 4, solo si la GPU ya terminó la superficie).
-- `traductor: frames HD N, con la imagen normal M | motivos: ... | draws dibujados`: cuántos frames dibujó la Vita y por
-  qué los otros fueron con la imagen normal (`sin_frame_nuevo`, `3d`, `primitiva`, `formato`, `mezcla`...).
-- `traductor: ritmo (frames del PSP que avanzó cada frame dibujado): 0 (repetido) N, 1 N, 2 N...`: con muchos repetidos
+- `translator: HD frames N, normal image M | reasons: ... | draws drawn N`: cuántos frames dibujó la Vita y por
+  qué los otros fueron con la imagen normal (`no_new_frame`, `3d`, `primitive`, `format`, `blend`...).
+- `translator: pace (PSP frames advanced per drawn frame): 0 (repeated) N, 1 N, 2 N...`: con muchos repetidos
   o saltos los juegos de Neo Geo destellan (hacen transparencias dibujando algo un frame sí y otro no).
-- `gpu: al empezar cada frame, escenas nuestras sin terminar: promedio, max | sin terminar: el frame anterior N, el de
-  hace 2 N | reescritos con la GPU sin terminar: vértices y paletas N, imagen normal N`: cuánto va atrasada la GPU de la
+- `gpu: at each frame start, our unfinished scenes: average, max | unfinished: previous frame N, 2 frames ago N |
+  rewritten with the GPU unfinished: vertices and palettes N, normal image N`: cuánto va atrasada la GPU de la
   Vita y cuántas veces se reescribió algo que todavía podía estar leyendo (las texturas del registro, en la línea
-  `registro:` de `nativedraw_captura.log`: "con la GPU sin terminar (medido)"). Debe ser 0: si no, cuadros rotos.
-- `gpu: frames no mandados por la GPU atrasada N, esperas a la GPU N ms | CPU en 10 s: traductor N ms, revisión de frames
-  distintos N ms | revisiones de la superficie saltadas (GPU sin terminar) N` (NativeDraw 0.0.7): frames que no se le
+  `record:` de `nativedraw_capture.log`: "with the GPU unfinished (measured)"). Debe ser 0: si no, cuadros rotos.
+- `gpu: frames not sent because the GPU was behind N, waits for the GPU N ms | CPU in 10 s: translator N ms,
+  different-frame check N ms | surface checks skipped (GPU unfinished) N` (NativeDraw 0.0.7): frames que no se le
   mandaron a la GPU porque no terminó el de hace 2 (se repite la superficie), tiempo esperándola antes de reescribir y
   tiempo de CPU del traductor y de la revisión.
-- `gpu tiempos: <tipo>: escenas, GPU ms (promedio, max) | draws por escena (con swizzle), miles de píxeles por escena |
-  en cola | histograma de ms` y `gpu tiempos: ocupada N ms de M (%)` (cronómetro, interruptor `medir_gpu`, desde
+- `gpu times: <type>: scenes, GPU ms (average, max) | draws per scene (swizzled), thousands of pixels per scene |
+  in queue | ms histogram` y `gpu times: busy N ms of M (%)` (cronómetro, interruptor `gpu_timer`, desde
   0.0.8.13): cuánto tarda la GPU en cada tipo de escena (Adrenaline, imagen normal, traductor en la superficie, imagen
-  intermedia). `gpu tiempos: detalle`: 16 escenas seguidas (A Adrenaline, N imagen normal, T traductor, I intermedia:
+  intermedia). `gpu times: detail`: 16 escenas seguidas (A Adrenaline, N imagen normal, T traductor, I intermedia:
   draws, ms de GPU / ms en cola).
-- `gpu: escena lenta: <tipo>, draws, miles de píxeles, ms` (0.0.8.20): cada escena nuestra de más de 30 ms; las 3
-  primeras piden un volcado. `traductor: draw gigante`: los primeros 40 draws de más de 2 pantallas de área.
-- Motivo `vertice_fuera` (0.0.8.21): un vértice fuera de ±4096 o NaN (datos leídos tarde): el frame va con la imagen normal.
-- `pantalla:` (0.0.8.13, cada 1 s y solo si algo cambia): escenas y frames a la pantalla de Adrenaline y de ScePspemu,
-  diálogo del sistema, estado de la superficie. `notificaciones:`: otro escribió una palabra de notificación de GXM.
-- En `nativedraw_captura.log`, línea `texturas (por frame):` (0.0.8.19): copias, KB y tiempo de DMA y de ordenar de la
+- `gpu: slow scene: <type>, draws, thousand pixels, ms` (0.0.8.20): cada escena nuestra de más de 30 ms; las 3
+  primeras piden un volcado. `translator: giant draw`: los primeros 40 draws de más de 2 pantallas de área.
+- Motivo `vertex_out` (0.0.8.21): un vértice fuera de ±4096 o NaN (datos leídos tarde): el frame va con la imagen normal.
+- `screen:` (0.0.8.13, cada 1 s y solo si algo cambia): escenas y frames a la pantalla de Adrenaline y de ScePspemu,
+  diálogo del sistema, estado de la superficie. `notifications:`: otro escribió una palabra de notificación de GXM.
+- En `nativedraw_capture.log`, línea `textures (per frame):` (0.0.8.19): copias, KB y tiempo de DMA y de ordenar de la
   RAM y de la VRAM; llamadas al DMA; copias por tamaño; KB con swizzle por ancho de fila; KB iguales, cambiados o nuevos
   respecto de la última copia de ese grupo de 8 filas (huella por grupo: lo que ahorraría un caché); KB sin swizzle;
   texturas distintas por frame.
 - Cómo se sabe cuándo termina la GPU: cada escena propia escribe su número en una palabra de las notificaciones de GXM
-  (la última que Adrenaline no usa, de 511 hacia abajo; el log la anota al empezar: `gpu: fin de escenas en la
-  notificación N`). Leer una superficie que la GPU no terminó da resultados falsos y `sceGxmFinish` para esperarla
+  (la última que Adrenaline no usa, de 511 hacia abajo; el log la anota al empezar: `gpu: end of scenes at notification N`). Leer una superficie que la GPU no terminó da resultados falsos y `sceGxmFinish` para esperarla
   cuesta ~20 ms en KOF: por eso la revisión se salta en vez de esperar.
 
 ## Memoria de sublistas (v13.11)
 Cada sublista guardada suma solo sus estadísticas distintas de 0 (hasta 48; con más no se guarda y el log lo avisa). En el
 nivel mínimo, al aplicar una sublista solo se suman comandos y draws: lo demás de su línea no lo usa. Detalle en
 `etapa2_fase2_estadisticas.md`.
-v13.12: la línea de la memoria agrega `| adelanto/f: plan= comprobadas= no_iguales= tarde=` (comprobación por adelantado
-de los lectores; `tarde` = veces que un lector se encontró con el capturador). Ver `etapa2_fase2_adelanto.md`.
+v13.12: la línea de la memoria agrega `| lookahead/f: plan= checked= not_equal= late=` (comprobación por adelantado
+de los lectores; `late` = veces que un lector se encontró con el capturador). Ver `etapa2_fase2_adelanto.md`.
 
 ## Compuerta (dev66 + v13.10, todos los niveles)
-- `nativelink.log`, cada 10 s: `stats compuerta (dev66): <modo> | esperas antes de encolar=N (us c/u, max) |
-  autocomprobaciones=N cambiaron=N`, y una línea `compuerta: ...` cada vez que cambia de modo (60 comprobaciones limpias
+- `nativelink.log`, cada 10 s: `stats gate: <mode> | waits before enqueue=N (us each, max) |
+  self_checks=N changed=N`, y una línea `gate: ...` cada vez que cambia de modo (60 comprobaciones limpias
   → antes de encolar; la lista cambió → en el sync).
-- `nativedraw_captura.log`, línea "impacto en el PSP" (mediano y extremo): al final `compuerta (v13.10): <modo>, esperas
-  antes de encolar/seg=N (us c/u)`. La espera total por frame sigue en `compuerta_us` (en el sync o antes de encolar).
-- Extremo: `nativedraw_tarde.log` anota también las esperas antes de encolar, con tipo `e`.
+- `nativedraw_capture.log`, línea "PSP impact" (mediano y extremo): al final `gate: <mode>, waits before enqueue/sec=N
+  (us each)`. La espera total por frame sigue en `gate_us` (en el sync o antes de encolar).
+- Extremo: `nativedraw_late.log` anota también las esperas antes de encolar, con tipo `e`.
 
 ## Archivos del nivel extremo
-- `nativedraw_frames.log` (CSV, una línea por frame del juego): `frame_us`, `compuerta_us` (espera a la Vita), `esperas`,
-  `sin_esperar`, `sync_GE_us` (espera al GE dentro del sync), `cpu_libre_x1000`, `espejo_us` / `espejo_paginas`,
-  `ganchos_us`, y de la Vita: `comandos`, `draws`, `captura_us` (reloj), `captura_cpu_us` (procesador recibido),
-  `aplicadas`, `comprobadas_lectores`, `lecturas_propias`, `de_lectores`, `listas_pendientes`, `syncs_atrasados`,
-  `lista_dir`, `lista_kb`, `memoria_us` (todo memoTry), `aplicar_us`.
-- `nativedraw_tarde.log` (CSV, cada sync en que la Vita terminó la lista después de que el juego llegó al sync): `espera_us`,
-  `atraso_us`, `comandos`, `listas_antes`, `encolada_hace_us` y `ultimo_stall_hace_us` (respecto del sync),
-  `vita_empezo_tras_us` (desde el encolado), `vita_recorrio_us`, `trabajo_us`, `lecturas_propias`, `de_lectores`,
-  `aplicadas`, `procesador_us`. Las horas de la Vita se pasan a horas del PSP con la diferencia mínima de relojes.
-- Resumen: `python3 tools/phase1_analysis.py <carpeta> [<carpeta> ...] [--tabla]` (una columna por corrida).
+- `nativedraw_frames.log` (CSV, una línea por frame del juego): `frame_us`, `gate_us` (espera a la Vita), `waits`,
+  `no_wait`, `sync_GE_us` (espera al GE dentro del sync), `cpu_idle_x1000`, `mirror_us` / `mirror_pages`,
+  `hooks_us`, y de la Vita: `commands`, `draws`, `capture_us` (reloj), `capture_cpu_us` (procesador recibido),
+  `applied`, `checked_readers`, `own_reads`, `from_readers`, `pending_lists`, `late_syncs`,
+  `list_addr`, `list_kb`, `memory_us` (todo memoTry), `apply_us`.
+- `nativedraw_late.log` (CSV, cada sync en que la Vita terminó la lista después de que el juego llegó al sync): `wait_us`,
+  `delay_us`, `commands`, `lists_before`, `enqueued_ago_us` y `last_stall_ago_us` (respecto del sync),
+  `vita_started_after_us` (desde el encolado), `vita_walked_us`, `work_us`, `own_reads`, `from_readers`,
+  `applied`, `processor_us`. Las horas de la Vita se pasan a horas del PSP con la diferencia mínima de relojes.
+- Resumen: `python3 tools/phase1_analysis.py <carpeta> [<carpeta> ...] [--table]` (una columna por corrida).

@@ -45,7 +45,7 @@ directa.
 - La compuerta espera como mucho 5 ms y nunca si la Vita no responde: el juego no se cuelga aunque NativeDraw falle.
 - **El juego sí reescribe sus listas**: la memoria de la lista del frame N la reusa al encolar la siguiente. Por eso la
   compuerta va antes de encolar y NativeLink lo comprueba solo con huellas (si una lista cambia antes, vuelve al sync).
-- Revisión permanente: 1 de cada 32 sublistas aplicadas se recorre igual y se compara (DISTINTAS en el log). Debe ser 0
+- Revisión permanente: 1 de cada 32 sublistas aplicadas se recorre igual y se compara (MISMATCHES en el log). Debe ser 0
   y lo es desde v13.12 (antes 1–7 por corrida por comparar contra el espejo equivocado).
 - Falló: leer la RAM del PSP directo de a 256 bytes en vez de la caché compartida (v13.11.1), no releer líneas ya
   comprobadas (v13.8), FSR 1 del lado de la Vita como atajo (no mejoraba la imagen, daba tirones y tearing).
@@ -85,8 +85,13 @@ directa.
   deja pasar al juego y se copian vértices que el juego ya reescribía (posiciones de ~2^31, uv 65535; la GPU rellenaba
   toda la pantalla con una textura: "glitch blanco" de Metal Slug XX). Un vértice fuera de ±4096 manda el frame con la
   imagen normal [medido, 0.0.8.20–0.0.8.21]. La causa la ataca el caché de texturas.
+- **Metal Slug XX en 0.0.8.23** (corrida `stage3_0.0.8.23/ms`): 30 fps sostenidos durante el juego (121 s, ninguno bajo
+  30). El capturador tarda ~25 ms de cada frame de 33 ms (p90 30 ms); copias de texturas: 358 KB por frame, DMA ~5 ms +
+  ordenar el swizzle ~3 ms. 2 puntos lentos: ~2 s a 38–40 ms por frame con picos de 70 ms. Una ráfaga de 174.353 comandos
+  en un frame: 182 ms, 25.054 draws, 2 frames llegaron al tope del registro; 44 frames `vertex_out` en esa ventana
+  [medido]. El arreglo previsto es el caché de texturas.
 - Los juegos de Neo Geo hacen transparencias dibujando algo un frame sí y otro no: si la Vita repite o salta frames,
-  destella. Se mide con la línea `traductor: ritmo` del log.
+  destella. Se mide con la línea `translator: pace` del log.
 - **Grabar la pantalla** (Vitastream + OBS a 60 fps) encontró los cuadros rotos de un frame que ningún volcado capturaba.
   Se usa solo cuando los volcados y logs no alcanzan.
 
@@ -109,12 +114,12 @@ directa.
 | Lo que el sistema del PSP dibuja encima (diálogo del botón PS) | no pasa por las listas del juego | "tapado": se compara con la imagen normal y se muestra la normal mientras dure |
 | Frames con sublistas aplicadas por la memoria | sus draws no pasan por el registro | imagen normal (los juegos 2D casi no usan sublistas) |
 | Una textura cambiada solo en bytes que la revisión no ve puede verse vieja unos frames | riesgo aceptado del caché de texturas (diseño en curso) | revisión completa por turnos |
-| Mezclas sin equivalente directo en GXM (alfa del destino, factores al doble), test de color, operaciones lógicas | GXM fijo no las tiene (sí tiene mezcla programable, sin usar todavía) | imagen normal, motivo `mezcla` / `test_color_o_logica` |
+| Mezclas sin equivalente directo en GXM (alfa del destino, factores al doble), test de color, operaciones lógicas | GXM fijo no las tiene (sí tiene mezcla programable, sin usar todavía) | imagen normal, motivo `blend` / `color_test_or_logic` |
 | Dependencia de Adrenaline | se enganchan importaciones de AdrenalineUser y ScePspemu | cada versión de Adrenaline puede romperlo; a futuro, proponer un punto de enganche oficial |
 
 ## Cosas que se midieron y no eran lo que parecían
 - vpjuego: "GE en stall" siempre 0 %: para los tiempos del GE sirven las horas de encolado y FINISH (T6).
-- El núcleo 0 de la línea `procesador` del log sale casi vacío: el gancho de CreateThread no ve los hilos que Adrenaline
+- El núcleo 0 de la línea `processor` del log sale casi vacío: el gancho de CreateThread no ve los hilos que Adrenaline
   creó antes de cargar NativeDraw.
 - Leer la hora en la Vita cuesta ~390 ns: el registro extremo completo altera lo que mide.
 - `sceCommonDialogIsRunning` siempre dice "no" aunque el diálogo del botón PS esté abierto: no sirve para detectarlo.

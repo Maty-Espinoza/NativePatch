@@ -18,10 +18,11 @@ moment, the user wins; afterwards this list is updated.
 - Comments are touched **only when what the code does changes**. They are not rewritten "to improve them" and what was
   discovered while testing is not added to them.
 - Log texts are part of the behavior, not comments: no versions or history inside them ("stats
-  compuerta:" and not "stats compuerta (dev66):"). If a script reads them (`tools/*.py`), change both.
-- Language: the code is in English, identifiers and comments, without accents (accents break some compilers and
-  terminals). Log texts, on-disk file names (switches, logs) and source file names stay in Spanish for now (`TODO.md`).
-  Function and variable names are short and consistent with the file.
+  gate:" and not "stats gate (dev66):"). If a script reads them (`tools/*.py`), change both.
+- Language: everything in the repo is in English (code, comments, log texts, on-disk names, file names), without accents
+  in the code (accents break some compilers and terminals). Exceptions: `docs/dev/es/`, `README.es.md` and the archive in
+  `docs/changelog/`. Answers to the user stay in Spanish. Function and variable names are short and
+  consistent with the file.
 
 ## 2. Dead code and simplicity
 - What is not used gets deleted: functions, variables, switches, parameters, `if` branches that can no longer happen,
@@ -53,16 +54,16 @@ moment, the user wins; afterwards this list is updated.
 - Documents have a single place: current ones in `docs/dev/` and `docs/agent/`; history in `docs/changelog/`. No new
   folders and no "v2" copies of a document are created: the existing one is edited.
 - New file names are in English and lowercase; documents with hyphens (`how-it-works.md`), with the same names in
-  `docs/dev/en/` and `docs/dev/es/`. Existing source files keep their Spanish names for now (`TODO.md`).
+  `docs/dev/en/` and `docs/dev/es/`.
 - When finishing a task, check with `git status` that no loose files (patches, logs, tests) are left in the repo.
 
 ## 4. Relay folder (`vitabridge/`) and the Vita
-- The relay only deletes what is older than 7 days in `enviados/`, `recibidos/` and `respuestas/` (`relay.md`). What is
-  worth keeping from a test is copied **beforehand** to `vitabridge/etapaN_<version>/<game><n>/`.
+- The relay only deletes what is older than 7 days in `sent/`, `received/` and `responses/` (`relay.md`). What is
+  worth keeping from a test is copied **beforehand** to `vitabridge/stageN_<version>/<game><n>/`.
 - No git bundles, patches or experiment folders from another era are left in `vitabridge/`: they are deleted when
   closing a stage.
 - On the Vita, test files (old switches, logs, dumps) are removed when they stop being used; the
-  installer has "Clean up test leftovers" for that (until before 1.0).
+  installer has "Clean test leftovers" for that (until before 1.0).
 
 ## 5. Versions and commits
 - Rules are in `../../dev/en/versions.md`. Summary: until the first release everything is `0.0.x`; every version sent to
@@ -93,9 +94,10 @@ Three kinds. When each one runs: `workflow.md`; how: `environment.md`.
 1. **Automatic on GitHub: no functional regression.** `tools/test_ci.sh` (capturer under qemu, log parsers against
    `tests/run/`, production builds), on every push.
 2. **Local: performance did not regress.** `sh tools/test_local.sh <run> [ref]` judges a saved run. A 60 fps game may
-   be at most 5 fps lower than without the plugin, a 30 fps game about 2 lower. `ref` is the same game with
-   `ux0:data/nativedraw/off` or another version. Without it the target is guessed and a game that mixes 60 fps menus
-   with 30 fps play is misjudged: a real verdict needs `ref`.
+   be at most 5 fps lower than without the plugin, a 30 fps game about 2 lower. `ref` is the same game with `ux0:data/nativedraw/off` or another version. The target comes from `--target 30|60`
+   (`run_summary.py --check`), then `ref`, then the `GAME_FPS` table of `run_summary.py`; otherwise it is a guess from the
+   median, printed `GUESS`, and a game that mixes 60 fps menus with 30 fps play is misjudged: that is not a real verdict.
+   In the table, Retro City Rampage 60 and Silent Hill 30 are unconfirmed.
 3. **Execution: the components communicate.** `python3 tools/test_link.py <run> [version.txt]`, on the logs after a Vita
    run.
 

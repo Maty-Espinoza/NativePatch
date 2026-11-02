@@ -25,7 +25,7 @@ NativeLink (PSP side) and NativeDraw (Vita side) are sibling projects: each one 
   E.g.: GitHub had NativeDraw 0.0.6 and the tests reached 0.0.8.12 → the commit is NativeDraw 0.0.7. Commits
   marked "(test)" do not count as a confirmed version.
 - **NativeDraw 0.0.8 tests** (confirmed by the user): they continue from **0.0.8.13**, so as not to
-  clash with the names in `vitabridge\respaldo\` and `vitabridge\etapa3_0.0.8.x\`, which already used 0.0.8.1–0.0.8.12
+  clash with the names in `vitabridge\backup\` and `vitabridge\stage3_0.0.8.x\`, which already used 0.0.8.1–0.0.8.12
   as tests of 0.0.7.
 - The first release (0.1.0) is marked with a tag and release on GitHub when the user decides.
   Before 1.0 the "Clean test leftovers" option is removed from the installer.
@@ -42,11 +42,12 @@ NativeLink (PSP side) and NativeDraw (Vita side) are sibling projects: each one 
 | | 0.0.2 | `6992890` | NativeDraw: the old presentation, the GXM test bench and the dumps are removed |
 | | 0.0.3 | `34dee77` | Stage 3, step 3.0: transparent presenter, off by default (`../../agent/en/stage3-plan.md`) |
 | | 0.0.4 | `a0d85da` | Stage 3, step 3.1: L+R+START menu drawn by NativeDraw (for now, the versions) |
-| | 0.0.5 | `1ae7191` | Stage 3, step 3.2: frame record (with `dibujar`) |
+| | 0.0.5 | `1ae7191` | Stage 3, step 3.2: frame record (with `draw`) |
 | | 0.0.6 | `da1daa0` | Stage 3, step 3.3 (first version): the Vita draws the frame record (Retro City); "covered" |
 | 0.0.3 | 0.0.7 | `f6384f7` | Stage 3, step 3.3 in KOF 96 (own shaders, textures through DMA, dumps) and broken frames fixed. Tests: NativeDraw 0.0.7.1–0.0.8.12 and NativeLink 0.0.3.1–0.0.3.3 (`8573486` was a test commit, 0.0.8.10 + 0.0.3.2) |
 | | (tests 0.0.8.15–0.0.8.22) | `a045974`…`3ab3b91` | Stage 3 test commits: GPU timer, textures sorted by the CPU, one scene for the surface (KOF 96 at 60 fps), Metal Slug XX, diagnosis of the white glitch; 0.0.8.22 + NativeLink 0.0.3.4: code cleanup. The commit that confirms this work will be **NativeDraw 0.0.9** |
 | (test 0.0.3.5) | (test 0.0.8.23) | `8cd1ff4`…`5f70fe0` | Dev builds, test commits: code in English, ready-made toolchain, measurements behind `NP_DEV`, the three tests. Must look and run the same |
+| (test 0.0.3.6) | (test 0.0.8.24) | `8cd1ff4`…`b76c030` | Whole project in English: code, source and tool names, log texts, on-disk names, relay and installer (old names below); fps target per game in `run_summary.py --check`; the relay starts awake. Must look and run the same |
 
 Tested on the Vita with Gran Turismo: `../../changelog/en/etapa3_preparacion.md`.
 
@@ -62,7 +63,20 @@ the Vita side **gepresent** (`gepresent.suprx`, versions `vNN.M`). The documents
 | `ux0:data/gepresent/gepresent.suprx` and its switches | `ux0:data/nativedraw/nativedraw.suprx` (same switches) |
 | `ge_patch.log`, `ge_patch_prev.log` | `nativelink.log`, `nativelink_prev.log` |
 | `ge_patch_gepresent.log` | `nativedraw.log` |
-| `ge_patch_captura.log` (and `_prev`), `ge_patch_frames.log`, `ge_patch_tarde.log` | `nativedraw_captura.log` (and `_prev`), `nativedraw_frames.log`, `nativedraw_tarde.log` |
+| `ge_patch_captura.log` (and `_prev`), `ge_patch_frames.log`, `ge_patch_tarde.log` | `nativedraw_capture.log` (and `_prev`), `nativedraw_frames.log`, `nativedraw_late.log` |
+
+Since NativeDraw 0.0.8.24 the old switch files are no longer read; the installer's "Clean test leftovers" removes them:
+
+| Old | New |
+|---|---|
+| `dibujar`, `espejo_espera`, `medir_ge`, `medir_gpu`, `memo_revisar` | `draw`, `mirror_wait`, `ge_timing`, `gpu_timer`, `memo_check` |
+| `nucleo_captura`, `captura_sin_lectores`, `compuerta_sync` | `capture_core`, `capture_no_readers`, `gate_sync` |
+| `sin_adelanto`, `sin_captura`, `sin_compuerta`, `sin_espejo`, `sin_libre`, `sin_memoria` | `no_lookahead`, `no_capture`, `no_gate`, `no_mirror`, `no_idle`, `no_memo` |
+| `registro` (`minimo`, `mediano`, `extremo`) | `log_level` (`minimum`, `medium`, `extreme`) |
+| `volcado` (`desactivado`, `pantallazo`, `frame`, `secuencia`), `volcados/`, `reproducir` | `dump` (`off`, `screenshot`, `frame`, `sequence`), `dumps/`, `replay` |
+| `fK_registro.bin`, `fK_reproduccion*.bmp` | `fK_record.bin`, `fK_replay*.bmp` |
+| `nativedraw_captura*.log`, `nativedraw_tarde*.log` | `nativedraw_capture*.log`, `nativedraw_late*.log` |
+| Relay: `enviar/`, `enviados/`, `recibidos/`, `respuestas/`, `respaldo/`, `bajar_*.txt`, `listar_*.txt`, `vigilar.txt`, `estado.txt`, `etapa<N>_<v>/` | `send/`, `sent/`, `received/`, `responses/`, `backup/`, `get_*.txt`, `list_*.txt`, `watch.txt`, `status.txt`, `stage<N>_<v>/` |
 
 Milestones of the old numbering (details in `../../changelog/`):
 
@@ -76,5 +90,5 @@ Milestones of the old numbering (details in `../../changelog/`):
 | dev62–dev64 + v13.1–v13.6 | Sublist memory, VRAM mirror (double), T4/T6 |
 | v13.7 | Core bench (GXM recording on several cores) |
 | dev65 + v13.9 | Analysis phase 1, log levels |
-| dev66 + v13.10–v13.12 | Phase 2: gate before enqueuing, compact statistics, look-ahead check, DISTINTAS fixed |
+| dev66 + v13.10–v13.12 | Phase 2: gate before enqueuing, compact statistics, look-ahead check, MISMATCHES fixed |
 | v13.13 | Ridge Racer at 60 fps: interpret line by line, capturer on any core |

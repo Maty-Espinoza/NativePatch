@@ -227,27 +227,27 @@ and what the plugin turned it into.
 
 ## 13. Log and dump: what they are and how to get good ones
 
-- **Logs** (`ux0:pspemu/nativelink.log`, `nativedraw.log`, `nativedraw_captura.log`): text with events and
+- **Logs** (`ux0:pspemu/nativelink.log`, `nativedraw.log`, `nativedraw_capture.log`): text with events and
   statistics (`logs-and-switches.md`).
   - At the start: version, memory, what was hooked.
-  - Every 10 s (NativeLink and `nativedraw.log`) or every 1 s (`nativedraw_captura.log`): fps, commands and draws per frame,
+  - Every 10 s (NativeLink and `nativedraw.log`) or every 1 s (`nativedraw_capture.log`): fps, commands and draws per frame,
     Vita time, textures, GPU.
   - New events, once each.
   - The number at the start of each line is the frame (NativeLink) or the ms since start-up (NativeDraw).
-- **Dump** (`ux0:data/nativedraw/volcados/NNN/`, L+R+SELECT or automatic): what happened on screen in one or more
+- **Dump** (`ux0:data/nativedraw/dumps/NNN/`, L+R+SELECT or automatic): what happened on screen in one or more
   frames: the PSP's image, the one the Vita drew, a text with how it was done and everything the Vita received in order to
   draw it (`dumps.md`). With that `tools/dump.py` draws the frame on the PC and says whether the error is in the data or in
   how the Vita draws.
 - Tips for a good dump:
   - Capture **right when the error is on screen**. If the error lasts a short time, use the `auto` level (it fires by itself).
   - Note down what you were seeing ("background with pieces of another sprite in fight 2").
-  - If you can, get the same place with NativeDraw not drawing (`dibujar` set to `no`): it is the reference of how it should look.
+  - If you can, get the same place with NativeDraw not drawing (`draw` set to `no`): it is the reference of how it should look.
   - Trying the same place with another version helps to know **since when** the error is there.
 
 ## 14. The minimum about the PC tools
 
 - `python3 tools/run_summary.py <folder>`: summary of a run (fps every 10 s, waits at the sync, mirror,
-  seconds where the Vita cannot keep up, DISTINTAS) without reading the whole logs.
+  seconds where the Vita cannot keep up, MISMATCHES) without reading the whole logs.
 - `python3 tools/dump.py <dump folder> [K]`: draws frame K on the PC and leaves `fK_pc.png` with
   **reference | PC | Vita | differences**. It is the fastest way to see where the error is.
 

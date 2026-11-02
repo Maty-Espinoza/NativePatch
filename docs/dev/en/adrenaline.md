@@ -66,8 +66,8 @@ partition 11 at start-up.
 
 ## The channel between the PSP and the ARM
 
-- The PSP fills a `SceKermitRequest` (command + arguments) and calls `sceKermitSendRequest661(req, mode, cmd, nargs, 0, &resp)`. It blocks until the response, using a semaphore.
-- On the ARM, a thread waits with `ScePspemuKermitWaitAndGetRequest(mode, &req)` and answers with `ScePspemuKermitSendResponse`. Those functions are at fixed offsets in the ScePspemu module (`user/main.c`, `GetFunctions`).
+- The PSP fills a `SceKermitRequest` (command + arguments) and calls `sceKermitSendRequest661(req, modo, cmd, nargs, 0, &resp)`. It blocks until the response, using a semaphore.
+- On the ARM, a thread waits with `ScePspemuKermitWaitAndGetRequest(modo, &req)` and answers with `ScePspemuKermitSendResponse`. Those functions are at fixed offsets in the ScePspemu module (`user/main.c`, `GetFunctions`).
 - Adrenaline uses `KERMIT_MODE_EXTRA_2` for its commands. `KERMIT_MODE_EXTRA_1` is defined but not used (NativePatch does not need it: it communicates through shared memory).
 - The ARM reads and writes the PSP RAM at `0x68000000 + addr`. To avoid reading stale data from its cache it uses `ScePspemuConvertAddress(addr, KERMIT_INPUT_MODE, size)` and `ScePspemuWritebackCache` when writing. On the PSP side the cache has to be written back to memory before making a request.
 

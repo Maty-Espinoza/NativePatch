@@ -40,7 +40,7 @@ and LocoRoco.
 ## Decisions
 - **Versions:** everything is 0.0.x until the first release, which will be NativeLink 0.1.0 + NativeDraw 0.1.0
   (`../../dev/en/versions.md`).
-- **Switch `ux0:data/nativedraw/dibujar`, off by default** while it stabilizes (without the file nothing of the presenter
+- **Switch `ux0:data/nativedraw/draw`, off by default** while it stabilizes (without the file nothing of the presenter
   is hooked). New GPU work is turned on on purpose: in stage 1 an experiment shut down the whole Vita.
 - **Own translator**, with PPSSPP as a reference and copying specific functions when it saves time (compatible license,
   noted in `THIRD_PARTY_NOTICES.md`).
@@ -71,7 +71,7 @@ and LocoRoco.
 ## Step 3.0: result (NativeDraw 0.0.3, tested on 2026-10-29) [measured]
 Adrenaline's menu, the game selector (preview videos and start-up animation), Gran Turismo (cutscene and
 race), Retro City Rampage and KOF 96 look the same as without NativeDraw, at 60 fps, for 15 minutes straight. Presenter
-CPU: 0.14–0.2 ms per frame (maximum ~1 ms on an occasional frame). Logs: `vitabridge/etapa3_0.0.3.x/`.
+CPU: 0.14–0.2 ms per frame (maximum ~1 ms on an occasional frame). Logs: `vitabridge/stage3_0.0.3.x/`.
 
 What was learned in the test versions:
 | Test | What happened | Lesson |
@@ -87,7 +87,7 @@ Memory with the presenter (free at once): CDRAM 4 MB (untouched), physical LPDDR
 copies of the image ≈ 11 MB), LPDDR 25 MB.
 
 Minor pending item: a fixed dotted line over the date in Adrenaline's menu (only there; not in games). It remains to see
-whether it also appears without NativeDraw (`dibujar` with `no`).
+whether it also appears without NativeDraw (`draw` with `no`).
 
 ## Step 3.1: L+R+START menu (NativeDraw 0.0.4, tested on 2026-10-29) [measured]
 - Buttons: hook on the ScePspemu import `sceCompatWriteSharedCtrl` (the same one Adrenaline uses for its menu).
@@ -95,19 +95,19 @@ whether it also appears without NativeDraw (`dibujar` with `no`).
   opens if Adrenaline is showing the PSP image (not in PS1).
 - Drawing: a 256x128 box (texture in LPDDR, point filter) at double size, centered, with blending, on top of the image in
   the presenter's surface. Text with the installer's 8x16 font.
-- Without `dibujar`, the presenter is still prepared (the usual memory) and replaces the image only with the menu open.
+- Without `draw`, the presenter is still prepared (the usual memory) and replaces the image only with the menu open.
 - For now it only shows the versions (the user: it is a place for the options; which ones go is decided later).
 - Lesson (0.0.4.1): the first line of `nativelink.log` (the version) is written by the PSP directly to the card, before
   NativeDraw serves the log: to know the version the file is read.
 - Tested in Adrenaline's menu, Retro City Rampage and Gran Turismo: it opens, closes, blocks the buttons, no jumps.
 
 ## Step 3.2: frame record (NativeDraw 0.0.5, tested on 2026-10-29) [measured]
-`nativedraw/record.c` (included in `capture.c`), active with `dibujar`. Per draw: type, count, vertex type,
+`nativedraw/record.c` (included in `capture.c`), active with `draw`. Per draw: type, count, vertex type,
 vertices (and indices) copied at that moment, the state (56 GE registers, `RS`) only when it changes and the loaded
 palette (copied at every C4). Frames closed at the flip, 4 records that take turns (`rg_pub` = last complete one; there were 3 until test 0.0.8.6:
 the last one the Vita drew is not rewritten until it draws another, because the GPU reads it later). Complete =
 all the counted draws went through the record (sublist memory, curves and what could not be read make it
-incomplete); an incomplete frame stops being copied. A `registro:` line per second in `nativedraw_captura.log`.
+incomplete); an incomplete frame stops being copied. A `record:` line per second in `nativedraw_capture.log`.
 Test outside the Vita: `REG=1 ./prueba 0` (all complete) and `REG=1 ./prueba 1` (incomplete because of memory).
 
 | Game | Complete | Draws per frame | What it uses | Cost |
@@ -140,7 +140,7 @@ normal image.
 ## Step 3.3 in KOF 96 (NativeLink 0.0.3 + NativeDraw 0.0.7, tests 0.0.7.1–0.0.8.12, 2026-10-30) [measured]
 KOF 96 (NeoGeo Station, NPUH-10119) drawn by the Vita in the fights, without broken frames, ~40 fps from the Vita with the
 game at 59.9. What was learned along the way (the test numbers serve to locate the logs in
-`vitabridge\etapa3_<version>\` and the dumps):
+`vitabridge\stage3_<version>\` and the dumps):
 - **Own shaders** (`nativedraw/shaders/*.cg` → `shaders_nd.h`, 0.0.7): color per vertex or from the
   material, texture function modulate/replace (TCC, color at double), alpha test, clears (rectangle of the requested
   color; without the color bit it draws nothing), blending (one fragment program per combination). The surface's alpha
@@ -161,7 +161,7 @@ game at 59.9. What was learned along the way (the test numbers serve to locate t
   of 0.0.7.10 drawn on the PC came out right with the next copy). By DMA (~512 MB/s; the CPU reads the PSP's RAM at
   ~74 MB/s) and without sorting the swizzle: the `nd_fs` shader does it, hence no filter.
 - **Full mirror for 2D** (NativeLink, switch 16, 0.0.7.6): with 64 pages in turns KOF (256 pages of
-  sprites) saw each page every 4 frames → sprites with old pieces. `espejo_espera` (switch 32, 0.0.8.2): the
+  sprites) saw each page every 4 frames → sprites with old pieces. `mirror_wait` (switch 32, 0.0.8.2): the
   PSP's flip waits for the mirror copy.
 - **One-frame broken frames in the fights** (0.0.8.6–0.0.8.11): first 4 records instead of 3 (0.0.8.6). Then,
   measuring with GXM notifications (0.0.8.10, `gpu:` lines of `../../dev/en/logs-and-switches.md`): the Vita's GPU was 3 to 8
@@ -175,15 +175,15 @@ game at 59.9. What was learned along the way (the test numbers serve to locate t
   now it is skipped if the GPU has not finished the surface. Fights: ~35 → ~40 fps from the Vita, CPU per frame ~13 →
   ~6.5 ms, GPU waits ~1.5 s → 0 every 10 s.
 - **Pacing** (0.0.8.9): Neo Geo games make transparencies by drawing something one frame yes and the next no; with skips or
-  repeats it flashes (HOW TO PLAY box). `traductor: ritmo` line.
+  repeats it flashes (HOW TO PLAY box). `translator: pace` line.
 - Lesson: recording the screen (Vitastream + OBS at 60 fps) found what the dumps did not capture; the detector of
-  one-frame broken frames in a video is in `vitabridge\respaldo\limpieza_0.0.8.11\transitorios.py`. Use videos
+  one-frame broken frames in a video is in `vitabridge\backup\limpieza_0.0.8.11\transitorios.py`. Use videos
   only when needed (`workflow.md`).
 - What comes next: the Vita's GPU takes ~20 ms per KOF frame (~430 draws) and every 10 s ~165 frames are not sent
   because it is behind; the translator spends ~7 ms of CPU per frame. Measure GPU time per scene before changing anything.
 
 ## GPU performance and Metal Slug XX (NativeDraw tests 0.0.8.13–0.0.8.21, 2026-10-30) [measured]
-GPU timer (`gpu_timer.c`, switch `medir_gpu`, `gpu tiempos:` lines of `../../dev/en/logs-and-switches.md`): each scene
+GPU timer (`gpu_timer.c`, switch `gpu_timer`, `gpu times:` lines of `../../dev/en/logs-and-switches.md`): each scene
 (ours and Adrenaline's) marks its end with a GXM notification (510 for Adrenaline's, 511 ours); a thread
 calculates how long each one took.
 - **KOF 96, before:** GPU at 96–99 %, ~26 ms per PSP frame (intermediate image ~16 ms with ~430 draws, two surface
@@ -203,7 +203,7 @@ calculates how long each one took.
   surface with the GPU unfinished (0.0.8.17: all the "black" frames were read that way). In `../../../TODO.md`.
 - **Metal Slug XX (ULUS-10495):** the game runs at 30 fps; the match is 2D through (the menus, 3D). The Vita draws it
   entirely at its speed: intermediate ~13.5 ms (~2 million pixels, ~3.6 times the screen), surface ~7.2 ms, GPU
-  ~75 %. Textures (`texturas:` line, 0.0.8.19): all from the PSP's RAM, 630–800 KB per frame in 90–170 copies (half
+  ~75 %. Textures (`textures (per frame):` line, 0.0.8.19): all from the PSP's RAM, 630–800 KB per frame in 90–170 copies (half
   of them under 1 KB), 128-byte rows, **~98 % equal to the previous copy** (KOF: from the VRAM, 140–220 KB in
   8–12 copies, ~99 % equal). What is expensive is the DMA: ~100 µs per call (10–17 ms per frame in Metal Slug, ~1.5 ms in
   KOF); sorting ~5.5 ms. It averages 90–126 distinct textures per frame (cap 128).
@@ -211,7 +211,7 @@ calculates how long each one took.
   ~2^31 and uv of 65535; the GPU filled them by repeating a 32x32 texture (white screen with colors, scenes of
   55–1900 ms). Cause: the capturer was behind (copying textures cost 20–28 ms of every 33 ms frame) and the
   gate waits at most 5 ms: it copied vertices that the game was already rewriting. 0.0.8.21: a vertex outside ±4096 or NaN
-  sends that frame with the normal image (reason `vertice_fuera`). What attacks the cause: the texture cache.
+  sends that frame with the normal image (reason `vertex_out`). What attacks the cause: the texture cache.
 - **0.0.8.22 + NativeLink 0.0.3.4 (2026-10-31): cleanup**, no behavior changes: comments without history or
   TODO (they go to `TODO.md`), out goes the black-screen safety that no longer activated (`falla`), the `volcado_auto` file and
   the mailbox's 0x4B/0x4C words that nobody read; documentation reorganized into `docs/dev`, `docs/agent` and
@@ -227,5 +227,5 @@ calculates how long each one took.
 | 3.0 | **done** (NativeDraw 0.0.3) |
 | 3.1 | **done** (NativeDraw 0.0.4) |
 | 3.2 | **done** (NativeDraw 0.0.5) |
-| 3.3 | Retro City (NativeDraw 0.0.6), **KOF 96** (NativeDraw 0.0.7; 60 fps in the fights since test 0.0.8.18) and **Metal Slug XX** (at its 30 fps; white glitch avoided in 0.0.8.21). Pending to test on the Vita: 0.0.8.21/0.0.8.22 in Metal Slug XX up to the end of the level. Next: texture cache |
+| 3.3 | Retro City (NativeDraw 0.0.6), **KOF 96** (NativeDraw 0.0.7; 60 fps in the fights since test 0.0.8.18) and **Metal Slug XX** (at its 30 fps; white glitch avoided in 0.0.8.21). 0.0.8.23 holds 30 fps in Metal Slug XX (`../../dev/en/findings.md`). Pending to test on the Vita: 0.0.8.24. Next: texture cache |
 | 3.4 | partly advanced: comparison with the normal image (detects what the system draws on top) |

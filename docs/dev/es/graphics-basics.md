@@ -228,28 +228,28 @@ y en qué lo convirtió el plugin.
 
 ## 13. Log y volcado: qué son y cómo sacar buenos
 
-- **Logs** (`ux0:pspemu/nativelink.log`, `nativedraw.log`, `nativedraw_captura.log`): texto con eventos y
+- **Logs** (`ux0:pspemu/nativelink.log`, `nativedraw.log`, `nativedraw_capture.log`): texto con eventos y
   estadísticas (`logs-and-switches.md`).
   - Al inicio: versión, memoria, qué se enganchó.
-  - Cada 10 s (NativeLink y `nativedraw.log`) o cada 1 s (`nativedraw_captura.log`): fps, comandos y draws por frame,
+  - Cada 10 s (NativeLink y `nativedraw.log`) o cada 1 s (`nativedraw_capture.log`): fps, comandos y draws por frame,
     tiempo de la Vita, texturas, GPU.
   - Eventos nuevos, una vez cada uno.
   - El número del principio de cada línea es el frame (NativeLink) o los ms desde el arranque (NativeDraw).
-- **Volcado** (`ux0:data/nativedraw/volcados/NNN/`, L+R+SELECT o automático): lo que pasó en pantalla en uno o más
+- **Volcado** (`ux0:data/nativedraw/dumps/NNN/`, L+R+SELECT o automático): lo que pasó en pantalla en uno o más
   frames: la imagen del PSP, la que dibujó la Vita, un texto con cómo se hizo y todo lo que la Vita recibió para
   dibujarla (`dumps.md`). Con eso `tools/dump.py` dibuja el frame en el PC y dice si el error está en los datos o en
   cómo dibuja la Vita.
 - Tips para un buen volcado:
   - Captura **justo cuando el error está en pantalla**. Si el error dura poco, usa el nivel `auto` (se dispara solo).
   - Anota qué estabas viendo ("fondo con pedazos de otro sprite en la pelea 2").
-  - Si puedes, saca el mismo lugar con NativeDraw sin dibujar (`dibujar` en `no`): es la referencia de cómo debería verse.
+  - Si puedes, saca el mismo lugar con NativeDraw sin dibujar (`draw` en `no`): es la referencia de cómo debería verse.
   - Probar el mismo lugar con otra versión ayuda a saber **desde cuándo** está el error.
 
 ## 14. Lo mínimo de las herramientas del PC
 
 - `python3 tools/run_summary.py <carpeta>`: resumen de una corrida (fps cada 10 s, esperas al sync, espejo,
-  segundos donde la Vita no alcanza, DISTINTAS) sin leer los logs enteros.
-- `python3 tools/dump.py <carpeta del volcado> [K]`: dibuja el frame K en el PC y deja `fK_pc.png` con
+  segundos donde la Vita no alcanza, MISMATCHES) sin leer los logs enteros.
+- `python3 tools/dump.py <carpeta del dump> [K]`: dibuja el frame K en el PC y deja `fK_pc.png` con
   **referencia | PC | Vita | diferencias**. Es la forma más rápida de ver dónde está el error.
 
 ## 15. Glosario rápido

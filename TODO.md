@@ -2,23 +2,20 @@
 
 The only list of pending work. Ordered from what comes next to what can wait. Each item says where it came from
 (a document in `docs/dev/en/`, `docs/agent/en/`, `docs/changelog/en/` or the claude.ai project). Done items are removed;
-what was done is in `CHANGELOG.md`. Updated 2026-11-02 (NativeLink 0.0.3 + NativeDraw 0.0.7 confirmed; tests up to
-NativeDraw 0.0.8.23 + NativeLink 0.0.3.5). How the work is done: `docs/agent/en/workflow.md`; stage 3 plan and results:
+what was done is in `CHANGELOG.md`. Updated 2026-11-02 (NativeLink 0.0.3 + NativeDraw 0.0.7 confirmed; tests up to NativeDraw 0.0.8.24 + NativeLink 0.0.3.6). How the work is done: `docs/agent/en/workflow.md`; stage 3 plan and results:
 `docs/agent/en/stage3-plan.md`.
 
 ## Next
-- [ ] **Test on the Vita: NativeDraw 0.0.8.23 + NativeLink 0.0.3.5** (rename, comments, `NP_DEV`: must look and run the
-      same) and the pending test of 0.0.8.21: Metal Slug XX to the end of the level; check whether `vertice_fuera`
-      appears in the log and whether the white screen comes back.
+- [ ] **Test on the Vita: NativeDraw 0.0.8.24 + NativeLink 0.0.3.6** (everything in English: must look and run the same, with
+      the new switch files). Metal Slug XX on 0.0.8.23: `docs/dev/en/findings.md`.
 - [ ] **Synthetic battery NPTEST** (standardization goes before the texture cache): a homebrew based on the old GEPTEST
       runner (tag `gepatch-dev66`). About 12 2D scenes (clear, 4 sprite formats, CLUT4/8, swizzle, blending, alpha test,
       scissor, layers, TRANSFER, intermediate image, texture in VRAM), a cache scene, later 3D scenes (~12–15), plus the
       useful GPU tests of pspautotests (from the 112). NPCHECK confirmed that Adrenaline loads NativeLink with a homebrew
-      (`archivo=ms0:/PSP/GAME/NPCHECK/EBOOT.PBP` in `nativelink.log`); whether NativeDraw captures it is not confirmed
+      (`file=ms0:/PSP/GAME/NPCHECK/EBOOT.PBP` in `nativelink.log`); whether NativeDraw captures it is not confirmed
       (that run had no draws). Open point: image tolerance HD vs normal, calibrated with scenes.
 - [ ] **Simplify the structure** (after the tests): split `capture.c` (1621 lines) into walk, sublist memory, readers and
-      logs; fewer switches; tidy the mailbox; source file names and log texts to English (log format changes also update
-      `tools/test_link.py`, `tools/run_summary.py` and `tests/run/`).
+      logs; fewer switches; tidy the mailbox.
 - [ ] **Texture cache between frames** (user's request: caches everywhere, avoid redoing what did not change). Measured
       in 0.0.8.19: ~98–99 % of the bytes copied each frame equal the previous copy; the DMA is the expensive part
       (~100 µs per call; Metal Slug XX 10–17 ms per frame). Agreed design: textures kept unswizzled in the Vita's own
@@ -29,10 +26,10 @@ NativeDraw 0.0.8.23 + NativeLink 0.0.3.5). How the work is done: `docs/agent/en/
       identical scenes; the translator spends ~8–10 ms of CPU per frame).
 - [ ] **Capturer running late → garbage vertices** (Metal Slug XX, 0.0.8.20): with texture copies taking 20–28 ms per
       frame, the gate (5 ms at most) lets the game go on and already-rewritten vertices get copied. 0.0.8.21 sends those
-      frames with the normal image (`vertice_fuera`); the cause is attacked by the cache. Check with the cache whether
+      frames with the normal image (`vertex_out`); the cause is attacked by the cache. Check with the cache whether
       they still appear.
 - [ ] Metal Slug XX: almost every checked frame comes out "different from the normal image" (KOF ~0) although it looks
-      fine. Understand why (filter? one-frame delay at 30 fps?) before trusting `volcado auto` with this game.
+      fine. Understand why (filter? one-frame delay at 30 fps?) before trusting `dump auto` with this game.
 - [ ] When the performance work is confirmed, the commit is **NativeDraw 0.0.9** (user's decision): update
       `docs/dev/*/versions.md` (history row), `CHANGELOG.md` and `docs/agent/en/stage3-plan.md`.
 
@@ -45,11 +42,11 @@ NativeDraw 0.0.8.23 + NativeLink 0.0.3.5). How the work is done: `docs/agent/en/
 - [ ] **PS button in KOF 96** (0.0.8.17): the dialog appeared behind the fight and over the background, and 1–2 s later
       on top of everything, **with NativeDraw not replacing the image**: it is not the surface drawing but something that
       keeps running (GPU timer with its notification 510 in Adrenaline's scenes, hooks, capturer). Next test: the same
-      with `medir_gpu` set to `no`. `sceCommonDialogIsRunning` always says "no": useless for this. Postponed by the user.
+      with `gpu_timer` set to `no`. `sceCommonDialogIsRunning` always says "no": useless for this. Postponed by the user.
       Earlier case (0.0.8.12): pressing PS to quit removed the background at the sides and the dialog did not appear; PS
       twice to the Vita menu and reopening Adrenaline fixed it. Low priority: solve it if it comes back.
 - [ ] Translator, not drawn yet (frame goes with the normal image): 3D (non-through mode), depth and stencil, color test
-      and logical operations; blending with destination alpha or doubled factors (`mezcla`); scissor clipping of triangles
+      and logical operations; blending with destination alpha or doubled factors (`blend`); scissor clipping of triangles
       and strips (only rectangles today); an intermediate image drawn in one frame and used as a texture in another;
       repeating the GE's block copies (TRANSFER) to VRAM; joining draws with the same state (fewer GPU calls).
 - [ ] Frame record: store the matrices (needed for 3D); copying from the PSP RAM costs ~6 µs per draw (KOF 96, ~2.4 ms
@@ -57,20 +54,22 @@ NativeDraw 0.0.8.23 + NativeLink 0.0.3.5). How the work is done: `docs/agent/en/
 - [ ] Possible bugs noted while cleaning comments (not touched; confirm before changing): `replay.c` `repLoad`
       goes on with garbage data when a texture is bigger than the buffer and does not free memory on failure;
       `capture.c` `markRt` does not guard `n == 0` (`want` does) and could mark all 512 VRAM pages; installer: `hasLine()`
-      counts a commented-out line as enabled, "Desinstalar" deletes the dumps without warning and "Limpiar restos" reports
+      counts a commented-out line as enabled, "Uninstall" deletes the dumps without warning and "Clean test leftovers" reports
       files as deleted without checking. `dumpFrame`: f1 and f2 of each dump come out without `.bin` (confirmed in 0.0.8.20).
 - [ ] A fixed dotted line over the date of Adrenaline's menu with the presenter (menu only). Check whether it appears
-      with `dibujar` set to `no`.
+      with `draw` set to `no`.
 - [ ] Run **Ridge Racer** and the other installed games with NativeDraw 0.0.2 or later (only GT was retested after the
       rename; the capture did not change).
 - [ ] **Options in the L+R+START menu** (the menu exists since NativeDraw 0.0.4): the ones that are files in
       `ux0:data/nativedraw/` today (`docs/dev/en/logs-and-switches.md`), including the dump level, so a user can turn on
-      automatic dumps, play and hand us the `volcados/` folder. Decide which are worth it; the ones that only apply when
-      Adrenaline opens (`nucleo_captura`, `off`) must say so. Save in `ux0:data/nativedraw/opciones.txt`.
+      automatic dumps, play and hand us the `dumps/` folder. Decide which are worth it; the ones that only apply when
+      Adrenaline opens (`capture_core`, `off`) must say so. Save in `ux0:data/nativedraw/options.txt`.
 - [ ] `nativedraw/capture_test.c` does not simulate the Vita's notice to the PSP (the mirror copy the Vita announces
       in `SB[0x48]`).
 - [ ] **Updater** in the installer (future): look in GitHub releases for a new VPK and download it.
-- [ ] **Before 1.0:** remove "Limpiar restos de pruebas" from the installer.
+- [ ] `tools/windows/install.sh`: under `curl | bash` (`install.cmd` without a clone) `read` may consume the script from stdin
+      (untested).
+- [ ] **Before 1.0:** remove "Clean test leftovers" from the installer.
 - [ ] **Before the first release:** remove `docs/changelog/*/conversaciones/` (`CHANGELOG.md` stays as the summary) and
       make the GitHub release (VPK + loose plugins) with tags `nativelink-X.Y.Z` / `nativedraw-X.Y.Z`.
 - [ ] `tools/windows/install.cmd` / `install.sh` use the `dev` branch while the default branch is `master`; move
@@ -82,8 +81,8 @@ NativeDraw 0.0.8.23 + NativeLink 0.0.3.5). How the work is done: `docs/agent/en/
       heaviest part of GT. Ideas: a cached view or DMA (KBENCH: 1.7–4 times faster on big blocks). Measure first.
       (`docs/changelog/en/etapa2_fase2_adelanto.md`, `etapa2_fase1_impacto.md`)
 - [ ] Applying a sublist still copies its registers (up to 64) and matrices: measure what is left with the extreme log
-      (`aplicar_us`) before touching it.
-- [ ] A `sin_captura` run in GT to know whether the slow frames at the end of the lap belong to the game alone.
+      (`apply_us`) before touching it.
+- [ ] A `no_capture` run in GT to know whether the slow frames at the end of the lap belong to the game alone.
 - [ ] Interpretation loop: `l->n`, `acc.cmds`, `f_cmds`, `l->pc`, `l->prev` and `l->hi` are still counted per command;
       they could be added once per line (watch the `return`s inside the `switch`). The `draw()` statistics (batches,
       state changes) could move to the extreme log now that stage 2 is over.
@@ -92,11 +91,11 @@ NativeDraw 0.0.8.23 + NativeLink 0.0.3.5). How the work is done: `docs/agent/en/
       (`etapa2_fase2_estadisticas.md`)
 - [ ] `memoVerify` compares every version (up to 8) of a sublist even when they have the same lines: compare once per
       range. In GT there is almost always a single version, so it is not noticeable. (`etapa2_comparar_menos.md`)
-- [ ] Many sublists entering with another state (`otra_entrada`) are walked again: find a way to reuse them.
+- [ ] Many sublists entering with another state (`other_entry`) are walked again: find a way to reuse them.
 - [ ] Since v13.12 a line of a VRAM sublist with no valid copy in the frame's mirror is re-recorded instead of compared
-      with the old copy: if other games show many "cambiaron" in VRAM sublists, look at this.
-- [ ] `run_summary.py` still does not show the gate lines ("stats compuerta" in `nativelink.log`) nor the look-ahead
-      line (`adelanto/f` in `nativedraw_captura.log`); today they are read with grep.
+      with the old copy: if other games show many "changed" in VRAM sublists, look at this.
+- [ ] `run_summary.py` still does not show the gate lines ("stats gate" in `nativelink.log`) nor the look-ahead
+      line (`lookahead/f` in `nativedraw_capture.log`); today they are read with grep.
 
 ## Other games (after stage 2)
 - [ ] Test NativeDraw on the user's other installed games and on Silent Hill (and LocoRoco with the free core): the gate
@@ -112,7 +111,7 @@ NativeDraw 0.0.8.23 + NativeLink 0.0.3.5). How the work is done: `docs/agent/en/
 - [ ] **Record each stable sublist once and reuse the recorded GXM list.** Recording draw by draw does not fit for GT
       even on 3 cores (~24 ms of CPU and ~16 ms of GPU for 9000 draws; ~1.5 core free). In GT ~85 % of the commands come
       from sublists the capture already recognizes as identical. To solve: the input state the sublist inherits
-      (`otra_entrada`). Probably moves from stage 6 to stage 3/4 for GT.
+      (`other_entry`). Probably moves from stage 6 to stage 3/4 for GT.
 - [ ] **Join draws** with the same state (stage 1: 2000 squares in 1 draw = 0.02 µs per square, half the GPU).
 - [ ] The translator/recorder must run on core 0 (and what is left of core 2): core 1 belongs to the capture (~10–15 %
       free).
@@ -136,11 +135,11 @@ NativeDraw 0.0.8.23 + NativeLink 0.0.3.5). How the work is done: `docs/agent/en/
 - [ ] T6: "GE busy when called" at the sync is always 0, although the game waits ~0.7 ms (GT) or ~3.7 ms (SH) inside
       `sceGeDrawSync`. Understand what it waits for there (the end of the list with the GE already stopped, or the
       callbacks?).
-- [ ] T6 is off by default (it took ~2–3 fps from GT): enable with `ux0:data/nativedraw/medir_ge`. To leave it always
+- [ ] T6 is off by default (it took ~2–3 fps from GT): enable with `ux0:data/nativedraw/ge_timing`. To leave it always
       on, sample every ~1 ms or from somewhere else.
 
 ## Unreliable measurements
-- [ ] Core 0 of the `procesador` log line comes out almost empty: the CreateThread hook does not see the threads
+- [ ] Core 0 of the `processor` log line comes out almost empty: the CreateThread hook does not see the threads
       Adrenaline created before loading NativeDraw. (`docs/changelog/en/etapa2_memoria_sublistas.md`)
 - [ ] Approximate sublist-memory statistics: "changes" and batches of the first draw of an applied sublist depend on the
       input state; `chg[]` does not add the applied sublists. (`etapa2_memoria_sublistas.md`)

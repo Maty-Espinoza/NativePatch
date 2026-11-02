@@ -36,18 +36,18 @@ Más detalle: [`docs/dev/es/overview.md`](docs/dev/es/overview.md) y [`docs/dev/
 
 ## Instalar
 1. Instalar `NativePatch.vpk` con VitaShell y abrir **NativePatch** (el instalador).
-2. **Instalar / actualizar**: copia NativeLink a `ux0:pspemu/seplugins/` y lo activa en `plugins.txt` (el administrador
+2. **Install / update**: copia NativeLink a `ux0:pspemu/seplugins/` y lo activa en `plugins.txt` (el administrador
    de plugins de Adrenaline 8); copia NativeDraw a `ux0:data/nativedraw/` y lo agrega en la sección `*PSPEMUCFW` del
    `config.txt` de taiHEN. Antes de cambiar un archivo de configuración deja un respaldo en
-   `ux0:data/nativepatch/respaldo/`.
+   `ux0:data/nativepatch/backup/`.
 3. Reiniciar la Vita si el instalador lo pide (cuando cambió `config.txt`).
 
-Para actualizar: instalar el VPK nuevo y volver a usar **Instalar / actualizar**. El instalador también desinstala.
-- El dibujo en la Vita se activa con el archivo `ux0:data/nativedraw/dibujar` (sin él, NativeDraw solo mide).
+Para actualizar: instalar el VPK nuevo y volver a usar **Install / update**. El instalador también desinstala.
+- El dibujo en la Vita se activa con el archivo `ux0:data/nativedraw/draw` (sin él, NativeDraw solo mide).
 - Abrir un juego manteniendo **L** (o SELECT): NativeLink queda apagado para esa sesión.
 - **L+R+START** durante el juego: menú de NativeDraw (por ahora muestra las versiones). **L+R+SELECT**: volcado para
   depurar.
-- Logs en `ux0:pspemu/`: `nativelink.log`, `nativedraw.log` y `nativedraw_captura.log`.
+- Logs en `ux0:pspemu/`: `nativelink.log`, `nativedraw.log` y `nativedraw_capture.log`.
 - Con el filtro "Original" de Adrenaline la Vita no dibuja con GXM y NativeDraw no puede actuar: usar Bilinear.
 
 ## Compilar

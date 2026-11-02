@@ -48,15 +48,15 @@ latest confirmed). The tag `gepatch-dev66` is the last state with the old names.
 ## 3. Build and send to the Vita
 - Build: `environment.md` (in the container: `T=/home/claude/tc sh tools/setup.sh` once per session and
   `T=/home/claude/tc sh tools/build.sh <test version>`).
-- Send: `relay.md`. In short: binaries go to `vitabridge/enviar/ux0/...`, NativeDraw needs Adrenaline to be closed
+- Send: `relay.md`. In short: binaries go to `vitabridge/send/ux0/...`, NativeDraw needs Adrenaline to be closed
   (`cmd_*.txt` with `destroy`), and the md5 of what reached the Vita is verified before asking for the test.
 - **After every change it is built and sent to the Vita** (user's rule). Graphics are only tested on the Vita: there is
   no PC lab since NativeLink 0.0.2 (NativeLink does nothing visible without the Vita). The capturer test with qemu
   (`environment.md`) is for the capture logic, not for graphics.
 - **When to run each test** (`good-practices.md` §7): the automatic one runs on every push, look at its result on GitHub
   (or run `sh tools/test_ci.sh` before pushing); the execution one on the logs of every Vita run, before analyzing them;
-  the local one on a saved run when a change can touch performance and before confirming a version, with `ref` for a
-  real verdict.
+  the local one on a saved run when a change can touch performance and before confirming a version, with a known target
+  (`ref`, `--target` or `GAME_FPS`) for a real verdict.
 
 ## 4. Asking the user for tests
 - Say **which game, what to do and what to look at**, and at the end a summary of which game goes with which option. The
@@ -85,12 +85,12 @@ A reasonable suspicion is not enough: it is stated as a suspicion and confirmed 
 
 ## 6. Saving and reading results
 - At the end of each run, **before the user opens another game** (logs get replaced): wait for the relay to download
-  them (15–30 s after closing the game) and copy from `recibidos/` `nativelink.log`, `nativelink_prev.log`,
-  `nativedraw_captura.log`, `nativedraw_captura_prev.log`, `nativedraw.log` (in a dev build with extreme log level, also
-  `nativedraw_frames.log` and `nativedraw_tarde.log`) to `vitabridge/etapa<N>_<version>/<game><n>/` (e.g.
-  `etapa3_0.0.8.22/metalslug1`). The relay deletes what is in `recibidos/` after 7 days: what was not copied is lost.
+  them (15–30 s after closing the game) and copy from `received/` `nativelink.log`, `nativelink_prev.log`,
+  `nativedraw_capture.log`, `nativedraw_capture_prev.log`, `nativedraw.log` (in a dev build with extreme log level, also
+  `nativedraw_frames.log` and `nativedraw_late.log`) to `vitabridge/stage<N>_<version>/<game><n>/` (e.g.
+  `stage3_0.0.8.22/metalslug1`). The relay deletes what is in `received/` after 7 days: what was not copied is lost.
 - **Verify the version in the logs before analyzing:** `head -1 nativelink.log`, the first line of
-  `nativedraw_captura.log` and the last "NativeDraw 0.0.x ... compilado" line of `nativedraw.log` (this file is
+  `nativedraw_capture.log` and the last "NativeDraw 0.0.x built ..." line of `nativedraw.log` (this file is
   appended to, not replaced: the analysis starts at that line). The "prev" of the capturer log only rotates when opening
   Adrenaline: if the user changes game without closing Adrenaline, both end up in the same log.
 - First check that the components talked: `python3 tools/test_link.py <folder> [version.txt]`. Performance verdict:

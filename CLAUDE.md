@@ -15,8 +15,7 @@ Everything else is indexed in `docs/agent/en/README.md`.
 - Edit only the lines the task needs: no rewriting whole functions or files, no reordering, renaming or reformatting
   nearby code. Before each commit check `git diff`; every changed line must come from the request, and the user gets
   the diff summary with the explanation of the change.
-- Code is in English (identifiers and comments). Log texts, on-disk file names and source file names stay Spanish for
-  now.
+- Everything in the repo is English, except `docs/dev/es/`, `README.es.md` and the archive in `docs/changelog/`.
 - Delete what is not used (code, switches, files). Git keeps the history. Exception: dev-only measurements stay behind
   `#ifdef NP_DEV`, off in production (`PROD=1`).
 - Every version sent to the Vita gets a fourth number and a "(test)" commit on `dev`; confirmed versions follow the

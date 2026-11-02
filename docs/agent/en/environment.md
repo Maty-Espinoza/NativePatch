@@ -35,10 +35,10 @@ GitHub release built by `.github/workflows/toolchain.yml` on push.
 ## What `tools/build.sh` leaves
 - `build/nativelink.prx`, `build/nativedraw.suprx`, `build/NativePatch.vpk` (the installer with both plugins and a
   `version.txt`), plus the md5s on screen.
-- With a version: copies `build/<plugin>_<version>.*`, `NativePatch_<version>.vpk` and `cambios_<version>.patch` (the
+- With a version: copies `build/<plugin>_<version>.*`, `NativePatch_<version>.vpk` and `changes_<version>.patch` (the
   `git diff`).
-- With `V=<relay folder>`: the plugins to `V/enviar/ux0/...` (the relay uploads them to the Vita), the plugins and the VPK
-  to the folder above `V` (Descargas) and the versioned copies to `V/respaldo/`.
+- With `V=<relay folder>`: the plugins to `V/send/ux0/...` (the relay uploads them to the Vita), the plugins and the VPK
+  to the folder above `V` (Descargas) and the versioned copies to `V/backup/`.
 - It stops on the first failure and shows NativeDraw's errors. NativeLink is always a clean build.
 - `PROD=1` in the environment gives a production build of both plugins, without `NP_DEV` (also in `nativedraw/build.sh`
   and `nativelink/Makefile`); the default is dev (`../../dev/en/logs-and-switches.md`).
@@ -56,9 +56,9 @@ GitHub release built by `.github/workflows/toolchain.yml` on push.
 | `build.sh`, `windows/build.cmd` | Build everything (above) |
 | `windows/install.cmd`, `windows/install.sh` | Complete environment on Windows + WSL; `install.cmd` works on its own (downloads `install.sh` from the `dev` branch) |
 | `vitabridge.py`, `windows/vitabridge.cmd` | Relay with the Vita (`relay.md`) |
-| `run_summary.py <folder>` | Summary of a run: fps every 10 s, sync waits, mirror, seconds where the Vita falls short, DISTINTAS. `--check [--ref <folder>]` judges it. It finds the lines with regular expressions: if a log's text changes, change it there too |
+| `run_summary.py <folder>` | Summary of a run: fps every 10 s, sync waits, mirror, seconds where the Vita falls short, MISMATCHES. `--check [--ref <folder>] [--target 30\|60]` judges it (fps target order: `good-practices.md` §7). It finds the lines with regular expressions: if a log's text changes, change it there too |
 | `test_ci.sh`, `test_local.sh`, `test_link.py` | The three tests (below) |
-| `phase1_analysis.py <folder>...` | Summarizes `nativedraw_frames.log` and `nativedraw_tarde.log` (extreme log level): fps, slow frames and the cost of each part per frame |
+| `phase1_analysis.py <folder>...` | Summarizes `nativedraw_frames.log` and `nativedraw_late.log` (extreme log level): fps, slow frames and the cost of each part per frame |
 | `dump.py <dump folder> [K]` | Draws a dumped frame on the PC imitating the GE and compares it with the normal image and the Vita's (`../../dev/en/dumps.md`). Needs numpy and Pillow |
 
 ## Tests

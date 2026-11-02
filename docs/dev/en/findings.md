@@ -47,7 +47,7 @@ proof.
 - **The game does rewrite its lists**: the memory of frame N's list is reused when the next one is enqueued. That is
   why the gate goes before enqueuing, and NativeLink verifies it by itself with hashes (if a list changes earlier, the
   gate goes back to the sync).
-- Permanent check: 1 in 32 applied sublists is walked anyway and compared (DISTINTAS in the log). It must be 0 and it
+- Permanent check: 1 in 32 applied sublists is walked anyway and compared (MISMATCHES in the log). It must be 0 and it
   has been since v13.12 (before, 1–7 per run because of comparing against the wrong mirror).
 - What failed: reading the PSP's RAM directly 256 bytes at a time instead of the shared cache (v13.11.1), not rereading
   lines already checked (v13.8), FSR 1 on the Vita side as a shortcut (it did not improve the image and gave stutter
@@ -90,8 +90,13 @@ proof.
   the game through and vertices the game was already rewriting get copied (positions of ~2^31, uv 65535; the GPU filled
   the whole screen with one texture: Metal Slug XX's "white glitch"). A vertex outside ±4096 sends the frame with the
   normal image [measured, 0.0.8.20–0.0.8.21]. The texture cache attacks the cause.
+- **Metal Slug XX on 0.0.8.23** (run `stage3_0.0.8.23/ms`): 30 fps held through gameplay (121 s, none below 30). The
+  capturer takes ~25 ms of each 33 ms frame (p90 30 ms); texture copies: 358 KB per frame, DMA ~5 ms + unswizzle ~3 ms.
+  2 slow spots: ~2 s at 38–40 ms per frame with peaks of 70 ms. One burst of 174,353 commands in a frame: 182 ms, 25,054
+  draws, 2 frames hit the record cap; 44 `vertex_out` frames in that window [measured]. The planned fix is the texture
+  cache.
 - Neo Geo games make transparencies by drawing something one frame on and one frame off: if the Vita repeats or skips
-  frames, it flickers. It is measured with the `traductor: ritmo` line of the log.
+  frames, it flickers. It is measured with the `translator: pace` line of the log.
 - **Recording the screen** (Vitastream + OBS at 60 fps) found the one-frame broken frames that no dump captured. It is
   used only when dumps and logs are not enough.
 
@@ -115,12 +120,12 @@ proof.
 | What the PSP's system draws on top (PS button dialog) | it does not go through the game's lists | "covered": compared with the normal image, and the normal one is shown while it lasts |
 | Frames with sublists applied from memory | their draws do not go through the record | normal image (2D games hardly use sublists) |
 | A texture changed only in bytes the check does not see may look stale for a few frames | accepted risk of the texture cache (design in progress) | full check in turns |
-| Blends with no direct equivalent in GXM (destination alpha, doubled factors), color test, logic operations | fixed-function GXM does not have them (it does have programmable blending, not used yet) | normal image, reason `mezcla` / `test_color_o_logica` |
+| Blends with no direct equivalent in GXM (destination alpha, doubled factors), color test, logic operations | fixed-function GXM does not have them (it does have programmable blending, not used yet) | normal image, reason `blend` / `color_test_or_logic` |
 | Dependency on Adrenaline | imports of AdrenalineUser and ScePspemu are hooked | each Adrenaline version may break it; in the future, propose an official hook point |
 
 ## Things that were measured and were not what they seemed
 - vpjuego: "GE in stall" always 0 %: for the GE's timings use the enqueue and FINISH times (T6).
-- Core 0 of the `procesador` log line comes out almost empty: the CreateThread hook does not see the threads Adrenaline
+- Core 0 of the `processor` log line comes out almost empty: the CreateThread hook does not see the threads Adrenaline
   created before loading NativeDraw.
 - Reading the clock on the Vita costs ~390 ns: the full extreme log alters what it measures.
 - `sceCommonDialogIsRunning` always says "no" even with the PS button dialog open: useless for detecting it.
