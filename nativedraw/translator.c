@@ -265,6 +265,51 @@ static int trVerts(RFrame *f, RDraw *d, TV *o, float tw, float th, uint32_t col0
   return T_OK;
 }
 
+// Clips triangle p to scissor sc edge by edge (Sutherland-Hodgman), interpolating the new vertices, and writes the
+// polygon left to o as triangles. Returns the vertices written (15 at most).
+static uint32_t trClipTri(const TV *p, const float *sc, TV *o) {
+  TV a[7], b[7], *in = a, *out = b;
+  uint32_t m = 3, n = 0;
+  sceClibMemcpy(a, p, 3 * sizeof(TV));
+  for (int e = 0; e < 4; e++) {  // edges in sc order: left, top, right, bottom
+    uint32_t k = 0;
+    float s = e < 2 ? 1 : -1;
+    for (uint32_t i = 0; i < m; i++) {
+      const TV *c = &in[i], *x = &in[(i + 1) % m];
+      float dc = s * ((e & 1 ? c->y : c->x) - sc[e]), dx = s * ((e & 1 ? x->y : x->x) - sc[e]);
+      if (dc >= 0) out[k++] = *c;
+      if ((dc >= 0) != (dx >= 0)) {
+        float t = dc / (dc - dx);
+        TV q = { c->x + (x->x - c->x) * t, c->y + (x->y - c->y) * t, c->z, c->u + (x->u - c->u) * t, c->v + (x->v - c->v) * t, 0 };
+        for (int sh = 0; sh < 32; sh += 8) {
+          float c0 = c->c >> sh & 255, c1 = x->c >> sh & 255;
+          q.c |= (uint32_t)(c0 + (c1 - c0) * t + .5f) << sh;
+        }
+        out[k++] = q;
+      }
+    }
+    m = k;
+    TV *sw = in; in = out; out = sw;
+  }
+  for (uint32_t i = 2; i < m; i++) { o[n++] = in[0]; o[n++] = in[i - 1]; o[n++] = in[i]; }
+  return n;
+}
+
+// Triangles or strip (*prim 3 or 4) of *np vertices at o, room for room: if a vertex is outside the scissor, rewrites
+// them as a clipped triangle list (*prim = 3) and updates *np. T_OK or T_LIMIT.
+static int trTris(TV *o, uint32_t *np, uint32_t room, uint32_t *prim, const float *sc) {
+  uint32_t n = *np, m = 0, cut = 0;
+  for (uint32_t i = 0; i < n; i++) cut |= o[i].x < sc[0] || o[i].y < sc[1] || o[i].x > sc[2] || o[i].y > sc[3];
+  if (!cut) return T_OK;
+  for (uint32_t i = 0; i + 2 < n; i += *prim == 3 ? 3 : 1) {
+    if (n + m + 15 > room) return T_LIMIT;
+    m += trClipTri(o + i, sc, o + n + m);
+  }
+  sceClibMemmove(o, o + n, m * sizeof(TV));
+  *np = m; *prim = 3;
+  return T_OK;
+}
+
 // Pixels covered by the n translated vertices of a draw (rectangles: each one; the rest: their bounding
 // rectangle). For the timer.
 static float trArea(const TV *o, uint32_t n, uint32_t prim) {
@@ -426,9 +471,11 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
       if (ry < sc[3]) sc[3] = ry;
     }
     if ((res = trVerts(f, d, o + nv, tw, th, mat, sc, &n))) break;
-    if (!n) continue;
     if (nv + n > TV_N) { res = T_LIMIT; break; }
-    float ar = trArea(o + nv, n, d->prim);
+    uint32_t prim = d->prim;
+    if (prim != 6 && (res = trTris(o + nv, &n, TV_N - nv, &prim, sc))) break;
+    if (!n) continue;
+    float ar = trArea(o + nv, n, prim);
     if (c_on) { spx += ar; ssw += tex && d->toff && (RE(e, 0xC2) & 1); }
     static uint32_t giant;  // giant draws (over 2 screens at double size): the first 40, in detail
     if (ar > 2.0f * LINE * H && giant < 40) {
@@ -460,7 +507,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
       sceGxmSetFragmentTexture(c, 0, &t);
     }
     sceGxmSetVertexStream(c, 0, o + nv);
-    sceGxmDraw(c, d->prim == 3 ? SCE_GXM_PRIMITIVE_TRIANGLES : SCE_GXM_PRIMITIVE_TRIANGLE_STRIP, SCE_GXM_INDEX_FORMAT_U16, tib, n);
+    sceGxmDraw(c, prim == 3 ? SCE_GXM_PRIMITIVE_TRIANGLES : SCE_GXM_PRIMITIVE_TRIANGLE_STRIP, SCE_GXM_INDEX_FORMAT_U16, tib, n);
     nv += n; t_draws++;
   }
   if (!has_base && res == T_OK) OPEN(0);  // (frame with no draws to the surface: it still gets the image underneath)
