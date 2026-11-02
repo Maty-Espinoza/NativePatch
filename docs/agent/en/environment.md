@@ -24,6 +24,11 @@ leaves adds `-std=gnu17`.
 | User's Linux / native Mac | `sh tools/setup.sh` | `sh tools/build.sh` | |
 | GitHub Actions (`.github/workflows/ci.yml`) | `tools/setup.sh` | `tools/build.sh` | On every push; the binaries stay as an artifact. Also runs `tools/test_ci.sh` |
 
+## Emulator package
+`sh tools/emu.sh` (needs `tools/setup.sh`) downloads PPSSPP headless from the release named in `tools/emu-version`, built by
+`.github/workflows/emulator.yml` for Linux x86_64 (container, WSL), Linux ARM64 (the Mac's VM) and macOS ARM64, and runs
+NPTEST (`docs/dev/en/nptest.md`). To change it: bump `tools/emu-version` and push. It checks the scenes, not the plugins.
+
 ## Toolchain package
 `tools/setup.sh` downloads and unpacks one pinned package, named by `tools/toolchain-version` (`toolchain-1`), from a
 GitHub release built by `.github/workflows/toolchain.yml` on push.

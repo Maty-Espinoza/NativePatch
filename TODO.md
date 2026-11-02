@@ -8,14 +8,11 @@ what was done is in `CHANGELOG.md`. Updated 2026-11-02 (NativeLink 0.0.3 + Nativ
 ## Next
 - [ ] **Triangle fans (prim 5) in the translator:** Street Fighter Alpha 3 MAX fights fall to the normal image with reason
       `primitive`. With them it is the 2D benchmark at 60 fps (~600 draws per frame).
-- [ ] A test for "state set only in the game's first lists", as a NPTEST scene (nothing cheaper can reproduce it).
 - [ ] KOF 96 fights: seconds at 42–57 fps with the GPU at 90–98 % and the capturer at ~11 ms; suspected GPU limit, not proven.
-- [ ] **Synthetic battery NPTEST** (standardization goes before the texture cache): a homebrew based on the old GEPTEST
-      runner (tag `gepatch-dev66`). About 12 2D scenes (clear, 4 sprite formats, CLUT4/8, swizzle, blending, alpha test,
-      scissor, layers, TRANSFER, intermediate image, texture in VRAM), a cache scene, later 3D scenes (~12–15), plus the
-      useful GPU tests of pspautotests (from the 112). NPCHECK confirmed that Adrenaline loads NativeLink with a homebrew
-      (`file=ms0:/PSP/GAME/NPCHECK/EBOOT.PBP` in `nativelink.log`); whether NativeDraw captures it is not confirmed
-      (that run had no draws). Open point: image tolerance HD vs normal, calibrated with scenes.
+- [ ] **Synthetic battery NPTEST** (`docs/dev/en/nptest.md`, standardization goes before the texture cache): 108 2D scenes
+      in `tests/nptest/`, checked on PPSSPP. Pending: first run on the Vita (does NativeDraw capture a homebrew?); the reason
+      of each scene (the presenter logs them every 10 s); comparing images per scene (image tolerance, open); a cache scene
+      check; 3D scenes; useful GPU tests of pspautotests.
 - [ ] **Simplify the structure** (after the tests): split `capture.c` (1621 lines) into walk, sublist memory, readers and
       logs; fewer switches; tidy the mailbox.
 - [ ] **Texture cache between frames** (user's request: caches everywhere, avoid redoing what did not change). Measured

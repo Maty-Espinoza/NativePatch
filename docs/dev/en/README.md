@@ -11,6 +11,7 @@ To understand NativePatch without knowing anything beforehand. Spanish version: 
 | 5 | `architecture-and-roadmap.md` | The analysis that decided the architecture and the roadmap by stages (kept as it was written) |
 | — | `logs-and-switches.md` | What each log writes, line by line, and the switches in `ux0:data/nativedraw/` |
 | — | `dumps.md` | Frame dumps: levels, files, how to read them with `tools/dump.py`, replay on the Vita |
+| — | `nptest.md` | The synthetic 2D battery: scenes, rare techniques, how to run it on the Vita and on a PC |
 | — | `adrenaline.md` | What you need to know about Adrenaline: plugin loading, how it draws, memory map, PSP–ARM channel |
 | — | `versions.md` | Version rules, commit history and equivalence with the old names (GePatch, gepresent) |
 
