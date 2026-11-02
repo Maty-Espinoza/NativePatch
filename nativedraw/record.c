@@ -366,7 +366,6 @@ static void regDraw(uint32_t n, uint32_t type, uint32_t vt, uint32_t idx) {
 static void regClut(uint32_t d) {
   uint32_t n = (d & 0x3F) * 32;
   rg_clut_b = n;
-  if (rf[rg_w]->flags) { rg_clut = 0; return; }
   uint32_t t0 = now();
   rg_clut = n ? rgCopy(CLUTADDR(), n) : 0;
   if (rg_clut) ga.cl++;
@@ -423,9 +422,12 @@ static void regFlip(uint32_t fb, uint32_t fbw, uint32_t draws_counted) {
   // Only what the GE draws from now on is held in HD; any other read of those pages comes from the mirror. A sublist
   // the memory applied did not go through draw(): its marks stay
   if (!(f->flags & R_MEMO)) { sceClibMemset(rt_pg, 0, sizeof rt_pg); last_fb = ~0u; }
+  const uint8_t *pal = rg_clut ? f->a + rg_clut - 1 : 0;
   f = rf[rg_w];
   f->nd = f->ne = f->na = f->flags = f->draws_seen = f->nt = f->ntx = f->dv = f->nimg = 0;
   rg_t = 0;
-  // The loaded palette is still valid in the GE: it is copied again to the new record (as it is now in memory)
-  rg_clut = rg_clut_b ? rgCopy(last_clut[0], rg_clut_b) : 0;
+  // The GE keeps the palette it loaded whatever the memory holds now: its copy goes on to the new record (from memory
+  // only if there is none)
+  if (pal) { sceClibMemmove(f->a, pal, rg_clut_b); f->na = rg_clut_b; rg_clut = 1; }
+  else rg_clut = rg_clut_b ? rgCopy(last_clut[0], rg_clut_b) : 0;
 }
