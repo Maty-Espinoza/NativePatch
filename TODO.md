@@ -13,16 +13,16 @@ what was done is in `CHANGELOG.md`. Updated 2026-11-02 (NativeLink 0.0.3 + Nativ
       (8-bit positions: the PSP does not draw the sprite where the translator does), `paletteRt`, `depthTex`. Animated
       scenes give false differences: the normal image of a dump is caught half drawn (suspected: NPTEST's flip), and
       `layers`, `rtOne` and `lateList` fail the comparator because of that.
-- [ ] **KOF 96, tiles after the SELECT menu (0.0.8.32):** cause unknown; the log has only `ok` frames and all its textures are
-      in VRAM. Not known if it is new. Next: a L+R+SELECT dump while it shows. Metal Slug XX is fine in the logs.
+- [ ] **KOF 96, tiles in the player select (0.0.8.32):** seen in a screenshot dump (`stage3_0.0.8.32/kof_dumps/215`): the frame is
+      drawn as ok but the tile textures in VRAM are wrong, right when the character portraits appear. Cause unknown; not
+      known if it is new. Suspected: `dd0456a` (TRANSFER destinations read from the mirror). Next: a `sequence` dump (with
+      record) of that moment, `tools/dump.py`, and if it is not enough the same scene on 0.0.8.29.
 - [ ] **NPTEST, still open:** `stencilAlpha` and `blendDst` (stencil to alpha at the end of a scene), `blend2x`, `fixGray` and bit
       masks (shaders; no shacc in the container), `readBack` (read the surface mid-scene), `cpuPixels` and `noClear`
       (CPU writes and partial redraws), offsets into intermediate images (`draw()` takes the height from 0xD6, MINZ, not
       0xD5: fixing it needs them; `subRt`, `xferIntra`).
-- [ ] **Synthetic battery NPTEST** (`docs/dev/en/nptest.md`, standardization goes before the texture cache): 108 2D scenes
-      in `tests/nptest/`, checked on PPSSPP. Pending: first run on the Vita (does NativeDraw capture a homebrew?); the reason
-      of each scene is logged (`translator: result at frame`), the report script is missing; comparing images per scene (image tolerance, open); a cache scene
-      check; 3D scenes; useful GPU tests of pspautotests.
+- [ ] **Synthetic battery NPTEST** (`docs/dev/en/nptest.md`): pending: false differences in animated scenes, image tolerance
+      with real scenes, 3D scenes, useful GPU tests of pspautotests.
 - [ ] **Simplify the structure** (after the tests): split `capture.c` (1621 lines) into walk, sublist memory, readers and
       logs; fewer switches; tidy the mailbox.
 - [ ] **Texture cache between frames** (user's request: caches everywhere, avoid redoing what did not change). Measured
@@ -52,10 +52,8 @@ what was done is in `CHANGELOG.md`. Updated 2026-11-02 (NativeLink 0.0.3 + Nativ
       with `gpu_timer` set to `no`. `sceCommonDialogIsRunning` always says "no": useless for this. Postponed by the user.
       Earlier case (0.0.8.12): pressing PS to quit removed the background at the sides and the dialog did not appear; PS
       twice to the Vita menu and reopening Adrenaline fixed it. Low priority: solve it if it comes back.
-- [ ] Translator, not drawn yet (frame goes with the normal image): 3D (non-through mode), depth and stencil, color test
-      and logical operations; blending with destination alpha or doubled factors (`blend`); scissor clipping of triangles
-      and strips (only rectangles today); an intermediate image drawn in one frame and used as a texture in another;
-      repeating the GE's block copies (TRANSFER) to VRAM; joining draws with the same state (fewer GPU calls).
+- [ ] Translator, not drawn yet (frame goes with the normal image): 3D (non-through mode), color test and logical
+      operations; blending with destination alpha or doubled factors (`blend`); joining draws with the same state.
 - [ ] Frame record: store the matrices (needed for 3D); copying from the PSP RAM costs ~6 µs per draw (KOF 96, ~2.4 ms
       per frame): make it cheaper if it matters; some KOF 96 frames hit the cap (`R_LIMIT`) in transitions.
 - [ ] Possible bugs noted while cleaning comments (not touched; confirm before changing): `replay.c` `repLoad`
