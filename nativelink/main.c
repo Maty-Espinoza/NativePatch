@@ -341,6 +341,7 @@ static void t4Flip(void) { // on the flip: frame totals
   memset(&t4, 0, sizeof(t4));
 }
 #endif
+DEV(static int stage;)
 // Development builds: finds sceGeGetReg and the cache and DMA functions, hooks those it finds and starts the T6 thread.
 // All builds: starts the free-CPU thread (after calibrating it). What it found goes to the log.
 static void t4t6Install(void) {
@@ -355,6 +356,7 @@ static void t4t6Install(void) {
     _dcWbA = (void *)FindProc(um[i], "UtilsForUser", 0x79D1C3FA);
     _dcWbIA = (void *)FindProc(um[i], "UtilsForUser", 0xB435DEC5);
   }
+  if (stage == 7) _dcWbR = _dcWbIR = _dcIR = 0, _dcWbA = _dcWbIA = 0;
   if (_dcWbR) { sctrlHENPatchSyscall((u32)_dcWbR, dcWbRPatched); nd++; }
   if (_dcWbIR) { sctrlHENPatchSyscall((u32)_dcWbIR, dcWbIRPatched); nd++; }
   if (_dcIR) { sctrlHENPatchSyscall((u32)_dcIR, dcIRPatched); nd++; }
@@ -369,7 +371,7 @@ static void t4t6Install(void) {
   }
   if (_dmac) { sctrlHENPatchSyscall((u32)_dmac, dmacPatched); nm++; }
   if (_dmacTry) { sctrlHENPatchSyscall((u32)_dmacTry, dmacTryPatched); nm++; }
-  SceUID th = _sceGeGetReg ? sceKernelCreateThread("NativeLinkGE", geThread, 0x11, 0x800, 0, NULL) : -1;
+  SceUID th = _sceGeGetReg && stage != 6 ? sceKernelCreateThread("NativeLinkGE", geThread, 0x11, 0x800, 0, NULL) : -1;
   if (th >= 0) sceKernelStartThread(th, 0, NULL);
 #endif
   // Free-CPU calibration: the thread's same loop, timed here (2 million spins) = spins per ms
@@ -377,7 +379,7 @@ static void t4t6Install(void) {
   for (k = 0; k < 2000000; k++) { spin++; asm volatile("" ::: "memory"); }
   tc = sceKernelGetSystemTimeLow() - tc;
   spin_cal = tc ? 2000000u / (tc / 1000 + 1) : 0;
-  SceUID tl = sceKernelCreateThread("NativeLinkIdle", libreThread, 126, 0x400, 0, NULL);
+  SceUID tl = DEV(stage == 5 ? -1 :) sceKernelCreateThread("NativeLinkIdle", libreThread, 126, 0x400, 0, NULL);
   if (tl >= 0) sceKernelStartThread(tl, 0, NULL);
   LOG("CPU idle: %lu loops/ms = 100%% (thread %08lx)\n", spin_cal, (u32)tl);
 #ifdef NP_DEV
@@ -639,7 +641,8 @@ static int zoneCheck(void) {
 }
 
 #ifdef NP_DEV
-// Diagnosis: ms0:/seplugins/nl_stage holds the digit of the startup step where module_start stops (0: none)
+// Diagnosis: ms0:/seplugins/nl_stage holds a digit: 1-3 step where module_start stops; 4 no display hook, 5 no idle
+// thread, 6 no GE thread, 7 no cache hooks; 0 everything
 static int stageRead(void) {
   char c = '0';
   SceUID fd = sceIoOpen("ms0:/seplugins/nl_stage", PSP_O_RDONLY, 0);
@@ -658,7 +661,7 @@ int module_start(SceSize args, void *argp) {
   logInit(pad.Buttons & PSP_CTRL_RTRIGGER);
   if (passive)
     LOG("off (L or SELECT when opening the game): the game runs unchanged and nothing is noted for NativeDraw\n");
-  DEV(int stage = stageRead(); if (stage == 1) return 0;)
+  DEV(stage = stageRead(); if (stage == 1) return 0;)
   if (zoneCheck() && !passive) {
     passive = 1;
     LOG("WARNING: the game uses the plugin zone (0x0A000000-0x0B000000) -> off\n");
@@ -686,7 +689,7 @@ int module_start(SceSize args, void *argp) {
   sctrlHENPatchSyscall((u32)_sceGeListSync, sceGeListSyncPatched);
   DEV(if (stage == 3) return 0;)
   t4t6Install(); // (the hooks only note if NativeLink is active)
-  sctrlHENPatchSyscall((u32)_sceDisplaySetFrameBuf, sceDisplaySetFrameBufPatched);
+  DEV(if (stage != 4)) sctrlHENPatchSyscall((u32)_sceDisplaySetFrameBuf, sceDisplaySetFrameBufPatched);
 
   sceKernelDcacheWritebackInvalidateAll();
   sceKernelIcacheClearAll();
