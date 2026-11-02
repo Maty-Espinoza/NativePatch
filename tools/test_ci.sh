@@ -36,5 +36,7 @@ cp -r $R/nativelink $B/nativelink
 make -s -C $B/nativelink clean ADRENALINE=$ADRENALINE
 make -s -C $B/nativelink PROD=1 ADRENALINE=$ADRENALINE
 (cd $R/nativedraw && O=$B/nativedraw PROD=1 sh build.sh >$B/nativedraw.log) || { cat $B/nativedraw.log; exit 1; }
+cp -r $R/tests/nptest $B/nptest; make -s -C $B/nptest >/dev/null  # (the synthetic battery still builds)
 ls -l $B/nativelink/nativelink.prx $B/nativedraw/nativedraw.suprx
+ls -l $B/nptest/EBOOT.PBP
 echo "all ok"
