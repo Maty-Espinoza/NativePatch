@@ -241,7 +241,8 @@ static void trOutLog(RFrame *f, RDraw *d, uint32_t i, uint32_t k, uint32_t sz, c
 // type (with its alignment), follows the indices if any, and leaves x, y doubled and u, v divided by tw x th.
 // col0: color if the vertex has none; sc: doubled scissor (x0, y0, x1, y1). Rectangles (2 corners) are clipped to the
 // scissor and come out as 4-vertex strips. *nout: vertices written. T_OK, T_VERT (data outside the record), T_LIMIT or
-// T_OUT (position outside +-4096: garbage vertices).
+// T_OUT (position outside +-4096: garbage vertices). The GE's z (integer, 0-65535) comes out as 0.5 down to 0: with the
+// matrix tr_wvp, clip z from 0 to almost 1, growing with the GE's, so the GE comparisons apply as they are.
 static int trVerts(RFrame *f, RDraw *d, TV *o, float tw, float th, uint32_t col0, const float *sc, uint32_t *nout) {
   static const uint8_t s4[4] = { 0, 1, 2, 4 }, cs[8] = { 0, 0, 0, 0, 2, 2, 2, 4 };
   uint32_t vt = d->vt, tc = vt & 3, ct = vt >> 2 & 7, nt = vt >> 5 & 3, pt = vt >> 7 & 3, sz = 0, al = 1, s;
@@ -261,8 +262,12 @@ static int trVerts(RFrame *f, RDraw *d, TV *o, float tw, float th, uint32_t col0
     const uint8_t *p = vb + k * sz;
     TV q = { 0, 0, .5f, 0, 0, ct ? col8888(p + ocol, ct) : col0 };
     if (pt == 1) { q.x = (int8_t)p[opos]; q.y = (int8_t)p[opos + 1]; }
-    else if (pt == 2) { q.x = ((const int16_t *)(p + opos))[0]; q.y = ((const int16_t *)(p + opos))[1]; }
-    else { q.x = ((const float *)(p + opos))[0]; q.y = ((const float *)(p + opos))[1]; }
+    else if (pt == 2) { q.x = ((const int16_t *)(p + opos))[0]; q.y = ((const int16_t *)(p + opos))[1]; q.z = .5f - ((const uint16_t *)(p + opos))[2] / 131072.0f; }
+    else {
+      q.x = ((const float *)(p + opos))[0]; q.y = ((const float *)(p + opos))[1];
+      float z = ((const float *)(p + opos))[2];
+      q.z = .5f - (z >= 65535 ? 65535 : z > 0 ? (int)z : 0) / 131072.0f;
+    }
     if (tc == 1) { q.u = p[otc]; q.v = p[otc + 1]; }
     else if (tc == 2) { q.u = ((const uint16_t *)(p + otc))[0]; q.v = ((const uint16_t *)(p + otc))[1]; }
     else if (tc == 3) { q.u = ((const float *)(p + otc))[0]; q.v = ((const float *)(p + otc))[1]; }
@@ -270,7 +275,7 @@ static int trVerts(RFrame *f, RDraw *d, TV *o, float tw, float th, uint32_t col0
     if (!(q.x > -4096 && q.x < 4096 && q.y > -4096 && q.y < 4096)) { DEV(trOutLog(f, d, i, k, sz, p);) return T_OUT; }
     q.x *= 2; q.y *= 2; q.u /= tw; q.v /= th;
     if (d->prim == 6) {  // rectangle: 2 vertices (opposite corners) -> strip of 4, separated from the next with two
-      r[i & 1] = q;      // repeated vertices; the color is the second vertex's (like the GE)
+      r[i & 1] = q;      // repeated vertices; color and z are the second vertex's (like the GE)
       if (i & 1) {
         if (n + 6 > TV_N) return T_LIMIT;
         for (int axis = 0; axis < 2; axis++) {  // scissor clipping in x and y; u and v are clipped proportionally
@@ -281,8 +286,9 @@ static int trVerts(RFrame *f, RDraw *d, TV *o, float tw, float th, uint32_t col0
           *t0 = q0 + (*a0 - p0) * k; *t1 = q0 + (*a1 - p0) * k;
         }
         uint32_t c = r[1].c;
-        TV a = { r[0].x, r[0].y, .5f, r[0].u, r[0].v, c }, b = { r[1].x, r[0].y, .5f, r[1].u, r[0].v, c },
-           cc = { r[0].x, r[1].y, .5f, r[0].u, r[1].v, c }, dd = { r[1].x, r[1].y, .5f, r[1].u, r[1].v, c };
+        float z = r[1].z;
+        TV a = { r[0].x, r[0].y, z, r[0].u, r[0].v, c }, b = { r[1].x, r[0].y, z, r[1].u, r[0].v, c },
+           cc = { r[0].x, r[1].y, z, r[0].u, r[1].v, c }, dd = { r[1].x, r[1].y, z, r[1].u, r[1].v, c };
         o[n++] = a; o[n++] = a; o[n++] = b; o[n++] = cc; o[n++] = dd; o[n++] = dd;
       }
     outside:;
@@ -333,6 +339,18 @@ static uint32_t trBase(SceGxmContext *c, const SceGxmTexture *base, TV *o, uint3
   sceGxmSetVertexStream(c, 0, o + nv);
   sceGxmDraw(c, SCE_GXM_PRIMITIVE_TRIANGLE_STRIP, SCE_GXM_INDEX_FORMAT_U16, tib, 4);
   return nv + 4;
+}
+
+// GE comparison (0-7) -> GXM depth function >> 22, which is also its stencil function >> 25
+static const uint8_t gcmp[8] = { 0, 7, 2, 5, 1, 3, 4, 6 };
+static uint32_t t_zs;  // depth state in the context; ~0u: unknown
+// Sets the depth test and write of the draw of state e (0: neither, for what goes underneath), if they changed. As on
+// the GE, without the test nothing is written; a clear writes if its depth bit is on. Depth lives in one scene only.
+static void zsSet(SceGxmContext *c, const uint32_t *e) {
+  uint32_t clr = e ? RE(e, 0xD3) : 0, z = SCE_GXM_DEPTH_FUNC_ALWAYS, w = SCE_GXM_DEPTH_WRITE_DISABLED;
+  if (clr & 1) { if (clr >> 10 & 1) w = SCE_GXM_DEPTH_WRITE_ENABLED; }
+  else if (e && (RE(e, 0x23) & 1)) { z = (uint32_t)gcmp[RE(e, 0xDE) & 7] << 22; if (!(RE(e, 0xE7) & 1)) w = SCE_GXM_DEPTH_WRITE_ENABLED; }
+  if ((z | w) != t_zs) { t_zs = z | w; sceGxmSetFrontDepthFunc(c, z); sceGxmSetFrontDepthWriteEnable(c, w); }
 }
 
 // Draws frame f of the record to surface s (cs[s]), in the Adrenaline thread. base: the normal image, which goes
@@ -387,7 +405,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
   uint32_t *pal = tpal[s], np = 0, nv = 0, pal_prev = ~0u, pn = 0;  // np: words used; pal_prev/pn: the previous palette
   void *u;
   // SCENE: starts a scene on surface surf_tex with the vertex program and the matrix
-#define SCENE(surf_tex) do { sceGxmBeginScene(c, 0, rt, 0, 0, 0, surf_tex, &ds); sceGxmSetVertexProgram(c, nvp); \
+#define SCENE(surf_tex) do { sceGxmBeginScene(c, 0, rt, 0, 0, 0, surf_tex, &ds); t_zs = ~0u; zsSet(c, 0); sceGxmSetVertexProgram(c, nvp); \
     sceGxmReserveVertexDefaultUniformBuffer(c, &u); sceGxmSetUniformDataF(u, n_wvp, 0, 16, tr_wvp); } while (0)
   // OPEN: closes the open scene (if any) and opens one on dst (0: surface s); the first time on the surface,
   // puts the normal image (or black: trBase) underneath
@@ -414,7 +432,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     if (fb != disp && !dst) { res = T_DEST; break; }
     if (ord && (pass ? dst != 0 : dst == 0)) continue;
     if (!opened || dst != cur_rt) OPEN(dst);
-    if ((clr & 1) && !(clr >> 8 & 1)) continue;  // depth/stencil-only clear: nothing to see
+    if ((clr & 1) && !(clr & 0x500)) continue;  // stencil-only clear: nothing to see
     uint32_t key = clr & 1 ? 0 : blendKey(e), mat = (RE(e, 0x55) & 0xFFFFFF) | (RE(e, 0x56) & 0xFF) << 24;
     float tw = 1, th = 1;
     SceGxmTexture t;
@@ -484,12 +502,15 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
       sceGxmSetUniformDataF(u, n_tf, 0, 4, tf);
       sceGxmSetFragmentTexture(c, 0, &t);
     }
+    zsSet(c, e);
     sceGxmSetVertexStream(c, 0, o + nv);
     sceGxmDraw(c, d->prim == 3 ? SCE_GXM_PRIMITIVE_TRIANGLES : SCE_GXM_PRIMITIVE_TRIANGLE_STRIP, SCE_GXM_INDEX_FORMAT_U16, tib, n);
     nv += n; t_draws++;
   }
   if (!has_base && res == T_OK) OPEN(0);  // (frame with no draws to the surface: it still gets the image underneath)
   if (opened) {  // (if something failed midway, the surface keeps what was drawn: not used)
+    sceGxmSetFrontDepthFunc(c, SCE_GXM_DEPTH_FUNC_ALWAYS);  // the context is Adrenaline's: its defaults back
+    sceGxmSetFrontDepthWriteEnable(c, SCE_GXM_DEPTH_WRITE_ENABLED);
     sceGxmEndScene(c, 0, gEnd());
     cNote(cur_rt ? C_INT : C_TR, &gq_n, t_draws - d0, spx / 1000, ssw);
   }
