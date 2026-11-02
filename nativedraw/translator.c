@@ -419,6 +419,12 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     uint32_t n = 0, d4 = RE(e, 0xD4), d5 = RE(e, 0xD5);
     float sc[4] = { 2.0f * (d4 & 0x3FF), 2.0f * (d4 >> 10 & 0x3FF), 2.0f * ((d5 & 0x3FF) + 1), 2.0f * ((d5 >> 10 & 0x3FF) + 1) };
     if (!(d5 & 0xFFFFF)) sc[0] = sc[1] = -1e9f, sc[2] = sc[3] = 1e9f;  // (no saved scissor: not clipped)
+    uint32_t rg = RE(e, 0x16);  // the region's end (never set: 0) is one more scissor edge
+    if (rg & 0xFFFFF) {
+      float rx = 2.0f * ((rg & 0x3FF) + 1), ry = 2.0f * ((rg >> 10 & 0x3FF) + 1);
+      if (rx < sc[2]) sc[2] = rx;
+      if (ry < sc[3]) sc[3] = ry;
+    }
     if ((res = trVerts(f, d, o + nv, tw, th, mat, sc, &n))) break;
     if (!n) continue;
     if (nv + n > TV_N) { res = T_LIMIT; break; }
