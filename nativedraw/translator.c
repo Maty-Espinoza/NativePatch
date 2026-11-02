@@ -313,6 +313,22 @@ static int trTris(TV *o, uint32_t *np, uint32_t room, uint32_t *prim, const floa
   return T_OK;
 }
 
+// Texture of tw x th texels (0xB8) in a buffer of tbw at src, narrower than the buffer, and t made with the buffer's
+// width: repeat and clamp would act at the buffer's edge. If the n vertices at o leave tw, copies its rows without the
+// gap to dst (room words), narrows t and rescales u. Returns the words used (0: not needed), ~0u if it does not fit.
+static uint32_t trNarrow(SceGxmTexture *t, const uint8_t *src, uint32_t fmt, uint32_t tbw, uint32_t tw, uint32_t th, TV *o, uint32_t n, uint32_t *dst, uint32_t room) {
+  static const uint8_t bp[6] = { 16, 16, 16, 32, 4, 8 };
+  float k = (float)tbw / tw;
+  uint32_t out = 0, ri = tbw * bp[fmt] / 8, ro = ((tw + 7) & ~7u) * bp[fmt] / 8, w;  // (GXM stride: 8 texels)
+  for (uint32_t i = 0; i < n; i++) out |= o[i].u < 0 || o[i].u * k > 1;
+  if (!out) return 0;
+  if ((w = (ro * th + 63) / 4 & ~15u) > room) return ~0u;
+  for (uint32_t y = 0; y < th; y++) sceClibMemcpy((uint8_t *)dst + y * ro, src + y * ri, ro < ri ? ro : ri);
+  sceGxmTextureSetWidth(t, tw); sceGxmTextureSetData(t, dst);
+  for (uint32_t i = 0; i < n; i++) o[i].u *= k;
+  return w;
+}
+
 // Pixels covered by the n translated vertices of a draw (rectangles: each one; the rest: their bounding
 // rectangle). For the timer.
 static float trArea(const TV *o, uint32_t n, uint32_t prim) {
@@ -478,6 +494,11 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     uint32_t prim = d->prim;
     if (prim != 6 && (res = trTris(o + nv, &n, TV_N - nv, &prim, sc, (clr & 1) || !(RE(e, 0x50) & 1)))) break;
     if (!n) continue;
+    if (tex && d->toff && (1u << (RE(e, 0xB8) & 15)) < tw) {
+      uint32_t w = trNarrow(&t, f->tx + d->toff - 1, RE(e, 0xC3) & 15, tw, 1u << (RE(e, 0xB8) & 15), th, o + nv, n, pal + np, TP_B / 4 - np);
+      if (w == ~0u) { res = T_LIMIT; break; }
+      np += w;
+    }
     float ar = trArea(o + nv, n, prim);
     if (c_on) { spx += ar; ssw += tex && d->toff && (RE(e, 0xC2) & 1); }
     static uint32_t giant;  // giant draws (over 2 screens at double size): the first 40, in detail
