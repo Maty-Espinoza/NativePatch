@@ -95,3 +95,4 @@ Hitos de la numeración vieja (detalle en `../../changelog/`):
 | dev65 + v13.9 | Fase 1 de análisis, niveles de registro |
 | dev66 + v13.10–v13.12 | Fase 2: compuerta antes de encolar, estadísticas compactas, comprobación por adelantado, MISMATCHES arregladas |
 | v13.13 | Ridge Racer a 60 fps: interpretar de a línea, capturador en cualquier núcleo |
+| 0.0.4 | 0.0.9 | (este commit) | Etapa 3: KOF 96 a 60 fps, Metal Slug XX a 30 fps, batería sintética NPTEST y comparador, paquete del emulador, arreglos de los volcados de NPTEST. Pruebas: NativeDraw 0.0.8.13–0.0.8.32 y NativeLink 0.0.3.1–0.0.3.11 |

@@ -2,7 +2,7 @@
 
 The only list of pending work. Ordered from what comes next to what can wait. Each item says where it came from
 (a document in `docs/dev/en/`, `docs/agent/en/`, `docs/changelog/en/` or the claude.ai project). Done items are removed;
-what was done is in `CHANGELOG.md`. Updated 2026-11-02 (NativeLink 0.0.3 + NativeDraw 0.0.7 confirmed; tests up to NativeDraw 0.0.8.29 + NativeLink 0.0.3.11). How the work is done: `docs/agent/en/workflow.md`; stage 3 plan and results:
+what was done is in `CHANGELOG.md`. Updated 2026-11-02 (NativeLink 0.0.4 + NativeDraw 0.0.9 confirmed; before: tests up to NativeDraw 0.0.8.29 + NativeLink 0.0.3.11). How the work is done: `docs/agent/en/workflow.md`; stage 3 plan and results:
 `docs/agent/en/stage3-plan.md`.
 
 ## Next
@@ -38,8 +38,6 @@ what was done is in `CHANGELOG.md`. Updated 2026-11-02 (NativeLink 0.0.3 + Nativ
       Dev builds log their bytes (`translator: giant draw bytes`): read them when they show up, before changing anything.
 - [ ] Metal Slug XX: almost every checked frame comes out "different from the normal image" (KOF ~0) although it looks
       fine. Understand why (filter? one-frame delay at 30 fps?) before trusting `dump auto` with this game.
-- [ ] When the performance work is confirmed, the commit is **NativeDraw 0.0.9** (user's decision): update
-      `docs/dev/*/versions.md` (history row), `CHANGELOG.md` and `docs/agent/en/stage3-plan.md`.
 
 ## Stage 3: drawing on the Vita
 - [ ] **Put the black-screen safety back** (removed in 0.0.8.18 at the user's request: if something goes wrong, he

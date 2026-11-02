@@ -4,6 +4,17 @@ Versions: `docs/dev/en/versions.md`. The detail of each step is in `docs/changel
 removed from there before the first release; this file stays as the summary). Versions marked "(test)" were sent to
 the Vita but not yet confirmed as a numbered release.
 
+## NativeLink 0.0.4 + NativeDraw 0.0.9 (2026-11-02)
+Closes tests NativeDraw 0.0.8.13–0.0.8.32 and NativeLink 0.0.3.1–0.0.3.11. Tested on the Vita with NPTEST (49 scenes identical
+to the PSP, 41 falling to the normal image with their reason), KOF 96 and Metal Slug XX.
+- **NPTEST** (`tests/nptest`, `docs/dev/en/nptest.md`): 108 2D scenes; `tools/nptest_report.py`, `tools/nptest_compare.py`;
+  PPSSPP headless package for the PC (`tools/emu.sh`).
+- **Translator:** 8-bit UVs, UV rotation of rectangles, scissor and region on all primitives, flat shading, texture width,
+  MIN/MAX blending, alpha test mask, channel masks, depth and stencil in 2D.
+- **Capture:** truncated frames marked incomplete, images held in HD only for the frame that draws them, palette and rows
+  per list, TRANSFER onto the shown image, cases with no answer rejected with a reason.
+- **Known:** tiles in the KOF 96 player select, also on 0.0.8.29 (`TODO.md`).
+
 ## Tests NativeDraw 0.0.8.13–0.0.8.22 + NativeLink 0.0.3.4 (2026-10-30/31, not confirmed yet)
 Will be confirmed as **NativeDraw 0.0.9**. Detail in `docs/agent/en/stage3-plan.md`.
 - **GPU timer** (`cronometro.c`, switch `medir_gpu`, 0.0.8.13): how long the Vita's GPU takes in each scene.
