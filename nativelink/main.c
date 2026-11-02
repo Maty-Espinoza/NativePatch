@@ -342,6 +342,14 @@ static void t4Flip(void) { // on the flip: frame totals
 }
 #endif
 DEV(static int stage;)
+#ifdef NP_DEV
+// Diagnosis: leaves in memory the last point reached, for NativeDraw to log it even if the game dies right after:
+// point | in interrupt << 8 | display hook calls << 16
+static u32 ck_calls;
+#define CK(n) (*(volatile u32 *)0x4A7FFF00 = (n) | ((int)sceKernelGetThreadId() < 0) << 8 | ck_calls << 16)
+#else
+#define CK(n)
+#endif
 // Development builds: finds sceGeGetReg and the cache and DMA functions, hooks those it finds and starts the T6 thread.
 // All builds: starts the free-CPU thread (after calibrating it). What it found goes to the log.
 static void t4t6Install(void) {
@@ -456,10 +464,14 @@ static void modeDecide(void) {
   mode_done = 1;
   if (passive)
     return;
+  CK(20);
   logGameId();
+  CK(21);
   active = 1;
   *(u32 *)DRAW_NATIVE = 0; // Adrenaline shows the game's image
+  CK(22);
   sbInit();
+  CK(23);
   LOG("NativeLink active: the game runs unchanged; event mailbox at 0x0A000000 for the NativeDraw capturer\n");
 }
 
@@ -520,22 +532,29 @@ static void memSnapshot(const char *why) {
 // Flip hook: restores the mailbox if something erased it, closes the frame (T4 totals, mirror copy, EV_FRAME,
 // EV_FLIP), measures fps and every STATS_EVERY frames writes the stats to the log and zeroes them.
 int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat, int sync) {
+  DEV(ck_calls++;)
+  CK(1);
   if (!mode_done)
     modeDecide();
+  CK(2);
   log_frame++;
   if (log_frame == 30)
     memSnapshot("start");
+  CK(3);
   if (active) {
     if (SB[0] != SB_MAGIC) // (in case something clears the zone, as Adrenaline 8 does when loading the game)
       sbInit();
     if (VDESC[0] != 0x31565047) // "GPV1": NativeDraw writes the log (descriptor mailbox, log.h)
       VDESC[0] = 0x31565047;
+    CK(4);
     DEV(t4Flip();)
+    CK(5);
     int k1e = pspSdkSetK1(0);
     u32 te = sceKernelGetSystemTimeLow(), pg0 = mir_pages;
     mirFlip(); // VRAM copy requested by the Vita
     fr.mir_us += sceKernelGetSystemTimeLow() - te; fr.mir_pages += mir_pages - pg0;
     pspSdkSetK1(k1e);
+    CK(6);
     { // what this frame cost the game (see EV_FRAME)
       static u32 ft, sp0;
       u32 tn = sceKernelGetSystemTimeLow(), sp = spin, fd = ft ? tn - ft : 0;
@@ -550,8 +569,10 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
       memset(&fr, 0, sizeof(fr));
       if (SB[0x4E] >= 1) sbPost(EV_FRAME, gn | nw << 8, fd, gu, su); // (the cost of this sbPost goes to the next frame)
     }
+    CK(7);
     sbPost(EV_FLIP, 0, (u32)topaddr, bufferwidth | pixelformat << 16, log_frame);
   }
+  CK(8);
   // Every distinct buffer the game displays
   LOG_ONCE((u32)topaddr ^ (bufferwidth << 20) ^ (pixelformat << 30), "display %08lx width=%d fmt=%d\n", (u32)topaddr, bufferwidth, pixelformat);
 
@@ -570,6 +591,7 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
     }
   }
   last_flip = now;
+  CK(9);
 
   if (log_frame % STATS_EVERY == 0) {
     LOG("stats lists=%lu head=%lu stall=%lu\n", st.lists, st.heads, st.stalls);
@@ -615,7 +637,10 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
     memset(&st, 0, sizeof(st));
   }
 
-  return _sceDisplaySetFrameBuf(topaddr, bufferwidth, pixelformat, sync);
+  CK(10);
+  int r = _sceDisplaySetFrameBuf(topaddr, bufferwidth, pixelformat, sync);
+  CK(11);
+  return r;
 }
 
 // Adrenaline 8 can give the game memory that reaches the plugin zone (MEMSIZE in the SFO, high memory, 40 MB

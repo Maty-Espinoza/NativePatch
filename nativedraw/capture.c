@@ -1493,6 +1493,14 @@ static int mirThread(SceSize args, void *argp) {
   uint32_t n = 0 DEV(, rr = 0);
   for (;;) {
     sceKernelDelayThread(5000);
+#ifdef NP_DEV
+    {  // diagnosis: the last point NativeLink noted, the first 60 changes and each time it stays for 300 ms
+      static uint32_t ck, ck_t, ck_n, ck_said;
+      uint32_t v = *(volatile uint32_t *)PSP(0x0A7FFF00u);
+      if (v != ck) { ck = v; ck_t = now(); ck_said = 0; if (ck_n++ < 60) clog("point %u (intr %u, display call %u)\n", v & 255, v >> 8 & 1, v >> 16); }
+      else if (!ck_said && v && now() - ck_t > 300000) { ck_said = 1; clog("stopped at point %u (intr %u, display call %u)\n", v & 255, v >> 8 & 1, v >> 16); }
+    }
+#endif
     DEV(if (SB[0] == SB_MAGIC && SB[1] >= 3 && SB[0x47] != probe_ge) SB[0x47] = probe_ge;)
     if (SB[0] == SB_MAGIC && SB[1] >= 5 && SB[0x4A] != gp_flags) SB[0x4A] = gp_flags;  // switches for NativeLink
     if (SB[0] == SB_MAGIC && SB[1] >= 5 && SB[0x4E] != level) SB[0x4E] = level;         // log level
