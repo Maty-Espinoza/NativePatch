@@ -76,7 +76,7 @@ fail) and the production builds.
 ### Capturer test outside the Vita (qemu)
 `nativedraw/capture_test.c` includes `capture.c` and runs it on ARM under qemu on the PC with a fake PSP RAM:
 synthetic lists, 8 frames, simulated double mirror, readers. It is for the capture logic (sublist memory,
-readers, look-ahead check, frame record); not for graphics. With no arguments it runs 14 cases with 9 pass/fail checks
+readers, look-ahead check, frame record); not for graphics. With no arguments it runs 14 cases with 10 pass/fail checks
 and returns an exit code. How to build it and what modes it has is in the file's header. The headers are taken from a
 folder with only vitasdk's `psp2*` and `vitasdk*` (with the whole `include` folder, vitasdk's libc clashes with the PC's).
 

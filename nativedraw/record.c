@@ -78,8 +78,8 @@ static int rgCoherent(uint8_t *c, uint8_t *u) {
   }
   return 1;
 }
-// Copies m bytes from s (PSP memory; pa: its PSP address) to d (record textures). rb: bytes per row if the texture is
-// swizzled (0: as is by DMA); then m is whole groups of 8 rows and each group is sorted: block b (16 bytes wide) of row
+// Copies m bytes from s (PSP memory; pa: its PSP address) to d (record textures), by CPU under 8 KB, where a DMA call
+// costs more than the bytes. rb: bytes per row if the texture is swizzled (0: as is); then m is whole groups of 8 rows and each group is sorted: block b (16 bytes wide) of row
 // r is at s + b * 128 + r * 16 and goes to d + r * rb + b * 16 (d is written in order: it is uncached memory).
 // Notes the t_* measurements of the "texturas:" line.
 static void rgTexCopy(uint8_t *d, const void *s, uint32_t m, uint32_t rb, uint32_t pa) {
@@ -87,19 +87,22 @@ static void rgTexCopy(uint8_t *d, const void *s, uint32_t m, uint32_t rb, uint32
   ga.t_n[v]++; ga.t_kb[v] += m;
   for (k = 0; k < 4 && m >= 1024u << 2 * k; k++) {}
   ga.t_size[k]++;
-  if (!rb) { sceDmacMemcpy(d, s, m); ga.t_calls++; ga.t_lines += m; ga.t_dma[v] += now() - t0; return; }
+  if (!rb) {
+    if (m < 8192) sceClibMemcpy(d, s, m); else { sceDmacMemcpy(d, s, m); ga.t_calls++; }
+    ga.t_lines += m; ga.t_dma[v] += now() - t0; return;
+  }
   for (k = 0; k < 5 && rb > 16u << k; k++) {}
   ga.t_rb[k] += m;
   uint32_t gb = 8 * rb, max = OR_N / gb * gb;
   for (uint32_t o = 0; o < m; o += max) {
     uint32_t l = m - o < max ? m - o : max, t1 = now();
-    sceDmacMemcpy(rg_ord, (const uint8_t *)s + o, l);
-    ga.t_calls++; td += now() - t1;
+    const uint8_t *src = (const uint8_t *)s + o;
+    if (l >= 8192) { sceDmacMemcpy(rg_ord, src, l); src = rg_ord; ga.t_calls++; td += now() - t1; }
     for (uint32_t g = 0; g < l; g += gb) {
       uint32_t h = 2166136261u ^ gb;
       for (uint32_t r = 0; r < 8; r++)
         for (uint32_t b = 0; b < rb; b += 16) {
-          const uint32_t *i = (const uint32_t *)(rg_ord + g + b * 8 + r * 16);
+          const uint32_t *i = (const uint32_t *)(src + g + b * 8 + r * 16);
           uint32_t *x = (uint32_t *)(d + o + g + r * rb + b);
           x[0] = i[0]; x[1] = i[1]; x[2] = i[2]; x[3] = i[3];
           h = ((((h ^ i[0]) * 16777619u ^ i[1]) * 16777619u ^ i[2]) * 16777619u ^ i[3]) * 16777619u;

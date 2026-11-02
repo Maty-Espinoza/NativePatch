@@ -11,7 +11,7 @@ static const uint8_t RS[] __attribute__((unused)) = { 0x1E, 0x21, 0x22, 0x23, 0x
 #define RD_N 4096         // draws per frame
 #define RE_N 1024         // states per frame
 #define RA_N (512 << 10)  // vertices, indices and palettes per frame
-#define TN_N 128          // textures per frame
+#define TN_N 256          // textures per frame
 // A draw: st = index of its state in e[]; prim, n, vt = GE type, count and vertex type; voff/vlen = vertices
 // in a[]; ioff/clut/toff: offset + 1 (0: absent) of indices and palette in a[] and of the texture in tx; clen: palette
 // bytes.

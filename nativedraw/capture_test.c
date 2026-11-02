@@ -114,6 +114,21 @@ static int same(Res *a, Res *b, int from, int st) {
   for (int f = from; f < 8; f++) if (strcmp(a->col[f], b->col[f]) || (st && a->st[f] != b->st[f])) return 0;
   return 1;
 }
+// rgTexCopy: a swizzled texture of 'groups' groups of 8 rows and a plain one come out right, below and above the
+// size that goes by DMA
+static int texCopyOk(uint32_t groups) {
+  uint32_t rb = 128, m = groups * 8 * rb, ok = 1;
+  uint8_t *s = malloc(m), *d = malloc(m);
+  rg_ord = malloc(OR_N);
+  for (uint32_t i = 0; i < m; i++) s[i] = i * 31 + (i >> 8);
+  rgTexCopy(d, s, m, rb, 0x08800000u);
+  for (uint32_t g = 0; g < groups; g++)
+    for (uint32_t r = 0; r < 8; r++)
+      for (uint32_t b = 0; b < rb; b += 16)
+        ok &= !memcmp(d + g * 8 * rb + r * rb + b, s + g * 8 * rb + b * 8 + r * 16, 16);
+  rgTexCopy(d, s, m, 0, 0x08800000u);
+  return ok && !memcmp(d, s, m);
+}
 // Runs each case in a child process (the capturer's state is global; a hang ends with the alarm) and compares them.
 int main(int argc, char **argv);
 static int checkAll(void) {
@@ -142,6 +157,7 @@ static int checkAll(void) {
   bad += report("VRAM page without copy: cut sublists, no hang", same(r + V2, r + V2REF, 0, 1) && r[V2].skip && !r[V2].bad);
   bad += report("VRAM per frame: the change is detected, no MISMATCH", same(r + V3, r + V3REF, 0, 1) && r[V3].fail && !r[V3].bad);
   bad += report("frame record: complete without memory, incomplete with it", same(r + REG0, r + RAM, 0, 1) && r[REG0].whole == 8 && r[REG1].whole < 8);
+  bad += report("texture copy: right by CPU and by DMA", texCopyOk(1) && texCopyOk(32));
   printf(bad ? "%d FAILED\n" : "all ok\n", bad);
   return bad;
 }
