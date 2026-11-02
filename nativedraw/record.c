@@ -303,7 +303,7 @@ static int rgRows(uint32_t vt, const uint8_t *vb, uint32_t vlen, const uint8_t *
     uint32_t k = !ib ? i : ix == 1 ? ib[i] : ix == 2 ? ((const uint16_t *)ib)[i] : ((const uint32_t *)ib)[i];
     if ((k + 1) * sz > vlen) return 0;
     const uint8_t *p = vb + k * sz;  // (the texture coordinate comes first)
-    int v = tc == 1 ? p[1] : tc == 2 ? ((const uint16_t *)p)[1] : (int)((const float *)p)[1];
+    int v = tc == 1 ? p[1] / 128 : tc == 2 ? ((const uint16_t *)p)[1] : (int)((const float *)p)[1];
     if (tc == 3 && ((const float *)p)[1] < 0) return 0;
     if (v < lo) lo = v;
     if (v > hi) hi = v;
