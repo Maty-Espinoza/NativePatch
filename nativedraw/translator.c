@@ -343,14 +343,27 @@ static uint32_t trBase(SceGxmContext *c, const SceGxmTexture *base, TV *o, uint3
 
 // GE comparison (0-7) -> GXM depth function >> 22, which is also its stencil function >> 25
 static const uint8_t gcmp[8] = { 0, 7, 2, 5, 1, 3, 4, 6 };
-static uint32_t t_zs;  // depth state in the context; ~0u: unknown
-// Sets the depth test and write of the draw of state e (0: neither, for what goes underneath), if they changed. As on
-// the GE, without the test nothing is written; a clear writes if its depth bit is on. Depth lives in one scene only.
-static void zsSet(SceGxmContext *c, const uint32_t *e) {
+static uint32_t t_zs, t_st, t_sr;  // depth state, stencil state and stencil reference in the context; ~0u: unknown
+// Sets depth and stencil of the draw of state e (0: no tests or writes, for what goes underneath), if they changed. As
+// on the GE, without the depth test nothing is written; a clear writes depth and stencil if their bits are on (stencil:
+// sv, its alpha). The surface's stencil plays the GE's alpha; there is none in 565 and the color mask's alpha (0xE9)
+// is its write mask. Depth and stencil live in one scene only.
+static void zsSet(SceGxmContext *c, const uint32_t *e, uint32_t sv) {
   uint32_t clr = e ? RE(e, 0xD3) : 0, z = SCE_GXM_DEPTH_FUNC_ALWAYS, w = SCE_GXM_DEPTH_WRITE_DISABLED;
   if (clr & 1) { if (clr >> 10 & 1) w = SCE_GXM_DEPTH_WRITE_ENABLED; }
   else if (e && (RE(e, 0x23) & 1)) { z = (uint32_t)gcmp[RE(e, 0xDE) & 7] << 22; if (!(RE(e, 0xE7) & 1)) w = SCE_GXM_DEPTH_WRITE_ENABLED; }
   if ((z | w) != t_zs) { t_zs = z | w; sceGxmSetFrontDepthFunc(c, z); sceGxmSetFrontDepthWriteEnable(c, w); }
+  static const uint8_t gop[8] = { 0, 1, 2, 5, 3, 4, 0, 0 };  // GE stencil operation (0-5, others keep) -> GXM
+  uint32_t f = 7, sf = 0, zf = 0, zp = 0, cm = 0, wm = 0, r = 0, on = e && (RE(e, 0xD2) & 3);
+  if (e && !(clr & 1) && (RE(e, 0x24) & 1)) {
+    uint32_t dc = RE(e, 0xDC), dd = RE(e, 0xDD);
+    f = gcmp[dc & 7]; r = dc >> 8 & 0xFF; cm = dc >> 16 & 0xFF;
+    sf = gop[dd & 7]; zf = gop[dd >> 8 & 7]; zp = gop[dd >> 16 & 7];
+    if (on) wm = ~RE(e, 0xE9) & 0xFF;
+  } else if (on && (clr & 0x201) == 0x201) { sf = zf = zp = SCE_GXM_STENCIL_OP_REPLACE; r = sv; wm = ~RE(e, 0xE9) & 0xFF; }
+  uint32_t k = f | sf << 3 | zf << 6 | zp << 9 | cm << 12 | wm << 20;
+  if (k != t_st) { t_st = k; sceGxmSetFrontStencilFunc(c, f << 25, sf, zf, zp, cm, wm); }
+  if (r != t_sr) { t_sr = r; sceGxmSetFrontStencilRef(c, r); }
 }
 
 // Draws frame f of the record to surface s (cs[s]), in the Adrenaline thread. base: the normal image, which goes
@@ -405,7 +418,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
   uint32_t *pal = tpal[s], np = 0, nv = 0, pal_prev = ~0u, pn = 0;  // np: words used; pal_prev/pn: the previous palette
   void *u;
   // SCENE: starts a scene on surface surf_tex with the vertex program and the matrix
-#define SCENE(surf_tex) do { sceGxmBeginScene(c, 0, rt, 0, 0, 0, surf_tex, &ds); t_zs = ~0u; zsSet(c, 0); sceGxmSetVertexProgram(c, nvp); \
+#define SCENE(surf_tex) do { sceGxmBeginScene(c, 0, rt, 0, 0, 0, surf_tex, &ds); t_zs = t_st = t_sr = ~0u; zsSet(c, 0, 0); sceGxmSetVertexProgram(c, nvp); \
     sceGxmReserveVertexDefaultUniformBuffer(c, &u); sceGxmSetUniformDataF(u, n_wvp, 0, 16, tr_wvp); } while (0)
   // OPEN: closes the open scene (if any) and opens one on dst (0: surface s); the first time on the surface,
   // puts the normal image (or black: trBase) underneath
@@ -432,7 +445,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     if (fb != disp && !dst) { res = T_DEST; break; }
     if (ord && (pass ? dst != 0 : dst == 0)) continue;
     if (!opened || dst != cur_rt) OPEN(dst);
-    if ((clr & 1) && !(clr & 0x500)) continue;  // stencil-only clear: nothing to see
+    if ((clr & 1) && !(clr & 0x700)) continue;  // clear of nothing
     uint32_t key = clr & 1 ? 0 : blendKey(e), mat = (RE(e, 0x55) & 0xFFFFFF) | (RE(e, 0x56) & 0xFF) << 24;
     float tw = 1, th = 1;
     SceGxmTexture t;
@@ -502,7 +515,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
       sceGxmSetUniformDataF(u, n_tf, 0, 4, tf);
       sceGxmSetFragmentTexture(c, 0, &t);
     }
-    zsSet(c, e);
+    zsSet(c, e, o[nv + n - 1].c >> 24);
     sceGxmSetVertexStream(c, 0, o + nv);
     sceGxmDraw(c, d->prim == 3 ? SCE_GXM_PRIMITIVE_TRIANGLES : SCE_GXM_PRIMITIVE_TRIANGLE_STRIP, SCE_GXM_INDEX_FORMAT_U16, tib, n);
     nv += n; t_draws++;
@@ -511,6 +524,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
   if (opened) {  // (if something failed midway, the surface keeps what was drawn: not used)
     sceGxmSetFrontDepthFunc(c, SCE_GXM_DEPTH_FUNC_ALWAYS);  // the context is Adrenaline's: its defaults back
     sceGxmSetFrontDepthWriteEnable(c, SCE_GXM_DEPTH_WRITE_ENABLED);
+    sceGxmSetFrontStencilFunc(c, SCE_GXM_STENCIL_FUNC_ALWAYS, SCE_GXM_STENCIL_OP_KEEP, SCE_GXM_STENCIL_OP_KEEP, SCE_GXM_STENCIL_OP_KEEP, 0, 0);
     sceGxmEndScene(c, 0, gEnd());
     cNote(cur_rt ? C_INT : C_TR, &gq_n, t_draws - d0, spx / 1000, ssw);
   }
