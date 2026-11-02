@@ -107,7 +107,7 @@ static void build(int frame) {
 static uint32_t stateSum(void) { uint32_t h = 0; for (int i = 0; i < 256; i++) h = h * 31 + reg[i]; for (int m = 0; m < 5; m++) for (int i = 0; i < 96; i++) h = h * 31 + mtx[m][i]; return h * 31 + vaddr * 7 + iaddr; }
 // Result of one case, in memory shared with the process that compares them. col: columns before "|" per frame, without
 // and with state; the rest are totals of what each case must exercise.
-typedef struct { char col[8][64]; uint32_t st[8], hit, chk, bad, fail, pre, late, lines, pv, skip, whole, lost, ok; } Res;
+typedef struct { char col[8][64]; uint32_t st[8], hit, chk, bad, fail, pre, late, lines, pv, skip, whole, lost, rt1, ok; } Res;
 static Res *res;
 static int report(const char *name, int ok) { printf("%s %s\n", ok ? "ok  " : "FAIL", name); return !ok; }
 // Frames from..7 of case a equal those of b (state too if st).
@@ -159,6 +159,7 @@ static int checkAll(void) {
   bad += report("VRAM per frame: the change is detected, no MISMATCH", same(r + V3, r + V3REF, 0, 1) && r[V3].fail && !r[V3].bad);
   bad += report("frame record: complete without memory, incomplete with it", same(r + REG0, r + RAM, 0, 1) && r[REG0].whole == 8 && r[REG1].whole < 8);
   bad += report("frame record: lost events leave the frame incomplete", r[REG0].lost);
+  bad += report("frame record: an image only counts as drawn in its frame", r[REG0].rt1);
   bad += report("texture copy: right by CPU and by DMA", texCopyOk(1) && texCopyOk(32));
   printf(bad ? "%d FAILED\n" : "all ok\n", bad);
   return bad;
@@ -225,7 +226,11 @@ int main(int argc, char **argv) {
     lifeFlip(); lf_ord_cmds = 0;  // as in the flip
     gen++; ntex = 0;
   }
-  if (reg_on && res) { resetQueue(); res->lost = rf[rg_w]->flags != 0; }  // events lost in the middle of a frame
+  if (reg_on && res) {
+    markRt(0x04100000, 4096); regFlip(0x04000000, 512, 0);
+    res->rt1 = !rt_pg[0x100 >> 5];
+    resetQueue(); res->lost = rf[rg_w]->flags != 0;  // events lost in the middle of a frame
+  }
   printf("list life: flip of its frame %u (top %u, sublists %u) | next flip %u (%u, %u) (expected 8 (0, 0) | 7 (7, 0))\n", lf_n[0], lf_top[0], lf_sub[0], lf_n[1], lf_top[1], lf_sub[1]);
   // A sync arriving 100 us after queuing: the Vita is behind (line in nativedraw_late)
   if (getenv("LATE")) {

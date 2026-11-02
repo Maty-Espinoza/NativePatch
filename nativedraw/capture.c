@@ -84,8 +84,8 @@ static inline int isVram(uint32_t a) { return (a & 0x0F000000u) == 0x04000000u; 
 
 // --- VRAM mirror ---
 // PSP VRAM is not mapped in Adrenaline. The capturer requests 4 KB pages in two mailbox bitmaps:
-// "lists" (sublists the game calls in VRAM) and "data" (textures and palettes; not those of a render target or
-// TRANSFER destination, which the Vita will hold in HD). At each flip the PSP GE copies all requested pages (mirFlip in
+// "lists" (sublists the game calls in VRAM) and "data" (textures and palettes; not those of an image the GE drew in the
+// current frame, which the Vita holds in HD). At each flip the PSP GE copies all requested pages (mirFlip in
 // NativeLink) alternating two mirrors: even copies to MIRROR and odd ones to MIRROR2. Each list is read with the last
 // copy finished when it starts (mir_u, without waiting for it: if the game queued the list before the flip, the right
 // copy is the previous one) and notes it in the mailbox (SB[0x48]) so the GE does not overwrite it. A page is usable in
@@ -94,7 +94,8 @@ static inline int isVram(uint32_t a) { return (a & 0x0F000000u) == 0x04000000u; 
 #define MIRROR2 0x0AC00000u
 // last copy of page p in mirror b (written by NativeLink)
 #define CPY(b, p) SB[((b) ? 0x8400 : 0x200) + (p)]
-// Bitmaps of 512 pages (2 MB): requested as list, as data, render targets and the displayed image
+// Bitmaps of 512 pages (2 MB): requested as list, as data, images drawn in this frame (regFlip empties it) and the
+// displayed image
 // (want_fb, requested by record.c for dumps)
 static uint32_t mir_on, want_l[16], want_d[16], rt_pg[16], want_fb[16];
 static volatile uint32_t mir_ok[2][16], mir_reset;           // pages with a valid copy in each mirror
@@ -866,11 +867,6 @@ static int __attribute__((noinline)) walkList(List *l) {
       acc.transfers++;
       uint32_t s = (reg[0xB2] & 0xFFFFF0) | ((reg[0xB3] << 8) & 0x0F000000), t = (reg[0xB4] & 0xFFFFF0) | ((reg[0xB5] << 8) & 0x0F000000);
       if (isVram(s) || isVram(t)) acc.tr_vram++;
-      uint32_t bp = d & 1 ? 4 : 2, w = (reg[0xEE] & 0x3FF) + 1, h = (reg[0xEE] >> 10 & 0x3FF) + 1, sw = reg[0xB3] & 0x7FF, dw = reg[0xB5] & 0x7FF;
-      if (isVram(t)) {  // destination in VRAM: the Vita holds it (repeats the copy); source in VRAM, from the mirror
-        markRt(t + ((reg[0xEC] >> 10 & 0x3FF) * dw + (reg[0xEC] & 0x3FF)) * bp, ((h - 1) * dw + w) * bp);
-        if (isVram(s)) want(s + ((reg[0xEB] >> 10 & 0x3FF) * sw + (reg[0xEB] & 0x3FF)) * bp, ((h - 1) * sw + w) * bp, 0);
-      }
       break;
     }
     default:

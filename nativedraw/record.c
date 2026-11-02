@@ -200,7 +200,7 @@ static uint32_t rgSrc(uint32_t a, uint32_t n) {
 // only the missing groups of 8 rows of [r0, r1) (r0 >= r1 or out of range: whole texture). With swizzle a group of 8
 // rows is one contiguous block and sorted takes the same place (rgTexCopy sorts it). RAM ones are copied right away by
 // DMA (the game may change them); VRAM ones are marked and regPend copies them from the flip's mirror.
-// Returns offset + 1 in tx; 0 if not copied (unsupported format, render target, limit or unreadable).
+// Returns offset + 1 in tx; 0 if not copied (unsupported format, image drawn in this frame, limit or unreadable).
 static uint32_t rgTex(uint32_t r0, uint32_t r1) {
   RFrame *f = rf[rg_w];
   static const uint8_t bp[6] = { 16, 16, 16, 32, 4, 8 };
@@ -212,7 +212,7 @@ static uint32_t rgTex(uint32_t r0, uint32_t r1) {
   for (i = 0; i < f->nt && !(f->ta[i] == ta && f->tn[i] == key); i++) {}
   // First time in this frame: full size is reserved (rows not copied are not read)
   if (i == f->nt) {
-    // Game render target (intermediate image): not copied
+    // Image the GE drew in this frame (intermediate image): not copied
     if (vr) { uint32_t p = (ta & 0x1FFFFF) >> 12; if (rt_pg[p >> 5] >> (p & 31) & 1) return 0; }
     if (f->nt >= TN_N || f->ntx + n > TX_N) {
       DEV(static uint32_t lim_n; if (lim_n < 20) { lim_n++; clog("record: texture limit at frame %u: %u textures, %u of %u bytes, %u more wanted\n", gen, f->nt, f->ntx, TX_N, n); })
@@ -420,6 +420,9 @@ static void regFlip(uint32_t fb, uint32_t fbw, uint32_t draws_counted) {
     if (w < 0) { w = rg_pend; rg_pend = -1; ga.stomped++; }  // (none free: the pending one is lost)
     rg_w = w; rg_gv[w] = 0;
   }
+  // Only what the GE draws from now on is held in HD; any other read of those pages comes from the mirror. A sublist
+  // the memory applied did not go through draw(): its marks stay
+  if (!(f->flags & R_MEMO)) { sceClibMemset(rt_pg, 0, sizeof rt_pg); last_fb = ~0u; }
   f = rf[rg_w];
   f->nd = f->ne = f->na = f->flags = f->draws_seen = f->nt = f->ntx = f->dv = f->nimg = 0;
   rg_t = 0;
