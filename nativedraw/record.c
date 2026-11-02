@@ -400,6 +400,47 @@ static void regMemo(uint32_t draws) { if (draws) { rf[rg_w]->flags |= R_MEMO; rf
 // Part of the frame's commands will never be walked (lost events, cut list): its draws are not even counted, so the
 // frame stays incomplete here.
 static void regLost(void) { if (reg_on) rf[rg_w]->flags |= R_READ; }
+// (capturer, command 0xEA) TRANSFER from s to t, bp bytes per pixel. On the image being drawn the HD surface would lose
+// it: it goes in the frame as a draw, a rectangle with no blending whose texture is the source (RAM: copied now; VRAM:
+// from the flip's mirror). A VRAM texture the frame already used, or a copy over itself, would be read with the content
+// left afterwards: the frame stays incomplete.
+static void regXfer(uint32_t s, uint32_t t, uint32_t bp) {
+  RFrame *f = rf[rg_w];
+  uint32_t sw = reg[0xB3] & 0x7FF, dw = reg[0xB5] & 0x7FF, sx = reg[0xEB] & 0x3FF, sy = reg[0xEB] >> 10 & 0x3FF, dx = reg[0xEC] & 0x3FF,
+           dy = reg[0xEC] >> 10 & 0x3FF, w = (reg[0xEE] & 0x3FF) + 1, h = (reg[0xEE] >> 10 & 0x3FF) + 1, r = sy * sw * bp;
+  uint32_t sa = (s + r) & ~15u, u = sx + ((s + r) & 15) / bp, da = t + dy * dw * bp, sn = h * sw * bp, dn = h * dw * bp;
+  if (!isVram(t)) return;
+  for (uint32_t i = 0; i < f->nt; i++)
+    if (isVram(f->ta[i]) && f->ta[i] < da + dn && da < f->ta[i] + (f->tn[i] & 0x7FFFFFFF)) f->flags |= R_READ;
+  uint32_t st = reg[0x9D] & 0x7FF, fbp = (reg[0xD2] & 3) == 3 ? 4 : 2, o = (t & 0x1FFFFF) - (reg[0x9C] & 0x1FFFF0);
+  if (o >= st * fbp * ((reg[0xD5] >> 10 & 0x3FF) + 1)) return;  // not on the image being drawn: the mirror has it
+  if (isVram(s)) want(sa, sn, 0);
+  if (dw != st || bp != fbp || h > 512 || !sw || (isVram(s) && sa < da + dn && da < sa + sn)) f->flags |= R_READ;
+  if (f->flags) return;
+  if (f->nd >= RD_N || f->ne >= RE_N || ((f->na + 15) & ~15u) + 32 > RA_N) { f->flags |= R_LIMIT; return; }
+  dx += o / fbp % st; dy += o / fbp / st;
+  uint32_t v[NRS], lw = 0, lh = 0, toff;
+  while (1u << lw < sw) lw++;
+  while (1u << lh < h) lh++;
+  for (int i = 0; i < NRS; i++) {  // the state of this draw, around the one of the image (0: plain)
+    v[i] = reg[RS[i]];
+    if ((RS[i] & 0xFC) != 0x9C && RS[i] != 0xD2) reg[RS[i]] = 0;
+  }
+  reg[0x1E] = 1; reg[0xA0] = sa & 0xFFFFFF; reg[0xA8] = (sa >> 8 & 0xFF0000) | sw; reg[0xB8] = lh << 8 | lw;
+  reg[0xC3] = bp == 4 ? 3 : reg[0xD2] & 3; reg[0xC7] = 0x101; reg[0xC9] = 0x103; reg[0xD5] = 0x7FDFF;
+  toff = rgTex(0, h);
+  uint32_t e[NRS];
+  for (int i = 0; i < NRS; i++) { e[i] = reg[RS[i]]; reg[RS[i]] = v[i]; }
+  if (!toff) { f->flags |= R_READ; return; }
+  sceClibMemcpy(f->e[f->ne++], e, sizeof e);
+  uint32_t a = (f->na + 15) & ~15u, c = 0xFFFFFFFFu;
+  uint16_t vx[16] = { u, 0, c, c >> 16, dx, dy, 0, 0, u + w, h, c, c >> 16, dx + w, dy + h, 0, 0 };
+  sceClibMemcpy(f->a + a, vx, sizeof vx);
+  f->na = a + 32;
+  RDraw *d = &f->d[f->nd++];
+  sceClibMemset(d, 0, sizeof *d);
+  d->st = f->ne - 1; d->prim = 6; d->n = 2; d->vt = 0x80011E; d->voff = a + 1; d->vlen = 32; d->toff = toff;
+}
 // (capturer, on each flip) Closes the frame. fb/fbw: shown image and width | format << 16; draws_counted: those the
 // capturer counted. If complete it publishes it (or leaves it pending its VRAM textures, regPend), asks the mirror for
 // the PSP image if a dump wants it, and picks another record to write: not the published one, nor the one the presenter

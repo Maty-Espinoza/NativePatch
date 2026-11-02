@@ -867,6 +867,7 @@ static int __attribute__((noinline)) walkList(List *l) {
       acc.transfers++;
       uint32_t s = (reg[0xB2] & 0xFFFFF0) | ((reg[0xB3] << 8) & 0x0F000000), t = (reg[0xB4] & 0xFFFFF0) | ((reg[0xB5] << 8) & 0x0F000000);
       if (isVram(s) || isVram(t)) acc.tr_vram++;
+      if (reg_on) regXfer(s, t, d & 1 ? 4 : 2);
       break;
     }
     default:
