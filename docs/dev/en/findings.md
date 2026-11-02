@@ -85,7 +85,11 @@ proof.
   [measured, 0.0.8.18].
 - **What repeats between frames:** ~98–99 % of the texture bytes copied each frame are equal to the previous copy
   (KOF 96 and Metal Slug XX) [measured, 0.0.8.19]. The expensive part is the DMA (~100 µs per call; Metal Slug 10–17 ms
-  per frame in 90–170 copies). Hence the next step: a texture cache between frames.
+  per frame in 90–170 copies). Hence the texture cache between frames.
+- **Texture cache (RAM textures):** textures stay sorted in a store the GPU reads, checked by sampling. In Metal Slug XX the
+  capturer went from 19.4 to 8.3 ms per frame, textures from 14.5 to 4.1 ms, copies from 746 to 3 KB and DMA calls from 44 to
+  0, with nothing out of the store and no visual errors reported [measured, 0.0.10.1]. The check itself costs ~2.5 ms per
+  frame. VRAM textures (KOF 96 fights, DMA ~1 ms + sort ~2 ms per frame) are not cached.
 - **Capturer behind = garbage vertices:** if copying textures takes longer than a frame, the gate (5 ms at most) lets
   the game through and vertices the game was already rewriting get copied (positions of ~2^31, uv 65535; the GPU filled
   the whole screen with one texture: Metal Slug XX's "white glitch"). A vertex outside ±4096 sends the frame with the
@@ -133,7 +137,7 @@ proof.
 | Adrenaline's "Original" filter | Adrenaline does not draw with GXM and the presenter cannot act | use Bilinear |
 | What the PSP's system draws on top (PS button dialog) | it does not go through the game's lists | "covered": compared with the normal image, and the normal one is shown while it lasts |
 | Frames with sublists applied from memory | their draws do not go through the record | normal image (2D games hardly use sublists) |
-| A texture changed only in bytes the check does not see may look stale for a few frames | accepted risk of the texture cache (design in progress) | full check in turns |
+| A texture changed only in bytes the check does not see may look stale for a few frames | accepted risk of the texture cache (up to 16 frames) | full check in turns |
 | Blends with no direct equivalent in GXM (destination alpha, doubled factors), color test, logic operations | fixed-function GXM does not have them (it does have programmable blending, not used yet) | normal image, reason `blend` / `color_test_or_logic` |
 | Color mask per bit (0xE8) and alpha test masks that are not high bits | GXM masks whole channels and the shaders compare the whole alpha | normal image, reason `mask` |
 | Depth and stencil across scenes | they live in one GXM scene (no force load/store), so they do not survive a change of target or frame | what relies on them is drawn wrong |

@@ -103,8 +103,10 @@ or `auto` (3 letters are compared; `no` also turns it off). What each one saves,
   system dialog, surface state. `notifications:`: someone else wrote a GXM notification word.
 - In `nativedraw_capture.log`, the `textures (per frame):` line (0.0.8.19): copies, KB and DMA and sorting time for
   RAM and VRAM; DMA calls; copies by size; swizzled KB by row width; KB equal, changed or new
-  compared with the last copy of that group of 8 rows (hash per group: what a cache would save); KB without swizzle;
-  distinct textures per frame.
+  compared with the last copy of that group of 8 rows (hash per group); KB without swizzle; distinct textures per frame.
+- In `nativedraw_capture.log`, the `texture cache (per frame):` line: KB reused and copied into the cache, groups found
+  changed, RAM textures that went to the record, times with no room, and µs spent checking. `texture cache: no memory`
+  at start-up: it runs without the cache.
 - How we know when the GPU finishes: each of our own scenes writes its number into a word of the GXM notifications
   (the last one Adrenaline does not use, counting down from 511; the log notes it at start-up: `gpu: end of scenes at notification N`). Reading a surface the GPU has not finished gives false results, and `sceGxmFinish` to wait for it
   costs ~20 ms in KOF: that is why the check is skipped instead of waiting.

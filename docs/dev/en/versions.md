@@ -96,3 +96,4 @@ Milestones of the old numbering (details in `../../changelog/`):
 | dev66 + v13.10–v13.12 | Phase 2: gate before enqueuing, compact statistics, look-ahead check, MISMATCHES fixed |
 | v13.13 | Ridge Racer at 60 fps: interpret line by line, capturer on any core |
 | 0.0.4 | 0.0.9 | `c9c50f3` | Stage 3: KOF 96 at 60 fps, Metal Slug XX at 30 fps, NPTEST synthetic battery and comparator, emulator package, fixes from the NPTEST dumps. Tests: NativeDraw 0.0.8.13–0.0.8.32 and NativeLink 0.0.3.1–0.0.3.11 |
+| 0.0.4 | 0.0.10 | (this commit's message: "NativeDraw 0.0.10") | Texture cache between frames for RAM textures. Metal Slug XX: capturer 19.4 → 8.3 ms per frame. Test: NativeDraw 0.0.10.1 |

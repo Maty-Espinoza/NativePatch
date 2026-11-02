@@ -68,7 +68,7 @@ static uint8_t *rg_ord;
 static int rg_ordc;
 // Repetition measurement: for each group of 8 rows copied, the PSP address and a hash of its content (and length), in
 // a table of RH_N slots by address (a slot taken by another address counts as new).
-// Tells how much a texture cache across frames would save.
+// Tells how much of what is still copied repeats between frames.
 #define RH_N 16384
 static struct { uint32_t a, h; } *rg_hash;
 // 1 if a DMA copy to cached memory c (from u, uncached) is seen when read later, even if c is already in the

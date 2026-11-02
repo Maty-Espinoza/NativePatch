@@ -4,6 +4,15 @@ Versions: `docs/dev/en/versions.md`. The detail of each step is in `docs/changel
 removed from there before the first release; this file stays as the summary). Versions marked "(test)" were sent to
 the Vita but not yet confirmed as a numbered release.
 
+## NativeDraw 0.0.10 (2026-11-02)
+Test 0.0.10.1, checked on the Vita with Metal Slug XX. NativeLink stays at 0.0.4.
+- **Texture cache between frames, RAM textures only:** a texture stays sorted in a 4 MB store the GPU reads, and draws use
+  it without copying. Each frame 8 words per group of 8 rows are sampled, and 1 group of every 16 is hashed whole. A
+  change, or a block copy over it, sends the texture to the record as a normal copy until no record reads the entry.
+- **Metal Slug XX (per frame, median):** capturer 19.4 → 8.3 ms, record 16.2 → 5.5 ms, textures 14.5 → 4.1 ms, copied from RAM
+  746 → 3 KB, DMA calls 44 → 0. Same 30 fps, no visual errors reported.
+- **Not touched:** VRAM textures, so KOF 96 fights and their tiles stay the same.
+
 ## NativeLink 0.0.4 + NativeDraw 0.0.9 (2026-11-02)
 Closes tests NativeDraw 0.0.8.13–0.0.8.32 and NativeLink 0.0.3.1–0.0.3.11. Tested on the Vita with NPTEST (49 scenes identical
 to the PSP, 41 falling to the normal image with their reason), KOF 96 and Metal Slug XX.

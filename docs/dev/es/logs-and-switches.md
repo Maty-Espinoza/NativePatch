@@ -102,8 +102,10 @@ o `auto` (se comparan 3 letras; `no` también lo apaga). Qué guarda cada uno, c
   diálogo del sistema, estado de la superficie. `notifications:`: otro escribió una palabra de notificación de GXM.
 - En `nativedraw_capture.log`, línea `textures (per frame):` (0.0.8.19): copias, KB y tiempo de DMA y de ordenar de la
   RAM y de la VRAM; llamadas al DMA; copias por tamaño; KB con swizzle por ancho de fila; KB iguales, cambiados o nuevos
-  respecto de la última copia de ese grupo de 8 filas (huella por grupo: lo que ahorraría un caché); KB sin swizzle;
-  texturas distintas por frame.
+  respecto de la última copia de ese grupo de 8 filas (huella por grupo); KB sin swizzle; texturas distintas por frame.
+- En `nativedraw_capture.log`, línea `texture cache (per frame):`: KB reutilizados y copiados al caché, grupos que
+  cambiaron, texturas de la RAM que fueron al registro, veces sin espacio y µs de revisión. `texture cache: no memory` al
+  arrancar: funciona sin el caché.
 - Cómo se sabe cuándo termina la GPU: cada escena propia escribe su número en una palabra de las notificaciones de GXM
   (la última que Adrenaline no usa, de 511 hacia abajo; el log la anota al empezar: `gpu: end of scenes at notification N`). Leer una superficie que la GPU no terminó da resultados falsos y `sceGxmFinish` para esperarla
   cuesta ~20 ms en KOF: por eso la revisión se salta en vez de esperar.

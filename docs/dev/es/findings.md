@@ -80,7 +80,12 @@ directa.
   [medido, 0.0.8.18].
 - **Lo que se repite entre frames:** ~98–99 % de los bytes de textura que se copian en cada frame son iguales a la copia
   anterior (KOF 96 y Metal Slug XX) [medido, 0.0.8.19]. Lo caro es el DMA (~100 µs por llamada; Metal Slug 10–17 ms
-  por frame en 90–170 copias). De ahí el siguiente paso: un caché de texturas entre frames.
+  por frame en 90–170 copias). De ahí el caché de texturas entre frames.
+- **Caché de texturas (texturas de la RAM):** las texturas quedan ordenadas en un almacén que lee la GPU y se revisan por
+  muestra. En Metal Slug XX el capturador bajó de 19,4 a 8,3 ms por frame, las texturas de 14,5 a 4,1 ms, lo copiado de 746
+  a 3 KB y las llamadas al DMA de 44 a 0, sin nada fuera del almacén y sin errores visuales reportados [medido, 0.0.10.1].
+  La revisión cuesta ~2,5 ms por frame. Las texturas de la VRAM (peleas de KOF 96, DMA ~1 ms + ordenar ~2 ms por frame) no
+  pasan por el caché.
 - **Capturador atrasado = vértices basura:** si copiar texturas tarda más que un frame, la compuerta (5 ms como mucho)
   deja pasar al juego y se copian vértices que el juego ya reescribía (posiciones de ~2^31, uv 65535; la GPU rellenaba
   toda la pantalla con una textura: "glitch blanco" de Metal Slug XX). Un vértice fuera de ±4096 manda el frame con la
@@ -130,7 +135,7 @@ directa.
 | Filtro "Original" de Adrenaline | Adrenaline no dibuja con GXM y el presentador no puede actuar | usar Bilinear |
 | Lo que el sistema del PSP dibuja encima (diálogo del botón PS) | no pasa por las listas del juego | "tapado": se compara con la imagen normal y se muestra la normal mientras dure |
 | Frames con sublistas aplicadas por la memoria | sus draws no pasan por el registro | imagen normal (los juegos 2D casi no usan sublistas) |
-| Una textura cambiada solo en bytes que la revisión no ve puede verse vieja unos frames | riesgo aceptado del caché de texturas (diseño en curso) | revisión completa por turnos |
+| Una textura cambiada solo en bytes que la revisión no ve puede verse vieja unos frames | riesgo aceptado del caché de texturas (hasta 16 frames) | revisión completa por turnos |
 | Mezclas sin equivalente directo en GXM (alfa del destino, factores al doble), test de color, operaciones lógicas | GXM fijo no las tiene (sí tiene mezcla programable, sin usar todavía) | imagen normal, motivo `blend` / `color_test_or_logic` |
 | Máscara de color por bit (0xE8) y máscaras del test de alfa que no son bits altos | GXM enmascara canales enteros y los shaders comparan el alfa entero | imagen normal, motivo `mask` |
 | Profundidad y stencil entre escenas | viven en una escena de GXM (sin force load/store), no sobreviven a un cambio de destino o de frame | lo que dependa de ellos se dibuja mal |

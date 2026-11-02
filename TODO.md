@@ -2,10 +2,16 @@
 
 The only list of pending work. Ordered from what comes next to what can wait. Each item says where it came from
 (a document in `docs/dev/en/`, `docs/agent/en/`, `docs/changelog/en/` or the claude.ai project). Done items are removed;
-what was done is in `CHANGELOG.md`. Updated 2026-11-02 (NativeLink 0.0.4 + NativeDraw 0.0.9 confirmed; before: tests up to NativeDraw 0.0.8.29 + NativeLink 0.0.3.11). How the work is done: `docs/agent/en/workflow.md`; stage 3 plan and results:
+what was done is in `CHANGELOG.md`. Updated 2026-11-02 (NativeLink 0.0.4 + NativeDraw 0.0.10 confirmed; before: tests up to NativeDraw 0.0.8.29 + NativeLink 0.0.3.11). How the work is done: `docs/agent/en/workflow.md`; stage 3 plan and results:
 `docs/agent/en/stage3-plan.md`.
 
 ## Next
+- [ ] **3D** (after the fans; the user's order, 2026-11-02): start with a light game, not GT. Store the matrices in the record
+      and translate depth; GT needs reusing recorded sublists (`Performance for drawing GT`).
+- [ ] **Texture cache, what is left:** VRAM textures (KOF 96 fights: DMA ~1 ms + sort ~2 ms per frame; only after understanding the
+      tiles: if they are stale data, a cache can make them worse); the check costs ~2.5 ms per frame (Metal Slug XX), see what
+      can go; translator caches (palettes, translated draws, identical scenes; the translator spends ~8–10 ms of CPU per
+      frame).
 - [ ] **Triangle fans (prim 5) in the translator:** Street Fighter Alpha 3 MAX fights fall to the normal image with reason
       `primitive`. With them it is the 2D benchmark at 60 fps (~600 draws per frame).
 - [ ] KOF 96 fights: seconds at 42–57 fps with the GPU at 90–98 % and the capturer at ~11 ms; suspected GPU limit, not proven.
@@ -26,14 +32,6 @@ what was done is in `CHANGELOG.md`. Updated 2026-11-02 (NativeLink 0.0.4 + Nativ
       with real scenes, 3D scenes, useful GPU tests of pspautotests.
 - [ ] **Simplify the structure** (after the tests): split `capture.c` (1621 lines) into walk, sublist memory, readers and
       logs; fewer switches; tidy the mailbox.
-- [ ] **Texture cache between frames** (user's request: caches everywhere, avoid redoing what did not change). Measured
-      in 0.0.8.19: ~98–99 % of the bytes copied each frame equal the previous copy; the DMA is the expensive part
-      (~98 µs per call; since 0.0.8.26 only copies of 8 KB or more use it). Agreed design: textures kept unswizzled in the Vita's own
-      memory across frames; a cheap sampled check every frame, a full check in turns (1 of every N groups of 8 rows per
-      frame), immediate invalidation when the GE writes there (block copies, intermediate images); no 128-textures-per-frame
-      cap. Accepted risk: a texture changed only in bytes the sample misses may look stale for up to N frames. Take care
-      that the GPU never reads an entry while it is rewritten. Afterwards: translator caches (palettes, translated draws,
-      identical scenes; the translator spends ~8–10 ms of CPU per frame).
 - [ ] **Giant draws in Metal Slug XX** (y -4127, target intermediate): 2 in the 0.0.8.24 run, none in 0.0.8.25 or 0.0.8.26.
       Dev builds log their bytes (`translator: giant draw bytes`): read them when they show up, before changing anything.
 - [ ] Metal Slug XX: almost every checked frame comes out "different from the normal image" (KOF ~0) although it looks
@@ -152,6 +150,9 @@ what was done is in `CHANGELOG.md`. Updated 2026-11-02 (NativeLink 0.0.4 + Nativ
 - [ ] Reading the clock on the Vita costs 390 ns: the full extreme log alters what it measures.
 
 ## Low priority
+- [ ] **Wi-Fi drops around PSP games:** the relay lost the Vita at both Metal Slug XX runs on 2026-11-02 (2 cases only). The
+      plugins have no network code; Adrenaline has `kermit_wlan` and a per-game "wlan switch" setting. Test: Metal Slug with L held
+      when opening (NativeLink off), and KOF 96.
 - [ ] **Battery, heat and Vita memory**: measure them later (a 30-minute session, same game, with and without the plugin,
       or log the battery percent). The optimizations overlap with the caches, not redrawing identical frames and waking
       threads only when there is work.

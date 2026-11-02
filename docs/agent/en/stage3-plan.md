@@ -216,7 +216,8 @@ calculates how long each one took.
   TODO (they go to `TODO.md`), out goes the black-screen safety that no longer activated (`falla`), the `volcado_auto` file and
   the mailbox's 0x4B/0x4C words that nobody read; documentation reorganized into `docs/dev`, `docs/agent` and
   `docs/changelog` in English and Spanish.
-- What comes next: **texture cache between frames** (sorted in the Vita's own memory; cheap per-sample check
+- **0.0.10: texture cache between frames, RAM only** (`RC` in `record.c`): done, results in `../../dev/en/findings.md`.
+- The design it followed: **texture cache between frames** (sorted in the Vita's own memory; cheap per-sample check
   in every frame, full check in turns 1 of every N groups, and invalidation when the GE writes to that memory; the user
   accepted that in rare cases a texture looks old for up to N frames). Afterwards, translator caches (palettes, translated
   draws, equal scenes).
@@ -227,5 +228,5 @@ calculates how long each one took.
 | 3.0 | **done** (NativeDraw 0.0.3) |
 | 3.1 | **done** (NativeDraw 0.0.4) |
 | 3.2 | **done** (NativeDraw 0.0.5) |
-| 3.3 | Retro City (NativeDraw 0.0.6), **KOF 96** (NativeDraw 0.0.7; 60 fps in the fights since test 0.0.8.18) and **Metal Slug XX** (at its 30 fps; white glitch avoided in 0.0.8.21). 0.0.8.23 holds 30 fps in Metal Slug XX (`../../dev/en/findings.md`). Pending to test on the Vita: 0.0.8.24. Next: texture cache |
+| 3.3 | Retro City (NativeDraw 0.0.6), **KOF 96** (NativeDraw 0.0.7; 60 fps in the fights since test 0.0.8.18) and **Metal Slug XX** (at its 30 fps; white glitch avoided in 0.0.8.21). 0.0.8.23 holds 30 fps in Metal Slug XX (`../../dev/en/findings.md`). Texture cache for RAM textures in 0.0.10. Next: triangle fans, then 3D |
 | 3.4 | partly advanced: comparison with the normal image (detects what the system draws on top) |
