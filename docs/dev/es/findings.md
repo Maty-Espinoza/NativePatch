@@ -132,6 +132,8 @@ directa.
 | Frames con sublistas aplicadas por la memoria | sus draws no pasan por el registro | imagen normal (los juegos 2D casi no usan sublistas) |
 | Una textura cambiada solo en bytes que la revisión no ve puede verse vieja unos frames | riesgo aceptado del caché de texturas (diseño en curso) | revisión completa por turnos |
 | Mezclas sin equivalente directo en GXM (alfa del destino, factores al doble), test de color, operaciones lógicas | GXM fijo no las tiene (sí tiene mezcla programable, sin usar todavía) | imagen normal, motivo `blend` / `color_test_or_logic` |
+| Máscara de color por bit (0xE8) y máscaras del test de alfa que no son bits altos | GXM enmascara canales enteros y los shaders comparan el alfa entero | imagen normal, motivo `mask` |
+| Profundidad y stencil entre escenas | viven en una escena de GXM (sin force load/store), no sobreviven a un cambio de destino o de frame | lo que dependa de ellos se dibuja mal |
 | Dependencia de Adrenaline | se enganchan importaciones de AdrenalineUser y ScePspemu | cada versión de Adrenaline puede romperlo; a futuro, proponer un punto de enganche oficial |
 
 ## Cosas que se midieron y no eran lo que parecían
