@@ -1,62 +1,62 @@
-// traductor.c: dibuja con la GPU de la Vita (GXM), al doble (960x544), un frame del registro (registro.h: draws y
-// estados del GE que guardo registro.c en el capturador). Se incluye dentro de presentador.c y usa su patcher, sus
-// superficies y su contexto; el presentador llama a trInit al iniciar y a trFrame en el hilo de Adrenaline, en vez de
-// copiar la imagen del PSP. Si el frame trae algo que no sabe dibujar devuelve el motivo (T_*) y el presentador muestra
-// la imagen normal. Sombreadores propios en sombreadores/*.cg.
+// traductor.c: draws with the Vita GPU (GXM), at double size (960x544), a frame of the record (registro.h: GE draws and
+// states saved by registro.c in the capturer). Included inside presentador.c, it uses its patcher, surfaces and context;
+// the presenter calls trInit at startup and trFrame in the Adrenaline thread, instead of copying the PSP image. If the
+// frame has something it cannot draw it returns the reason (T_*) and the presenter shows the normal image.
+// Own shaders in sombreadores/*.cg.
 #include "registro.h"
 #include "sombreadores_nd.h"
-// Resultado de trCheck/trFrame: T_OK o el motivo por el que el frame no se dibujo (tnom: su nombre en el log)
-enum { T_OK, T_NUEVO, T_3D, T_PRIM, T_FMT, T_MEZCLA, T_TFUNC, T_RARO, T_DESTINO, T_VERT, T_TOPE, T_TEX, T_PROG, T_FUERA, TN };
-static const char *tnom[TN] = { "ok", "sin_frame_nuevo", "3d", "primitiva", "formato", "mezcla", "funcion_textura",
+// Result of trCheck/trFrame: T_OK or the reason the frame was not drawn (tnames: its name in the log)
+enum { T_OK, T_NEW, T_3D, T_PRIM, T_FMT, T_BLEND, T_TFUNC, T_ODD, T_DEST, T_VERT, T_LIMIT, T_TEX, T_PROG, T_OUT, TN };
+static const char *tnames[TN] = { "ok", "sin_frame_nuevo", "3d", "primitiva", "formato", "mezcla", "funcion_textura",
                                 "test_color_o_logica", "otro_destino", "vertice", "tope", "textura_mal", "programa", "vertice_fuera" };
-// contadores del log de cada 10 s (los lee y borra el presentador)
+// counters for the 10 s log (read and cleared by the presenter)
 static volatile uint32_t t_cnt[TN], t_hd, t_nat, t_draws;
-static volatile uint32_t t_salto[6];  // frames del PSP que avanzo cada frame dibujado (0: repetido, 5: 5 o mas)
-static uint32_t t_vis[TN];   // veces que se vio cada motivo (el primero se anota con detalle en el log)
-typedef struct { float x, y, z, u, v; uint32_t c; } TV;  // vertice traducido (24 bytes, el formato de nd_v)
-static TV *tv[2];            // vertices traducidos, uno por superficie
-static uint32_t *tpal[2];    // paletas traducidas (8888), alineadas a 64: 16 entradas (64 bytes) o 256 (1 KB)
-#define TV_N (64 << 10)      // vertices por superficie (y tope de los indices de 16 bits)
-#define TP_B (256 << 10)     // bytes de paletas por superficie (KOF 96 carga ~260 paletas de 16 colores por frame)
-// ultimo frame del registro dibujado, si quedo bien y cuantas veces se repitio
+static volatile uint32_t t_skip[6];  // PSP frames advanced by each drawn frame (0: repeated, 5: 5 or more)
+static uint32_t t_seen[TN];   // times each reason was seen (the first one is logged in detail)
+typedef struct { float x, y, z, u, v; uint32_t c; } TV;  // translated vertex (24 bytes, the nd_v format)
+static TV *tv[2];            // translated vertices, one per surface
+static uint32_t *tpal[2];    // translated palettes (8888), aligned to 64: 16 entries (64 bytes) or 256 (1 KB)
+#define TV_N (64 << 10)      // vertices per surface (and limit of the 16-bit indices)
+#define TP_B (256 << 10)     // palette bytes per surface
+// last record frame drawn, whether it came out fine and how many times it was repeated
 static uint32_t t_frame = ~0u, t_ok, t_rep;
-static uint16_t *tib;        // 0, 1, 2... (indices para la GPU)
-// Imagen intermedia: un draw del juego a otra imagen de la VRAM (no la que se muestra) va a una superficie propia al
-// doble (1024x544); si despues, en el mismo frame, una textura esta en esa direccion, se lee de esa superficie.
-// fb: direccion de la imagen en la VRAM (~0u: libre); fr: ultimo frame en que se uso.
+static uint16_t *tib;        // 0, 1, 2... (indices for the GPU)
+// Intermediate image: a game draw to another VRAM image (not the shown one) goes to our own double-size surface
+// (1024x544); if later in the same frame a texture is at that address, it is read from that surface.
+// fb: image address in VRAM (~0u: free); fr: last frame it was used.
 typedef struct { uint32_t fb, fr; void *mem; SceGxmColorSurface cs; } RT;
 static RT rts[2];
-// Reserva la superficie de una imagen intermedia (alfa 255, como la superficie principal). Las dos se reservan en
-// trInit, antes que el volcado: si no, el volcado se queda con la memoria fisica.
+// Reserves the surface of an intermediate image (alpha 255, like the main surface). Both are reserved in trInit,
+// before the dump: otherwise the dump takes the physical memory.
 static int rtMem(RT *r) {
   if (!(r->mem = gmem1(PHY, LINE * H * 4, RW))) { alog("traductor: sin memoria para una imagen intermedia\n"); return 0; }
-  for (uint32_t k = 0; k < LINE * H; k++) ((uint32_t *)r->mem)[k] = 0xFF000000u;  // (el alfa no se escribe nunca)
+  for (uint32_t k = 0; k < LINE * H; k++) ((uint32_t *)r->mem)[k] = 0xFF000000u;  // (alpha is never written)
   sceGxmColorSurfaceInit(&r->cs, SCE_GXM_COLOR_FORMAT_A8B8G8R8, SCE_GXM_COLOR_SURFACE_LINEAR, SCE_GXM_COLOR_SURFACE_SCALE_NONE,
                          SCE_GXM_OUTPUT_REGISTER_SIZE_32BIT, LINE, H, LINE, r->mem);
   r->fb = ~0u;
   return 1;
 }
-// La imagen intermedia de la imagen fb (desplazamiento en la VRAM) y la marca como usada en frame. Si no hay y crear,
-// toma una que no se haya usado en este frame (la reserva si hace falta). 0 si no hay.
-static RT *rtDe(uint32_t fb, uint32_t frame, int crear) {
+// The intermediate image of image fb (VRAM offset), marked as used in frame. If none and create, takes one not used
+// in this frame (reserving it if needed). 0 if none.
+static RT *rtOf(uint32_t fb, uint32_t frame, int create) {
   for (int i = 0; i < 2; i++) if (rts[i].mem && rts[i].fb == fb) { rts[i].fr = frame; return &rts[i]; }
-  if (!crear) return 0;
+  if (!create) return 0;
   for (int i = 0; i < 2; i++) {
     RT *r = &rts[i];
-    if (r->mem && r->fr == frame) continue;  // (ya la usa otra imagen de este frame)
+    if (r->mem && r->fr == frame) continue;  // (already used by another image of this frame)
     if (!r->mem && !rtMem(r)) return 0;
-    if (r->fb == ~0u) alog("traductor: imagen intermedia %d (%s) para %06x\n", i, tipo(r->mem), fb);
+    if (r->fb == ~0u) alog("traductor: imagen intermedia %d (%s) para %06x\n", i, ty(r->mem), fb);
     r->fb = fb; r->fr = frame;
     return r;
   }
   return 0;
 }
-// Direccion de la textura 0 del estado e (registros 0xA0 y 0xA8 del GE)
+// Address of texture 0 of state e (GE registers 0xA0 and 0xA8)
 static uint32_t texAddr(const uint32_t *e) { return (RE(e, 0xA0) & 0xFFFFF0) | ((RE(e, 0xA8) << 8) & 0x0F000000); }
 
-// --- programas: uno de vertices (nd_v) y dos de fragmentos: nd_fc sin textura y nd_ft con textura (las con swizzle ya
-// llegan ordenadas del registro). Cada programa de fragmentos se arma una vez por cada mezcla que aparece (fps, hasta
-// 64) ---
+// --- programs: one vertex program (nd_v) and two fragment programs: nd_fc without texture and nd_ft with texture
+// (swizzled ones arrive already sorted from the record). Each fragment program is built once per blend that appears
+// (fps, up to 64) ---
 static SceGxmVertexProgram *nvp;
 static const SceGxmProgram *pft, *pfc, *pv;
 static SceGxmShaderPatcherId ift, ifc;
@@ -64,8 +64,8 @@ static const SceGxmProgramParameter *n_wvp, *n_tf, *n_atx, *n_atc;
 typedef struct { uint32_t key; SceGxmFragmentProgram *p; } FP;
 static FP fps[64];
 static uint32_t nfps;
-// Programa de fragmentos para tex (0 sin textura, 1 con textura) y key (0 sin mezcla; si no, los 4 bytes de
-// SceGxmBlendInfo + 1, ver blendKey). Lo busca en fps o lo crea con el patcher (sin escribir el alfa); 0 si falla.
+// Fragment program for tex (0 no texture, 1 textured) and key (0 no blending; otherwise the 4 bytes of
+// SceGxmBlendInfo + 1, see blendKey). Finds it in fps or creates it with the patcher (no alpha write); 0 on failure.
 static SceGxmFragmentProgram *fragProg(int tex, uint32_t key) {
   uint32_t k = key << 1 | tex;
   for (uint32_t i = 0; i < nfps; i++) if (fps[i].key == k) return fps[i].p;
@@ -73,7 +73,7 @@ static SceGxmFragmentProgram *fragProg(int tex, uint32_t key) {
   SceGxmBlendInfo b;
   if (key) sceClibMemcpy(&b, &(uint32_t){ key - 1 }, 4);
   else { sceClibMemset(&b, 0, sizeof b); b.colorFunc = b.alphaFunc = SCE_GXM_BLEND_FUNC_NONE; }
-  b.colorMask = SCE_GXM_COLOR_MASK_R | SCE_GXM_COLOR_MASK_G | SCE_GXM_COLOR_MASK_B;  // (alfa del PSP = su stencil)
+  b.colorMask = SCE_GXM_COLOR_MASK_R | SCE_GXM_COLOR_MASK_G | SCE_GXM_COLOR_MASK_B;  // (PSP alpha = its stencil)
   SceGxmFragmentProgram *p = 0;
   int r = sceGxmShaderPatcherCreateFragmentProgram(pat, tex ? ift : ifc, SCE_GXM_OUTPUT_REGISTER_FORMAT_UCHAR4,
                                                    SCE_GXM_MULTISAMPLE_NONE, &b, pv, &p);
@@ -82,9 +82,9 @@ static SceGxmFragmentProgram *fragProg(int tex, uint32_t key) {
   return p;
 }
 
-// Prepara el traductor (lo llama presStart, solo con dibujar): memoria de vertices, paletas e indices, registra los
-// sombreadores y busca sus parametros, crea los programas basicos, reserva las imagenes intermedias y deja a la GPU
-// leer la RAM del PSP y las texturas del registro. 0 si quedo listo; negativo si no.
+// Prepares the translator (called by presStart, only with dibujar): vertex, palette and index memory, registers the
+// shaders and finds their parameters, creates the basic programs, reserves the intermediate images and lets the GPU
+// read the PSP RAM and the record textures. 0 if ready; negative otherwise.
 static int trInit(void) {
   for (int i = 0; i < 2; i++)
     if (!(tv[i] = gmem(TV_N * sizeof(TV), RD)) || !(tpal[i] = gmem(TP_B, RD))) return -1;
@@ -109,14 +109,14 @@ static int trInit(void) {
   if ((r = sceGxmShaderPatcherCreateVertexProgram(pat, iv, at, 3, &st, 1, &nvp)) < 0) { alog("traductor: programa de vertices %08x\n", r); return r; }
   if (!fragProg(0, 0) || !fragProg(1, 0)) return -3;
   for (int i = 0; i < 2; i++) rtMem(&rts[i]);
-  // RAM del PSP (0x08000000-0x0A000000) para la GPU (con 0x72000000 falla)
+  // PSP RAM (0x08000000-0x0A000000) for the GPU (fails with 0x72000000)
   int r1 = sceGxmMapMemory((void *)0x70000000, 0x2000000, RD);
   int r3 = regMapGpu();
   alog("traductor: RAM del PSP para la GPU %08x, texturas del registro %08x\n", r1, r3);
   return r3 < 0 ? r3 : 0;
 }
 
-// Color del PSP c en formato f (0 5650, 1 5551, 2 4444, 3 8888; R en los bits bajos) -> 0xAABBGGRR (canales a 0-255)
+// PSP color c in format f (0 5650, 1 5551, 2 4444, 3 8888; R in the low bits) -> 0xAABBGGRR (channels scaled to 0-255)
 static uint32_t pal8888(uint32_t c, uint32_t f) {
   uint32_t r, g, b, a;
   if (f == 3) return c;
@@ -126,9 +126,9 @@ static uint32_t pal8888(uint32_t c, uint32_t f) {
   return (a * 17) << 24 | (b * 17) << 16 | (g * 17) << 8 | r * 17;
 }
 
-// Mezcla del GE del estado e (0x21 activa, 0xDF factores y operacion, 0xE0/0xE1 colores fijos) -> los 4 bytes de
-// SceGxmBlendInfo + 1 (0: sin mezcla); ~0u si no tiene equivalente. Los colores fijos solo sirven si son 0 o blanco
-// (factor ZERO u ONE); el alfa del destino no se calcula (no se escribe).
+// GE blend of state e (0x21 enable, 0xDF factors and operation, 0xE0/0xE1 fixed colors) -> the 4 bytes of
+// SceGxmBlendInfo + 1 (0: no blending); ~0u if it has no equivalent. Fixed colors only work if 0 or white
+// (factor ZERO or ONE); destination alpha is not computed (not written).
 static uint32_t blendKey(const uint32_t *e) {
   if (!(RE(e, 0x21) & 1)) return 0;
   uint32_t df = RE(e, 0xDF), s = df & 15, d = df >> 4 & 15, op = df >> 8 & 15;
@@ -150,49 +150,49 @@ static uint32_t blendKey(const uint32_t *e) {
   return k + 1;
 }
 
-// Revisa si el draw d del frame f se sabe dibujar (modo through, primitiva, vertices sin pesos, destino, mezcla,
-// formato y funcion de textura). T_OK si se puede; si no, el motivo. Lo que depende de otros draws lo mira trFrame.
+// Checks whether draw d of frame f can be drawn (through mode, primitive, vertices without weights, destination, blend,
+// texture format and function). T_OK if so; otherwise the reason. What depends on other draws is checked by trFrame.
 static int trCheck(RFrame *f, RDraw *d) {
   const uint32_t *e = f->e[d->st];
   uint32_t vt = d->vt, clr = RE(e, 0xD3) & 1;
   if (!(vt >> 23 & 1)) return T_3D;
-  if (d->prim != 3 && d->prim != 4 && d->prim != 6) return T_PRIM;  // triangulos, tira, rectangulos
-  if ((vt >> 9 & 3) || (vt >> 18 & 7)) return T_VERT;  // pesos o morph
-  if ((RE(e, 0x9D) & 0x7FF) > 512) return T_DESTINO;
+  if (d->prim != 3 && d->prim != 4 && d->prim != 6) return T_PRIM;  // triangles, strip, rectangles
+  if ((vt >> 9 & 3) || (vt >> 18 & 7)) return T_VERT;  // weights or morph
+  if ((RE(e, 0x9D) & 0x7FF) > 512) return T_DEST;
   if (clr) return T_OK;
-  if (RE(e, 0x27) & 1 || RE(e, 0x28) & 1) return T_RARO;
-  if (blendKey(e) == ~0u) return T_MEZCLA;
+  if (RE(e, 0x27) & 1 || RE(e, 0x28) & 1) return T_ODD;
+  if (blendKey(e) == ~0u) return T_BLEND;
   if ((RE(e, 0x1E) & 1) && (vt & 3)) {
     uint32_t fmt = RE(e, 0xC3) & 15, tf = RE(e, 0xC9) & 7;
     if (fmt > 5 || (fmt >= 4 && !d->clut)) return T_FMT;
     if (tf != 0 && tf != 3) return T_TFUNC;
-    // (textura sin copia en el registro: trFrame mira si es una imagen intermedia de este frame)
+    // (texture with no copy in the record: trFrame checks whether it is an intermediate image of this frame)
   }
   return T_OK;
 }
 
-// Color de un vertice en p con el tipo de color ct del GE (4 5650, 5 5551, 6 4444, 7 8888) -> 0xAABBGGRR
+// Color of a vertex at p with GE color type ct (4 5650, 5 5551, 6 4444, 7 8888) -> 0xAABBGGRR
 static uint32_t col8888(const uint8_t *p, uint32_t ct) {
   if (ct == 7) return *(const uint32_t *)p;
   return pal8888(*(const uint16_t *)p, ct - 4);
 }
 
-// Decodifica los vertices del draw d (modo through) a o: calcula el tamano y la posicion de cada campo segun el tipo de
-// vertice del GE (con su alineacion), sigue los indices si hay, y deja x, y al doble y u, v divididos por tw x th.
-// col0: color si el vertice no trae; sc: scissor al doble (x0, y0, x1, y1). Los rectangulos (2 esquinas) se recortan al
-// scissor y salen como tiras de 4 vertices. *nout: vertices escritos. T_OK, T_VERT (datos fuera del registro), T_TOPE o
-// T_FUERA (posicion fuera de +-4096: vertices basura).
+// Decodes the vertices of draw d (through mode) to o: computes the size and position of each field from the GE vertex
+// type (with its alignment), follows the indices if any, and leaves x, y doubled and u, v divided by tw x th.
+// col0: color if the vertex has none; sc: doubled scissor (x0, y0, x1, y1). Rectangles (2 corners) are clipped to the
+// scissor and come out as 4-vertex strips. *nout: vertices written. T_OK, T_VERT (data outside the record), T_LIMIT or
+// T_OUT (position outside +-4096: garbage vertices).
 static int trVerts(RFrame *f, RDraw *d, TV *o, float tw, float th, uint32_t col0, const float *sc, uint32_t *nout) {
   static const uint8_t s4[4] = { 0, 1, 2, 4 }, cs[8] = { 0, 0, 0, 0, 2, 2, 2, 4 };
   uint32_t vt = d->vt, tc = vt & 3, ct = vt >> 2 & 7, nt = vt >> 5 & 3, pt = vt >> 7 & 3, sz = 0, al = 1, s;
   uint32_t otc = 0, ocol = 0, opos = 0, dummy __attribute__((unused));
-  // FLD: n componentes de size bytes, alineados a size (o: desplazamiento). Orden: textura, color, normal, posicion
+  // FLD: n components of size bytes, aligned to size (o: offset). Order: texture, color, normal, position
 #define FLD(n, size, o) s = (size); if (s) { sz = (sz + s - 1) & ~(s - 1); o = sz; sz += (n) * s; if (s > al) al = s; }
   FLD(2, s4[tc], otc); FLD(1, cs[ct], ocol); FLD(3, s4[nt], dummy); FLD(3, s4[pt], opos);
 #undef FLD
   sz = (sz + al - 1) & ~(al - 1);
   if (!sz || !pt) return T_VERT;
-  const uint8_t *vb = f->a + d->voff - 1, *ib = d->ioff ? f->a + d->ioff - 1 : 0;  // (desplazamientos + 1; 0: no hay)
+  const uint8_t *vb = f->a + d->voff - 1, *ib = d->ioff ? f->a + d->ioff - 1 : 0;  // (offsets + 1; 0: absent)
   uint32_t ix = d->vt >> 11 & 3, n = 0;
   TV r[2];
   for (uint32_t i = 0; i < d->n; i++) {
@@ -206,18 +206,18 @@ static int trVerts(RFrame *f, RDraw *d, TV *o, float tw, float th, uint32_t col0
     if (tc == 1) { q.u = p[otc]; q.v = p[otc + 1]; }
     else if (tc == 2) { q.u = ((const uint16_t *)(p + otc))[0]; q.v = ((const uint16_t *)(p + otc))[1]; }
     else if (tc == 3) { q.u = ((const float *)(p + otc))[0]; q.v = ((const float *)(p + otc))[1]; }
-    // posicion fuera de lo que dibuja el GE (o NaN): datos leidos tarde, cuando el juego ya los reescribia
-    if (!(q.x > -4096 && q.x < 4096 && q.y > -4096 && q.y < 4096)) return T_FUERA;
+    // position outside what the GE draws (or NaN): data read late, when the game was already rewriting it
+    if (!(q.x > -4096 && q.x < 4096 && q.y > -4096 && q.y < 4096)) return T_OUT;
     q.x *= 2; q.y *= 2; q.u /= tw; q.v /= th;
-    if (d->prim == 6) {  // rectangulo: 2 vertices (esquinas opuestas) -> tira de 4, separada de la siguiente con dos
-      r[i & 1] = q;      // vertices repetidos; el color es el del segundo vertice (como el GE)
+    if (d->prim == 6) {  // rectangle: 2 vertices (opposite corners) -> strip of 4, separated from the next with two
+      r[i & 1] = q;      // repeated vertices; the color is the second vertex's (like the GE)
       if (i & 1) {
-        if (n + 6 > TV_N) return T_TOPE;
-        for (int ej = 0; ej < 2; ej++) {  // recorte al scissor en x y en y; u y v se recortan en proporcion
-          float *a0 = ej ? &r[0].y : &r[0].x, *a1 = ej ? &r[1].y : &r[1].x, *t0 = ej ? &r[0].v : &r[0].u, *t1 = ej ? &r[1].v : &r[1].u;
-          float lo = sc[ej], hi = sc[ej + 2], d = *a1 - *a0, p0 = *a0, q0 = *t0, k = d != 0 ? (*t1 - *t0) / d : 0;
-          if (d >= 0) { if (*a0 < lo) *a0 = lo; if (*a1 > hi) *a1 = hi; if (*a0 >= *a1) goto fuera; }
-          else { if (*a1 < lo) *a1 = lo; if (*a0 > hi) *a0 = hi; if (*a1 >= *a0) goto fuera; }
+        if (n + 6 > TV_N) return T_LIMIT;
+        for (int axis = 0; axis < 2; axis++) {  // scissor clipping in x and y; u and v are clipped proportionally
+          float *a0 = axis ? &r[0].y : &r[0].x, *a1 = axis ? &r[1].y : &r[1].x, *t0 = axis ? &r[0].v : &r[0].u, *t1 = axis ? &r[1].v : &r[1].u;
+          float lo = sc[axis], hi = sc[axis + 2], d = *a1 - *a0, p0 = *a0, q0 = *t0, k = d != 0 ? (*t1 - *t0) / d : 0;
+          if (d >= 0) { if (*a0 < lo) *a0 = lo; if (*a1 > hi) *a1 = hi; if (*a0 >= *a1) goto outside; }
+          else { if (*a1 < lo) *a1 = lo; if (*a0 > hi) *a0 = hi; if (*a1 >= *a0) goto outside; }
           *t0 = q0 + (*a0 - p0) * k; *t1 = q0 + (*a1 - p0) * k;
         }
         uint32_t c = r[1].c;
@@ -225,9 +225,9 @@ static int trVerts(RFrame *f, RDraw *d, TV *o, float tw, float th, uint32_t col0
            cc = { r[0].x, r[1].y, .5f, r[0].u, r[1].v, c }, dd = { r[1].x, r[1].y, .5f, r[1].u, r[1].v, c };
         o[n++] = a; o[n++] = a; o[n++] = b; o[n++] = cc; o[n++] = dd; o[n++] = dd;
       }
-    fuera:;
+    outside:;
     } else {
-      if (n + 1 > TV_N) return T_TOPE;
+      if (n + 1 > TV_N) return T_LIMIT;
       o[n++] = q;
     }
   }
@@ -235,8 +235,8 @@ static int trVerts(RFrame *f, RDraw *d, TV *o, float tw, float th, uint32_t col0
   return T_OK;
 }
 
-// Pixeles que cubren los n vertices traducidos de un draw (rectangulos: cada uno; el resto: el rectangulo que los
-// encierra). Para el cronometro.
+// Pixels covered by the n translated vertices of a draw (rectangles: each one; the rest: their bounding
+// rectangle). For the timer.
 static float trArea(const TV *o, uint32_t n, uint32_t prim) {
   float a = 0;
   if (prim == 6) {
@@ -251,10 +251,10 @@ static float trArea(const TV *o, uint32_t n, uint32_t prim) {
   return n ? (x1 - x0) * (y1 - y0) : 0;
 }
 
-// matriz pixeles -> pantalla, por columnas (como la del presentador), y alfa test que siempre pasa
-static const float tr_wvp[16] = { 2.0f / LINE, 0, 0, 0, 0, -2.0f / H, 0, 0, 0, 0, -2, 0, -1, 1, 1, 1 }, siempre[4] = { 1, 0, 0, 0 };
-// Lo que va debajo en la superficie (escena ya abierta): la imagen normal base estirada, con el programa del
-// presentador; sin base, negro de pantalla completa (4 vertices en o + nv). Devuelve los vertices usados de o.
+// pixels -> screen matrix, by columns (like the presenter's), and alpha test that always passes
+static const float tr_wvp[16] = { 2.0f / LINE, 0, 0, 0, 0, -2.0f / H, 0, 0, 0, 0, -2, 0, -1, 1, 1, 1 }, always[4] = { 1, 0, 0, 0 };
+// What goes underneath in the surface (scene already open): the normal image base stretched, with the presenter's
+// program; without base, full-screen black (4 vertices at o + nv). Returns the vertices used from o.
 static uint32_t trBase(SceGxmContext *c, const SceGxmTexture *base, TV *o, uint32_t nv) {
   void *u;
   if (base) {
@@ -269,50 +269,50 @@ static uint32_t trBase(SceGxmContext *c, const SceGxmTexture *base, TV *o, uint3
   sceClibMemcpy(o + nv, q, sizeof q);
   sceGxmSetFragmentProgram(c, fragProg(0, 0));
   sceGxmReserveFragmentDefaultUniformBuffer(c, &u);
-  sceGxmSetUniformDataF(u, n_atc, 0, 4, siempre);
+  sceGxmSetUniformDataF(u, n_atc, 0, 4, always);
   sceGxmSetVertexStream(c, 0, o + nv);
   sceGxmDraw(c, SCE_GXM_PRIMITIVE_TRIANGLE_STRIP, SCE_GXM_INDEX_FORMAT_U16, tib, 4);
   return nv + 4;
 }
 
-// Dibuja el frame f del registro en la superficie s (cs[s]), en el hilo de Adrenaline. base: la imagen normal, que va
-// debajo estirada (lo que el juego no redibuja queda como en el PSP); 0: fondo negro. Primero revisa todos los draws
-// (trCheck, destinos y texturas sin copia): si alguno no se puede, devuelve el motivo sin dibujar nada. Despues abre
-// una escena por cada cambio de destino (la superficie s o una imagen intermedia; si se puede, primero todas las
-// intermedias y la superficie al final, en una sola escena: cada escena lee y escribe su superficie entera), arma
-// textura, paleta (a 8888 en tpal), vertices (trVerts, en tv) y uniformes de cada draw, y lo dibuja. T_OK si quedo listo; si falla a medias
-// devuelve el motivo y la superficie no se usa.
+// Draws frame f of the record to surface s (cs[s]), in the Adrenaline thread. base: the normal image, which goes
+// underneath stretched (what the game does not redraw stays as on the PSP); 0: black background. First checks all draws
+// (trCheck, destinations and textures with no copy): if one fails, returns the reason without drawing. Then opens
+// one scene per destination change (surface s or an intermediate image; if possible, all intermediates first and the
+// surface last, in a single scene: each scene reads and writes its whole surface), sets up texture, palette (to 8888 in
+// tpal), vertices (trVerts, in tv) and uniforms of each draw, and draws it. T_OK if ready; if it fails midway
+// returns the reason and the surface is not used.
 static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base) {
-  uint32_t disp = f->fb & 0x1FFFF0, ifb[2], nif = 0, en = 0;  // disp: imagen que se muestra; ifb: imagenes intermedias
-  // ord: primero las imagenes intermedias y despues, en una sola escena, la superficie (ver trFrame). Vale si solo los
-  // draws a la superficie leen imagenes intermedias y ninguna se dibuja despues de leida (leida: bit por imagen)
-  uint32_t ord = 1, leida = 0;
-  for (uint32_t i = 0; i < f->nd; i++) en += (RE(f->e[f->d[i].st], 0x9C) & 0x1FFFF0) == disp;
-  // ningun draw a la imagen que se muestra (juego atrasado: el flip trae la otra del doble buffer): vale la del ultimo
-  if (!en && f->nd) disp = RE(f->e[f->d[f->nd - 1].st], 0x9C) & 0x1FFFF0;
+  uint32_t disp = f->fb & 0x1FFFF0, ifb[2], nif = 0, n_disp = 0;  // disp: image being shown; ifb: intermediate images
+  // ord: intermediate images first and then, in a single scene, the surface (see trFrame). Valid only if just the
+  // draws to the surface read intermediate images and none is drawn after being read (rd_mask: bit per image)
+  uint32_t ord = 1, rd_mask = 0;
+  for (uint32_t i = 0; i < f->nd; i++) n_disp += (RE(f->e[f->d[i].st], 0x9C) & 0x1FFFF0) == disp;
+  // no draw to the shown image (game behind: the flip has the other one of the double buffer): use the last draw's one
+  if (!n_disp && f->nd) disp = RE(f->e[f->d[f->nd - 1].st], 0x9C) & 0x1FFFF0;
   for (uint32_t i = 0; i < f->nd; i++) {
     int r = trCheck(f, &f->d[i]);
     const uint32_t *e0 = f->e[f->d[i].st];
     uint32_t fb = RE(e0, 0x9C) & 0x1FFFF0, k;
-    int kd = -1;  // imagen intermedia de destino (-1: la superficie)
+    int kd = -1;  // destination intermediate image (-1: the surface)
     if (!r && fb != disp) {
       for (k = 0; k < nif && ifb[k] != fb; k++) {}
-      if (k == nif) { if (nif < 2) ifb[nif++] = fb; else r = T_DESTINO; }
+      if (k == nif) { if (nif < 2) ifb[nif++] = fb; else r = T_DEST; }
       kd = k;
-      if (leida >> k & 1) ord = 0;
+      if (rd_mask >> k & 1) ord = 0;
     }
-    if (!r && !(RE(e0, 0xD3) & 1) && (RE(e0, 0x1E) & 1) && (f->d[i].vt & 3) && !f->d[i].toff) {  // textura sin copia
+    if (!r && !(RE(e0, 0xD3) & 1) && (RE(e0, 0x1E) & 1) && (f->d[i].vt & 3) && !f->d[i].toff) {  // texture with no copy
       uint32_t ta = texAddr(e0);
-      // solo vale si esta en la VRAM (0x04000000) y es una imagen intermedia de un draw anterior de este frame
+      // only valid if in VRAM (0x04000000) and an intermediate image of an earlier draw of this frame
       for (k = 0; k < nif && !((ta & 0x0F000000) == 0x04000000 && (ta & 0x1FFFF0) == ifb[k]); k++) {}
       if (k == nif) r = T_TEX;
-      else { leida |= 1u << k; if (kd >= 0) ord = 0; }
+      else { rd_mask |= 1u << k; if (kd >= 0) ord = 0; }
     }
     if (r) {
-      if (!t_vis[r]++) {
+      if (!t_seen[r]++) {
         const uint32_t *e = f->e[f->d[i].st];
         alog("traductor: primer frame con '%s': draw %u de %u prim %u vt %06x tex %u fmt %u swz %u mezcla %u (%04x %06x %06x) alfa %u "
-             "tfunc %06x fb %06x/%u (se muestra %07x/%u) clear %u ctest %u logica %u\n", tnom[r], i, f->nd, f->d[i].prim, f->d[i].vt,
+             "tfunc %06x fb %06x/%u (se muestra %07x/%u) clear %u ctest %u logica %u\n", tnames[r], i, f->nd, f->d[i].prim, f->d[i].vt,
              RE(e, 0x1E) & 1, RE(e, 0xC3) & 15, RE(e, 0xC2) & 1, RE(e, 0x21) & 1, RE(e, 0xDF) & 0xFFFF, RE(e, 0xE0) & 0xFFFFFF,
              RE(e, 0xE1) & 0xFFFFFF, RE(e, 0x22) & 1, RE(e, 0xC9) & 0xFFFFFF, RE(e, 0x9C) & 0xFFFFFF, RE(e, 0x9D) & 0x7FF, f->fb,
              f->fbw & 0xFFFF, RE(e, 0xD3) & 0xFFFF, RE(e, 0x27) & 1, RE(e, 0x28) & 1);
@@ -320,67 +320,67 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
       return r;
     }
   }
-  static uint32_t t_q[2];  // ultima escena que leyo los vertices y paletas de cada superficie
-  // si la GPU todavia los lee (escena sin terminar) se espera
-  if (gOcupada(t_q[s])) { g_psup++; gEv("vertices y paletas reescritos", t_q[s]); gEspera(t_q[s]); }
+  static uint32_t t_q[2];  // last scene that read the vertices and palettes of each surface
+  // if the GPU is still reading them (unfinished scene) it waits
+  if (gBusy(t_q[s])) { g_psurf++; gEv("vertices y paletas reescritos", t_q[s]); gWait(t_q[s]); }
   TV *o = tv[s];
-  uint32_t *pal = tpal[s], np = 0, nv = 0, pant = ~0u, pn = 0;  // np: palabras usadas; pant/pn: la paleta anterior
+  uint32_t *pal = tpal[s], np = 0, nv = 0, pal_prev = ~0u, pn = 0;  // np: words used; pal_prev/pn: the previous palette
   void *u;
-  // ESCENA: empieza una escena en la superficie sup con el programa de vertices y la matriz
-#define ESCENA(sup) do { sceGxmBeginScene(c, 0, rt, 0, 0, 0, sup, &ds); sceGxmSetVertexProgram(c, nvp); \
+  // SCENE: starts a scene on surface surf_tex with the vertex program and the matrix
+#define SCENE(surf_tex) do { sceGxmBeginScene(c, 0, rt, 0, 0, 0, surf_tex, &ds); sceGxmSetVertexProgram(c, nvp); \
     sceGxmReserveVertexDefaultUniformBuffer(c, &u); sceGxmSetUniformDataF(u, n_wvp, 0, 16, tr_wvp); } while (0)
-  // ABRIR: cierra la escena abierta (si hay) y abre una en dst (0: la superficie s); la primera vez en la superficie,
-  // pone debajo la imagen normal (o negro: trBase)
-#define ABRIR(dst_) do { if (abierta) { sceGxmEndScene(c, 0, gFin()); cAnota(cur_rt ? C_INT : C_TR, &gq_n, t_draws - d0, spx / 1000, ssw); } \
-    d0 = t_draws; spx = 0; ssw = 0; cur_rt = (dst_); abierta = 1; ESCENA(cur_rt ? &cur_rt->cs : &cs[s]); \
-    if (!cur_rt && !con_base) { con_base = 1; nv = trBase(c, base, o, nv); spx += W * H; } } while (0)
-  RT *cur_rt = 0;  // destino de la escena abierta (0: la superficie que se muestra)
-  int abierta = 0, con_base = 0;
-  uint32_t d0 = t_draws, ssw = 0;  // cronometro: draws al empezar la escena, draws con swizzle y pixeles de la escena
+  // OPEN: closes the open scene (if any) and opens one on dst (0: surface s); the first time on the surface,
+  // puts the normal image (or black: trBase) underneath
+#define OPEN(dst_) do { if (opened) { sceGxmEndScene(c, 0, gEnd()); cNote(cur_rt ? C_INT : C_TR, &gq_n, t_draws - d0, spx / 1000, ssw); } \
+    d0 = t_draws; spx = 0; ssw = 0; cur_rt = (dst_); opened = 1; SCENE(cur_rt ? &cur_rt->cs : &cs[s]); \
+    if (!cur_rt && !has_base) { has_base = 1; nv = trBase(c, base, o, nv); spx += W * H; } } while (0)
+  RT *cur_rt = 0;  // destination of the open scene (0: the shown surface)
+  int opened = 0, has_base = 0;
+  uint32_t d0 = t_draws, ssw = 0;  // timer: draws at scene start, swizzled draws and scene pixels
   float spx = 0;
-  if (!ord) ABRIR(0);  // (en el orden del juego: la superficie primero, como en el PSP)
-  // formato de textura del GE (0xC3) -> GXM
+  if (!ord) OPEN(0);  // (in game order: the surface first, as on the PSP)
+  // GE texture format (0xC3) -> GXM
   static const SceGxmTextureFormat gf[6] = { SCE_GXM_TEXTURE_FORMAT_U5U6U5_BGR, SCE_GXM_TEXTURE_FORMAT_U1U5U5U5_ABGR,
     SCE_GXM_TEXTURE_FORMAT_U4U4U4U4_ABGR, SCE_GXM_TEXTURE_FORMAT_U8U8U8U8_ABGR, SCE_GXM_TEXTURE_FORMAT_P4_ABGR,
     SCE_GXM_TEXTURE_FORMAT_P8_ABGR };
   int res = T_OK;
-  // con ord, dos pasadas: 0 los draws a imagenes intermedias, 1 los de la superficie
-  for (uint32_t pasada = 0; pasada <= ord && res == T_OK; pasada++)
+  // with ord, two passes: 0 draws to intermediate images, 1 those to the surface
+  for (uint32_t pass = 0; pass <= ord && res == T_OK; pass++)
   for (uint32_t i = 0; i < f->nd && res == T_OK; i++) {
     RDraw *d = &f->d[i];
     const uint32_t *e = f->e[d->st];
     uint32_t clr = RE(e, 0xD3), tex = !(clr & 1) && (RE(e, 0x1E) & 1) && (d->vt & 3), fb = RE(e, 0x9C) & 0x1FFFF0;
-    RT *dst = fb == disp ? 0 : rtDe(fb, f->frame, 1);
-    if (fb != disp && !dst) { res = T_DESTINO; break; }
-    if (ord && (pasada ? dst != 0 : dst == 0)) continue;
-    if (!abierta || dst != cur_rt) ABRIR(dst);
-    if ((clr & 1) && !(clr >> 8 & 1)) continue;  // borrado solo de profundidad/stencil: nada que ver
+    RT *dst = fb == disp ? 0 : rtOf(fb, f->frame, 1);
+    if (fb != disp && !dst) { res = T_DEST; break; }
+    if (ord && (pass ? dst != 0 : dst == 0)) continue;
+    if (!opened || dst != cur_rt) OPEN(dst);
+    if ((clr & 1) && !(clr >> 8 & 1)) continue;  // depth/stencil-only clear: nothing to see
     uint32_t key = clr & 1 ? 0 : blendKey(e), mat = (RE(e, 0x55) & 0xFFFFFF) | (RE(e, 0x56) & 0xFF) << 24;
     float tw = 1, th = 1;
     SceGxmTexture t;
     if (tex) {
       uint32_t fmt = RE(e, 0xC3) & 15, a8 = RE(e, 0xA8), b8 = RE(e, 0xB8), tbw = a8 & 0x7FF;
       th = 1u << (b8 >> 8 & 15); tw = tbw;
-      RT *src = d->toff ? 0 : rtDe(texAddr(e) & 0x1FFFF0, f->frame, 0);
-      if (src) {  // imagen intermedia de este frame: su superficie al doble (512 x 272 del PSP -> 1024 x 544)
+      RT *src = d->toff ? 0 : rtOf(texAddr(e) & 0x1FFFF0, f->frame, 0);
+      if (src) {  // intermediate image of this frame: its double-size surface (512 x 272 of the PSP -> 1024 x 544)
         if (sceGxmTextureInitLinear(&t, src->mem, SCE_GXM_TEXTURE_FORMAT_A8B8G8R8, LINE, H, 0) < 0) { res = T_TEX; break; }
         tw = LINE / 2; th = H / 2; fmt = 3;
       } else if (!d->toff || sceGxmTextureInitLinear(&t, f->tx + d->toff - 1, gf[fmt], tbw, (uint32_t)th, 0) < 0) { res = T_TEX; break; }
-      if (fmt >= 4) {  // paleta: a 8888, con desplazamiento, mascara y comienzo (0xC5)
+      if (fmt >= 4) {  // palette: to 8888, with shift, mask and start (0xC5)
         uint32_t c5 = RE(e, 0xC5), cf = c5 & 3, sh = c5 >> 2 & 31, mk = c5 >> 8 & 0xFF, st = (c5 >> 16 & 31) << 4;
         uint32_t ne = fmt == 4 ? 16 : 256, bpe = cf == 3 ? 4 : 2, max = d->clen / bpe, *pp = pal + np;
-        if ((np + ne) * 4 > TP_B) { res = T_TOPE; break; }
+        if ((np + ne) * 4 > TP_B) { res = T_LIMIT; break; }
         const uint8_t *src = f->a + d->clut - 1;
         for (uint32_t k = 0; k < ne; k++) {
           uint32_t j = ((k >> sh) & mk) | st;
           pp[k] = pal8888(j < max ? (bpe == 4 ? ((const uint32_t *)src)[j] : ((const uint16_t *)src)[j]) : 0, cf);
         }
-        if (pn == ne && !sceClibMemcmp(pal + pant, pp, ne * 4)) pp = pal + pant;  // igual a la anterior: se reusa
-        else { pant = np; pn = ne; np += ne; }
+        if (pn == ne && !sceClibMemcmp(pal + pal_prev, pp, ne * 4)) pp = pal + pal_prev;  // same as the last: reused
+        else { pal_prev = np; pn = ne; np += ne; }
         sceGxmTextureSetPalette(&t, pp);
       }
       uint32_t tfl = RE(e, 0xC6), twr = RE(e, 0xC7);
-      // filtro y repeticion del GE (0xC6, 0xC7)
+      // GE filter and wrap (0xC6, 0xC7)
       sceGxmTextureSetMinFilter(&t, (tfl & 7) == 1 ? SCE_GXM_TEXTURE_FILTER_LINEAR : SCE_GXM_TEXTURE_FILTER_POINT);
       sceGxmTextureSetMagFilter(&t, tfl >> 8 & 1 ? SCE_GXM_TEXTURE_FILTER_LINEAR : SCE_GXM_TEXTURE_FILTER_POINT);
       sceGxmTextureSetUAddrMode(&t, twr & 1 ? SCE_GXM_TEXTURE_ADDR_CLAMP : SCE_GXM_TEXTURE_ADDR_REPEAT);
@@ -388,23 +388,23 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     }
     uint32_t n = 0, d4 = RE(e, 0xD4), d5 = RE(e, 0xD5);
     float sc[4] = { 2.0f * (d4 & 0x3FF), 2.0f * (d4 >> 10 & 0x3FF), 2.0f * ((d5 & 0x3FF) + 1), 2.0f * ((d5 >> 10 & 0x3FF) + 1) };
-    if (!(d5 & 0xFFFFF)) sc[0] = sc[1] = -1e9f, sc[2] = sc[3] = 1e9f;  // (sin scissor guardado: no se recorta)
+    if (!(d5 & 0xFFFFF)) sc[0] = sc[1] = -1e9f, sc[2] = sc[3] = 1e9f;  // (no saved scissor: not clipped)
     if ((res = trVerts(f, d, o + nv, tw, th, mat, sc, &n))) break;
     if (!n) continue;
-    if (nv + n > TV_N) { res = T_TOPE; break; }
+    if (nv + n > TV_N) { res = T_LIMIT; break; }
     float ar = trArea(o + nv, n, d->prim);
     if (c_on) { spx += ar; ssw += tex && d->toff && (RE(e, 0xC2) & 1); }
-    static uint32_t gig;  // draws gigantes (mas de 2 pantallas al doble): los primeros 40, con su detalle
-    if (ar > 2.0f * LINE * H && gig < 40) {
+    static uint32_t giant;  // giant draws (over 2 screens at double size): the first 40, in detail
+    if (ar > 2.0f * LINE * H && giant < 40) {
       float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f, u0 = 1e9f, v0 = 1e9f, u1 = -1e9f, v1 = -1e9f;
       for (uint32_t j = 0; j < n; j++) {
         const TV *q = &o[nv + j];
         x0 = q->x < x0 ? q->x : x0; x1 = q->x > x1 ? q->x : x1; y0 = q->y < y0 ? q->y : y0; y1 = q->y > y1 ? q->y : y1;
         u0 = q->u < u0 ? q->u : u0; u1 = q->u > u1 ? q->u : u1; v0 = q->v < v0 ? q->v : v0; v1 = q->v > v1 ? q->v : v1;
       }
-      gig++;
+      giant++;
       alog("traductor: draw gigante (%u): frame %u draw %u de %u prim %u vertices %u->%u area %u miles x %d..%d y %d..%d | tex %u %ux%u fmt %u "
-           "swz %u copia %u uv %d..%d %d..%d (milesimas) | destino %s\n", gig, f->frame, i, f->nd, d->prim, d->n, n, (uint32_t)(ar / 1000),
+           "swz %u copia %u uv %d..%d %d..%d (milesimas) | destino %s\n", giant, f->frame, i, f->nd, d->prim, d->n, n, (uint32_t)(ar / 1000),
            (int)x0, (int)x1, (int)y0, (int)y1, tex, (uint32_t)tw, (uint32_t)th, RE(e, 0xC3) & 15, RE(e, 0xC2) & 1, d->toff ? 1 : 0,
            (int)(u0 * 1000), (int)(u1 * 1000), (int)(v0 * 1000), (int)(v1 * 1000), dst ? "intermedia" : "superficie");
     }
@@ -412,8 +412,8 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     if (!p) { res = T_PROG; break; }
     sceGxmSetFragmentProgram(c, p);
     sceGxmReserveFragmentDefaultUniformBuffer(c, &u);
-    // uniformes (ver sombreadores/*.cg): at = funcion del alfa test (1: siempre pasa) y referencia; tf = funcion de
-    // textura, TCC y color al doble
+    // uniforms (see sombreadores/*.cg): at = alpha test function (1: always passes) and reference; tf = texture
+    // function, TCC and color doubling
     uint32_t db = RE(e, 0xDB), c9 = RE(e, 0xC9);
     float at[4] = { (clr & 1) || !(RE(e, 0x22) & 1) ? 1.0f : (float)(db & 7), (float)(db >> 8 & 0xFF), 0, 0 };
     sceGxmSetUniformDataF(u, tex ? n_atx : n_atc, 0, 4, at);
@@ -426,14 +426,14 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     sceGxmDraw(c, d->prim == 3 ? SCE_GXM_PRIMITIVE_TRIANGLES : SCE_GXM_PRIMITIVE_TRIANGLE_STRIP, SCE_GXM_INDEX_FORMAT_U16, tib, n);
     nv += n; t_draws++;
   }
-  if (!con_base && res == T_OK) ABRIR(0);  // (frame sin draws a la superficie: igual lleva la imagen de abajo)
-  if (abierta) {  // (si algo fallo a medias, la superficie queda con lo dibujado: no se usa)
-    sceGxmEndScene(c, 0, gFin());
-    cAnota(cur_rt ? C_INT : C_TR, &gq_n, t_draws - d0, spx / 1000, ssw);
+  if (!has_base && res == T_OK) OPEN(0);  // (frame with no draws to the surface: it still gets the image underneath)
+  if (opened) {  // (if something failed midway, the surface keeps what was drawn: not used)
+    sceGxmEndScene(c, 0, gEnd());
+    cNote(cur_rt ? C_INT : C_TR, &gq_n, t_draws - d0, spx / 1000, ssw);
   }
-#undef ABRIR
-#undef ESCENA
+#undef OPEN
+#undef SCENE
   t_q[s] = gq;
-  if (res && !t_vis[res]++) alog("traductor: primer frame con '%s' al dibujar\n", tnom[res]);
+  if (res && !t_seen[res]++) alog("traductor: primer frame con '%s' al dibujar\n", tnames[res]);
   return res;
 }

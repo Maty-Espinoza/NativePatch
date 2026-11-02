@@ -1,2 +1,2 @@
-// version.h: version de NativeDraw. La usan nativedraw.c y captura.c (logs) y presentador.c (menu).
+// version.h: NativeDraw version. Used by nativedraw.c and captura.c (logs) and presentador.c (menu).
 #define NATIVEDRAW_VERSION "0.0.8.22"

@@ -1,7 +1,7 @@
-// Log de NativeLink (ms0:/nativelink.log; la sesion anterior queda en nativelink_prev.log). LOG (log.h) deja cada linea
-// en un buffer en RAM y un hilo lo vuelca cada ~1 s, para que el juego nunca espere a la tarjeta. Si NativeDraw atiende
-// el buzon del descriptor (VDESC, log.h), el volcado solo copia el texto a la zona compartida y lo escribe la Vita; si
-// no, se escribe con sceIo. Lo usa main.c (LOG, logInit, logGameId); del lado Vita lo atiende nativedraw.c.
+// NativeLink log (ms0:/nativelink.log; the previous session stays in nativelink_prev.log). LOG (log.h) leaves each line
+// in a RAM buffer and a thread flushes it every ~1 s, so the game never waits for the card. If NativeDraw serves the
+// descriptor mailbox (VDESC, log.h), the flush only copies the text to the shared zone and the Vita writes it; if
+// not, it is written with sceIo. Used by main.c (LOG, logInit, logGameId); on the Vita side nativedraw.c serves it.
 #include <pspsdk.h>
 #include <pspkernel.h>
 #include <pspinit.h>
@@ -14,17 +14,17 @@
 
 #define LOG_PATH "ms0:/nativelink.log"
 #define LOG_PREV "ms0:/nativelink_prev.log"
-#define LOG_MAX  (1024 * 1024) // tope del archivo, para no llenar la tarjeta
+#define LOG_MAX  (1024 * 1024) // file limit, so as not to fill the card
 
-u32 log_frame; // lo sube el gancho del flip (main.c)
+u32 log_frame; // raised by the flip hook (main.c)
 
-// --- Canal con NativeDraw (ver log.h) ---
-static int vita_dead; // no respondio: hasta reiniciar el juego se escribe con sceIo
-static int vitaIo(void) { // 1 si NativeDraw escribe el log
-  return !vita_dead && VDESC[0] == 0x31565047 && VDESC[8] == 0x56474F4C; // "GPV1" y "LOGV"
+// --- Channel with NativeDraw (see log.h) ---
+static int vita_dead; // did not respond: sceIo is used until the game restarts
+static int vitaIo(void) { // 1 if NativeDraw writes the log
+  return !vita_dead && VDESC[0] == 0x31565047 && VDESC[8] == 0x56474F4C; // "GPV1" and "LOGV"
 }
-// Espera a que NativeDraw termine el pedido anterior del buzon 'box' (done == seq). Si no responde en 2 s, devuelve 0 y
-// deja de usar la Vita hasta reiniciar el juego.
+// Waits for NativeDraw to finish the previous request of mailbox 'box' (done == seq). If it does not respond in 2 s,
+// returns 0 and stops using the Vita until the game restarts.
 static int vitaWait(int box) {
   u32 t0 = sceKernelGetSystemTimeLow();
   while (VDESC[box] != VDESC[box + 1]) {
@@ -36,19 +36,19 @@ static int vitaWait(int box) {
   }
   return 1;
 }
-static void vitaPost(int box) { // deja el pedido (los datos ya escritos)
+static void vitaPost(int box) { // posts the request (data already written)
 #ifdef __mips__
-  asm volatile("sync"); // los datos antes que el numero de pedido
+  asm volatile("sync"); // the data before the request number
 #endif
   VDESC[box]++;
 }
 
-static char buf[2][8192]; // doble buffer: se llena uno mientras se escribe el otro
+static char buf[2][8192]; // double buffer: one fills while the other is written
 static int cur, len, dropped, written, sync_mode;
-static int flushing; // un solo volcado a la vez (el hilo del log y el modo sincrono pueden coincidir)
-static u32 seen[256];     // keys ya vistas por logOnce
+static int flushing; // one flush at a time (the log thread and sync mode can coincide)
+static u32 seen[256];     // keys already seen by logOnce
 
-// Agrega n bytes al buffer en uso (si no entran, la linea se pierde y se cuenta); en modo sincrono vuelca al instante
+// Appends n bytes to the current buffer (if they do not fit, the line is lost and counted); in sync mode flushes at once
 void logWrite(const char *s, int n) {
   int intr = sceKernelCpuSuspendIntr();
   if (len + n <= (int)sizeof(buf[0])) {
@@ -63,11 +63,11 @@ void logWrite(const char *s, int n) {
     logFlush();
 }
 
-// Cambia de buffer y escribe el que estaba lleno: a la Vita (copia el texto a VLOG_BUF y deja el pedido) o, sin ella,
-// al final del archivo con sceIo. Avisa las lineas perdidas y deja de escribir al llegar a LOG_MAX.
+// Swaps buffers and writes the full one: to the Vita (copies the text to VLOG_BUF and posts the request) or, without
+// it, to the end of the file with sceIo. Reports lost lines and stops writing at LOG_MAX.
 void logFlush(void) {
   int intr = sceKernelCpuSuspendIntr();
-  if (flushing) { // otro hilo esta escribiendo: estas lineas salen en el proximo volcado
+  if (flushing) { // another thread is writing: these lines go out in the next flush
     sceKernelCpuResumeIntr(intr);
     return;
   }
@@ -83,7 +83,7 @@ void logFlush(void) {
     return;
   }
 
-  if (vitaIo() && vitaWait(VLOG)) { // lo escribe la Vita: aqui solo se copia el texto
+  if (vitaIo() && vitaWait(VLOG)) { // the Vita writes it: here the text is only copied
     char *q = (char *)(VLOG_BUF | 0x40000000);
     int k = d ? sprintf(q, "-- %d lineas perdidas (buffer lleno)\n", d) : 0;
     memcpy(q + k, p, n);
@@ -113,10 +113,10 @@ void logFlush(void) {
   flushing = 0;
 }
 
-// Tabla hash abierta de 256 casillas: 1 si 'key' no estaba (y la agrega), 0 si ya estaba o la tabla esta llena
+// Open hash table of 256 slots: 1 if 'key' was absent (and adds it), 0 if present or the table is full
 int logOnce(u32 key) {
   if (!key)
-    key = 1; // 0 marca casilla vacia
+    key = 1; // 0 marks an empty slot
   int i = (key * 2654435761u) >> 24, n, res = 0;
   int intr = sceKernelCpuSuspendIntr();
   for (n = 0; n < 256; n++, i = (i + 1) & 255) {
@@ -129,11 +129,11 @@ int logOnce(u32 key) {
     }
   }
   sceKernelCpuResumeIntr(intr);
-  return res; // si la tabla se llena, no se loguean eventos nuevos
+  return res; // if the table fills up, new events are not logged
 }
 
-// ID del juego al log. Primero de disc0:/UMD_DATA.BIN (ISO/UMD; en module_start el disco aun no esta montado, por eso
-// se llama desde el primer gancho; en juegos PSN no existe).
+// Game ID to the log. First from disc0:/UMD_DATA.BIN (ISO/UMD; in module_start the disc is not mounted yet, hence the
+// call from the first hook; it does not exist in PSN games).
 void logGameId(void) {
   static char id[11] = "?";
   int k1 = pspSdkSetK1(0);
@@ -144,8 +144,8 @@ void logGameId(void) {
     sceIoClose(fd);
   }
   pspSdkSetK1(k1);
-  // Si no hay UMD_DATA.BIN (juego PSN, o el disco todavia no esta montado), el ID sale de los datos del juego que
-  // guarda el kernel (sceKernelGetGameInfo, +0x44 "ULUS10450"; lo mismo que usa Adrenaline para su titleid)
+  // Without UMD_DATA.BIN (PSN game, or disc not mounted yet), the ID comes from the game data kept by the
+  // kernel (sceKernelGetGameInfo, +0x44 "ULUS10450"; the same Adrenaline uses for its titleid)
   const char *from = "UMD_DATA.BIN";
   if (id[0] == '?') {
     char *(*info)(void) = (void *)sctrlHENFindFunction("sceSystemMemoryManager", "SysMemForKernel", 0xEF29061C);
@@ -162,7 +162,7 @@ void logGameId(void) {
   LOG("juego=%s (de %s)\n", id, from);
 }
 
-static int flushThread(SceSize args, void *argp) { // vuelca el log cada segundo
+static int flushThread(SceSize args, void *argp) { // flushes the log every second
   for (;;) {
     sceKernelDelayThread(1000 * 1000);
     logFlush();
@@ -170,8 +170,8 @@ static int flushThread(SceSize args, void *argp) { // vuelca el log cada segundo
   return 0;
 }
 
-// Desde module_start: rota el log anterior, escribe la cabecera (version, build, archivo del juego) y, salvo en modo
-// sincrono, arranca el hilo que vuelca cada segundo
+// From module_start: rotates the previous log, writes the header (version, build, game file) and, unless in sync
+// mode, starts the thread that flushes every second
 void logInit(int sync) {
   int k1 = pspSdkSetK1(0);
   sceIoRemove(LOG_PREV);

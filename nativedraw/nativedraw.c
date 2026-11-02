@@ -1,12 +1,12 @@
-// nativedraw.c: arranque de NativeDraw (nativedraw.suprx), el plugin del lado Vita.
-// Plugin de usuario en el proceso de Adrenaline (taiHEN, seccion *PSPEMUCFW de ur0:tai/config.txt). NativeLink (lado
-// PSP) anota en un buzon de la RAM del PSP lo que el juego le pide al GE; captura.c lo recorre y registra, y
-// presentador.c lo dibuja con la GPU de la Vita. Este archivo: arranque (module_start), log propio (alog), el log de
-// NativeLink (lo escribe la Vita, asi el PSP no espera a la tarjeta), la version de NativeLink para el menu y el gancho
-// que anota los hilos del emulador. Con ux0:data/nativedraw/off no se engancha nada.
-// Logs: ux0:pspemu/nativedraw.log (este), nativedraw_captura.log (captura.c) y nativelink.log (el de NativeLink).
-// Canal del log de NativeLink (pagina 0x0A7FF000 de la RAM del PSP, ver nativelink/log.h): +0 "GPV1" (NativeLink),
-// +0x20 "LOGV" (este plugin: atiende el buzon), +0x40 seq, done, bytes (texto en 0x0A7FA000).
+// nativedraw.c: startup of NativeDraw (nativedraw.suprx), the Vita side plugin.
+// User plugin in the Adrenaline process (taiHEN, section *PSPEMUCFW of ur0:tai/config.txt). NativeLink (PSP side)
+// notes in a mailbox in PSP RAM what the game asks of the GE; captura.c walks and records it, and
+// presentador.c draws it with the Vita GPU. This file: startup (module_start), own log (alog), the NativeLink log
+// (written by the Vita, so the PSP does not wait for the card), the NativeLink version for the menu and the hook
+// that notes the emulator threads. With ux0:data/nativedraw/off nothing is hooked.
+// Logs: ux0:pspemu/nativedraw.log (this one), nativedraw_captura.log (captura.c) and nativelink.log (NativeLink's).
+// NativeLink log channel (page 0x0A7FF000 of PSP RAM, see nativelink/log.h): +0 "GPV1" (NativeLink),
+// +0x20 "LOGV" (this plugin: serves the mailbox), +0x40 seq, done, bytes (text at 0x0A7FA000).
 #include <psp2/kernel/modulemgr.h>
 #include <psp2/kernel/threadmgr.h>
 #include <psp2/kernel/clib.h>
@@ -19,37 +19,37 @@
 #include "version.h"
 
 #define LOGF "ux0:pspemu/nativedraw.log"
-#define PSP(a) (0x68000000u + ((a) & 0x0FFFFFFFu))  // vista sin cache de la RAM del PSP (CONVERT_ADDRESS)
+#define PSP(a) (0x68000000u + ((a) & 0x0FFFFFFFu))  // uncached view of PSP RAM (CONVERT_ADDRESS)
 #define DESC ((volatile uint32_t *)PSP(0x0A7FF000u))
 
 static int nlog;
-// Log propio (ux0:pspemu/nativedraw.log): cada linea con los ms desde que arranco el proceso; como mucho ~1000 lineas.
-// Abre, escribe y cierra cada vez (lento: no usar en caminos rapidos).
+// Own log (ux0:pspemu/nativedraw.log): each line with the ms since the process started; ~1000 lines at most.
+// Opens, writes and closes each time (slow: do not use in fast paths).
 void alog(const char *fmt, ...) {
   if (nlog++ > 1000) return;
   char b[512];
   va_list ap; va_start(ap, fmt);
   int n = sceClibSnprintf(b, 16, "%7u ", sceKernelGetProcessTimeLow() / 1000);
   n += sceClibVsnprintf(b + n, sizeof b - n, fmt, ap); va_end(ap);
-  if (n > (int)sizeof b - 1) { n = sizeof b - 1; b[n - 1] = '\n'; }  // (cortada: el salto de linea se conserva)
+  if (n > (int)sizeof b - 1) { n = sizeof b - 1; b[n - 1] = '\n'; }  // (cut: the newline is kept)
   SceUID fd = sceIoOpen(LOGF, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_APPEND, 0666);
   if (fd >= 0) { sceIoWrite(fd, b, n); sceIoClose(fd); }
 }
-static volatile int dato __attribute__((aligned(64))) = 1;  // .data no vacia (segmento RW valido)
-// Sin libc: el compilador puede generar llamadas a estas dos (copias de estructuras en captura.c)
+static volatile int datum __attribute__((aligned(64))) = 1;  // non-empty .data (valid RW segment)
+// No libc: the compiler may generate calls to these two (structure copies in captura.c)
 void *memset(void *d, int c, unsigned n) { char *p = d; while (n--) *p++ = c; return d; }
 void *memcpy(void *d, const void *s, unsigned n) { char *p = d; const char *q = s; while (n--) *p++ = *q++; return d; }
 
-// --- Log de NativeLink: seq lo sube el PSP, done lo iguala este plugin al copiarlo ---
+// --- NativeLink log: seq is raised by the PSP, done is matched by this plugin when copying ---
 #define LOGV 0x56474F4Cu
 #define VLOG 16
 void *sceDmacMemcpy(void *dst, const void *src, SceSize size);
-// El texto se copia por DMA a un anillo (lring, lw/lr = bytes escritos/leidos) y un hilo lo escribe a la tarjeta
-// despues: el PSP no espera la escritura (abrir, escribir y cerrar toma decenas de ms).
+// The text is copied by DMA to a ring (lring, lw/lr = bytes written/read) and a thread writes it to the card
+// later: the PSP does not wait for the write (opening, writing and closing is slow).
 static char lring[0x40000];
 static volatile uint32_t lw, lr;
-static int writer;  // 1 si el hilo escritor corre (si no, se escribe directo)
-// Copia n bytes de la RAM del PSP (a) al anillo, esperando si esta lleno.
+static int writer;  // 1 if the writer thread runs (otherwise, written directly)
+// Copies n bytes from PSP RAM (a) to the ring, waiting if full.
 static void logPut(uint32_t a, uint32_t n) {
   while (n) {
     while (lw - lr >= sizeof lring) sceKernelDelayThread(1000);
@@ -60,7 +60,7 @@ static void logPut(uint32_t a, uint32_t n) {
     a += k; lw += k; n -= k;
   }
 }
-static void logFlushOut(void) {  // (hilo escritor) pasa lo que hay en el anillo a nativelink.log
+static void logFlushOut(void) {  // (writer thread) moves what is in the ring to nativelink.log
   if (lr == lw) return;
   SceUID fd = sceIoOpen("ux0:pspemu/nativelink.log", SCE_O_WRONLY | SCE_O_CREAT | SCE_O_APPEND, 0666);
   while (lr != lw) {
@@ -71,14 +71,14 @@ static void logFlushOut(void) {  // (hilo escritor) pasa lo que hay en el anillo
   }
   if (fd >= 0) sceIoClose(fd);
 }
-static int writerThread(SceSize args, void *argp) {  // hilo escritor: vacia el anillo cada 2 ms
+static int writerThread(SceSize args, void *argp) {  // writer thread: empties the ring every 2 ms
   for (;;) { logFlushOut(); sceKernelDelayThread(2000); }
   return 0;
 }
-static uint32_t nlogs, ram_ok;  // pedazos de log atendidos; la RAM del PSP ya esta mapeada
-// Version de NativeLink para el menu: la primera linea de nativelink.log ("000000 NativeLink X.Y.Z (build ..."). Esa
-// linea la escribe el PSP directo a la tarjeta (antes de que la Vita atienda el log), asi que se lee del archivo. Solo
-// si NativeLink esta activo ("GPV1" en el buzon): si no, el archivo es del juego anterior.
+static uint32_t nlogs, ram_ok;  // log chunks served; PSP RAM is already mapped
+// NativeLink version for the menu: the first line of nativelink.log ("000000 NativeLink X.Y.Z (build ..."). The PSP
+// writes that line directly to the card (before the Vita serves the log), so it is read from the file. Only
+// if NativeLink is active ("GPV1" in the mailbox): otherwise the file is from the previous game.
 static char nl_ver[16];
 const char *nlVersion(void) {
   if (!ram_ok || DESC[0] != 0x31565047) return 0;
@@ -95,8 +95,8 @@ const char *nlVersion(void) {
     }
   return 0;
 }
-// Atiende el buzon del log: si NativeLink subio seq, pasa sus bytes (texto en 0x0A7FA000, hasta 16 KB) al anillo (o
-// directo al archivo sin hilo escritor) y responde igualando done.
+// Serves the log mailbox: if NativeLink raised seq, moves its bytes (text at 0x0A7FA000, up to 16 KB) to the ring (or
+// directly to the file without writer thread) and replies by matching done.
 static void serveLog(void) {
   uint32_t seq = DESC[VLOG];
   if (seq == DESC[VLOG + 1]) return;
@@ -112,21 +112,21 @@ static void serveLog(void) {
   DESC[VLOG + 1] = seq;
 }
 
-void capturaStart(void);  // captura.c
+void capStart(void);  // captura.c
 void presStart(void), presStop(void);  // presentador.c
 
-// Hilo principal: arranca el presentador, espera a que la RAM del PSP este mapeada, arranca el capturador y desde ahi
-// atiende el log de NativeLink (cada 0,2 ms si hay trabajo, si no cada 2 ms).
+// Main thread: starts the presenter, waits until PSP RAM is mapped, starts the capturer and from then on
+// serves the NativeLink log (every 0.2 ms if there is work, otherwise every 2 ms).
 static int mainThread(SceSize args, void *argp) {
   SceIoStat st;
   if (sceIoGetstat("ux0:data/nativedraw/off", &st) >= 0) {
     alog("ux0:data/nativedraw/off existe: no se engancha nada\n");
     return sceKernelExitDeleteThread(0);
   }
-  presStart();  // presentador y menu L+R+START
-  // La RAM del PSP se mapea en el proceso despues de cargar el plugin: leerla antes cierra Adrenaline.
-  // Se espera a que el bloque exista.
-  for (int mapped = 0;;) {  // solo escribe si NativeLink dejo su marca (la zona es del XMB fuera de los juegos)
+  presStart();  // presenter and L+R+START menu
+  // PSP RAM is mapped into the process after the plugin loads: reading it earlier closes Adrenaline.
+  // Waits for the block to exist.
+  for (int mapped = 0;;) {  // only writes if NativeLink left its mark (the zone belongs to the XMB outside games)
     SceKernelMemBlockInfo in; in.size = sizeof in;
     uint32_t a = (uint32_t)DESC;
     if (!mapped && (sceKernelGetMemBlockInfoByAddr((void *)a, &in) < 0 || a < (uint32_t)in.mappedBase ||
@@ -134,8 +134,8 @@ static int mainThread(SceSize args, void *argp) {
       sceKernelDelayThread(100000);
       continue;
     }
-    if (!mapped) capturaStart();  // el hilo de captura espera el buzon de NativeLink
-    mapped = ram_ok = 1;  // (se comprueba una vez: la RAM del PSP queda mapeada mientras viva el proceso)
+    if (!mapped) capStart();  // the capture thread waits for the NativeLink mailbox
+    mapped = ram_ok = 1;  // (checked once: PSP RAM stays mapped while the process lives)
     int busy = 0;
     if (DESC[0] == 0x31565047) {  // "GPV1"
       if (DESC[8] != LOGV) DESC[8] = LOGV;
@@ -146,12 +146,12 @@ static int mainThread(SceSize args, void *argp) {
   }
 }
 
-// Gancho de sceKernelCreateThread de ScePspemu: anota en el log cada hilo que crea el emulador (prioridad, nucleos) y
-// lo guarda en emu_th/emu_aff para que captura.c mida cuanto procesador usa cada uno. No ve los hilos creados antes de
-// cargar NativeDraw.
+// Hook on ScePspemu's sceKernelCreateThread: logs each thread the emulator creates (priority, cores) and
+// keeps it in emu_th/emu_aff so captura.c can measure how much CPU each one uses. Does not see threads created before
+// NativeDraw loads.
 static tai_hook_ref_t ref_ct;
 static SceUID hk_ct = -1;
-SceUID emu_th[256]; int emu_aff[256], emu_n;  // (captura.c los lee: EMU_N tiene que ser igual)
+SceUID emu_th[256]; int emu_aff[256], emu_n;  // (read by captura.c: EMU_N must be equal)
 static SceUID hookCT(const char *name, SceKernelThreadEntry entry, int prio, int stack, SceUInt attr, int aff,
                      const SceKernelThreadOptParam *opt) {
   SceUID r = TAI_CONTINUE(SceUID, ref_ct, name, entry, prio, stack, attr, aff, opt);
@@ -161,9 +161,9 @@ static SceUID hookCT(const char *name, SceKernelThreadEntry entry, int prio, int
 }
 
 void _start() __attribute__((weak, alias("module_start")));
-// Arranque del plugin: hilo escritor del log de NativeLink, gancho de los hilos del emulador e hilo principal.
+// Plugin startup: NativeLink log writer thread, emulator threads hook and main thread.
 int module_start(SceSize args, void *argp) {
-  alog("NativeDraw " NATIVEDRAW_VERSION " compilado %s %s (dato %d)\n", __DATE__, __TIME__, dato);
+  alog("NativeDraw " NATIVEDRAW_VERSION " compilado %s %s (dato %d)\n", __DATE__, __TIME__, datum);
   SceUID wt = sceKernelCreateThread("nativedraw_escritor", writerThread, 0xA0, 0x2000, 0, 0, NULL);
   if (wt >= 0 && sceKernelStartThread(wt, 0, NULL) >= 0) writer = 1;
   alog("log de NativeLink: %s\n", writer ? "anillo + hilo escritor" : "escritura directa");
@@ -173,7 +173,7 @@ int module_start(SceSize args, void *argp) {
   if (th >= 0) sceKernelStartThread(th, 0, NULL);
   return SCE_KERNEL_START_SUCCESS;
 }
-int module_stop(SceSize args, void *argp) {  // suelta el gancho y apaga el presentador
+int module_stop(SceSize args, void *argp) {  // releases the hook and shuts down the presenter
   if (hk_ct >= 0) taiHookRelease(hk_ct, ref_ct);
   presStop();
   return SCE_KERNEL_STOP_SUCCESS;

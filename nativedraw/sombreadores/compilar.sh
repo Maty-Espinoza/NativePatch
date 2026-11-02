@@ -1,8 +1,8 @@
 #!/bin/sh
-# Compila los sombreadores del traductor (*.cg) a ../sombreadores_nd.h (arreglos de bytes que incluye traductor.c) con
-# el compilador de Sony bajo qemu: JagerDesu/vita-shaders, con memmem(start, 0x300000, ...) en resolve.c y compilado con
-# make CC=arm-linux-gnueabihf-gcc. Detalle de la cadena: docs/agent/<idioma>/stage3-plan.md (Sombreadores).
-# Uso: SHACC=<carpeta de vita-shaders> sh compilar.sh   (solo hace falta al cambiar un .cg: el .h va en el repo)
+# Compiles the translator shaders (*.cg) to ../sombreadores_nd.h (byte arrays included by traductor.c) with
+# Sony's compiler under qemu: JagerDesu/vita-shaders, with memmem(start, 0x300000, ...) in resolve.c and built with
+# make CC=arm-linux-gnueabihf-gcc. Chain details: docs/agent/<language>/stage3-plan.md (Sombreadores).
+# Usage: SHACC=<vita-shaders folder> sh compilar.sh   (only needed when a .cg changes: the .h is in the repo)
 set -e
 D=$(cd "$(dirname "$0")" && pwd); O=$D/../sombreadores_nd.h
 echo "// Sombreadores del traductor (nativedraw/sombreadores/*.cg), compilados con sombreadores/compilar.sh. No editar." > $O

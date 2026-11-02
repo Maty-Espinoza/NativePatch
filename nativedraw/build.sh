@@ -1,13 +1,13 @@
 #!/bin/sh
-# Compila nativedraw.suprx sin el vitasdk completo: arm-none-eabi-gcc + vita-toolchain + stubs de vita-libs-gen-2
-# (vita-headers/db) y libtaihen_stub.a del paquete taihen de vitasdk (NO stubs de taiHEN hechos a mano: con NIDs
-# equivocados el plugin no carga y no avisa). Normalmente lo llama tools/compilar.sh (que prepara las variables).
-# Uso: VH=<vita-headers> STUBS=<salida de vita-libs-gen-2> TAI=<paquete taihen> [O=<carpeta de salida>] sh build.sh
+# Builds nativedraw.suprx without the full vitasdk: arm-none-eabi-gcc + vita-toolchain + vita-libs-gen-2 stubs
+# (vita-headers/db) and libtaihen_stub.a from the vitasdk taihen package (NOT hand-made taiHEN stubs: with wrong NIDs
+# the plugin does not load and gives no warning). Normally called by tools/compilar.sh (which prepares the variables).
+# Usage: VH=<vita-headers> STUBS=<vita-libs-gen-2 output> TAI=<taihen package> [O=<output folder>] sh build.sh
 set -e
 F="-mcpu=cortex-a9 -mthumb -mfloat-abi=hard -mfpu=neon -O2 -Wall -Wno-format -nostdlib -fno-builtin -ffreestanding"
 O=${O:-o}; rm -rf $O; mkdir -p $O
 for c in nativedraw captura presentador; do arm-none-eabi-gcc $F -I$VH/include -I$TAI/include -c $c.c -o $O/$c.o; done
-# Stubs: cada funcion que falta sale del primer archivo de $STUBS que la tenga, en este orden de bibliotecas
+# Stubs: each missing function comes from the first $STUBS file that has it, in this library order
 arm-none-eabi-ld -r -o $O/todo.o $O/nativedraw.o $O/captura.o $O/presentador.o
 for s in $(arm-none-eabi-nm -u $O/todo.o | awk '{print $2}' | grep -v -E '^(__|tai|mem)' | sort -u); do
   ok=
@@ -18,8 +18,8 @@ for s in $(arm-none-eabi-nm -u $O/todo.o | awk '{print $2}' | grep -v -E '^(__|t
   [ -n "$ok" ] || { echo "sin stub: $s"; exit 1; }
 done
 arm-none-eabi-gcc $F -Wl,-q -o $O/nativedraw.elf $O/todo.o $O/s_*.o $TAI/lib/libtaihen_stub.a -lgcc
-# vita-elf-create agrega ~1,1 KB al final del segmento del codigo y falla si el de los datos empieza muy cerca: se
-# enlaza de nuevo con los datos una pagina (4 KB) despues del final del codigo, redondeado a pagina.
+# vita-elf-create adds ~1.1 KB at the end of the code segment and fails if the data segment starts too close: it is
+# linked again with the data one page (4 KB) after the end of the code, rounded to a page.
 dat=$(arm-vita-eabi-readelf -lW $O/nativedraw.elf | awk '$1 == "LOAD" { print $3, $6; exit }' | { read a m; printf '0x%x' $(( (a + m + 0x1fff) & ~0xfff )); })
 arm-none-eabi-gcc $F -Wl,-q -Wl,-Tdata=$dat -o $O/nativedraw.elf $O/todo.o $O/s_*.o $TAI/lib/libtaihen_stub.a -lgcc
 vita-elf-create -e exports.yml $O/nativedraw.elf $O/nativedraw.velf
