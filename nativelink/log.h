@@ -11,7 +11,7 @@
 // sync mode: each line is written at once (slower, but nothing is lost if the game hangs).
 // Each line starts with the frame number (how many times sceDisplaySetFrameBuf was called).
 
-#define NATIVELINK_VERSION "0.0.3.9" // tools/build.sh reads it from here
+#define NATIVELINK_VERSION "0.0.3.10" // tools/build.sh reads it from here
 
 extern u32 log_frame;
 

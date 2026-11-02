@@ -132,34 +132,21 @@ int logOnce(u32 key) {
   return res; // if the table fills up, new events are not logged
 }
 
-// Game ID to the log. First from disc0:/UMD_DATA.BIN (ISO/UMD; in module_start the disc is not mounted yet, hence the
-// call from the first hook; it does not exist in PSN games).
+// Game ID to the log, from the game data kept by the kernel (sceKernelGetGameInfo, +0x44 "ULUS10450"; the same
+// Adrenaline uses for its titleid). Called from the game's first hook, where reading the disc is not safe: the game
+// may not have it ready yet.
 void logGameId(void) {
   static char id[11] = "?";
-  int k1 = pspSdkSetK1(0);
-  SceUID fd = sceIoOpen("disc0:/UMD_DATA.BIN", PSP_O_RDONLY, 0);
-  if (fd >= 0) {
-    if (sceIoRead(fd, id, 10) == 10)
-      id[10] = 0;
-    sceIoClose(fd);
+  char *(*info)(void) = (void *)sctrlHENFindFunction("sceSystemMemoryManager", "SysMemForKernel", 0xEF29061C);
+  char *g = info ? info() : NULL;
+  if (g && g[0x44] >= 'A' && g[0x44] <= 'Z') {
+    g += 0x44;
+    memcpy(id, g, 4);
+    id[4] = '-';
+    memcpy(id + 5, g + (g[4] == '-' ? 5 : 4), 5);
+    id[10] = 0;
   }
-  pspSdkSetK1(k1);
-  // Without UMD_DATA.BIN (PSN game, or disc not mounted yet), the ID comes from the game data kept by the
-  // kernel (sceKernelGetGameInfo, +0x44 "ULUS10450"; the same Adrenaline uses for its titleid)
-  const char *from = "UMD_DATA.BIN";
-  if (id[0] == '?') {
-    char *(*info)(void) = (void *)sctrlHENFindFunction("sceSystemMemoryManager", "SysMemForKernel", 0xEF29061C);
-    char *g = info ? info() : NULL;
-    if (g && g[0x44] >= 'A' && g[0x44] <= 'Z') {
-      g += 0x44;
-      memcpy(id, g, 4);
-      id[4] = '-';
-      memcpy(id + 5, g + (g[4] == '-' ? 5 : 4), 5);
-      id[10] = 0;
-      from = "kernel game data";
-    }
-  }
-  LOG("game=%s (from %s)\n", id, from);
+  LOG("game=%s\n", id);
 }
 
 static int flushThread(SceSize args, void *argp) { // flushes the log every second
