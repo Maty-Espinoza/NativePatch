@@ -295,15 +295,18 @@ static uint32_t trClipTri(const TV *p, const float *sc, TV *o) {
   return n;
 }
 
-// Triangles or strip (*prim 3 or 4) of *np vertices at o, room for room: if a vertex is outside the scissor, rewrites
-// them as a clipped triangle list (*prim = 3) and updates *np. T_OK or T_LIMIT.
-static int trTris(TV *o, uint32_t *np, uint32_t room, uint32_t *prim, const float *sc) {
-  uint32_t n = *np, m = 0, cut = 0;
+// Triangles or strip (*prim 3 or 4) of *np vertices at o, room for room: if a vertex is outside the scissor or flat is
+// set (each triangle takes the color of its last vertex), rewrites them as a clipped triangle list (*prim = 3) and
+// updates *np. T_OK or T_LIMIT.
+static int trTris(TV *o, uint32_t *np, uint32_t room, uint32_t *prim, const float *sc, int flat) {
+  uint32_t n = *np, m = 0, cut = flat;
   for (uint32_t i = 0; i < n; i++) cut |= o[i].x < sc[0] || o[i].y < sc[1] || o[i].x > sc[2] || o[i].y > sc[3];
   if (!cut) return T_OK;
   for (uint32_t i = 0; i + 2 < n; i += *prim == 3 ? 3 : 1) {
     if (n + m + 15 > room) return T_LIMIT;
-    m += trClipTri(o + i, sc, o + n + m);
+    TV t[3] = { o[i], o[i + 1], o[i + 2] };
+    if (flat) t[0].c = t[1].c = t[2].c;
+    m += trClipTri(t, sc, o + n + m);
   }
   sceClibMemmove(o, o + n, m * sizeof(TV));
   *np = m; *prim = 3;
@@ -473,7 +476,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     if ((res = trVerts(f, d, o + nv, tw, th, mat, sc, &n))) break;
     if (nv + n > TV_N) { res = T_LIMIT; break; }
     uint32_t prim = d->prim;
-    if (prim != 6 && (res = trTris(o + nv, &n, TV_N - nv, &prim, sc))) break;
+    if (prim != 6 && (res = trTris(o + nv, &n, TV_N - nv, &prim, sc, (clr & 1) || !(RE(e, 0x50) & 1)))) break;
     if (!n) continue;
     float ar = trArea(o + nv, n, prim);
     if (c_on) { spx += ar; ssw += tex && d->toff && (RE(e, 0xC2) & 1); }
