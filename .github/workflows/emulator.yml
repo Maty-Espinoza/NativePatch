@@ -1,0 +1,36 @@
+# Builds PPSSPP headless for tools/emu.sh and publishes it in the GitHub release named in tools/emu-version. A published
+# version never changes: to make a new one, change that file. Runs on push because workflow_dispatch only sees the
+# default branch. Each system uploads its own package to the same release.
+name: Emulator
+on:
+  workflow_dispatch:
+  push:
+    branches: ['**']
+    paths: [tools/emu-version, tools/emu.sh]
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-22.04-arm, macos-14]
+    runs-on: ${{ matrix.os }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependencies
+        run: |
+          if [ $(uname -s) = Darwin ]; then brew install ninja dylibbundler; else
+            sudo apt-get update; sudo apt-get install -y ninja-build libgl1-mesa-dev libglu1-mesa-dev libglew-dev libfontconfig1-dev \
+              libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxss-dev libpng-dev zlib1g-dev; fi
+      - name: Build and publish
+        run: |
+          V=$(cat tools/emu-version); A=$(uname -s | tr A-Z a-z)-$(uname -m | sed s/arm64/aarch64/); P=$V-$A.tar.xz
+          if gh release view $V --json assets -q '.assets[].name' 2>/dev/null | grep -qx $P; then echo "$P is already published"; exit 0; fi
+          sh tools/emu.sh pack
+          gh release view $V >/dev/null 2>&1 || gh release create $V --target $GITHUB_SHA --title "PPSSPP headless $V" --notes "Used by tools/emu.sh"
+          gh release upload $V $P

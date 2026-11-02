@@ -297,7 +297,10 @@ static void colorTest(int f) {  // chroma key: magenta out
 static void logicOp(int f) { sceGuEnable(GU_COLOR_LOGIC_OP); sceGuLogicalOp(GU_XOR); t32(); cell(0, WHITE); }
 static void fixGray(int f) { sceGuEnable(GU_BLEND); sceGuBlendFunc(GU_ADD, GU_FIX, GU_FIX, 0x808080, 0x404040); t32(); cell(0, WHITE); }
 static void blendAbs(int f) { sceGuEnable(GU_BLEND); sceGuBlendFunc(GU_ABS, GU_SRC_ALPHA, GU_ONE_MINUS_SRC_ALPHA, 0, 0); t32(); cell(0, WHITE); }
-static void blendDst(int f) { sceGuEnable(GU_BLEND); sceGuBlendFunc(GU_ADD, 4, 5, 0, 0); t32(); cell(0, WHITE); }  // destination alpha
+static void blendDst(int f) {
+  sceGuClearStencil(0xFF); sceGuScissor(CX(0), CY(0), CX(0) + 32, CY(0) + N); sceGuClear(GU_STENCIL_BUFFER_BIT); sceGuScissor(0, 0, 480, 272);
+  sceGuEnable(GU_BLEND); sceGuBlendFunc(GU_ADD, 4, 5, 0, 0); t32(); cell(0, WHITE);  // destination alpha: half the cell has it
+}
 static void blend2x(int f) { sceGuEnable(GU_BLEND); sceGuBlendFunc(GU_ADD, 6, 7, 0, 0); t32(); cell(0, 0x80FFFFFF); }  // 2 x source alpha
 static void wideTarget(int f) { sceGuDrawBufferList(GU_PSM_8888, RT(0), 768); rect(0, 0, 32, 32, WHITE); targetFb(); }
 static void threeRt(int f) {  // a bloom chain: more intermediate images than the translator keeps
@@ -338,7 +341,7 @@ static void stencilMask(int f) {  // circular minimap: stencil written by a shap
   rect(60, 40, 180, 180, 0xFF00FF00);
 }
 static void stencilAlpha(int f) {  // alpha left in an image by stencil writes, used as a mask by a later texture
-  target(RT(0), GU_PSM_8888, 128); sceGuClearColor(0x00000000); sceGuClear(GU_COLOR_BUFFER_BIT);
+  target(RT(0), GU_PSM_8888, 128); sceGuClearColor(0x00000000); sceGuClearStencil(0); sceGuClear(GU_COLOR_BUFFER_BIT | GU_STENCIL_BUFFER_BIT);
   sceGuEnable(GU_STENCIL_TEST); sceGuStencilFunc(GU_ALWAYS, 0xFF, 0xFF); sceGuStencilOp(GU_REPLACE, GU_REPLACE, GU_REPLACE);
   rect(32, 32, 64, 64, 0xFF00FF00); sceGuDisable(GU_STENCIL_TEST); targetFb();
   sceGuEnable(GU_BLEND); texrt(0); spr(0, 0, 128, 128, CX(0), CY(0), 128, 128, WHITE);
@@ -394,7 +397,7 @@ static void subRt(int f) {  // texture pointing inside an image: a part of it by
 }
 static void rtTall(int f) {  // image taller than the screen
   sceGuDrawBufferList(GU_PSM_8888, RT(0), 128); sceGuScissor(0, 0, 128, 512);
-  sceGuClearColor(0xFF800000); sceGuClear(GU_COLOR_BUFFER_BIT); rect(0, 400, 128, 64, 0xFF00FF00); targetFb();
+  rect(0, 0, 128, 512, 0xFF800000); rect(0, 400, 128, 64, 0xFF00FF00); targetFb();
   tex(GU_PSM_8888, 0, 128, 512, 128, VRAM(RT(0))); spr(0, 0, 128, 512, CX(0), 14, 64, 250, WHITE);
 }
 static void rtPrev(int f) {  // intermediate image drawn in the previous frame, not redrawn in this one
@@ -402,7 +405,7 @@ static void rtPrev(int f) {  // intermediate image drawn in the previous frame, 
   targetFb(); texrt(0); spr(0, 0, 128, 128, CX(0), CY(0), 128, 128, WHITE);
 }
 static void readFront(int f) {  // the shown image as a texture: motion blur
-  sceGuEnable(GU_BLEND); tex(GU_PSM_8888, 0, 512, 512, FB_W, VRAM(frontBuf())); spr(4, 4, 484, 276, 0, 0, 480, 272, 0xC0FFFFFF);
+  sceGuEnable(GU_BLEND); sceGuTexFunc(GU_TFX_MODULATE, GU_TCC_RGB); tex(GU_PSM_8888, 0, 512, 512, FB_W, VRAM(frontBuf())); spr(4, 4, 484, 276, 0, 0, 480, 272, 0xC0FFFFFF);
   sceGuDisable(GU_TEXTURE_2D); rect(f * 4 % 440, 100, 32, 32, WHITE);
 }
 static void readBack(int f) {  // the image being drawn, read a moment later: a shrunk copy of itself

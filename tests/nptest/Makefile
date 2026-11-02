@@ -1,7 +1,7 @@
 # NPTEST: synthetic 2D battery (see main.c). make leaves EBOOT.PBP; it goes to ms0:/PSP/GAME/NPTEST/.
 TARGET = nptest
 OBJS = main.o scenes.o
-CFLAGS = -O2 -G0 -Wall
+CFLAGS = -O2 -G0 -Wall $(if $(SHOTS),-DSHOTS)
 LIBS = -lpspgu -lm
 EXTRA_TARGETS = EBOOT.PBP
 PSP_EBOOT_TITLE = NPTEST

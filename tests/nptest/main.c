@@ -98,6 +98,9 @@ static void logLine(const char *t) {
 
 int main(void) {
   sceIoRemove("ms0:/native_test.log");
+#ifdef SHOTS
+  sceIoMkdir("ms0:/nptest_shots", 0777);
+#endif
   sceCtrlSetSamplingMode(PSP_CTRL_MODE_DIGITAL);
   sceGuInit();
   sceGuStart(GU_DIRECT, list);
@@ -122,6 +125,15 @@ int main(void) {
       if (!(s->flags & F_SELF)) { begin(); s->fn(f); end(); }
       else s->fn(f);
       if (f == 30) h0 = hash();
+#ifdef SHOTS  // (make SHOTS=1: the raw image of each scene in ms0:/nptest_shots/, to look at it on a PC)
+      if (f == 30) {
+        char n[48];
+        snprintf(n, sizeof n, "ms0:/nptest_shots/%03d.raw", cur);
+        SceUID fd = sceIoOpen(n, PSP_O_WRONLY | PSP_O_CREAT | PSP_O_TRUNC, 0777);
+        sceIoWrite(fd, (void *)(0x44000000 | (u32)fbs[back]), FB_W * 272 * (fb_psm == GU_PSM_8888 ? 4 : 2));
+        sceIoClose(fd);
+      }
+#endif
       if (f == 119) h1 = hash();
       if (!(s->flags & F_SELF)) flip();
       SceCtrlData c;
