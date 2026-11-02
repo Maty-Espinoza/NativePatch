@@ -43,6 +43,6 @@ cp -r $R/tests/nptest $B/src; make -s -C $B/src SHOTS=1 >/dev/null; cp $B/src/EB
 LD_LIBRARY_PATH=$T/emu/lib $T/emu/PPSSPPHeadless --graphics=software --timeout=120 --memstick=$M $M/PSP/GAME/NPTEST/EBOOT.PBP >$B/emu.out 2>&1 || true
 mv $M/native_test.log $B/; mv $M/nptest_shots $B/shots; rm -rf $B/src $M
 python3 $R/tools/nptest_sheet.py $B
-N=$(grep -oE '\bS\(|\{ "[a-zA-Z0-9]+", "' $R/tests/nptest/scenes.c | wc -l)
+N=$(sed -n '/^const Scene/,$p' $R/tests/nptest/scenes.c | grep -oE '\bS\(|\{ "[a-zA-Z0-9]+", "' | wc -l)
 echo "$(wc -l < $B/native_test.log) scenes run, $N in scenes.c"
 [ $(wc -l < $B/native_test.log) = $N ]
