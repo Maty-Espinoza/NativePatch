@@ -6,7 +6,7 @@
 // palettes when loaded and the texture rows the draws use (copied to uncached memory the GPU reads; those with PSP
 // swizzle end up sorted, with rows in sequence: rgTexCopy). There are RN records taking turns: one is written, another
 // stays published (rg_pub) and those the GPU may be reading are not touched.
-// Complete = all counted draws went through regDraw and fit.
+// Complete = every command of the frame was walked and all its draws went through regDraw and fit.
 static void clog(const char *fmt, ...);
 #include "record.h"
 enum { R_MEMO = 1, R_READ = 2, R_LIMIT = 4, R_CURVE = 8 };
@@ -376,6 +376,9 @@ static void regClut(uint32_t d) {
 // walking. They leave the frame incomplete.
 static void regCurve(void) { rf[rg_w]->flags |= R_CURVE; rf[rg_w]->draws_seen++; }
 static void regMemo(uint32_t draws) { if (draws) { rf[rg_w]->flags |= R_MEMO; rf[rg_w]->draws_seen += draws; } }
+// Part of the frame's commands will never be walked (lost events, cut list): its draws are not even counted, so the
+// frame stays incomplete here.
+static void regLost(void) { if (reg_on) rf[rg_w]->flags |= R_READ; }
 // (capturer, on each flip) Closes the frame. fb/fbw: shown image and width | format << 16; draws_counted: those the
 // capturer counted. If complete it publishes it (or leaves it pending its VRAM textures, regPend), asks the mirror for
 // the PSP image if a dump wants it, and picks another record to write: not the published one, nor the one the presenter
@@ -384,7 +387,7 @@ static void regMemo(uint32_t draws) { if (draws) { rf[rg_w]->flags |= R_MEMO; rf
 static void regFlip(uint32_t fb, uint32_t fbw, uint32_t draws_counted) {
   RFrame *f = rf[rg_w];
   regPend();
-  // Draws that did not go through regDraw: curves, cut lists
+  // Counted draws that did not go through regDraw
   if (f->draws_seen < draws_counted) f->flags |= R_READ;
   ga.fr++; ga.us += rg_t; ga.st += f->ne; ga.kb += f->na; ga.t_tex += f->nt;
   if (f->flags & R_MEMO) ga.memo++;

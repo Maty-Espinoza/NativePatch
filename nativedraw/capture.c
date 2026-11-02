@@ -778,6 +778,7 @@ static int __attribute__((noinline)) walkList(List *l) {
     if ((pc & ~63u) == lpc) ra = lra | (pc & 63);
     else if ((ra = vtr(pc))) { lpc = pc & ~63u; lra = ra & ~63u; }
     if (!ra) {
+      regLost();
       if (!isVram(pc)) { acc.bad++; return 1; }
       want(pc, 4, 1);
       if (!l->sp) { acc.lost++; return 1; }
@@ -787,7 +788,7 @@ static int __attribute__((noinline)) walkList(List *l) {
     // consecutive commands left in the line (1: single word)
     uint32_t k = ra - ba < bn ? (64 - (pc & 63)) >> 2 : 1;
     if (l->stall && l->stall - pc < k * 4) k = (l->stall - pc) >> 2;  // (the stall inside the line)
-    if (l->n + k > LIST_MAX) { acc.aborted++; return 1; }
+    if (l->n + k > LIST_MAX) { acc.aborted++; regLost(); return 1; }
     if (rec && (pc & ~63u) != rec_last) recLine(pc & ~63u, ra & ~63u);
     uint32_t sp0 = l->sp, top = !sp0 && !isVram(pc);  // top level in RAM: lo/hi range for the list lifetime
     if (top && pc < l->lo) l->lo = pc;
@@ -805,6 +806,7 @@ static int __attribute__((noinline)) walkList(List *l) {
     case 0x08: case 0x0A: {
       uint32_t t = rel(l, d & 0xFFFFFC);
       if (!vtr(t)) {  // in VRAM without copy in the mirror (yet) or invalid
+        regLost();
         if (!isVram(t)) { acc.bad++; return 1; }
         want(t, 4096, 1);  // its page and the next: from the next frame on it is walked from the mirror
         if (c == 0x0A) { acc.vcalls++; break; }  // skipped
@@ -814,7 +816,7 @@ static int __attribute__((noinline)) walkList(List *l) {
       }
       if (c == 0x0A && isVram(t)) acc.v_ok++;
       if (c == 0x0A) {
-        if (l->sp >= 32) { acc.bad++; return 1; }
+        if (l->sp >= 32) { acc.bad++; regLost(); return 1; }
         acc.calls_ram++;
         // sample for the list lifetime
         if (!l->sp && l->nsub < 16 && !(l->ncall & 7) && !isVram(t)) l->subs[l->nsub++] = t;
@@ -1040,6 +1042,7 @@ static void walk(void) {
 // Empties the queue (lost events or mailbox reset): everything queued so far counts as captured
 static void resetQueue(void) {
   qh = qt = 0;
+  regLost();
   capt = SB[6]; SB[3] = capt;  // what was lost counts as captured
 }
 
