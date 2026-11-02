@@ -6,9 +6,9 @@
 #include "record.h"
 #include "shaders_nd.h"
 // Result of trCheck/trFrame: T_OK or the reason the frame was not drawn (tnames: its name in the log)
-enum { T_OK, T_NEW, T_3D, T_PRIM, T_FMT, T_BLEND, T_TFUNC, T_ODD, T_DEST, T_VERT, T_LIMIT, T_TEX, T_PROG, T_OUT, TN };
+enum { T_OK, T_NEW, T_3D, T_PRIM, T_FMT, T_BLEND, T_TFUNC, T_ODD, T_DEST, T_VERT, T_LIMIT, T_TEX, T_PROG, T_OUT, T_MASK, TN };
 static const char *tnames[TN] = { "ok", "no_new_frame", "3d", "primitive", "format", "blend", "texture_function",
-                                "color_test_or_logic", "other_target", "vertex", "limit", "bad_texture", "program", "vertex_out" };
+                                "color_test_or_logic", "other_target", "vertex", "limit", "bad_texture", "program", "vertex_out", "mask" };
 // counters for the 10 s log (read and cleared by the presenter)
 static volatile uint32_t t_cnt[TN], t_hd, t_nat, t_draws;
 static volatile uint32_t t_skip[6];  // PSP frames advanced by each drawn frame (0: repeated, 5: 5 or more)
@@ -152,17 +152,33 @@ static uint32_t blendKey(const uint32_t *e) {
   return k + 1;
 }
 
+// GE alpha test of state e, (alpha & mask) FUNC (ref & mask) (0xDB), as what the shaders compare, the whole alpha: *fn
+// and *ref. A mask of high bits makes values into ranges, which fit one comparison unless EQUAL or NOTEQUAL are in the
+// middle. 0 if there is no equivalent.
+static int alphaFn(const uint32_t *e, uint32_t *fn, uint32_t *ref) {
+  uint32_t db = RE(e, 0xDB), f = db & 7, m = db >> 16 & 0xFF, lo = ~m & 0xFF, r = db >> 8 & m, hi = r + lo;
+  if (f > 1 && lo & (lo + 1)) return 0;
+  *fn = f; *ref = f == 5 || f == 6 ? hi : r;
+  if ((f == 2 || f == 3) && lo) {
+    if (r == 0) { *fn = f == 2 ? 5 : 6; *ref = hi; }
+    else if (hi == 255) *fn = f == 2 ? 7 : 4;
+    else return 0;
+  }
+  return 1;
+}
+
 // Checks whether draw d of frame f can be drawn (through mode, primitive, vertices without weights, destination, blend,
 // texture format and function). T_OK if so; otherwise the reason. What depends on other draws is checked by trFrame.
 static int trCheck(RFrame *f, RDraw *d) {
   const uint32_t *e = f->e[d->st];
-  uint32_t vt = d->vt, clr = RE(e, 0xD3) & 1;
+  uint32_t vt = d->vt, clr = RE(e, 0xD3) & 1, afn, aref;
   if (!(vt >> 23 & 1)) return T_3D;
   if (d->prim != 3 && d->prim != 4 && d->prim != 6) return T_PRIM;  // triangles, strip, rectangles
   if ((vt >> 9 & 3) || (vt >> 18 & 7)) return T_VERT;  // weights or morph
   if ((RE(e, 0x9D) & 0x7FF) > 512) return T_DEST;
   if (clr) return T_OK;
   if (RE(e, 0x27) & 1 || RE(e, 0x28) & 1) return T_ODD;
+  if ((RE(e, 0x22) & 1) && !alphaFn(e, &afn, &aref)) return T_MASK;
   if (blendKey(e) == ~0u) return T_BLEND;
   if ((RE(e, 0x1E) & 1) && (vt & 3)) {
     uint32_t fmt = RE(e, 0xC3) & 15, tf = RE(e, 0xC9) & 7;
@@ -445,8 +461,9 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     sceGxmReserveFragmentDefaultUniformBuffer(c, &u);
     // uniforms (see shaders/*.cg): at = alpha test function (1: always passes) and reference; tf = texture
     // function, TCC and color doubling
-    uint32_t db = RE(e, 0xDB), c9 = RE(e, 0xC9);
-    float at[4] = { (clr & 1) || !(RE(e, 0x22) & 1) ? 1.0f : (float)(db & 7), (float)(db >> 8 & 0xFF), 0, 0 };
+    uint32_t afn = 1, aref = 0, c9 = RE(e, 0xC9);
+    if (!(clr & 1) && (RE(e, 0x22) & 1)) alphaFn(e, &afn, &aref);
+    float at[4] = { (float)afn, (float)aref, 0, 0 };
     sceGxmSetUniformDataF(u, tex ? n_atx : n_atc, 0, 4, at);
     if (tex) {
       float tf[4] = { (c9 & 7) == 3 ? 1.0f : 0.0f, (float)(c9 >> 8 & 1), (float)(c9 >> 16 & 1), 0 };
