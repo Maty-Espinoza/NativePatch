@@ -18,6 +18,7 @@ static TV *tv[2];            // translated vertices, one per surface
 static uint32_t *tpal[2];    // translated palettes (8888), aligned to 64: 16 entries (64 bytes) or 256 (1 KB)
 #define TV_N (64 << 10)      // vertices per surface (and limit of the 16-bit indices)
 #define TP_B (256 << 10)     // palette bytes per surface
+#define C_RGB (SCE_GXM_COLOR_MASK_R | SCE_GXM_COLOR_MASK_G | SCE_GXM_COLOR_MASK_B)  // alpha is never written
 // last record frame drawn, whether it came out fine and how many times it was repeated
 static uint32_t t_frame = ~0u, t_ok, t_rep;
 static uint16_t *tib;        // 0, 1, 2... (indices for the GPU)
@@ -64,16 +65,17 @@ static const SceGxmProgramParameter *n_wvp, *n_tf, *n_atx, *n_atc;
 typedef struct { uint32_t key; SceGxmFragmentProgram *p; } FP;
 static FP fps[64];
 static uint32_t nfps;
-// Fragment program for tex (0 no texture, 1 textured) and key (0 no blending; otherwise the 4 bytes of
-// SceGxmBlendInfo + 1, see blendKey). Finds it in fps or creates it with the patcher (no alpha write); 0 on failure.
-static SceGxmFragmentProgram *fragProg(int tex, uint32_t key) {
-  uint32_t k = key << 1 | tex;
+// Fragment program for tex (0 no texture, 1 textured), key (0 no blending; otherwise the 4 bytes of SceGxmBlendInfo + 1,
+// see blendKey) and mask (SCE_GXM_COLOR_MASK_*, see colorMask). Finds it in fps or creates it with the patcher; 0 on
+// failure.
+static SceGxmFragmentProgram *fragProg(int tex, uint32_t key, uint32_t mask) {
+  uint32_t k = key << 1 | mask << 2 | tex;  // (key's low byte is 0 or 1)
   for (uint32_t i = 0; i < nfps; i++) if (fps[i].key == k) return fps[i].p;
   if (nfps >= 64) return 0;
   SceGxmBlendInfo b;
   if (key) sceClibMemcpy(&b, &(uint32_t){ key - 1 }, 4);
   else { sceClibMemset(&b, 0, sizeof b); b.colorFunc = b.alphaFunc = SCE_GXM_BLEND_FUNC_NONE; }
-  b.colorMask = SCE_GXM_COLOR_MASK_R | SCE_GXM_COLOR_MASK_G | SCE_GXM_COLOR_MASK_B;  // (PSP alpha = its stencil)
+  b.colorMask = mask;
   SceGxmFragmentProgram *p = 0;
   int r = sceGxmShaderPatcherCreateFragmentProgram(pat, tex ? ift : ifc, SCE_GXM_OUTPUT_REGISTER_FORMAT_UCHAR4,
                                                    SCE_GXM_MULTISAMPLE_NONE, &b, pv, &p);
@@ -107,7 +109,7 @@ static int trInit(void) {
                                   { 0, 20, SCE_GXM_ATTRIBUTE_FORMAT_U8N, 4, sceGxmProgramParameterGetResourceIndex(pc) } };
   SceGxmVertexStream st = { sizeof(TV), SCE_GXM_INDEX_SOURCE_INDEX_16BIT };
   if ((r = sceGxmShaderPatcherCreateVertexProgram(pat, iv, at, 3, &st, 1, &nvp)) < 0) { alog("translator: vertex program %08x\n", r); return r; }
-  if (!fragProg(0, 0) || !fragProg(1, 0)) return -3;
+  if (!fragProg(0, 0, C_RGB) || !fragProg(1, 0, C_RGB)) return -3;
   for (int i = 0; i < 2; i++) rtMem(&rts[i]);
   // PSP RAM (0x08000000-0x0A000000) for the GPU (fails with 0x72000000)
   int r1 = sceGxmMapMemory((void *)0x70000000, 0x2000000, RD);
@@ -167,6 +169,17 @@ static int alphaFn(const uint32_t *e, uint32_t *fn, uint32_t *ref) {
   return 1;
 }
 
+// Channels the draw of state e writes: GE color mask (0xE8, bits set are not written) and, in a clear, its color bit.
+// ~0u if the mask is not whole channels: GXM masks by channel, per bit needs reading the destination in a shader.
+static uint32_t colorMask(const uint32_t *e) {
+  uint32_t m = RE(e, 0xE8), clr = RE(e, 0xD3), g = 0;
+  for (int i = 0; i < 3; i++) {
+    uint32_t b = m >> i * 8 & 0xFF;
+    if (!b) g |= SCE_GXM_COLOR_MASK_R << i; else if (b != 0xFF) return ~0u;
+  }
+  return (clr & 1) && !(clr >> 8 & 1) ? SCE_GXM_COLOR_MASK_NONE : g;
+}
+
 // Checks whether draw d of frame f can be drawn (through mode, primitive, vertices without weights, destination, blend,
 // texture format and function). T_OK if so; otherwise the reason. What depends on other draws is checked by trFrame.
 static int trCheck(RFrame *f, RDraw *d) {
@@ -176,6 +189,7 @@ static int trCheck(RFrame *f, RDraw *d) {
   if (d->prim != 3 && d->prim != 4 && d->prim != 6) return T_PRIM;  // triangles, strip, rectangles
   if ((vt >> 9 & 3) || (vt >> 18 & 7)) return T_VERT;  // weights or morph
   if ((RE(e, 0x9D) & 0x7FF) > 512) return T_DEST;
+  if (colorMask(e) == ~0u) return T_MASK;
   if (clr) return T_OK;
   if (RE(e, 0x27) & 1 || RE(e, 0x28) & 1) return T_ODD;
   if ((RE(e, 0x22) & 1) && !alphaFn(e, &afn, &aref)) return T_MASK;
@@ -313,7 +327,7 @@ static uint32_t trBase(SceGxmContext *c, const SceGxmTexture *base, TV *o, uint3
   }
   TV q[4] = { { 0, 0, .5f, 0, 0, 0xFF000000u }, { W, 0, .5f, 0, 0, 0xFF000000u }, { 0, H, .5f, 0, 0, 0xFF000000u }, { W, H, .5f, 0, 0, 0xFF000000u } };
   sceClibMemcpy(o + nv, q, sizeof q);
-  sceGxmSetFragmentProgram(c, fragProg(0, 0));
+  sceGxmSetFragmentProgram(c, fragProg(0, 0, C_RGB));
   sceGxmReserveFragmentDefaultUniformBuffer(c, &u);
   sceGxmSetUniformDataF(u, n_atc, 0, 4, always);
   sceGxmSetVertexStream(c, 0, o + nv);
@@ -455,7 +469,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
            (int)(u0 * 1000), (int)(u1 * 1000), (int)(v0 * 1000), (int)(v1 * 1000), dst ? "intermediate" : "surface");
       DEV(alog("translator: giant draw (%u) vt %06x\n", giant, d->vt); trRaw("translator: giant draw bytes", f->a + d->voff - 1, d->vlen);)
     }
-    SceGxmFragmentProgram *p = fragProg(tex, key);
+    SceGxmFragmentProgram *p = fragProg(tex, key, colorMask(e));
     if (!p) { res = T_PROG; break; }
     sceGxmSetFragmentProgram(c, p);
     sceGxmReserveFragmentDefaultUniformBuffer(c, &u);
