@@ -88,6 +88,9 @@ or `auto` (3 letters are compared; `no` also turns it off). What each one saves,
 - `gpu: slow scene: <type>, draws, thousand pixels, ms` (0.0.8.20): each of our scenes over 30 ms; the first 3
   ask for a dump. `translator: giant draw`: the first 40 draws with an area of more than 2 screens.
 - Reason `vertex_out` (0.0.8.21): a vertex outside ±4096 or NaN (data read too late): the frame goes with the normal image.
+  In dev builds the first 40 also log `translator: vertex_out (n)` (frame, draw, vertex type and index) and the bytes of the vertex
+  and the draw; each giant draw logs its vertex type and bytes. `late frame <n>` (capturer log, first 400): gate at its limit or a
+  capture over 33 ms. `record: texture limit` (first 20): how many textures and bytes the frame had when it hit the cap.
 - `screen:` (0.0.8.13, every 1 s and only if something changes): scenes and frames to the Adrenaline and ScePspemu screen,
   system dialog, surface state. `notifications:`: someone else wrote a GXM notification word.
 - In `nativedraw_capture.log`, the `textures (per frame):` line (0.0.8.19): copies, KB and DMA and sorting time for

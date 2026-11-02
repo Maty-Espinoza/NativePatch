@@ -211,7 +211,10 @@ static uint32_t rgTex(uint32_t r0, uint32_t r1) {
   if (i == f->nt) {
     // Game render target (intermediate image): not copied
     if (vr) { uint32_t p = (ta & 0x1FFFFF) >> 12; if (rt_pg[p >> 5] >> (p & 31) & 1) return 0; }
-    if (f->nt >= TN_N || f->ntx + n > TX_N) { f->flags |= R_LIMIT; return 0; }
+    if (f->nt >= TN_N || f->ntx + n > TX_N) {
+      DEV(static uint32_t lim_n; if (lim_n < 20) { lim_n++; clog("record: texture limit at frame %u: %u textures, %u of %u bytes, %u more wanted\n", gen, f->nt, f->ntx, TX_N, n); })
+      f->flags |= R_LIMIT; return 0;
+    }
     f->ta[i] = ta; f->tn[i] = key; f->to[i] = f->ntx; f->tm[i] = 0; f->tq[i] = vr ? ~0u : 0; f->tr[i] = 8 * rb; f->nt++;
     f->ntx += (n + 63) & ~63u;
   }

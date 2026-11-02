@@ -1145,6 +1145,9 @@ static void event(volatile uint32_t *e) {
       tm_memo = tm_apply = 0;
       lc = cc; s_own = R0.own; s_hit = R0.hits; s_memo = acc.memo_hit; s_pre = acc.memo_pre; s_late = acc.pf_late;
     }
+    // frames where the game outran the capturer: gate at its 5 ms limit or capture longer than a 30 fps frame
+    static uint32_t late_n;
+    if ((pfr[1] >= 4500 || f_us >= 33000) && late_n < 400) { late_n++; clog("late frame %u: gate %u us, capture %u us, draws %u\n", gen, pfr[1], f_us, f_draws); }
     sceClibMemset(pfr, 0, sizeof pfr);
 #endif
     // closes the frame record (a: displayed image, b: width | format << 16)

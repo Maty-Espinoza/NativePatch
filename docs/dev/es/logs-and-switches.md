@@ -87,6 +87,9 @@ o `auto` (se comparan 3 letras; `no` también lo apaga). Qué guarda cada uno, c
 - `gpu: slow scene: <type>, draws, thousand pixels, ms` (0.0.8.20): cada escena nuestra de más de 30 ms; las 3
   primeras piden un volcado. `translator: giant draw`: los primeros 40 draws de más de 2 pantallas de área.
 - Motivo `vertex_out` (0.0.8.21): un vértice fuera de ±4096 o NaN (datos leídos tarde): el frame va con la imagen normal.
+  En compilaciones de desarrollo, los primeros 40 también anotan `translator: vertex_out (n)` (frame, draw, tipo e índice de vértice) y los bytes del vértice
+  y del draw; cada giant draw anota su tipo de vértice y sus bytes. `late frame <n>` (log del capturador, primeros 400): compuerta en su tope o
+  captura de más de 33 ms. `record: texture limit` (primeros 20): cuántas texturas y bytes tenía el frame al llegar al tope.
 - `screen:` (0.0.8.13, cada 1 s y solo si algo cambia): escenas y frames a la pantalla de Adrenaline y de ScePspemu,
   diálogo del sistema, estado de la superficie. `notifications:`: otro escribió una palabra de notificación de GXM.
 - En `nativedraw_capture.log`, línea `textures (per frame):` (0.0.8.19): copias, KB y tiempo de DMA y de ordenar de la

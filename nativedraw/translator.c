@@ -177,6 +177,27 @@ static uint32_t col8888(const uint8_t *p, uint32_t ct) {
   return pal8888(*(const uint16_t *)p, ct - 4);
 }
 
+#ifdef NP_DEV
+// Logs in hex up to 24 words of the n bytes at p, after the text what
+static void trRaw(const char *what, const uint8_t *p, uint32_t n) {
+  char b[220];
+  uint32_t k = 0;
+  b[0] = 0;
+  for (uint32_t i = 0; i + 4 <= n && i < 96; i += 4) k += sceClibSnprintf(b + k, sizeof b - k, " %08x", *(const uint32_t *)(p + i));
+  alog("%s:%s\n", what, b);
+}
+// First 40 vertices rejected as T_OUT: which draw and vertex, and the bytes of the vertex and of the draw
+static void trOutLog(RFrame *f, RDraw *d, uint32_t i, uint32_t k, uint32_t sz, const uint8_t *p) {
+  static uint32_t cnt;
+  if (cnt >= 40) return;
+  cnt++;
+  alog("translator: vertex_out (%u): frame %u draw %u of %u prim %u vt %06x vertex %u of %u index %u size %u\n", cnt, f->frame, (uint32_t)(d - f->d),
+       f->nd, d->prim, d->vt, i, d->n, k, sz);
+  trRaw("translator: vertex_out vertex", p, sz);
+  trRaw("translator: vertex_out draw", f->a + d->voff - 1, d->vlen);
+}
+#endif
+
 // Decodes the vertices of draw d (through mode) to o: computes the size and position of each field from the GE vertex
 // type (with its alignment), follows the indices if any, and leaves x, y doubled and u, v divided by tw x th.
 // col0: color if the vertex has none; sc: doubled scissor (x0, y0, x1, y1). Rectangles (2 corners) are clipped to the
@@ -207,7 +228,7 @@ static int trVerts(RFrame *f, RDraw *d, TV *o, float tw, float th, uint32_t col0
     else if (tc == 2) { q.u = ((const uint16_t *)(p + otc))[0]; q.v = ((const uint16_t *)(p + otc))[1]; }
     else if (tc == 3) { q.u = ((const float *)(p + otc))[0]; q.v = ((const float *)(p + otc))[1]; }
     // position outside what the GE draws (or NaN): data read late, when the game was already rewriting it
-    if (!(q.x > -4096 && q.x < 4096 && q.y > -4096 && q.y < 4096)) return T_OUT;
+    if (!(q.x > -4096 && q.x < 4096 && q.y > -4096 && q.y < 4096)) { DEV(trOutLog(f, d, i, k, sz, p);) return T_OUT; }
     q.x *= 2; q.y *= 2; q.u /= tw; q.v /= th;
     if (d->prim == 6) {  // rectangle: 2 vertices (opposite corners) -> strip of 4, separated from the next with two
       r[i & 1] = q;      // repeated vertices; the color is the second vertex's (like the GE)
@@ -407,6 +428,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
            "swz %u copy %u uv %d..%d %d..%d (thousandths) | target %s\n", giant, f->frame, i, f->nd, d->prim, d->n, n, (uint32_t)(ar / 1000),
            (int)x0, (int)x1, (int)y0, (int)y1, tex, (uint32_t)tw, (uint32_t)th, RE(e, 0xC3) & 15, RE(e, 0xC2) & 1, d->toff ? 1 : 0,
            (int)(u0 * 1000), (int)(u1 * 1000), (int)(v0 * 1000), (int)(v1 * 1000), dst ? "intermediate" : "surface");
+      DEV(alog("translator: giant draw (%u) vt %06x\n", giant, d->vt); trRaw("translator: giant draw bytes", f->a + d->voff - 1, d->vlen);)
     }
     SceGxmFragmentProgram *p = fragProg(tex, key);
     if (!p) { res = T_PROG; break; }
