@@ -55,10 +55,10 @@ int (*_sceDisplaySetFrameBuf)(void *topaddr, int bufferwidth, int pixelformat, i
 //   SB[0x400] ring of SB_N 8-word events: type | datum << 8, a, b, c, PSP time (us), list sequence number
 //   (enqueues only) or extra (EV_FRAME, 3 words)
 // EV_FRAME (before each EV_FLIP), what each part costs the game in the frame: datum = waits at the gate |
-// syncs with the Vita behind that did not wait (sin_compuerta) << 8; a = frame (us, flip to flip), b = gate wait
+// syncs with the Vita behind that did not wait (no_gate) << 8; a = frame (us, flip to flip), b = gate wait
 // (us), c = wait for the GE inside sceGeDrawSync/ListSync (us); e[5] = free-CPU thread spins
 // (SB[0x4D]: spins per ms = 100 %), e[6] = mirror: flip CPU (us) | pages << 16, e[7] = hooks (us in sbPost).
-// Switches NativeDraw sets in SB[0x4A]: 1 sin_compuerta (does not wait for the Vita, only counts), 2 no
+// Switches NativeDraw sets in SB[0x4A]: 1 no_gate (does not wait for the Vita, only counts), 2 no
 // mirror, 4 no free-CPU thread, 8 gate always at the sync, 16 full mirror (all requested data pages on
 // every flip), 32 the flip waits for the mirror copy to finish.
 // SB[0x4E] = NativeDraw record level (0 minimal, 1 medium, 2 extreme): EV_FRAME and the free-CPU thread from
@@ -157,10 +157,10 @@ static int sbAlive(void) { // the Vita capturer responds (its heartbeat changed 
   return hb && now - hb_t < 500000;
 }
 // Gate: waits (in 50 us steps, up to 5 ms) until the Vita has captured list 'ord'. Returns 0 if no wait was needed
-// (already captured, the Vita does not respond, or sin_compuerta); otherwise the us waited | 1.
+// (already captured, the Vita does not respond, or no_gate); otherwise the us waited | 1.
 static u32 sbGate(u32 ord) {
   if (!sbAlive() || (int)(SB[3] - ord) >= 0) return 0;
-  if (SB[0x4A] & 1) { fr.nowait++; return 0; } // sin_compuerta: only counts
+  if (SB[0x4A] & 1) { fr.nowait++; return 0; } // no_gate: only counts
   u32 t0 = sceKernelGetSystemTimeLow(), w;
   do {
     sceKernelDelayThread(50);
@@ -181,7 +181,7 @@ static u32 sbGate(u32 ord) {
 // next one and the Vita could read something the GE did not draw -> the gate returns to the sync.
 // Mode (gate_mode, copied to SB[0x54]): 0 at the sync, testing; goes to 1 (before enqueue) after 60 clean checks in a
 // row; a change returns it to 0 and 10 changes leave it at 2 (at the sync until the game closes).
-// compuerta_sync (SB[0x4A] & 8): always at the sync, but the checks continue (for comparison).
+// gate_sync (SB[0x4A] & 8): always at the sync, but the checks continue (for comparison).
 // Only the sample of a list enqueued after the previous sync counts (sync_lo, sync_ord]: an older list may be in
 // an area the game already reuses and would give false changes.
 // sync_ord / sync_lo: last list past a sync and the one of the previous sync; gate_ord: the one the next enqueue
@@ -205,12 +205,12 @@ static u32 gateBeforeEnq(void) { // before enqueuing: wait (if due) and self-che
   gate_sq = sq; gts.checks++;
   if (top | sub) {
     static u32 bad_total;
-    if (gate_mode != 2) LOG("compuerta: la lista %lu cambio antes de encolar la siguiente (%lu lineas arriba, %lu de sublistas; %lu cambios) -> en el sync%s\n",
-                            SB[0x53], top, sub, bad_total + 1, bad_total + 1 >= 10 ? " hasta cerrar el juego" : "");
+    if (gate_mode != 2) LOG("gate: list %lu changed before enqueuing the next (%lu lines top, %lu in sublists; %lu changes) -> at the sync%s\n",
+                            SB[0x53], top, sub, bad_total + 1, bad_total + 1 >= 10 ? " until the game closes" : "");
     gts.bad++; gate_ok = 0; gate_mode = ++bad_total >= 10 ? 2 : 0;
   } else if (!gate_mode && ++gate_ok >= 60) {
     gate_mode = 1;
-    LOG("compuerta: 60 comprobaciones limpias seguidas -> antes de encolar la lista siguiente\n");
+    LOG("gate: 60 clean checks in a row -> before enqueuing the next list\n");
   }
   SB[0x54] = gate_mode;
   return w;
@@ -264,7 +264,7 @@ int sceGeListSyncPatched(int qid, int mode) {
 #ifdef NP_DEV
 // --- T6 and T4 telemetry: when the GE works and what the game CPU leaves ready for it ----
 // T6: a thread looks at the GE every ~250 us with sceGeGetReg only while it has work; with no lists it sleeps 2 ms. Off
-// unless NativeDraw asks for it (SB[0x47] = 1, file medir_ge). For each
+// unless NativeDraw asks for it (SB[0x47] = 1, file ge_timing). For each
 // stretch the GE was busy without pause it notes EV_GEDONE: a = start (enqueue time if the GE was idle),
 // b = samples stopped at the stall, c = samples; the event time is the end (+-250 us).
 // T4: hooks of the functions the game uses to leave data ready for the GE (flushing a cache range, DMA):
@@ -278,7 +278,7 @@ static struct { u32 busy_us, runs, run_max, stall_n, n; } ges;  // (log)
 static int geThread(SceSize args, void *argp) {
   u32 busy0 = 0, n = 0, nst = 0;
   for (;;) {
-    if (!active || !_sceGeGetReg || SB[0x47] != 1) { // only if NativeDraw asks for it (medir_ge)
+    if (!active || !_sceGeGetReg || SB[0x47] != 1) { // only if NativeDraw asks for it (ge_timing)
       busy0 = ge_kick = 0;
       sceKernelDelayThread(100000);
       continue;
@@ -365,7 +365,7 @@ static void t4t6Install(void) {
   for (i = 0; i < 4 && !_dmac; i++) {
     _dmac = (void *)FindProc(dm[i], "sceDmac", 0x617F3FE6);
     _dmacTry = (void *)FindProc(dm[i], "sceDmac", 0xD97F94D8);
-    if (_dmac) LOG("T4: sceDmac en %s\n", dm[i]);
+    if (_dmac) LOG("T4: sceDmac in %s\n", dm[i]);
   }
   if (_dmac) { sctrlHENPatchSyscall((u32)_dmac, dmacPatched); nm++; }
   if (_dmacTry) { sctrlHENPatchSyscall((u32)_dmacTry, dmacTryPatched); nm++; }
@@ -377,11 +377,11 @@ static void t4t6Install(void) {
   for (k = 0; k < 2000000; k++) { spin++; asm volatile("" ::: "memory"); }
   tc = sceKernelGetSystemTimeLow() - tc;
   spin_cal = tc ? 2000000u / (tc / 1000 + 1) : 0;
-  SceUID tl = sceKernelCreateThread("NativeLinkLibre", libreThread, 126, 0x400, 0, NULL);
+  SceUID tl = sceKernelCreateThread("NativeLinkIdle", libreThread, 126, 0x400, 0, NULL);
   if (tl >= 0) sceKernelStartThread(tl, 0, NULL);
-  LOG("CPU libre: %lu vueltas/ms = 100%% (hilo %08lx)\n", spin_cal, (u32)tl);
+  LOG("CPU idle: %lu loops/ms = 100%% (thread %08lx)\n", spin_cal, (u32)tl);
 #ifdef NP_DEV
-  LOG("T4/T6: sceGeGetReg %s, hilo del GE %08lx | ganchos de la cache %d de 5, del DMA %d de 2\n", _sceGeGetReg ? "si" : "NO",
+  LOG("T4/T6: sceGeGetReg %s, GE thread %08lx | cache hooks %d of 5, DMA hooks %d of 2\n", _sceGeGetReg ? "yes" : "NO",
       (u32)th, nd, nm);
 #endif
 }
@@ -410,7 +410,7 @@ static struct { u32 copies, pages, busy, vita, over, runs_max; } mirs; // (log)
 // two frames ago (same mirror) is still in the GE or the Vita is still reading that mirror.
 static void mirFlip(void) {
   u32 cp[16], wd[16], i, p, w, b, n = 0, any = 0; // (n: data pages of this copy)
-  if (SB[0x4A] & 2) return; // sin_espejo
+  if (SB[0x4A] & 2) return; // no_mirror
   for (i = 0; i < 16; i++) { cp[i] = SB[0x20 + i]; wd[i] = SB[0x30 + i] & ~cp[i]; any |= cp[i] | wd[i]; }
   if (!any) return;
   for (i = 0; i < 512; i++) { // lists: all; data: those that fit, starting where the last overflow stopped
@@ -444,7 +444,7 @@ static void mirFlip(void) {
   sceGuCopyImage(GU_PSM_8888, 0, 0, 4, 1, 64, (void *)(rl + 0x1FF0), 0, 0, 64, (void *)0x0A000100);
   sceGuFinish();
   mir_qid[s] = _sceGeListEnQueue((void *)rl, NULL, -1, NULL);
-  if (SB[0x4A] & 32 && mir_qid[s] >= 0) _sceGeListSync(mir_qid[s], 0);  // espejo_espera: the game waits for the copy
+  if (SB[0x4A] & 32 && mir_qid[s] >= 0) _sceGeListSync(mir_qid[s], 0);  // mirror_wait: the game waits for the copy
   mirs.copies++;                                                         // (it cannot change the VRAM meanwhile)
   SB[0x44] = seq; SB[0x45] = mir_pages;
 }
@@ -458,7 +458,7 @@ static void modeDecide(void) {
   active = 1;
   *(u32 *)DRAW_NATIVE = 0; // Adrenaline shows the game's image
   sbInit();
-  LOG("NativeLink activo: el juego corre sin cambios; buzon de eventos en 0x0A000000 para el capturador de NativeDraw\n");
+  LOG("NativeLink active: the game runs unchanged; event mailbox at 0x0A000000 for the NativeDraw capturer\n");
 }
 
 // Stall and enqueue hooks: call the original and note the event. Before enqueuing they go through the gate
@@ -512,7 +512,7 @@ static void memSnapshot(const char *why) {
   int ft = freeTotal ? freeTotal() / 1024 : -1, fm = freeMax ? freeMax() / 1024 : -1;
   int c = cpu ? cpu() : -1, b = bus ? bus() : -1;
   pspSdkSetK1(k1);
-  LOG("memoria (%s): ram del juego libre=%d KB (bloque mayor %d KB) | cpu=%d MHz bus=%d MHz\n", why, ft, fm, c, b);
+  LOG("memory (%s): game ram free=%d KB (largest block %d KB) | cpu=%d MHz bus=%d MHz\n", why, ft, fm, c, b);
 }
 
 // Flip hook: restores the mailbox if something erased it, closes the frame (T4 totals, mirror copy, EV_FRAME,
@@ -522,7 +522,7 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
     modeDecide();
   log_frame++;
   if (log_frame == 30)
-    memSnapshot("inicio");
+    memSnapshot("start");
   if (active) {
     if (SB[0] != SB_MAGIC) // (in case something clears the zone, as Adrenaline 8 does when loading the game)
       sbInit();
@@ -551,7 +551,7 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
     sbPost(EV_FLIP, 0, (u32)topaddr, bufferwidth | pixelformat << 16, log_frame);
   }
   // Every distinct buffer the game displays
-  LOG_ONCE((u32)topaddr ^ (bufferwidth << 20) ^ (pixelformat << 30), "display %08lx ancho=%d fmt=%d\n", (u32)topaddr, bufferwidth, pixelformat);
+  LOG_ONCE((u32)topaddr ^ (bufferwidth << 20) ^ (pixelformat << 30), "display %08lx width=%d fmt=%d\n", (u32)topaddr, bufferwidth, pixelformat);
 
   // Time between flips (fps)
   u32 now = sceKernelGetSystemTimeLow(), dt = now - last_flip;
@@ -564,48 +564,48 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
     st.slow30 += dt > 34000; // under 30 fps
     if (dt > 200000 && log_frame > 120 && !st.long_logged) {
       st.long_logged = 1;
-      LOG("frame lento: %lu ms\n", dt / 1000);
+      LOG("slow frame: %lu ms\n", dt / 1000);
     }
   }
   last_flip = now;
 
   if (log_frame % STATS_EVERY == 0) {
-    LOG("stats listas=%lu head=%lu stall=%lu\n", st.lists, st.heads, st.stalls);
+    LOG("stats lists=%lu head=%lu stall=%lu\n", st.lists, st.heads, st.stalls);
     memSnapshot("stats");
     if (st.frames) {
       u32 fps10 = st.frames * 100000 / (st.frame_us / 100 + 1); // fps x10, without 64-bit division
-      LOG("stats rendimiento: fps=%lu.%lu frame_max=%lu ms bajo60=%lu bajo30=%lu\n",
+      LOG("stats performance: fps=%lu.%lu frame_max=%lu ms under60=%lu under30=%lu\n",
           fps10 / 10, fps10 % 10, st.frame_max / 1000, st.slow60, st.slow30);
     }
     if (active) {
       u32 s = sbs.syncs ? sbs.syncs : 1;
-      LOG("stats sombra: eventos=%lu listas=%lu vita=%s capturadas=%lu (faltan %ld) leidos=%lu\n", sbs.ev, sb_ord,
-          sbAlive() ? "si" : "NO", SB[3], (long)(sb_ord - SB[3]), SB[5]);
-      LOG("stats sombra sync: drawsync=%lu atrasados=%lu (>5 ms: %lu) espera=%lu us/sync (max %lu) listsync=%lu atrasados=%lu\n",
+      LOG("stats shadow: events=%lu lists=%lu vita=%s captured=%lu (missing %ld) read=%lu\n", sbs.ev, sb_ord,
+          sbAlive() ? "yes" : "NO", SB[3], (long)(sb_ord - SB[3]), SB[5]);
+      LOG("stats shadow sync: drawsync=%lu late=%lu (>5 ms: %lu) wait=%lu us/sync (max %lu) listsync=%lu late=%lu\n",
           sbs.syncs, sbs.late, sbs.timeouts, sbs.wait_us / s, sbs.wait_max, sbs.lsyncs, sbs.llate);
-      LOG("stats sombra GE: el juego espera al GE en drawsync %lu us/sync\n", sbs.in_sync_us / s);
-      LOG("stats compuerta: %s%s | esperas antes de encolar=%lu (%lu us c/u, max %lu) | autocomprobaciones=%lu cambiaron=%lu\n",
-          gate_mode == 1 ? "antes de encolar" : gate_mode ? "en el sync (la lista cambio 10 veces)" : "en el sync (probando)", DEV_SW(8) ? " [compuerta_sync]" : "",
+      LOG("stats shadow GE: the game waits for the GE in drawsync %lu us/sync\n", sbs.in_sync_us / s);
+      LOG("stats gate: %s%s | waits before enqueue=%lu (%lu us each, max %lu) | self_checks=%lu changed=%lu\n",
+          gate_mode == 1 ? "before enqueue" : gate_mode ? "at the sync (the list changed 10 times)" : "at the sync (probing)", DEV_SW(8) ? " [gate_sync]" : "",
           gts.n, gts.n ? gts.us / gts.n : 0, gts.max, gts.checks, gts.bad);
       memset(&gts, 0, sizeof(gts));
       if (frs.frames) { // impact on the game, per frame
         u32 f = frs.frames, ms = frs.frame_us / 1000 + 1;
-        LOG("stats impacto (por frame): frame=%lu us CPU_libre=%lu%% compuerta=%lu us (%lu esperas en 10 s, %lu sin esperar) sync_GE=%lu us ganchos=%lu us espejo=%lu us (%lu paginas)\n",
+        LOG("stats impact (per frame): frame=%lu us CPU_idle=%lu%% gate=%lu us (%lu waits in 10 s, %lu no wait) sync_GE=%lu us hooks=%lu us mirror=%lu us (%lu pages)\n",
             frs.frame_us / f, spin_cal ? frs.spin / spin_cal * 100 / ms : 0, frs.gate_us / f, frs.gate_n, frs.nowait, frs.sync_us / f,
             frs.post_us / f, frs.mir_us / f, frs.mir_pages / f);
       }
       memset(&frs, 0, sizeof(frs));
 #ifdef NP_DEV
-      LOG("stats T6 (por frame): GE ocupado %lu us en %lu tramos (el mas largo %lu us), en stall %lu%% | T4 (por frame): cache %lu (%lu KB) dma %lu (%lu KB)\n",
+      LOG("stats T6 (per frame): GE busy %lu us in %lu runs (longest %lu us), in stall %lu%% | T4 (per frame): cache %lu (%lu KB) dma %lu (%lu KB)\n",
           ges.busy_us / STATS_EVERY, ges.runs / STATS_EVERY, ges.run_max, ges.n ? ges.stall_n * 100 / ges.n : 0,
           t4s.n / STATS_EVERY, t4s.kb / STATS_EVERY, t4s.dn / STATS_EVERY, t4s.dkb / STATS_EVERY);
       memset(&ges, 0, sizeof(ges)); memset(&t4s, 0, sizeof(t4s));
 #endif
       u32 pl = 0, pd = 0, i;
       for (i = 0; i < 512; i++) pl += SB[0x20 + (i >> 5)] >> (i & 31) & 1, pd += SB[0x30 + (i >> 5)] >> (i & 31) & 1;
-      LOG("stats espejo: pedidas listas=%lu datos=%lu (%lu KB) | copias=%lu paginas=%lu (KB/frame %lu)\n", pl, pd, (pl + pd) * 4,
+      LOG("stats mirror: requested lists=%lu data=%lu (%lu KB) | copies=%lu pages=%lu (KB/frame %lu)\n", pl, pd, (pl + pd) * 4,
           mirs.copies, mirs.pages, mirs.pages * 4 / STATS_EVERY);
-      LOG("stats espejo: tramos_max=%lu ocupado=%lu vita_usando=%lu no_entraron=%lu terminada=%lu/%lu\n", mirs.runs_max,
+      LOG("stats mirror: runs_max=%lu busy=%lu vita_using=%lu no_fit=%lu finished=%lu/%lu\n", mirs.runs_max,
           mirs.busy, mirs.vita, mirs.over, SB[0x40], mir_seq);
       mirs.copies = mirs.pages = mirs.busy = mirs.vita = mirs.over = mirs.runs_max = 0;
       memset(&sbs, 0, sizeof(sbs));
@@ -624,17 +624,17 @@ static int zoneCheck(void) {
   pi.size = sizeof(pi);
   int r = sceKernelQueryMemoryPartitionInfo(2, &pi);
   u32 finish = r < 0 ? 0 : (pi.startaddr & 0x0fffffff) + pi.memsize;
-  LOG("particion del juego: %08x-%08lx (%u KB) [%08x]\n", pi.startaddr, finish, r < 0 ? 0 : pi.memsize >> 10, r);
+  LOG("game partition: %08x-%08lx (%u KB) [%08x]\n", pi.startaddr, finish, r < 0 ? 0 : pi.memsize >> 10, r);
   PspSysmemPartitionInfo p11;
   p11.size = sizeof(p11);
   int r11 = sceKernelQueryMemoryPartitionInfo(11, &p11);
-  LOG("particion 11: %08x (%u KB, attr %x) [%08x]\n", r11 < 0 ? 0 : p11.startaddr, r11 < 0 ? 0 : p11.memsize >> 10,
+  LOG("partition 11: %08x (%u KB, attr %x) [%08x]\n", r11 < 0 ? 0 : p11.startaddr, r11 < 0 ? 0 : p11.memsize >> 10,
       r11 < 0 ? 0 : p11.attr, r11);
   if (finish > ZONE)
     return 1;
   SceUID id = sceKernelAllocPartitionMemory(11, "NativeLink", PSP_SMEM_Addr, 0x01000000, (void *)ZONE);
-  LOG("reserva de 0x0A000000-0x0B000000 en la particion 11: %08x%s\n", id,
-      id >= 0 ? "" : " (Adrenaline 7, o algo ya esta ahi: un plugin de usuario cargado en la particion 11)");
+  LOG("reserve of 0x0A000000-0x0B000000 in partition 11: %08x%s\n", id,
+      id >= 0 ? "" : " (Adrenaline 7, or something already there: a user plugin loaded in partition 11)");
   return 0;
 }
 
@@ -647,10 +647,10 @@ int module_start(SceSize args, void *argp) {
   passive = !!(pad.Buttons & (PSP_CTRL_SELECT | PSP_CTRL_LTRIGGER));
   logInit(pad.Buttons & PSP_CTRL_RTRIGGER);
   if (passive)
-    LOG("apagado (L o SELECT al abrir el juego): el juego corre sin cambios y no se anota nada para NativeDraw\n");
+    LOG("off (L or SELECT when opening the game): the game runs unchanged and nothing is noted for NativeDraw\n");
   if (zoneCheck() && !passive) {
     passive = 1;
-    LOG("AVISO: el juego usa la zona de los plugins (0x0A000000-0x0B000000) -> apagado\n");
+    LOG("WARNING: the game uses the plugin zone (0x0A000000-0x0B000000) -> off\n");
   }
   if (!passive) { // NativeDraw writes the log as soon as it responds (log.h)
     VDESC[0] = 0x31565047; VDESC[1] = 0; // "GPV1"
@@ -664,7 +664,7 @@ int module_start(SceSize args, void *argp) {
   _sceDisplaySetFrameBuf = (void *)FindProc("sceDisplay_Service", "sceDisplay_driver", 0x289D82FE);
   if (!_sceGeListUpdateStallAddr || !_sceGeListEnQueue || !_sceGeListEnQueueHead || !_sceGeDrawSync || !_sceGeListSync ||
       !_sceDisplaySetFrameBuf) {
-    LOG("ERROR: no se encontro alguna funcion del GE o de la pantalla: NativeLink no engancha nada\n");
+    LOG("ERROR: a GE or display function was not found: NativeLink hooks nothing\n");
     return 0;
   }
   sctrlHENPatchSyscall((u32)_sceGeListUpdateStallAddr, sceGeListUpdateStallAddrPatched);

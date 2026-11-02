@@ -20,9 +20,9 @@ python3 $R/tools/test_link.py $C $C/version.txt
 sh $R/tools/test_local.sh $C $C
 # A damaged copy of the run: each script must fail on it. A run with no game must pass.
 cp -r $C $X
-sed -i 's/fps=[0-9.]*/fps=50.0/; s/vita=si/vita=NO/' $X/nativelink.log
-sed -i 's/DISTINTAS=0/DISTINTAS=3/; s/reinicios=0/reinicios=2/; s/seg: frames=[0-9]*/seg: frames=20/' $X/nativedraw_captura.log
-sed -i 's/sin_frame_nuevo=10/vertice_fuera=10/' $X/nativedraw.log
+sed -i 's/fps=[0-9.]*/fps=50.0/; s/vita=yes/vita=NO/' $X/nativelink.log
+sed -i 's/MISMATCHES=0/MISMATCHES=3/; s/resets=0/resets=2/; s/sec: frames=[0-9]*/sec: frames=20/' $X/nativedraw_capture.log
+sed -i 's/no_new_frame=10/vertex_out=10/' $X/nativedraw.log
 echo 'NativeDraw 9.9.9' > $X/version.txt
 for t in "test_link.py $X $X/version.txt" "run_summary.py $X --check"; do
   n=$(python3 $R/tools/$t | grep -c FAIL || true); python3 $R/tools/$t >/dev/null && { echo "FAIL: $t did not fail"; exit 1; }

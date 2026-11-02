@@ -7,8 +7,8 @@
 #include "shaders_nd.h"
 // Result of trCheck/trFrame: T_OK or the reason the frame was not drawn (tnames: its name in the log)
 enum { T_OK, T_NEW, T_3D, T_PRIM, T_FMT, T_BLEND, T_TFUNC, T_ODD, T_DEST, T_VERT, T_LIMIT, T_TEX, T_PROG, T_OUT, TN };
-static const char *tnames[TN] = { "ok", "sin_frame_nuevo", "3d", "primitiva", "formato", "mezcla", "funcion_textura",
-                                "test_color_o_logica", "otro_destino", "vertice", "tope", "textura_mal", "programa", "vertice_fuera" };
+static const char *tnames[TN] = { "ok", "no_new_frame", "3d", "primitive", "format", "blend", "texture_function",
+                                "color_test_or_logic", "other_target", "vertex", "limit", "bad_texture", "program", "vertex_out" };
 // counters for the 10 s log (read and cleared by the presenter)
 static volatile uint32_t t_cnt[TN], t_hd, t_nat, t_draws;
 static volatile uint32_t t_skip[6];  // PSP frames advanced by each drawn frame (0: repeated, 5: 5 or more)
@@ -29,7 +29,7 @@ static RT rts[2];
 // Reserves the surface of an intermediate image (alpha 255, like the main surface). Both are reserved in trInit,
 // before the dump: otherwise the dump takes the physical memory.
 static int rtMem(RT *r) {
-  if (!(r->mem = gmem1(PHY, LINE * H * 4, RW))) { alog("traductor: sin memoria para una imagen intermedia\n"); return 0; }
+  if (!(r->mem = gmem1(PHY, LINE * H * 4, RW))) { alog("translator: no memory for an intermediate image\n"); return 0; }
   for (uint32_t k = 0; k < LINE * H; k++) ((uint32_t *)r->mem)[k] = 0xFF000000u;  // (alpha is never written)
   sceGxmColorSurfaceInit(&r->cs, SCE_GXM_COLOR_FORMAT_A8B8G8R8, SCE_GXM_COLOR_SURFACE_LINEAR, SCE_GXM_COLOR_SURFACE_SCALE_NONE,
                          SCE_GXM_OUTPUT_REGISTER_SIZE_32BIT, LINE, H, LINE, r->mem);
@@ -45,7 +45,7 @@ static RT *rtOf(uint32_t fb, uint32_t frame, int create) {
     RT *r = &rts[i];
     if (r->mem && r->fr == frame) continue;  // (already used by another image of this frame)
     if (!r->mem && !rtMem(r)) return 0;
-    if (r->fb == ~0u) alog("traductor: imagen intermedia %d (%s) para %06x\n", i, ty(r->mem), fb);
+    if (r->fb == ~0u) alog("translator: intermediate image %d (%s) for %06x\n", i, ty(r->mem), fb);
     r->fb = fb; r->fr = frame;
     return r;
   }
@@ -77,12 +77,12 @@ static SceGxmFragmentProgram *fragProg(int tex, uint32_t key) {
   SceGxmFragmentProgram *p = 0;
   int r = sceGxmShaderPatcherCreateFragmentProgram(pat, tex ? ift : ifc, SCE_GXM_OUTPUT_REGISTER_FORMAT_UCHAR4,
                                                    SCE_GXM_MULTISAMPLE_NONE, &b, pv, &p);
-  if (r < 0) { alog("traductor: programa de fragmentos %u %08x: %08x\n", tex, key, r); return 0; }
+  if (r < 0) { alog("translator: fragment program %u %08x: %08x\n", tex, key, r); return 0; }
   fps[nfps].key = k; fps[nfps++].p = p;
   return p;
 }
 
-// Prepares the translator (called by presStart, only with dibujar): vertex, palette and index memory, registers the
+// Prepares the translator (called by presStart, only with draw): vertex, palette and index memory, registers the
 // shaders and finds their parameters, creates the basic programs, reserves the intermediate images and lets the GPU
 // read the PSP RAM and the record textures. 0 if ready; negative otherwise.
 static int trInit(void) {
@@ -94,25 +94,25 @@ static int trInit(void) {
   int r = sceGxmShaderPatcherRegisterProgram(pat, (const SceGxmProgram *)nd_v_gxp, &iv);
   if (r >= 0) r = sceGxmShaderPatcherRegisterProgram(pat, (const SceGxmProgram *)nd_ft_gxp, &ift);
   if (r >= 0) r = sceGxmShaderPatcherRegisterProgram(pat, (const SceGxmProgram *)nd_fc_gxp, &ifc);
-  if (r < 0) { alog("traductor: registrar sombreadores %08x\n", r); return r; }
+  if (r < 0) { alog("translator: register shaders %08x\n", r); return r; }
   pv = sceGxmShaderPatcherGetProgramFromId(iv); pft = sceGxmShaderPatcherGetProgramFromId(ift); pfc = sceGxmShaderPatcherGetProgramFromId(ifc);
   const SceGxmProgramParameter *pa = sceGxmProgramFindParameterByName(pv, "aPosition"), *pt = sceGxmProgramFindParameterByName(pv, "aTexcoord"),
                                *pc = sceGxmProgramFindParameterByName(pv, "aColor");
   n_wvp = sceGxmProgramFindParameterByName(pv, "wvp");
   n_tf = sceGxmProgramFindParameterByName(pft, "tf"); n_atx = sceGxmProgramFindParameterByName(pft, "at");
   n_atc = sceGxmProgramFindParameterByName(pfc, "at");
-  if (!pa || !pt || !pc || !n_wvp || !n_tf || !n_atx || !n_atc) { alog("traductor: parametros de los sombreadores no encontrados\n"); return -2; }
+  if (!pa || !pt || !pc || !n_wvp || !n_tf || !n_atx || !n_atc) { alog("translator: shader parameters not found\n"); return -2; }
   SceGxmVertexAttribute at[3] = { { 0, 0, SCE_GXM_ATTRIBUTE_FORMAT_F32, 3, sceGxmProgramParameterGetResourceIndex(pa) },
                                   { 0, 12, SCE_GXM_ATTRIBUTE_FORMAT_F32, 2, sceGxmProgramParameterGetResourceIndex(pt) },
                                   { 0, 20, SCE_GXM_ATTRIBUTE_FORMAT_U8N, 4, sceGxmProgramParameterGetResourceIndex(pc) } };
   SceGxmVertexStream st = { sizeof(TV), SCE_GXM_INDEX_SOURCE_INDEX_16BIT };
-  if ((r = sceGxmShaderPatcherCreateVertexProgram(pat, iv, at, 3, &st, 1, &nvp)) < 0) { alog("traductor: programa de vertices %08x\n", r); return r; }
+  if ((r = sceGxmShaderPatcherCreateVertexProgram(pat, iv, at, 3, &st, 1, &nvp)) < 0) { alog("translator: vertex program %08x\n", r); return r; }
   if (!fragProg(0, 0) || !fragProg(1, 0)) return -3;
   for (int i = 0; i < 2; i++) rtMem(&rts[i]);
   // PSP RAM (0x08000000-0x0A000000) for the GPU (fails with 0x72000000)
   int r1 = sceGxmMapMemory((void *)0x70000000, 0x2000000, RD);
   int r3 = regMapGpu();
-  alog("traductor: RAM del PSP para la GPU %08x, texturas del registro %08x\n", r1, r3);
+  alog("translator: PSP RAM for the GPU %08x, record textures %08x\n", r1, r3);
   return r3 < 0 ? r3 : 0;
 }
 
@@ -311,8 +311,8 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     if (r) {
       if (!t_seen[r]++) {
         const uint32_t *e = f->e[f->d[i].st];
-        alog("traductor: primer frame con '%s': draw %u de %u prim %u vt %06x tex %u fmt %u swz %u mezcla %u (%04x %06x %06x) alfa %u "
-             "tfunc %06x fb %06x/%u (se muestra %07x/%u) clear %u ctest %u logica %u\n", tnames[r], i, f->nd, f->d[i].prim, f->d[i].vt,
+        alog("translator: first frame with '%s': draw %u of %u prim %u vt %06x tex %u fmt %u swz %u blend %u (%04x %06x %06x) alpha %u "
+             "tfunc %06x fb %06x/%u (displayed %07x/%u) clear %u ctest %u logic %u\n", tnames[r], i, f->nd, f->d[i].prim, f->d[i].vt,
              RE(e, 0x1E) & 1, RE(e, 0xC3) & 15, RE(e, 0xC2) & 1, RE(e, 0x21) & 1, RE(e, 0xDF) & 0xFFFF, RE(e, 0xE0) & 0xFFFFFF,
              RE(e, 0xE1) & 0xFFFFFF, RE(e, 0x22) & 1, RE(e, 0xC9) & 0xFFFFFF, RE(e, 0x9C) & 0xFFFFFF, RE(e, 0x9D) & 0x7FF, f->fb,
              f->fbw & 0xFFFF, RE(e, 0xD3) & 0xFFFF, RE(e, 0x27) & 1, RE(e, 0x28) & 1);
@@ -322,7 +322,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
   }
   static uint32_t t_q[2];  // last scene that read the vertices and palettes of each surface
   // if the GPU is still reading them (unfinished scene) it waits
-  if (gBusy(t_q[s])) { g_psurf++; gEv("vertices y paletas reescritos", t_q[s]); gWait(t_q[s]); }
+  if (gBusy(t_q[s])) { g_psurf++; gEv("vertices and palettes rewritten", t_q[s]); gWait(t_q[s]); }
   TV *o = tv[s];
   uint32_t *pal = tpal[s], np = 0, nv = 0, pal_prev = ~0u, pn = 0;  // np: words used; pal_prev/pn: the previous palette
   void *u;
@@ -403,10 +403,10 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
         u0 = q->u < u0 ? q->u : u0; u1 = q->u > u1 ? q->u : u1; v0 = q->v < v0 ? q->v : v0; v1 = q->v > v1 ? q->v : v1;
       }
       giant++;
-      alog("traductor: draw gigante (%u): frame %u draw %u de %u prim %u vertices %u->%u area %u miles x %d..%d y %d..%d | tex %u %ux%u fmt %u "
-           "swz %u copia %u uv %d..%d %d..%d (milesimas) | destino %s\n", giant, f->frame, i, f->nd, d->prim, d->n, n, (uint32_t)(ar / 1000),
+      alog("translator: giant draw (%u): frame %u draw %u of %u prim %u vertices %u->%u area %u thousand x %d..%d y %d..%d | tex %u %ux%u fmt %u "
+           "swz %u copy %u uv %d..%d %d..%d (thousandths) | target %s\n", giant, f->frame, i, f->nd, d->prim, d->n, n, (uint32_t)(ar / 1000),
            (int)x0, (int)x1, (int)y0, (int)y1, tex, (uint32_t)tw, (uint32_t)th, RE(e, 0xC3) & 15, RE(e, 0xC2) & 1, d->toff ? 1 : 0,
-           (int)(u0 * 1000), (int)(u1 * 1000), (int)(v0 * 1000), (int)(v1 * 1000), dst ? "intermedia" : "superficie");
+           (int)(u0 * 1000), (int)(u1 * 1000), (int)(v0 * 1000), (int)(v1 * 1000), dst ? "intermediate" : "surface");
     }
     SceGxmFragmentProgram *p = fragProg(tex, key);
     if (!p) { res = T_PROG; break; }
@@ -434,6 +434,6 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
 #undef OPEN
 #undef SCENE
   t_q[s] = gq;
-  if (res && !t_seen[res]++) alog("traductor: primer frame con '%s' al dibujar\n", tnames[res]);
+  if (res && !t_seen[res]++) alog("translator: first frame with '%s' on drawing\n", tnames[res]);
   return res;
 }

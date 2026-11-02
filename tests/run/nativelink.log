@@ -1,19 +1,19 @@
-000000 NativeLink 0.0.3.4 (build Nov  2 2026 10:00:00) modo=async
-000000 archivo=ms0:/ISO/juego.iso
-000001 juego=ULUS10000 (de UMD_DATA.BIN)
-000001 NativeLink activo: el juego corre sin cambios; buzon de eventos en 0x0A000000 para el capturador de NativeDraw
-000600 stats listas=1200 head=0 stall=2400
-000600 stats rendimiento: fps=59.9 frame_max=18 ms bajo60=2 bajo30=0
-000600 stats sombra: eventos=3600 listas=1200 vita=si capturadas=1200 (faltan 0) leidos=4000
-000600 stats sombra sync: drawsync=600 atrasados=4 (>5 ms: 1) espera=120 us/sync (max 6000) listsync=0 atrasados=0
-000600 stats espejo: pedidas listas=6 datos=0 (24 KB) | copias=600 paginas=3600 (KB/frame 24)
-001200 stats listas=1200 head=0 stall=2400
-001200 stats rendimiento: fps=58.1 frame_max=21 ms bajo60=30 bajo30=0
-001200 stats sombra: eventos=3600 listas=2400 vita=si capturadas=2400 (faltan 0) leidos=8000
-001200 stats sombra sync: drawsync=600 atrasados=9 (>5 ms: 2) espera=150 us/sync (max 7000) listsync=0 atrasados=0
-001200 stats espejo: pedidas listas=6 datos=0 (24 KB) | copias=600 paginas=3600 (KB/frame 24)
-001800 stats listas=1200 head=0 stall=2400
-001800 stats rendimiento: fps=59.9 frame_max=17 ms bajo60=1 bajo30=0
-001800 stats sombra: eventos=3600 listas=3600 vita=si capturadas=3600 (faltan 0) leidos=12000
-001800 stats sombra sync: drawsync=600 atrasados=3 (>5 ms: 0) espera=100 us/sync (max 5000) listsync=0 atrasados=0
-001800 stats espejo: pedidas listas=6 datos=0 (24 KB) | copias=600 paginas=3600 (KB/frame 24)
+000000 NativeLink 0.0.3.4 (build Nov  2 2026 10:00:00) mode=async
+000000 file=ms0:/ISO/game.iso
+000001 game=ULUS10000 (from UMD_DATA.BIN)
+000001 NativeLink active: the game runs unchanged; event mailbox at 0x0A000000 for the NativeDraw capturer
+000600 stats lists=1200 head=0 stall=2400
+000600 stats performance: fps=59.9 frame_max=18 ms under60=2 under30=0
+000600 stats shadow: events=3600 lists=1200 vita=yes captured=1200 (missing 0) read=4000
+000600 stats shadow sync: drawsync=600 late=4 (>5 ms: 1) wait=120 us/sync (max 6000) listsync=0 late=0
+000600 stats mirror: requested lists=6 data=0 (24 KB) | copies=600 pages=3600 (KB/frame 24)
+001200 stats lists=1200 head=0 stall=2400
+001200 stats performance: fps=58.1 frame_max=21 ms under60=30 under30=0
+001200 stats shadow: events=3600 lists=2400 vita=yes captured=2400 (missing 0) read=8000
+001200 stats shadow sync: drawsync=600 late=9 (>5 ms: 2) wait=150 us/sync (max 7000) listsync=0 late=0
+001200 stats mirror: requested lists=6 data=0 (24 KB) | copies=600 pages=3600 (KB/frame 24)
+001800 stats lists=1200 head=0 stall=2400
+001800 stats performance: fps=59.9 frame_max=17 ms under60=1 under30=0
+001800 stats shadow: events=3600 lists=3600 vita=yes captured=3600 (missing 0) read=12000
+001800 stats shadow sync: drawsync=600 late=3 (>5 ms: 0) wait=100 us/sync (max 5000) listsync=0 late=0
+001800 stats mirror: requested lists=6 data=0 (24 KB) | copies=600 pages=3600 (KB/frame 24)

@@ -1,8 +1,8 @@
 // dump.c: frame dumps to debug what is seen on screen. Included inside presenter.c: the Adrenaline thread
 // (hookEnd) calls dumpText and dumpFrame to capture each frame; the presenter thread calls dumpTick
-// to build the dump (L+R+SELECT or automatic) and write it to ux0:data/nativedraw/volcados/NNN/. Saves per frame
+// to build the dump (L+R+SELECT or automatic) and write it to ux0:data/nativedraw/dumps/NNN/. Saves per frame
 // the PSP image, the Vita image, a text with how it was made and a copy of the frame record (record.h) for
-// tools/dump.py and replay.c. Level in ux0:data/nativedraw/volcado (dumpLevel).
+// tools/dump.py and replay.c. Level in ux0:data/nativedraw/dump (dumpLevel).
 #include <psp2/io/stat.h>
 void *sceDmacMemcpy(void *dst, const void *src, SceSize size);
 #define VN 3            // frames per dump (at most)
@@ -13,17 +13,17 @@ static volatile uint32_t dump_req, dump_on, dump_k;
 extern volatile uint32_t nd_exact_until;  // (capture.c) until when the record carries the exact PSP image
 // whether automatic; dumps made; time of the last; bad blocks of the one that triggered the automatic; request time
 static uint32_t dump_auto, dump_n, dump_t, dump_dif, dump_t0;
-// Level (0 disabled, 1 pantallazo, 2 frame, 3 secuencia, 4 auto) and frames per dump
+// Level (0 off, 1 screenshot, 2 frame, 3 sequence, 4 auto) and frames per dump
 static uint32_t dump_level = 3, dump_nf = VN;
-static const char *dump_names[5] = { "desactivado", "pantallazo", "frame", "secuencia", "auto" };
-// Dump level: the word in ux0:data/nativedraw/volcado (4 letters are compared; "no" = disabled); without
-// file, 3 (secuencia).
+static const char *dump_names[5] = { "off", "screenshot", "frame", "sequence", "auto" };
+// Dump level: the word in ux0:data/nativedraw/dump (3 letters are compared; "no" = disabled); without
+// file, 3 (sequence).
 int dumpLevel(void) {
   char b[16] = { 0 };
-  SceUID fd = sceIoOpen("ux0:data/nativedraw/volcado", SCE_O_RDONLY, 0);
+  SceUID fd = sceIoOpen("ux0:data/nativedraw/dump", SCE_O_RDONLY, 0);
   if (fd < 0) return 3;
   sceIoRead(fd, b, 15); sceIoClose(fd);
-  for (int i = 0; i < 5; i++) if (!sceClibStrncmp(b, dump_names[i], 4)) return i;
+  for (int i = 0; i < 5; i++) if (!sceClibStrncmp(b, dump_names[i], 3)) return i;
   return b[0] == 'n' ? 0 : 3;  // ("no": disabled)
 }
 // Memory of each captured frame: dump_hd Vita surface, dump_ps PSP image, dump_tx its line, dump_ok whether there was a
@@ -120,12 +120,12 @@ static int dumpBad(const uint32_t *ps, int *best_p) {
 // failed; -1 without translator), copies record f (dumpBin) and, if it carries the exact PSP image, keeps it in dump_nat.
 static void dumpText(RFrame *f, const char *how, int reason) {
   if ((dump_on != 1 && dump_on != 3) || !dump_mem) return;
-  dump_lastn = sceClibSnprintf(dump_last, VL, "superficie: %s%s%s | tapado=%u\n", how, reason > 0 ? ", motivo: " : "", reason > 0 ? tnames[reason] : "", covered);
+  dump_lastn = sceClibSnprintf(dump_last, VL, "surface: %s%s%s | covered=%u\n", how, reason > 0 ? ", reason: " : "", reason > 0 ? tnames[reason] : "", covered);
   dumpBin(f);
   if (f && f->nimg && dump_nat && reason <= 0) {  // (compared in the coming frame)
     dump_natf = f->fbw >> 16 & 3; dump_natw = f->fbw & 0xFFFF;
     sceDmacMemcpy(dump_nat, f->tx + f->nimg - 1, dump_natw * 272 * (dump_natf == 3 ? 4 : 2)); dump_natok = 1;
-  } else if (reason != 0) dump_natok = 0;  // (normal image: no record drawn; "repite": the previous one is kept)
+  } else if (reason != 0) dump_natok = 0;  // (normal image: no record drawn; "repeats": the previous one is kept)
 }
 
 // In the Adrenaline thread, at the start of its hookEnd, with the surface to be shown (surf[cur], if has_surf) and the
@@ -152,8 +152,8 @@ static void dumpFrame(SceGxmContext *c, const void *pj, int has_surf) {
   dump_ok[k] = has_surf;
   if (has_surf) { sceDmacMemcpy(dump_hd[k], surf[cur], LINE * H * 4); sceClibMemcpy(dump_tx[k], dump_last, VL); }
   if (k == 0) { dump_rtfb = dump_rt && rts[0].mem && rts[0].fb != ~0u ? rts[0].fb : ~0u; if (dump_rtfb != ~0u) sceDmacMemcpy(dump_rt, rts[0].mem, LINE * H * 4); }
-  else { sceClibSnprintf(dump_tx[k], VL, "superficie: no se uso en este frame (Adrenaline mostro la imagen normal)\n"); dump_bf[k] = VN; }
-  if (k == 0 && dump_dif) sceClibSnprintf(dump_tx[0] + sceClibStrnlen(dump_tx[0], VL - 80), 80, "volcado automatico: %u bloques que no se parecen a ninguna imagen del PSP\n", dump_dif);
+  else { sceClibSnprintf(dump_tx[k], VL, "surface: not used in this frame (Adrenaline showed the normal image)\n"); dump_bf[k] = VN; }
+  if (k == 0 && dump_dif) sceClibSnprintf(dump_tx[0] + sceClibStrnlen(dump_tx[0], VL - 80), 80, "automatic dump: %u blocks that do not resemble any PSP image\n", dump_dif);
   if (++dump_k == dump_nf) dump_on = 2;
 }
 
@@ -190,23 +190,23 @@ static void dumpList(SceUID fd, const uint8_t *b) {
   const uint32_t *e0 = (const uint32_t *)((const uint8_t *)d + ((nd * sizeof(RDraw) + 3) & ~3u));
   char *t = (char *)dump_w;
 #define EMIT(...) do { k += sceClibSnprintf(t + k, n - k, __VA_ARGS__); if (k > n - 1024) { sceIoWrite(fd, t, k); k = 0; } } while (0)
-  EMIT("registro: frame %u, draws %u, estados %u, imagen que se muestra %07x ancho %u, incompleto %x, texturas %u (%u KB)\n"
-      "espejo: copia usada %u, ultima terminada %u | texturas (direccion, bytes, grupos de 8 filas copiados, copia mas vieja):\n",
+  EMIT("record: frame %u, draws %u, states %u, displayed image %07x width %u, incomplete %x, textures %u (%u KB)\n"
+      "mirror: copy used %u, last finished %u | textures (address, bytes, groups of 8 rows copied, oldest copy):\n",
       h[2], nd, ne, h[3], h[4] & 0xFFFF, h[8], nt, h[10] >> 10, h[11], h[12]);
   for (uint32_t i = 0; i < nt; i++)
-    EMIT("  t%u %07x %u%s grupos=%08x%08x copia=%u\n", i, ta[i], tn[i] & 0x7FFFFFFF, tn[i] >> 31 ? " swz" : "", (uint32_t)(tm[i] >> 32), (uint32_t)tm[i], tq[i]);
-  EMIT("(cada estado se escribe la primera vez, con los registros del GE que cambiaron)\n");
+    EMIT("  t%u %07x %u%s groups=%08x%08x copy=%u\n", i, ta[i], tn[i] & 0x7FFFFFFF, tn[i] >> 31 ? " swz" : "", (uint32_t)(tm[i] >> 32), (uint32_t)tm[i], tq[i]);
+  EMIT("(each state is written the first time, with the GE registers that changed)\n");
   const uint32_t *prior = 0;
   uint32_t last_st = ~0u;
   for (uint32_t i = 0; i < nd; i++) {
     const uint32_t *e = e0 + d[i].st * NRS;
     if (d[i].st != last_st) {
-      EMIT("  estado %u:", d[i].st);
+      EMIT("  state %u:", d[i].st);
       for (int r = 0; r < NRS; r++) if (!prior || prior[r] != e[r]) EMIT(" %02x=%06x", RS[r], e[r] & 0xFFFFFF);
       EMIT("\n");
       prior = e; last_st = d[i].st;
     }
-    EMIT("%4u e%u destino=%06x prim=%u n=%u vt=%06x tex=%07x copia=%u paleta=%u\n", i, d[i].st, RE(e, 0x9C) & 0xFFFFFF, d[i].prim, d[i].n,
+    EMIT("%4u e%u target=%06x prim=%u n=%u vt=%06x tex=%07x copy=%u palette=%u\n", i, d[i].st, RE(e, 0x9C) & 0xFFFFFF, d[i].prim, d[i].n,
         d[i].vt, RE(e, 0x1E) & 1 ? texAddr(e) : 0, d[i].toff ? 1 : 0, d[i].clen);
   }
 #undef EMIT
@@ -220,29 +220,29 @@ static int dumpAlloc(void) {
   uint32_t n = 0, ok = 1;
   for (int i = 0; i < (int)dump_nf && ok; i++) {  // Vita surface + PSP image, in one block
     void *p = 0;
-    dump_blk[n] = sceKernelAllocMemBlock("nativedraw_volcado", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW_UNCACHE, (LINE * H * 4 + 512 * 272 * 4 + 0x3FFFF) & ~0x3FFFFu, 0);
+    dump_blk[n] = sceKernelAllocMemBlock("nativedraw_dump", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW_UNCACHE, (LINE * H * 4 + 512 * 272 * 4 + 0x3FFFF) & ~0x3FFFFu, 0);
     if (dump_blk[n] < 0 || sceKernelGetMemBlockBase(dump_blk[n++], &p) < 0) { ok = 0; break; }
     dump_hd[i] = p; dump_ps[i] = (uint8_t *)p + LINE * H * 4;
   }
   void *t = 0;
-  if (ok) { dump_blk[n] = sceKernelAllocMemBlock("nativedraw_volcado", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, 0x40000, 0); if (dump_blk[n] < 0 || sceKernelGetMemBlockBase(dump_blk[n++], &t) < 0) ok = 0; }
-  if (!ok) { alog("volcado: sin memoria\n"); for (uint32_t i = 0; i < n; i++) if (dump_blk[i] >= 0) sceKernelFreeMemBlock(dump_blk[i]); for (int i = 0; i <= VN; i++) dump_blk[i] = 0; return 0; }
+  if (ok) { dump_blk[n] = sceKernelAllocMemBlock("nativedraw_dump", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, 0x40000, 0); if (dump_blk[n] < 0 || sceKernelGetMemBlockBase(dump_blk[n++], &t) < 0) ok = 0; }
+  if (!ok) { alog("dump: no memory\n"); for (uint32_t i = 0; i < n; i++) if (dump_blk[i] >= 0) sceKernelFreeMemBlock(dump_blk[i]); for (int i = 0; i <= VN; i++) dump_blk[i] = 0; return 0; }
   dump_w = t;
   int nb = 0;
   for (int i = 0; i < (int)dump_nf && dump_level >= 2; i++) {  // records
     void *q = 0;
-    dump_bblk[i] = sceKernelAllocMemBlock("nativedraw_volcado_reg", SCE_KERNEL_MEMBLOCK_TYPE_USER_MAIN_PHYCONT_NC_RW, VB_N, 0);
+    dump_bblk[i] = sceKernelAllocMemBlock("nativedraw_dump_rec", SCE_KERNEL_MEMBLOCK_TYPE_USER_MAIN_PHYCONT_NC_RW, VB_N, 0);
     dump_bb[i] = dump_bblk[i] >= 0 && sceKernelGetMemBlockBase(dump_bblk[i], &q) >= 0 ? q : 0;
     nb += dump_bb[i] != 0;
   }
   void *r = 0, *nn = 0;
   // exact PSP image and intermediate image
-  if (dump_level >= 2) dump_natblk = sceKernelAllocMemBlock("nativedraw_volcado_nat", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW_UNCACHE, 0x100000, 0);
+  if (dump_level >= 2) dump_natblk = sceKernelAllocMemBlock("nativedraw_dump_nat", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW_UNCACHE, 0x100000, 0);
   dump_nat = dump_level >= 2 && dump_natblk >= 0 && sceKernelGetMemBlockBase(dump_natblk, &nn) >= 0 ? nn : 0; dump_natok = 0;
-  if (dump_level >= 2) dump_rtblk = sceKernelAllocMemBlock("nativedraw_volcado_rt", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW_UNCACHE, (LINE * H * 4 + 0x3FFFF) & ~0x3FFFFu, 0);
+  if (dump_level >= 2) dump_rtblk = sceKernelAllocMemBlock("nativedraw_dump_rt", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW_UNCACHE, (LINE * H * 4 + 0x3FFFF) & ~0x3FFFFu, 0);
   dump_rt = dump_level >= 2 && dump_rtblk >= 0 && sceKernelGetMemBlockBase(dump_rtblk, &r) >= 0 ? r : 0;
   dump_bpend = VN; dump_mem = 1;
-  alog("volcado: memoria lista, nivel %s (%u frames, %u bloques para registros)\n", dump_names[dump_level], dump_nf, nb);
+  alog("dump: memory ready, level %s (%u frames, %u blocks for records)\n", dump_names[dump_level], dump_nf, nb);
   return 1;
 }
 static void dumpFree(void) {  // frees all the dump memory
@@ -255,7 +255,7 @@ static void dumpFree(void) {  // frees all the dump memory
 }
 // In the presenter thread (every 50 ms): in automatic it arms the dump (dump_on = 3, at most 10 per game); with an
 // L+R+SELECT request it takes the memory and starts capturing; when capture ends (dump_on = 2) it writes the
-// files to the first free volcados/NNN folder and frees the memory (except in automatic).
+// files to the first free dumps/NNN folder and frees the memory (except in automatic).
 static void dumpTick(void) {
   if (dump_auto && !dump_on && dump_n < 10) {  // automatic: armed (the memory stays taken)
     if (!dump_mem && !dumpAlloc()) { dump_auto = 0; return; }
@@ -271,14 +271,14 @@ static void dumpTick(void) {
     dump_t0 = now();
     if (!dump_mem && !dumpAlloc()) return;
     dump_k = 0; dump_dif = 0; dump_lastn = 0; dump_on = 1;
-    alog("volcado: capturando %u frame(s), nivel %s\n", dump_nf, dump_names[dump_level]);
+    alog("dump: capturing %u frame(s), level %s\n", dump_nf, dump_names[dump_level]);
     return;
   }
   if (dump_on != 2) return;
   char d[64], p[96];
-  sceIoMkdir("ux0:data/nativedraw/volcados", 0777);
+  sceIoMkdir("ux0:data/nativedraw/dumps", 0777);
   int n = 0;
-  for (; n < 1000; n++) { sceClibSnprintf(d, sizeof d, "ux0:data/nativedraw/volcados/%03d", n); if (sceIoMkdir(d, 0777) >= 0) break; }
+  for (; n < 1000; n++) { sceClibSnprintf(d, sizeof d, "ux0:data/nativedraw/dumps/%03d", n); if (sceIoMkdir(d, 0777) >= 0) break; }
   for (int i = 0; i < (int)dump_nf; i++) {
     sceClibSnprintf(p, sizeof p, "%s/f%d_normal.bmp", d, i); bmp(p, dump_ps[i], 480, 272, 512);
     if (dump_ok[i]) { sceClibSnprintf(p, sizeof p, "%s/f%d_vita.bmp", d, i); bmp(p, dump_hd[i], W, H, LINE); }
@@ -287,14 +287,14 @@ static void dumpTick(void) {
     SceUID fd = sceIoOpen(p, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0666);
     if (fd >= 0) { sceIoWrite(fd, dump_tx[i], sceClibStrnlen(dump_tx[i], VL)); if (b < VN && dump_bb[b]) dumpList(fd, dump_bb[b]); sceIoClose(fd); }
     if (b < VN && dump_bb[b]) {
-      sceClibSnprintf(p, sizeof p, "%s/f%d_registro.bin", d, i);
+      sceClibSnprintf(p, sizeof p, "%s/f%d_record.bin", d, i);
       if ((fd = sceIoOpen(p, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0666)) >= 0) { sceIoWrite(fd, dump_bb[b], dump_bbn[b]); sceIoClose(fd); }
     }
   }
-  if (dump_rtfb != ~0u) { sceClibSnprintf(p, sizeof p, "%s/f0_intermedia_%06x.bmp", d, dump_rtfb); bmp(p, dump_rt, LINE, H, LINE); }
+  if (dump_rtfb != ~0u) { sceClibSnprintf(p, sizeof p, "%s/f0_intermediate_%06x.bmp", d, dump_rtfb); bmp(p, dump_rt, LINE, H, LINE); }
   for (int i = 0; i < VN; i++) dump_bf[i] = VN;
   dump_n++; dump_t = now();
   if (!dump_auto || dump_n >= 10) dumpFree();  // (in automatic the memory stays for the next one)
   dump_on = 0;
-  alog("volcado: listo en %s%s\n", d, dump_dif ? " (automatico)" : "");
+  alog("dump: done in %s%s\n", d, dump_dif ? " (automatic)" : "");
 }

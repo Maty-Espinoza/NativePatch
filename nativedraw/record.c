@@ -1,6 +1,6 @@
 // record.c: frame record. Saves every draw of the frame so the Vita can draw it later with its GPU.
 // Included inside capture.c (uses its GE state: reg, vaddr, iaddr, vtr, the VRAM mirror) and only works with
-// ux0:data/nativedraw/dibujar. The capturer calls regDraw/regClut/regCurve/regMemo while walking the list and regFlip on
+// ux0:data/nativedraw/draw. The capturer calls regDraw/regClut/regCurve/regMemo while walking the list and regFlip on
 // each flip; the presenter (translator.c) takes the last complete frame with regTake/regRelease.
 // Saved per frame: copied vertices and indices (the game may reuse that memory), the GE state (RS) only when it changes,
 // palettes when loaded and the texture rows the draws use (copied to uncached memory the GPU reads; those with PSP
@@ -10,7 +10,7 @@
 static void clog(const char *fmt, ...);
 #include "record.h"
 enum { R_MEMO = 1, R_READ = 2, R_LIMIT = 4, R_CURVE = 8 };
-// Per-second statistics for the "registro:" log line (ga accumulates, gr is the copy being written; us_*: time for
+// Per-second statistics for the "record:" log line (ga accumulates, gr is the copy being written; us_*: time for
 // states, vertices, textures, palettes and DMA copies; gpu: textures written to a record the GPU could be reading;
 // o_b/us_o: swizzled bytes sorted and their time, included in us_l). t_*: "texturas:" line (rgTexCopy): copies, bytes,
 // us of DMA and of sorting, by source (0 RAM, 1 VRAM); DMA calls; copies by size (<1K, <4K, <16K, <64K, more); swizzled
@@ -51,7 +51,7 @@ static void rgGpu(int k, const char *what) {
   volatile uint32_t *finish = rg_gdone;
   if (!finish || rg_gv[k] || (int)(*finish - rg_gq[k]) >= 0) return;
   rg_gv[k] = 1; ga.gpu++;
-  if (rg_gev++ < 60) clog("registro: texturas %s escritas en el registro %d con la GPU sin terminar de leerlo (le faltaban %u escenas)\n",
+  if (rg_gev++ < 60) clog("record: textures %s written to record %d with the GPU still reading it (%u scenes left)\n",
                           what, k, rg_gq[k] - *finish);
 }
 static uint32_t rg_clut, rg_clut_b, rg_t;   // loaded palette (offset + 1) and its size; us of this frame
@@ -120,28 +120,28 @@ static void rgTexCopy(uint8_t *d, const void *s, uint32_t m, uint32_t rb, uint32
 static void regInit(void) {
   for (int i = 0; i < RN; i++) {
     void *p = 0;
-    SceUID b = sceKernelAllocMemBlock("nativedraw_registro", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW,
+    SceUID b = sceKernelAllocMemBlock("nativedraw_record", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW,
                                       (sizeof(RFrame) + 0x3FFFF) & ~0x3FFFFu, 0);
-    if (b < 0 || sceKernelGetMemBlockBase(b, &p) < 0) { reg_on = 0; clog("registro del frame: sin memoria (%08x)\n", b); return; }
+    if (b < 0 || sceKernelGetMemBlockBase(b, &p) < 0) { reg_on = 0; clog("frame record: no memory (%08x)\n", b); return; }
     rf[i] = p; rf[i]->nd = rf[i]->ne = rf[i]->na = rf[i]->flags = rf[i]->nt = rf[i]->ntx = 0;
-    SceUID t = sceKernelAllocMemBlock("nativedraw_registro_tex", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW_UNCACHE, TX_N, 0);
-    if (t < 0 || sceKernelGetMemBlockBase(t, &p) < 0) { reg_on = 0; clog("registro del frame: sin memoria para texturas (%08x)\n", t); return; }
+    SceUID t = sceKernelAllocMemBlock("nativedraw_record_tex", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW_UNCACHE, TX_N, 0);
+    if (t < 0 || sceKernelGetMemBlockBase(t, &p) < 0) { reg_on = 0; clog("frame record: no memory for textures (%08x)\n", t); return; }
     rf[i]->tx = p;
   }
   // Transit for swizzled textures: cached if the DMA copy keeps it up to date (rgCoherent); otherwise uncached
   void *p = 0;
-  SceUID b = sceKernelAllocMemBlock("nativedraw_orden", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, OR_N, 0);
+  SceUID b = sceKernelAllocMemBlock("nativedraw_order", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, OR_N, 0);
   if (b >= 0 && sceKernelGetMemBlockBase(b, &p) >= 0 && rgCoherent(p, rf[0]->tx)) rg_ord = p, rg_ordc = 1;
   else {
     if (b >= 0) sceKernelFreeMemBlock(b);
-    b = sceKernelAllocMemBlock("nativedraw_orden", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW_UNCACHE, OR_N, 0);
-    if (b < 0 || sceKernelGetMemBlockBase(b, &p) < 0) { reg_on = 0; clog("registro del frame: sin memoria para ordenar texturas (%08x)\n", b); return; }
+    b = sceKernelAllocMemBlock("nativedraw_order", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW_UNCACHE, OR_N, 0);
+    if (b < 0 || sceKernelGetMemBlockBase(b, &p) < 0) { reg_on = 0; clog("frame record: no memory to sort textures (%08x)\n", b); return; }
     rg_ord = p;
   }
-  b = sceKernelAllocMemBlock("nativedraw_huellas", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, 0x20000, 0);  // (RH_N x 8 bytes)
+  b = sceKernelAllocMemBlock("nativedraw_hashes", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, 0x20000, 0);  // (RH_N x 8 bytes)
   if (b >= 0 && sceKernelGetMemBlockBase(b, &p) >= 0) { rg_hash = p; sceClibMemset(p, 0, 0x20000); }
-  clog("registro del frame: activo (dibujar), %u x %u KB; texturas con swizzle ordenadas por la CPU desde memoria %s\n", RN,
-       (unsigned)(sizeof(RFrame) >> 10), rg_ordc ? "con cache (el DMA la deja al dia)" : "sin cache (el DMA no deja al dia la cache: lento)");
+  clog("frame record: active (draw), %u x %u KB; swizzled textures sorted by the CPU from memory %s\n", RN,
+       (unsigned)(sizeof(RFrame) >> 10), rg_ordc ? "with cache (the DMA keeps it up to date)" : "without cache (the DMA does not keep the cache up to date: slow)");
 }
 // Diagnostic (once, when the mailbox is found): measures the speed of each copy type (256 KB, CPU or DMA, cached or
 // not) using record 2 as test memory, and writes it to the log.
@@ -158,8 +158,8 @@ static void regBench(void) {
   t0 = now(); sceDmacMemcpy(u + n, u, n); t[4] = now() - t0;   // uncached -> uncached (DMA)
   t0 = now(); sceClibMemcpy(c + n, c, n); t[5] = now() - t0;   // cached -> cached (CPU)
   for (int i = 0; i < 6; i++) t[i] = t[i] ? n / t[i] : 0;
-  clog("banco de memoria (MB/s): RAM del PSP->con cache %u, RAM del PSP->sin cache (DMA) %u, con cache->sin cache %u, "
-       "sin cache->con cache %u, sin cache->sin cache (DMA) %u, con cache->con cache %u\n", t[0], t[1], t[2], t[3], t[4], t[5]);
+  clog("memory bench (MB/s): PSP RAM->cached %u, PSP RAM->uncached (DMA) %u, cached->uncached %u, "
+       "uncached->cached %u, uncached->uncached (DMA) %u, cached->cached %u\n", t[0], t[1], t[2], t[3], t[4], t[5]);
 }
 // Copies [a, a + n) of PSP memory to the record's area a (aligned to 16), 4 KB page at a time because VRAM is
 // translated to the mirror per page. Returns offset + 1; 0 if it does not fit (R_LIMIT) or cannot be read (R_READ).
@@ -225,7 +225,7 @@ static uint32_t rgTex(uint32_t r0, uint32_t r1) {
     if (vr) { if (!rgSrc(ta + o, m)) { f->flags |= R_READ; return 0; } f->dv = 1; }
     else {  // from RAM: now (the game may change it), by DMA
       uint32_t sa = rgSrc(ta + o, m), t0 = now();
-      rgGpu(rg_w, "de la RAM");
+      rgGpu(rg_w, "from RAM");
       if (!sa) { f->flags |= R_READ; return 0; }
       rgTexCopy(f->tx + f->to[i] + o, (const void *)PSP(sa), m, swz ? rb : 0, ta + o);
       ga.t_b += m; ga.us_l += now() - t0;
@@ -250,7 +250,7 @@ static void regPend(void) {
   int ready = (int)(SB[0x40] - f->tgt) >= 0;
   if (!ready && now() - rg_pend_t < 100000) return;
   uint32_t b = (ready ? f->tgt : SB[0x40]) & 1, base = b ? MIRROR2 : MIRROR, t0 = now();
-  rgGpu(k, "de la VRAM");
+  rgGpu(k, "from VRAM");
   for (uint32_t i = 0; i < f->nt; i++) {
     if (!isVram(f->ta[i]) || !f->tm[i]) continue;
     uint32_t n = f->tn[i] & 0x7FFFFFFF, gb = f->tr[i];

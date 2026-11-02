@@ -1,5 +1,5 @@
 // gpu_timer.c (included in presenter.c, development builds only): how long the Vita GPU takes on each scene. Only
-// with the switch ux0:data/nativedraw/medir_gpu.
+// with the switch ux0:data/nativedraw/gpu_timer.
 // Adrenaline's scenes and ours go through the same context, so the GPU finishes them in the order they were
 // sent. Each sceGxmEndScene notes in a queue the scene type, its draws, the send time and the notification the
 // GPU writes when done (Adrenaline's, which have none, get our own). A thread checks every ~0.1 ms the
@@ -7,7 +7,7 @@
 // later). If the GPU was idle when the scene arrived, that gap is added as idle time. Every 10 s the
 // presenter logs the totals per type and, in detail, the scenes following the report.
 enum { C_ADR, C_NORMAL, C_TR, C_INT, CN };
-static const char *cnames[CN] = { "Adrenaline (pantalla)", "imagen normal al doble", "traductor (superficie)", "traductor (intermedia)" };
+static const char *cnames[CN] = { "Adrenaline (screen)", "normal image doubled", "translator (surface)", "translator (intermediate)" };
 typedef struct { volatile uint32_t *a; uint32_t v, t, ty, dr, px, sw; } CScene;  // px: thousands of pixels; sw: swizzled draws
 #define CQ 64
 static CScene cq[CQ];
@@ -74,9 +74,9 @@ static void cStart(volatile uint32_t *nr, const uint32_t *adr) {
   if (!nr || !gq_done) return;
   for (c_slot = gq_slot - 1; c_slot > 400 && (adr[c_slot >> 5] >> (c_slot & 31) & 1); c_slot--) {}
   c_adr.address = nr + c_slot; *c_adr.address = 0;
-  SceUID th = sceKernelCreateThread("nativedraw_cronometro", cThread, 0x40, 0x1000, 0, 0, 0);
+  SceUID th = sceKernelCreateThread("nativedraw_timer", cThread, 0x40, 0x1000, 0, 0, 0);
   if (th >= 0 && sceKernelStartThread(th, 0, 0) >= 0) c_on = 1;
-  alog("cronometro de la GPU: %s (notificacion %u para las escenas de Adrenaline)\n", c_on ? "encendido" : "no se pudo crear el hilo", c_slot);
+  alog("GPU timer: %s (notification %u for the Adrenaline scenes)\n", c_on ? "on" : "could not create the thread", c_slot);
 }
 // 10 s report (dt: ms since the previous one): one line per type, the total and the detail of a few consecutive scenes
 static void cReport(uint32_t dt) {
@@ -88,12 +88,12 @@ static void cReport(uint32_t dt) {
     c_n[k] = c_us[k] = c_max[k] = c_dr[k] = c_queue[k] = c_px[k] = c_sw[k] = 0;
     tot += us;
     if (!n) continue;
-    alog("gpu tiempos: %s: escenas %u, GPU %u ms (promedio %u.%02u ms, max %u.%u) | draws por escena %u (con swizzle %u), miles "
-         "de pixeles por escena %u | en cola promedio %u.%u ms | ms: <5 %u, 5-10 %u, 10-15 %u, 15-20 %u, 20-30 %u, 30+ %u\n",
+    alog("gpu times: %s: scenes %u, GPU %u ms (average %u.%02u ms, max %u.%u) | draws per scene %u (swizzled %u), thousands "
+         "of pixels per scene %u | in queue average %u.%u ms | ms: <5 %u, 5-10 %u, 10-15 %u, 15-20 %u, 20-30 %u, 30+ %u\n",
          cnames[k], n, us / 1000, us / n / 1000, us / n / 10 % 100, mx / 1000, mx / 100 % 10, dr / n, sw / n, px / n,
          qsum / n / 1000, qsum / n / 100 % 10, h[0], h[1], h[2], h[3], h[4], h[5]);
   }
-  alog("gpu tiempos: ocupada %u ms de %u (%u %%), ociosa %u ms | cola llena %u | vueltas del hilo %u (una cada %u us)\n",
+  alog("gpu times: busy %u ms of %u (%u %%), idle %u ms | queue full %u | thread loops %u (one every %u us)\n",
        tot / 1000, dt, dt ? tot / 10 / dt : 0, oc / 1000, ll, vu, vu ? dt * 1000 / vu : 0);
   if (c_dn == CD) {  // detail of the scenes following the previous report (in the order the GPU finished them)
     char b[400]; int n = 0;
@@ -102,7 +102,7 @@ static void cReport(uint32_t dt) {
       n += sceClibSnprintf(b + n, sizeof b - n, " %s%u:%u.%u/%u.%u", abbr[c_det[i].ty], c_det[i].dr, c_det[i].us / 1000,
                            c_det[i].us / 100 % 10, c_det[i].queue / 1000, c_det[i].queue / 100 % 10);
     b[n] = 0;
-    alog("gpu tiempos: detalle (tipo y draws: ms de GPU / ms en cola; A Adrenaline, N imagen normal, T traductor, I intermedia):%s\n", b);
+    alog("gpu times: detail (type and draws: GPU ms / queue ms; A Adrenaline, N normal image, T translator, I intermediate):%s\n", b);
   }
   c_dn = 0;
 }

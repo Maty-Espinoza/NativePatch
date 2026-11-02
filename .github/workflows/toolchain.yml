@@ -12,7 +12,7 @@ permissions:
   contents: write
 
 jobs:
-  paquete:
+  package:
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
@@ -29,6 +29,6 @@ jobs:
           XZ_OPT='-9 -T0' tar cJf $P -C $T --owner=0 --group=0 --exclude=pspdev/var --exclude=pspdev/share/man \
             --exclude=pspdev/share/info --exclude=pspdev/share/locale \
             versions.txt pspdev vcore taipkg Adrenaline/LICENSE Adrenaline/cef/include Adrenaline/cef/lib
-          mkdir $HOME/prueba; cp $P $HOME/prueba/
-          T=$HOME/prueba sh tools/setup.sh; T=$HOME/prueba sh tools/build.sh
+          mkdir $HOME/check; cp $P $HOME/check/
+          T=$HOME/check sh tools/setup.sh; T=$HOME/check sh tools/build.sh
           gh release create $V $P --target $GITHUB_SHA --title "Toolchain $V" --notes-file $T/versions.txt

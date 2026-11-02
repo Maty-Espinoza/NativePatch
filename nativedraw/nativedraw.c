@@ -4,7 +4,7 @@
 // presenter.c draws it with the Vita GPU. This file: startup (module_start), own log (alog), the NativeLink log
 // (written by the Vita, so the PSP does not wait for the card), the NativeLink version for the menu and the hook
 // that notes the emulator threads. With ux0:data/nativedraw/off nothing is hooked.
-// Logs: ux0:pspemu/nativedraw.log (this one), nativedraw_captura.log (capture.c) and nativelink.log (NativeLink's).
+// Logs: ux0:pspemu/nativedraw.log (this one), nativedraw_capture.log (capture.c) and nativelink.log (NativeLink's).
 // NativeLink log channel (page 0x0A7FF000 of PSP RAM, see nativelink/log.h): +0 "GPV1" (NativeLink),
 // +0x20 "LOGV" (this plugin: serves the mailbox), +0x40 seq, done, bytes (text at 0x0A7FA000).
 #include <psp2/kernel/modulemgr.h>
@@ -108,7 +108,7 @@ static void serveLog(void) {
     SceUID fd = sceIoOpen("ux0:pspemu/nativelink.log", SCE_O_WRONLY | SCE_O_CREAT | SCE_O_APPEND, 0666);
     if (fd >= 0) { sceIoWrite(fd, (void *)PSP(0x0A7FA000u), n); sceIoClose(fd); }
   }
-  if (!nlogs++) alog("log de NativeLink: lo escribe la Vita (primer pedazo %u bytes)\n", n);
+  if (!nlogs++) alog("NativeLink log: written by the Vita (first chunk %u bytes)\n", n);
   DESC[VLOG + 1] = seq;
 }
 
@@ -120,7 +120,7 @@ void presStart(void), presStop(void);  // presenter.c
 static int mainThread(SceSize args, void *argp) {
   SceIoStat st;
   if (sceIoGetstat("ux0:data/nativedraw/off", &st) >= 0) {
-    alog("ux0:data/nativedraw/off existe: no se engancha nada\n");
+    alog("ux0:data/nativedraw/off exists: nothing is hooked\n");
     return sceKernelExitDeleteThread(0);
   }
   presStart();  // presenter and L+R+START menu
@@ -155,7 +155,7 @@ SceUID emu_th[256]; int emu_aff[256], emu_n;  // (read by capture.c: EMU_N must 
 static SceUID hookCT(const char *name, SceKernelThreadEntry entry, int prio, int stack, SceUInt attr, int aff,
                      const SceKernelThreadOptParam *opt) {
   SceUID r = TAI_CONTINUE(SceUID, ref_ct, name, entry, prio, stack, attr, aff, opt);
-  alog("hilo de ScePspemu: %s prioridad %x nucleos %x pila %x atributos %x -> %08x\n", name ? name : "?", prio, aff, stack, attr, r);
+  alog("ScePspemu thread: %s priority %x cores %x stack %x attributes %x -> %08x\n", name ? name : "?", prio, aff, stack, attr, r);
   if (r >= 0 && emu_n < 256) { emu_th[emu_n] = r; emu_aff[emu_n] = aff; emu_n++; }
   return r;
 }
@@ -163,12 +163,12 @@ static SceUID hookCT(const char *name, SceKernelThreadEntry entry, int prio, int
 void _start() __attribute__((weak, alias("module_start")));
 // Plugin startup: NativeLink log writer thread, emulator threads hook and main thread.
 int module_start(SceSize args, void *argp) {
-  alog("NativeDraw " NATIVEDRAW_VERSION " compilado %s %s (dato %d)\n", __DATE__, __TIME__, datum);
-  SceUID wt = sceKernelCreateThread("nativedraw_escritor", writerThread, 0xA0, 0x2000, 0, 0, NULL);
+  alog("NativeDraw " NATIVEDRAW_VERSION " built %s %s (datum %d)\n", __DATE__, __TIME__, datum);
+  SceUID wt = sceKernelCreateThread("nativedraw_writer", writerThread, 0xA0, 0x2000, 0, 0, NULL);
   if (wt >= 0 && sceKernelStartThread(wt, 0, NULL) >= 0) writer = 1;
-  alog("log de NativeLink: %s\n", writer ? "anillo + hilo escritor" : "escritura directa");
+  alog("NativeLink log: %s\n", writer ? "ring + writer thread" : "direct write");
   hk_ct = taiHookFunctionImport(&ref_ct, "ScePspemu", 0xCAE9ACE6, 0xC5C11EE7, hookCT);
-  alog("gancho de sceKernelCreateThread de ScePspemu: %08x\n", hk_ct);
+  alog("ScePspemu sceKernelCreateThread hook: %08x\n", hk_ct);
   SceUID th = sceKernelCreateThread("nativedraw", mainThread, 0x60, 0x2000, 0, 0, NULL);
   if (th >= 0) sceKernelStartThread(th, 0, NULL);
   return SCE_KERNEL_START_SUCCESS;

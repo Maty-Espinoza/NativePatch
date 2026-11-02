@@ -1,9 +1,9 @@
 // replay.c: draws again on the Vita, with the same translator (trFrame), a frame saved by a dump
-// (fK_registro.bin, dumpBin format in dump.c). Used to separate an error that depends on timing (changing data,
+// (fK_record.bin, dumpBin format in dump.c). Used to separate an error that depends on timing (changing data,
 // races with the GPU) from one that always appears with the same data (translator, shaders).
 // Included inside presenter.c: presStart calls repStart, the presenter thread repTick and the Adrenaline thread
-// repDraw. Usage: ux0:data/nativedraw/reproducir with the .bin path. Leaves fK_reproduccion.bmp and
-// fK_reproduccion_intermedia.bmp next to the .bin and writes "no" to the file (once per game).
+// repDraw. Usage: ux0:data/nativedraw/replay with the .bin path. Leaves fK_replay.bmp and
+// fK_replay_intermediate.bmp next to the .bin and writes "no" to the file (once per game).
 static char rep_path[128];
 // rep_on: 0 nothing, 1 to load, 2 loaded (drawn by the Adrenaline thread), 3 drawn (to write)
 static volatile uint32_t rep_on;
@@ -12,27 +12,27 @@ static RFrame *rep_f;
 static uint8_t *rep_hd, *rep_rt;
 static SceUID rep_blk[2];
 
-// Reads the path from ux0:data/nativedraw/reproducir (trimming trailing blanks); if present and not "no", rep_on = 1.
+// Reads the path from ux0:data/nativedraw/replay (trimming trailing blanks); if present and not "no", rep_on = 1.
 static void repStart(void) {
-  SceUID fd = sceIoOpen("ux0:data/nativedraw/reproducir", SCE_O_RDONLY, 0);
+  SceUID fd = sceIoOpen("ux0:data/nativedraw/replay", SCE_O_RDONLY, 0);
   if (fd < 0) return;
   int n = sceIoRead(fd, rep_path, sizeof rep_path - 1);
   sceIoClose(fd);
   while (n > 0 && (rep_path[n - 1] == '\n' || rep_path[n - 1] == '\r' || rep_path[n - 1] == ' ')) n--;
   rep_path[n > 0 ? n : 0] = 0;
-  if (n > 4 && !(rep_path[0] == 'n' && rep_path[1] == 'o')) { rep_on = 1; alog("reproduccion: %s\n", rep_path); }
+  if (n > 4 && !(rep_path[0] == 'n' && rep_path[1] == 'o')) { rep_on = 1; alog("replay: %s\n", rep_path); }
 }
 
 // In the presenter thread: reads the .bin into its own RFrame (header, checked against the record.h limits, and each
 // array aligned to 4) and the textures into memory the GPU reads. On success, rep_on = 2; otherwise rep_on = 0.
 static void repLoad(void) {
   SceUID fd = sceIoOpen(rep_path, SCE_O_RDONLY, 0);
-  if (fd < 0) { alog("reproduccion: no se pudo abrir %s\n", rep_path); rep_on = 0; return; }
+  if (fd < 0) { alog("replay: could not open %s\n", rep_path); rep_on = 0; return; }
   void *p = 0, *q = 0;
   rep_blk[0] = sceKernelAllocMemBlock("nativedraw_rep", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, (sizeof(RFrame) + 0x3FFFF) & ~0x3FFFFu, 0);
   rep_blk[1] = sceKernelAllocMemBlock("nativedraw_rep_img", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW_UNCACHE, 0x500000, 0);
   if (rep_blk[0] < 0 || rep_blk[1] < 0 || sceKernelGetMemBlockBase(rep_blk[0], &p) < 0 || sceKernelGetMemBlockBase(rep_blk[1], &q) < 0) {
-    alog("reproduccion: sin memoria\n"); sceIoClose(fd); rep_on = 0; return;
+    alog("replay: no memory\n"); sceIoClose(fd); rep_on = 0; return;
   }
   rep_f = p; rep_hd = q; rep_rt = (uint8_t *)q + 0x240000;
   uint8_t *tx = gmem(TX_N + 0x40000, RD);  // (the GPU reads the textures from here)
@@ -55,8 +55,8 @@ static void repLoad(void) {
     f->tx = tx;
   }
   sceIoClose(fd);
-  if (!ok) { alog("reproduccion: el archivo no es un registro de esta version\n"); rep_on = 0; return; }
-  alog("reproduccion: frame %u cargado (%u draws, %u texturas)\n", f->frame, f->nd, f->nt);
+  if (!ok) { alog("replay: the file is not a record of this version\n"); rep_on = 0; return; }
+  alog("replay: frame %u loaded (%u draws, %u textures)\n", f->frame, f->nd, f->nt);
   rep_on = 2;
 }
 
@@ -68,13 +68,13 @@ static int repDraw(SceGxmContext *c, int s, const SceGxmTexture *base) {
   sceGxmFinish(c);
   sceDmacMemcpy(rep_hd, surf[s], LINE * H * 4);
   if (rts[0].mem) sceDmacMemcpy(rep_rt, rts[0].mem, LINE * H * 4);
-  alog("reproduccion: dibujado (resultado del traductor: %s)\n", tnames[r]);
+  alog("replay: drawn (translator result: %s)\n", tnames[r]);
   rep_on = 3;
   return 1;
 }
 
 // In the presenter thread: loads the .bin when the translator is ready and, once drawn, writes the two BMPs
-// next to the .bin (fK_registro.bin -> fK_reproduccion*.bmp), writes "no" to the path file and frees the memory.
+// next to the .bin (fK_record.bin -> fK_replay*.bmp), writes "no" to the path file and frees the memory.
 static void repTick(void) {
   if (rep_on == 1 && t_on) repLoad();
   if (rep_on != 3) return;
@@ -83,13 +83,13 @@ static void repTick(void) {
   uint8_t *vw = dump_w;
   dump_w = w;
   int n = sceClibStrnlen(rep_path, sizeof rep_path);
-  if (n > 13 && !sceClibStrncmp(rep_path + n - 13, "_registro.bin", 13)) n -= 13;
-  sceClibSnprintf(p, sizeof p, "%.*s_reproduccion.bmp", n, rep_path); bmp(p, rep_hd, W, H, LINE);
-  sceClibSnprintf(p, sizeof p, "%.*s_reproduccion_intermedia.bmp", n, rep_path); bmp(p, rep_rt, LINE, H, LINE);
+  if (n > 11 && !sceClibStrncmp(rep_path + n - 11, "_record.bin", 11)) n -= 11;
+  sceClibSnprintf(p, sizeof p, "%.*s_replay.bmp", n, rep_path); bmp(p, rep_hd, W, H, LINE);
+  sceClibSnprintf(p, sizeof p, "%.*s_replay_intermediate.bmp", n, rep_path); bmp(p, rep_rt, LINE, H, LINE);
   dump_w = vw;
-  SceUID fd = sceIoOpen("ux0:data/nativedraw/reproducir", SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0666);
+  SceUID fd = sceIoOpen("ux0:data/nativedraw/replay", SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0666);
   if (fd >= 0) { sceIoWrite(fd, "no\n", 3); sceIoClose(fd); }
   for (int i = 0; i < 2; i++) if (rep_blk[i] > 0) sceKernelFreeMemBlock(rep_blk[i]);
-  alog("reproduccion: listo en %s\n", p);
+  alog("replay: done in %s\n", p);
   rep_on = 0;
 }

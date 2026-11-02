@@ -3,7 +3,7 @@
 // Adrenaline 8 and taiHEN load them:
 //   - NativeLink: ux0:pspemu/seplugins/nativelink.prx, enabled with LINK_LINE in plugins.txt (or EPIplugins.txt).
 //   - NativeDraw: ux0:data/nativedraw/nativedraw.suprx, under *PSPEMUCFW in taiHEN's config.txt (needs a reboot).
-// Before changing a config file it leaves a copy in ux0:data/nativepatch/respaldo/.
+// Before changing a config file it leaves a copy in ux0:data/nativepatch/backup/.
 // Updating = installing from a newer VPK.
 #include <psp2/kernel/processmgr.h>
 #include <psp2/kernel/sysmem.h>
@@ -26,7 +26,7 @@
 #define LINK_LINE "game, ms0:/seplugins/nativelink.prx, on"
 #define DRAW_DIR "ux0:data/nativedraw"
 #define DRAW_DST "ux0:data/nativedraw/nativedraw.suprx"
-#define BACKUP "ux0:data/nativepatch/respaldo"
+#define BACKUP "ux0:data/nativepatch/backup"
 
 // --- Screen: 8x16 text doubled (60 columns x 17 lines) ---------------------------------------------------------
 #define W 960
@@ -121,8 +121,8 @@ static int copyFile(const char *from, const char *to) {
 }
 // File name, without the folder.
 static const char *baseName(const char *p) { const char *s = strrchr(p, '/'); return s ? s + 1 : p; }
-// Copy of a config file before changing it, in respaldo/: <name>_original (the first time it is touched; never
-// overwritten) and <name>_anterior (before the last change). Name: ur0:tai/config.txt -> ur0_tai_config.txt
+// Copy of a config file before changing it, in backup/: <name>_original (the first time it is touched; never
+// overwritten) and <name>_previous (before the last change). Name: ur0:tai/config.txt -> ur0_tai_config.txt
 static void backup(const char *p) {
   char n[128], to[256];
   int k = 0;
@@ -133,8 +133,8 @@ static void backup(const char *p) {
   mkdirs(BACKUP);
   snprintf(to, sizeof to, BACKUP "/%s_original.txt", n);
   if (!exists(to)) copyFile(p, to);
-  snprintf(to, sizeof to, BACKUP "/%s_anterior.txt", n);
-  if (copyFile(p, to) == 0) say(C_DIM, "  respaldo: %s_anterior.txt", n);
+  snprintf(to, sizeof to, BACKUP "/%s_previous.txt", n);
+  if (copyFile(p, to) == 0) say(C_DIM, "  backup: %s_previous.txt", n);
 }
 static int removeTree(const char *p) {  // deletes a folder with everything in it; returns how many files
   int n = 0;
@@ -195,8 +195,8 @@ static int editText(const char *path, const char *const *rm_list, const char *af
   if (changed) {
     if (exists(path)) backup(path);
     int r = writeAll(path, o, len);
-    if (r) say(C_BAD, "  %s: ERROR al escribir", path);
-    else say(C_OK, "  %s: %s", path, removed && added ? "linea reemplazada" : removed ? "lineas quitadas" : "linea agregada");
+    if (r) say(C_BAD, "  %s: ERROR writing", path);
+    else say(C_OK, "  %s: %s", path, removed && added ? "line replaced" : removed ? "lines removed" : "line added");
     if (did_change && !r) *did_change = 1;
   }
   free(t); free(o);
@@ -231,22 +231,26 @@ static int hasLine(const char *path, const char *s) {
   return r;
 }
 
-// --- Test leftovers (GePatch, gepresent and development tools) -----------------------------------------------------
+// --- Test leftovers (GePatch, gepresent, development tools, old switch and log names) -----------------------------------------------------
 // Folders, files, and line texts of plugins.txt/game.txt (leftPlug) and config.txt (leftTai) deleted by
-// "Limpiar restos".
+// "Clean test leftovers".
 static const char *const leftDirs[] = { "ux0:data/gepresent", "ux0:data/adrfsr", "ux0:data/kbench", "ux0:data/vprobe",
   "ux0:pspemu/kbench", "ux0:pspemu/vprobe", "ux0:pspemu/gepvm", "ux0:pspemu/geptest", "ux0:pspemu/PSP/GAME/VPROBE",
-  "ux0:pspemu/PSP/GAME/KBENCH", "ux0:pspemu/PSP/GAME/GEPTEST", "ux0:pspemu/PSP/GAME/GEPVM", NULL };
+  "ux0:pspemu/PSP/GAME/KBENCH", "ux0:pspemu/PSP/GAME/GEPTEST", "ux0:pspemu/PSP/GAME/GEPVM", DRAW_DIR "/volcados", NULL };
 static const char *const leftFiles[] = { "ux0:pspemu/seplugins/ge_patch.prx", "ux0:pspemu/seplugins/ge_patch_anterior.prx",
   "ux0:pspemu/seplugins/._ge_patch.prx", "ux0:pspemu/seplugins/kbench.prx", "ux0:pspemu/seplugins/vpjuego.prx",
-  "ux0:pspemu/seplugins/geptest.prx", NULL };  // (exFAT is case-insensitive: also deletes GE_PATCH.PRX)
+  "ux0:pspemu/seplugins/geptest.prx", DRAW_DIR "/dibujar", DRAW_DIR "/espejo_espera", DRAW_DIR "/medir_ge",
+  DRAW_DIR "/medir_gpu", DRAW_DIR "/memo_revisar", DRAW_DIR "/nucleo_captura", DRAW_DIR "/captura_sin_lectores",
+  DRAW_DIR "/compuerta_sync", DRAW_DIR "/sin_adelanto", DRAW_DIR "/sin_captura", DRAW_DIR "/sin_compuerta",
+  DRAW_DIR "/sin_espejo", DRAW_DIR "/sin_libre", DRAW_DIR "/sin_memoria", DRAW_DIR "/registro", DRAW_DIR "/reproducir",
+  DRAW_DIR "/volcado", NULL };  // (exFAT is case-insensitive: also deletes GE_PATCH.PRX)
 static const char *const leftPlug[] = { "ge_patch.prx", "kbench.prx", "vpjuego.prx", "geptest.prx", NULL };
 static const char *const leftTai[] = { "ux0:data/gepresent/", "ux0:data/adrfsr/", "ux0:data/kbench/", "ux0:data/vprobe/", NULL };
-static int isLeftover(const char *n) {  // loose files in ux0:pspemu: GePatch logs, dumps and options
+static int isLeftover(const char *n) {  // loose files in ux0:pspemu: GePatch logs, dumps and options, old NativeDraw logs
   int l = strlen(n);
   if (!strncmp(n, "._", 2)) n += 2, l -= 2;  // ("._" copies left by the Mac Finder)
   return (!strncasecmp(n, "ge_patch", 8) && l > 4 && !strcasecmp(n + l - 4, ".log")) || (l > 4 && !strcasecmp(n + l - 4, ".gpd")) ||
-         !strncasecmp(n, "gepatch_", 8);
+         !strncasecmp(n, "gepatch_", 8) || !strncasecmp(n, "nativedraw_captura", 18) || !strncasecmp(n, "nativedraw_tarde", 16);
 }
 // Finds the leftovers: folders and files of the lists, loose files of ux0:pspemu (isLeftover), leftPlug lines
 // in plugins.txt and game.txt, and leftTai lines in both config.txt. With erase, also deletes them (lines with
@@ -255,8 +259,8 @@ static int leftovers(int erase) {
   int total = 0, loose = 0;
   for (const char *const *d = leftDirs; *d; d++)
     if (isDir(*d)) {
-      if (erase) { int n = removeTree(*d); say(isDir(*d) ? C_BAD : C_OK, "  %s (%d archivos)%s", *d, n, isDir(*d) ? ": ERROR" : ""); }
-      else say(C_TEXT, "  carpeta %s", *d);
+      if (erase) { int n = removeTree(*d); say(isDir(*d) ? C_BAD : C_OK, "  %s (%d files)%s", *d, n, isDir(*d) ? ": ERROR" : ""); }
+      else say(C_TEXT, "  folder %s", *d);
       total++;
     }
   for (const char *const *f = leftFiles; *f; f++)
@@ -277,7 +281,7 @@ static int leftovers(int erase) {
       }
     sceIoDclose(d);
   }
-  if (loose) { say(erase ? C_OK : C_TEXT, "  %d logs, volcados .gpd y opciones de GePatch en ux0:pspemu", loose); total += loose; }
+  if (loose) { say(erase ? C_OK : C_TEXT, "  %d old logs, .gpd dumps and options in ux0:pspemu", loose); total += loose; }
   const char *plug[3] = { pluginsTxt(), "ux0:pspemu/seplugins/game.txt", NULL };
   for (int i = 0; plug[i]; i++)
     if (exists(plug[i])) {
@@ -285,13 +289,13 @@ static int leftovers(int erase) {
       int found = 0;
       for (const char *const *q = leftPlug; t && *q; q++) found |= strstr(t, *q) != NULL;
       free(t);
-      if (found) { total++; if (erase) editText(plug[i], leftPlug, NULL, NULL, NULL); else say(C_TEXT, "  lineas de GePatch o pruebas en %s", baseName(plug[i])); }
+      if (found) { total++; if (erase) editText(plug[i], leftPlug, NULL, NULL, NULL); else say(C_TEXT, "  GePatch or test lines in %s", baseName(plug[i])); }
     }
   const char *cfg[3] = { "ux0:tai/config.txt", "ur0:tai/config.txt", NULL };
   for (int i = 0; cfg[i]; i++) {
     int found = 0;
     for (const char *const *q = leftTai; *q; q++) found |= hasLine(cfg[i], *q);
-    if (found) { total++; if (erase) editText(cfg[i], leftTai, NULL, NULL, &need_reboot); else say(C_TEXT, "  lineas de gepresent o pruebas en %s", cfg[i]); }
+    if (found) { total++; if (erase) editText(cfg[i], leftTai, NULL, NULL, &need_reboot); else say(C_TEXT, "  gepresent or test lines in %s", cfg[i]); }
   }
   return total;
 }
@@ -300,36 +304,36 @@ static int leftovers(int erase) {
 // Copies both plugins and version.txt, enables NativeLink in plugins.txt (replaces another nativelink.prx line) and
 // adds NativeDraw under *PSPEMUCFW in config.txt. If a plugin cannot be copied, the config is left alone.
 static void install(void) {
-  say(C_TITLE, "Instalar / actualizar: %s", bundled);
+  say(C_TITLE, "Install / update: %s", bundled);
   mkdirs("ux0:pspemu/seplugins");
   mkdirs(DRAW_DIR);
   int a = copyFile("app0:nativelink.prx", LINK_DST), b = copyFile("app0:nativedraw.suprx", DRAW_DST);
   say(a ? C_BAD : C_OK, "  NativeLink -> %s%s", LINK_DST, a ? ": ERROR" : "");
   say(b ? C_BAD : C_OK, "  NativeDraw -> %s%s", DRAW_DST, b ? ": ERROR" : "");
-  if (a || b) { say(C_BAD, "No se pudo copiar. No se cambio la configuracion."); return; }
+  if (a || b) { say(C_BAD, "Could not copy. Configuration left unchanged."); return; }
   copyFile("app0:version.txt", VERSION_FILE);
   static const char *const oldLink[] = { "nativelink.prx", NULL };  // the NativeLink line, if it was written differently
   const char *p = pluginsTxt();
   if (!hasLine(p, LINK_LINE)) editText(p, oldLink, NULL, LINK_LINE, NULL);
-  else say(C_DIM, "  %s: NativeLink ya estaba activado", baseName(p));
+  else say(C_DIM, "  %s: NativeLink already enabled", baseName(p));
   const char *c = taiConfig();
   if (!hasLine(c, DRAW_DST)) editText(c, NULL, "*PSPEMUCFW", DRAW_DST, &need_reboot);
-  else say(C_DIM, "  %s: NativeDraw ya estaba", c);
+  else say(C_DIM, "  %s: NativeDraw already there", c);
   if (exists("ux0:pspemu/seplugins/ge_patch.prx") || isDir("ux0:data/gepresent"))
-    say(C_TITLE, "Quedan restos de GePatch/gepresent: ver 'Limpiar restos'.");
-  say(C_OK, need_reboot ? "Listo. Reinicia la Vita para cargar NativeDraw." : "Listo. Cierra Adrenaline si estaba abierto.");
+    say(C_TITLE, "Old GePatch files remain: see 'Clean test leftovers'.");
+  say(C_OK, need_reboot ? "Done. Reboot the Vita to load NativeDraw." : "Done. Close Adrenaline if it was open.");
 }
 // Removes the plugin lines (plugins.txt and both config.txt) and deletes nativelink.prx and the whole
 // ux0:data/nativedraw folder (switches and dumps too). The backups stay.
 static void uninstall(void) {
-  say(C_TITLE, "Desinstalar NativeLink y NativeDraw");
+  say(C_TITLE, "Uninstall NativeLink and NativeDraw");
   static const char *const link[] = { "nativelink.prx", NULL }, *const draw[] = { DRAW_DST, NULL };
   editText(pluginsTxt(), link, NULL, NULL, NULL);
   editText("ux0:tai/config.txt", draw, NULL, NULL, &need_reboot);
   editText("ur0:tai/config.txt", draw, NULL, NULL, &need_reboot);
-  if (exists(LINK_DST)) say(sceIoRemove(LINK_DST) < 0 ? C_BAD : C_OK, "  %s borrado", LINK_DST);
-  if (isDir(DRAW_DIR)) say(C_OK, "  %s (%d archivos)", DRAW_DIR, removeTree(DRAW_DIR));
-  say(C_OK, need_reboot ? "Listo. Reinicia la Vita." : "Listo.");
+  if (exists(LINK_DST)) say(sceIoRemove(LINK_DST) < 0 ? C_BAD : C_OK, "  %s deleted", LINK_DST);
+  if (isDir(DRAW_DIR)) say(C_OK, "  %s (%d files)", DRAW_DIR, removeTree(DRAW_DIR));
+  say(C_OK, need_reboot ? "Done. Reboot the Vita." : "Done.");
 }
 
 // Shows the log with a footer text: up/down to move, O, X or START to return.
@@ -354,7 +358,7 @@ static int confirm(const char *title) {  // shows the log (what will be done): 1
     putText(0, 0, C_TITLE, C_BG, title);
     for (int i = 0; i < ROWS - 3 && top + i < nlog; i++) putText(0, i + 1, logc[top + i], C_BG, logl[top + i]);
     fillRow(ROWS - 1, C_SEL);
-    putText(0, ROWS - 1, C_TEXT, C_SEL, " X: confirmar   O: cancelar   arriba/abajo: ver mas");
+    putText(0, ROWS - 1, C_TEXT, C_SEL, " X: confirm   O: cancel   up/down: see more");
     uint32_t b;
     while (!(b = buttons()));
     if ((b & SCE_CTRL_DOWN) && top + ROWS - 3 < nlog) top++;
@@ -367,48 +371,48 @@ static int confirm(const char *title) {  // shows the log (what will be done): 1
 // Own screen in CDRAM (960x544 ABGR, 2 MB). Menu loop: shows the VPK version, what is installed and whether a reboot
 // is pending; X runs the selected option, which fills the log and shows it (those that delete ask to confirm first).
 int main(void) {
-  SceUID mb = sceKernelAllocMemBlock("pantalla", SCE_KERNEL_MEMBLOCK_TYPE_USER_CDRAM_RW, 0x200000, NULL);
+  SceUID mb = sceKernelAllocMemBlock("screen", SCE_KERNEL_MEMBLOCK_TYPE_USER_CDRAM_RW, 0x200000, NULL);
   if (mb < 0 || sceKernelGetMemBlockBase(mb, (void **)&fb) < 0) { sceKernelExitProcess(0); return 0; }
   SceDisplayFrameBuf df = { sizeof df, fb, W, SCE_DISPLAY_PIXELFORMAT_A8B8G8R8, W, H };
   sceDisplaySetFrameBuf(&df, SCE_DISPLAY_SETBUF_NEXTFRAME);
   sceCtrlSetSamplingMode(SCE_CTRL_MODE_DIGITAL);
   readVersion("app0:version.txt", bundled);
-  static const char *const op[] = { "Instalar / actualizar", "Desinstalar", "Limpiar restos de pruebas (temporal)",
-                                    "Reiniciar la Vita", "Salir" };
+  static const char *const op[] = { "Install / update", "Uninstall", "Clean test leftovers (temporary)",
+                                    "Reboot the Vita", "Exit" };
   int sel = 0;
   for (;;) {
     readVersion(VERSION_FILE, installed);
     int hasLink = exists(LINK_DST), hasDraw = exists(DRAW_DST), plug = hasLine(pluginsTxt(), LINK_LINE),
         tai = hasLine(taiConfig(), DRAW_DST), stale = exists("ux0:pspemu/seplugins/ge_patch.prx") || isDir("ux0:data/gepresent");
     clear();
-    putText(0, 0, C_TITLE, C_BG, "NativePatch - instalador");
-    putText(0, 1, C_DIM, C_BG, "Proyecto en desarrollo (hecho con IA): no listo para jugar.");
+    putText(0, 0, C_TITLE, C_BG, "NativePatch - installer");
+    putText(0, 1, C_DIM, C_BG, "Project in development (made with AI): not ready to play.");
     char l[160];  // (putText cuts at 60 columns)
-    snprintf(l, sizeof l, "Este VPK:  %s", bundled); putText(0, 3, C_TEXT, C_BG, l);
-    snprintf(l, sizeof l, "Instalado: %s", hasLink || hasDraw ? (installed[0] ? installed : "(version desconocida)") : "nada");
+    snprintf(l, sizeof l, "This VPK:  %s", bundled); putText(0, 3, C_TEXT, C_BG, l);
+    snprintf(l, sizeof l, "Installed: %s", hasLink || hasDraw ? (installed[0] ? installed : "(unknown version)") : "nothing");
     putText(0, 4, C_TEXT, C_BG, l);
-    snprintf(l, sizeof l, "  NativeLink %s, %s", hasLink ? "copiado" : "falta", plug ? "activado" : "sin activar en plugins.txt");
+    snprintf(l, sizeof l, "  NativeLink %s, %s", hasLink ? "copied" : "missing", plug ? "enabled" : "not enabled in plugins.txt");
     putText(0, 5, hasLink && plug ? C_OK : C_DIM, C_BG, l);
-    snprintf(l, sizeof l, "  NativeDraw %s, %s", hasDraw ? "copiado" : "falta", tai ? "en config.txt" : "fuera de config.txt");
+    snprintf(l, sizeof l, "  NativeDraw %s, %s", hasDraw ? "copied" : "missing", tai ? "in config.txt" : "not in config.txt");
     putText(0, 6, hasDraw && tai ? C_OK : C_DIM, C_BG, l);
-    if (stale) putText(0, 7, C_BAD, C_BG, "  Hay restos de GePatch/gepresent en la Vita.");
-    if (need_reboot) putText(0, 8, C_TITLE, C_BG, "  Cambio config.txt: reinicia la Vita para que valga.");
+    if (stale) putText(0, 7, C_BAD, C_BG, "  GePatch/gepresent leftovers on the Vita.");
+    if (need_reboot) putText(0, 8, C_TITLE, C_BG, "  config.txt changed: reboot the Vita to apply.");
     for (int i = 0; i < 5; i++) {
       fillRow(10 + i, i == sel ? C_SEL : C_BG);
       putText(1, 10 + i, C_TEXT, i == sel ? C_SEL : C_BG, op[i]);
     }
-    putText(0, ROWS - 1, C_DIM, C_BG, "arriba/abajo: elegir   X: aceptar");
+    putText(0, ROWS - 1, C_DIM, C_BG, "up/down: choose   X: accept");
     uint32_t b;
     while (!(b = buttons()));
     if (b & SCE_CTRL_UP) sel = (sel + 4) % 5;
     if (b & SCE_CTRL_DOWN) sel = (sel + 1) % 5;
     if (!(b & SCE_CTRL_CROSS)) continue;
     nlog = 0;
-    if (sel == 0) { install(); showLog(" O: volver"); }
-    else if (sel == 1) { say(C_TEXT, "Se borran NativeLink, NativeDraw y sus lineas en plugins.txt"); say(C_TEXT, "y config.txt (con respaldo)."); if (confirm("Desinstalar")) { nlog = 0; uninstall(); showLog(" O: volver"); } }
+    if (sel == 0) { install(); showLog(" O: back"); }
+    else if (sel == 1) { say(C_TEXT, "Deletes NativeLink, NativeDraw and their lines in plugins.txt"); say(C_TEXT, "and config.txt (with backup)."); if (confirm("Uninstall")) { nlog = 0; uninstall(); showLog(" O: back"); } }
     else if (sel == 2) {
-      if (!leftovers(0)) { say(C_OK, "No hay restos de pruebas."); showLog(" O: volver"); }
-      else if (confirm("Se borra esto (restos de GePatch, gepresent y pruebas):")) { nlog = 0; say(C_TITLE, "Limpiar restos de pruebas"); leftovers(1); say(C_OK, need_reboot ? "Listo. Reinicia la Vita." : "Listo."); showLog(" O: volver"); }
+      if (!leftovers(0)) { say(C_OK, "No test leftovers."); showLog(" O: back"); }
+      else if (confirm("This gets deleted (GePatch, gepresent and test leftovers):")) { nlog = 0; say(C_TITLE, "Clean test leftovers"); leftovers(1); say(C_OK, need_reboot ? "Done. Reboot the Vita." : "Done."); showLog(" O: back"); }
     }
     else if (sel == 3) scePowerRequestColdReset();
     else break;

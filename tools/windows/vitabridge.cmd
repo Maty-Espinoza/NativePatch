@@ -1,10 +1,10 @@
 @echo off
-rem Relevo con la Vita (como vitabridge.py en la Terminal del Mac). Dejar esta ventana abierta mientras se prueba.
-rem Sin argumentos busca la Vita en la red; o con la IP: vitabridge.cmd 192.168.0.10
+rem Relay with the Vita (like vitabridge.py in the Mac Terminal). Leave this window open while testing.
+rem Without arguments it finds the Vita on the network; or with the IP: vitabridge.cmd 192.168.0.10
 cd /d "%~dp0"
 set PY=python
 where py >nul 2>&1 && set PY=py -3
-rem inicio.txt: hora y que Python se uso (para revisar desde Claude si el relevo no arranca)
-(echo %date% %time% & where py python & %PY% --version) > vitabridge\inicio.txt 2>&1
+rem start.txt: time and which Python was used (to check from Claude if the relay does not start)
+(echo %date% %time% & where py python & %PY% --version) > vitabridge\start.txt 2>&1
 %PY% -u vitabridge.py %*
 pause

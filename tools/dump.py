@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Draws on the PC a frame dumped by NativeDraw (fK_registro.bin) and compares it with the normal image.
+"""Draws on the PC a frame dumped by NativeDraw (fK_record.bin) and compares it with the normal image.
 
-  python3 tools/dump.py <dump folder> [K] [--texturas-de <other .bin>] [--salida <folder>]
+  python3 tools/dump.py <dump folder> [K] [--textures-from <other .bin>] [--out <folder>]
 
 Imitates the PSP GE in 2D (through mode: rectangles, triangles and strips; 5650/5551/4444/8888/T4/T8 textures with the
 copy the record made; palettes; texture function; alpha test; blending; clears; scissor; intermediate images)
@@ -10,22 +10,22 @@ What it tells:
   - if the PC drawing matches the normal image: the data is fine and the error is on the Vita (translator);
   - if it has the same errors as fK_vita.bmp: the data the Vita received is wrong; the guilty draws and their
     textures (with which rows were copied and from which mirror copy) are listed.
-  - with --texturas-de f2_registro.bin: draws f1 with the textures copied in the next frame; if it then comes out
+  - with --textures-from f2_record.bin: draws f1 with the textures copied in the next frame; if it then comes out
     right, the mirror copy arrived late.
-Leaves fK_pc.png (normal | PC | reduced Vita | differences) in --salida (by default, the dump folder).
+Leaves fK_pc.png (normal | PC | reduced Vita | differences) in --out (by default, the dump folder).
 Needs numpy and Pillow. Writes nothing to the repo. Record format and dump levels: docs/dev/<language>/dumps.md.
 """
 import struct, sys, os
 import numpy as np
 from PIL import Image
 
-# Reads an fK_registro.bin: 16-word header, saved registers (RS), texture table (ta/tn/to/tq/tm), draws
+# Reads an fK_record.bin: 16-word header, saved registers (RS), texture table (ta/tn/to/tq/tm), draws
 # (d), states (e: one value per RS register), vertex/index/palette data (a) and texture copies (tx).
 # The draws' 'off' positions are offset + 1 (0 = none).
 def read_record(path):
     b = open(path, 'rb').read()
     h = struct.unpack_from('<16I', b, 0)
-    if h[0] != 0x47524E44: sys.exit(f'{path}: no es un registro de NativeDraw')
+    if h[0] != 0x47524E44: sys.exit(f'{path}: not a NativeDraw record')
     F = dict(ver=h[1], nimg=h[15] if h[1] >= 3 else 0, frame=h[2], fb=h[3], fbw=h[4], nd=h[5], ne=h[6], na=h[7], flags=h[8], nt=h[9], ntx=h[10], mir=h[11], mirf=h[12])
     nrs, dsz, o = h[13], h[14], 64
     al = lambda n: (n + 3) & ~3
@@ -255,24 +255,24 @@ def main():
     rest = args[1:]
     while rest:
         a = rest.pop(0)
-        if a == '--texturas-de': other = read_record(rest.pop(0))
-        elif a == '--salida': out_dir = rest.pop(0)
+        if a == '--textures-from': other = read_record(rest.pop(0))
+        elif a == '--out': out_dir = rest.pop(0)
         else: k = a
     out_dir = out_dir or folder
-    F = read_record(os.path.join(folder, f'f{k}_registro.bin'))
+    F = read_record(os.path.join(folder, f'f{k}_record.bin'))
     normal = np.array(Image.open(os.path.join(folder, f'f{k}_normal.bmp')).convert('RGB'), np.float32)[:272, :480]
     vp = os.path.join(folder, f'f{k}_vita.bmp')
     vita = np.array(Image.open(vp).convert('RGB').resize((480, 272), Image.BILINEAR), np.float32) if os.path.exists(vp) else np.zeros_like(normal)
     ex = exact_image(F)
     if ex is not None:  # (the Vita's normal image may be from another frame: compare with the exact one)
-        print(f'imagen exacta del frame: si (la normal difiere de ella en {(np.abs(ex - normal) > 40).any(2).mean() * 100:.2f}%: atraso de la Vita)')
+        print(f'exact image of the frame: yes (the normal one differs from it in {(np.abs(ex - normal) > 40).any(2).mean() * 100:.2f}%: Vita delay)')
         normal = ex
     fbs, who, disp = draw(F, normal, other)
     pc = fbs.get(disp, np.zeros((272, 512, 4), np.float32))[:, :480, :3]
     dif = (np.abs(pc - normal) > 40).any(2)
     difv = (np.abs(vita - normal) > 60).any(2)
-    print(f'frame {F["frame"]}: draws {F["nd"]}, texturas {F["nt"]}, espejo usado {F["mir"]} (ultimo terminado {F["mirf"]}), imagen {disp:06x}')
-    print(f'pixeles distintos de la normal: PC {dif.mean() * 100:.2f}% | Vita {difv.mean() * 100:.2f}%')
+    print(f'frame {F["frame"]}: draws {F["nd"]}, textures {F["nt"]}, mirror used {F["mir"]} (last finished {F["mirf"]}), image {disp:06x}')
+    print(f'pixels different from the normal one: PC {dif.mean() * 100:.2f}% | Vita {difv.mean() * 100:.2f}%')
     # culprits: the last draw that wrote each differing pixel of the displayed image
     culprits = {}
     q = who[disp][:, :480]
@@ -280,10 +280,10 @@ def main():
         i = q[y, x]
         culprits[i] = culprits.get(i, 0) + 1
     if culprits:
-        print('draws con pixeles distintos (draw: pixeles) en la imagen que se muestra:', sorted(culprits.items(), key=lambda t: -t[1])[:12])
+        print('draws with different pixels (draw: pixels) in the displayed image:', sorted(culprits.items(), key=lambda t: -t[1])[:12])
     for a, Q in who.items():  # intermediate images: only how many draws (there is no reference to compare them)
-        if a != disp: print(f'imagen intermedia {a:06x}: {len(set(Q[Q >= 0].tolist()))} draws')
-    print('texturas: t direccion bytes grupos_copiados copia_del_espejo')
+        if a != disp: print(f'intermediate image {a:06x}: {len(set(Q[Q >= 0].tolist()))} draws')
+    print('textures: t address bytes copied_groups mirror_copy')
     for j in range(F['nt']):
         print(f'  t{j} {F["ta"][j]:07x} {F["tn"][j] & 0x7FFFFFFF} {F["tm"][j]:016x} {F["tq"][j]}')
     big = lambda im: Image.fromarray(np.clip(im, 0, 255).astype(np.uint8))
@@ -291,10 +291,10 @@ def main():
     out = Image.new('RGB', (960, 544))
     for n, im in enumerate((normal, pc, vita, mark)): out.paste(big(im), ((n & 1) * 480, (n >> 1) * 272))
     for a, b in fbs.items():
-        if a != disp: big(b[..., :3]).save(os.path.join(out_dir, f'f{k}_pc_intermedia_{a:06x}.png'))
-    name = os.path.join(out_dir, f'f{k}_pc{"_texturas_de_otro" if other else ""}.png')
+        if a != disp: big(b[..., :3]).save(os.path.join(out_dir, f'f{k}_pc_intermediate_{a:06x}.png'))
+    name = os.path.join(out_dir, f'f{k}_pc{"_textures_from_other" if other else ""}.png')
     out.save(name)
-    print('->', name, '(%s | PC / Vita | diferencias del PC en magenta)' % ('exacta' if ex is not None else 'normal'))
+    print('->', name, '(%s | PC / Vita | PC differences in magenta)' % ('exact' if ex is not None else 'normal'))
 
 if __name__ == '__main__':
     main()

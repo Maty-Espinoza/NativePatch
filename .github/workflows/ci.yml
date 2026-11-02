@@ -1,18 +1,18 @@
-# En cada push: compila NativeLink, NativeDraw y el instalador con los mismos scripts que se usan a mano.
-# Si no compila, el commit queda marcado en rojo en GitHub. Los binarios quedan como "artifact" de la corrida.
-name: Compilacion
+# On each push: builds NativeLink, NativeDraw and the installer with the same scripts used by hand.
+# If it does not build, the commit shows red on GitHub. The binaries stay as the run's "artifact".
+name: Build
 on: [push, pull_request]
 
 jobs:
-  compilar:
+  build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Compiladores (pspdev y vitasdk)
+      - name: Compilers (pspdev and vitasdk)
         run: sh tools/setup.sh
-      - name: Compilar
+      - name: Build
         run: sh tools/build.sh
-      - name: Pruebas (capturador en qemu, logs, compilacion de produccion)
+      - name: Tests (capturer under qemu, logs, production build)
         run: |
           sudo apt-get update
           sudo apt-get install -y qemu-user gcc-arm-linux-gnueabihf

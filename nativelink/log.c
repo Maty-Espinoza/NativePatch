@@ -85,12 +85,12 @@ void logFlush(void) {
 
   if (vitaIo() && vitaWait(VLOG)) { // the Vita writes it: here the text is only copied
     char *q = (char *)(VLOG_BUF | 0x40000000);
-    int k = d ? sprintf(q, "-- %d lineas perdidas (buffer lleno)\n", d) : 0;
+    int k = d ? sprintf(q, "-- %d lines lost (buffer full)\n", d) : 0;
     memcpy(q + k, p, n);
     k += n;
     written += n;
     if (written >= LOG_MAX)
-      k += sprintf(q + k, "-- log detenido: llego a %d KB\n", LOG_MAX / 1024);
+      k += sprintf(q + k, "-- log stopped: reached %d KB\n", LOG_MAX / 1024);
     VDESC[VLOG + 2] = k;
     vitaPost(VLOG);
     flushing = 0;
@@ -102,11 +102,11 @@ void logFlush(void) {
     sceIoLseek(fd, 0, PSP_SEEK_END);
     char t[64];
     if (d)
-      sceIoWrite(fd, t, sprintf(t, "-- %d lineas perdidas (buffer lleno)\n", d));
+      sceIoWrite(fd, t, sprintf(t, "-- %d lines lost (buffer full)\n", d));
     sceIoWrite(fd, p, n);
     written += n;
     if (written >= LOG_MAX)
-      sceIoWrite(fd, t, sprintf(t, "-- log detenido: llego a %d KB\n", LOG_MAX / 1024));
+      sceIoWrite(fd, t, sprintf(t, "-- log stopped: reached %d KB\n", LOG_MAX / 1024));
     sceIoClose(fd);
   }
   pspSdkSetK1(k1);
@@ -156,10 +156,10 @@ void logGameId(void) {
       id[4] = '-';
       memcpy(id + 5, g + (g[4] == '-' ? 5 : 4), 5);
       id[10] = 0;
-      from = "datos del juego del kernel";
+      from = "kernel game data";
     }
   }
-  LOG("juego=%s (de %s)\n", id, from);
+  LOG("game=%s (from %s)\n", id, from);
 }
 
 static int flushThread(SceSize args, void *argp) { // flushes the log every second
@@ -181,8 +181,8 @@ void logInit(int sync) {
   pspSdkSetK1(k1);
 
   sync_mode = sync;
-  LOG("NativeLink %s (build %s %s) modo=%s\n", NATIVELINK_VERSION, __DATE__, __TIME__, sync ? "sync" : "async");
-  LOG("archivo=%s\n", file ? file : "?");
+  LOG("NativeLink %s (build %s %s) mode=%s\n", NATIVELINK_VERSION, __DATE__, __TIME__, sync ? "sync" : "async");
+  LOG("file=%s\n", file ? file : "?");
   logFlush();
 
   if (!sync) {

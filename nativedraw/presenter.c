@@ -47,7 +47,7 @@ static uint32_t probe(uint32_t type) {  // MB that can be reserved at once (bina
   uint32_t lo = 0, hi = 64;
   while (lo < hi) {
     uint32_t m = (lo + hi + 1) / 2;
-    SceUID b = sceKernelAllocMemBlock("nativedraw_prueba", type, m << 20, 0);
+    SceUID b = sceKernelAllocMemBlock("nativedraw_test", type, m << 20, 0);
     if (b >= 0) { sceKernelFreeMemBlock(b); lo = m; } else hi = m - 1;
   }
   return lo;
@@ -56,7 +56,7 @@ static uint32_t probe(uint32_t type) {  // MB that can be reserved at once (bina
 static const char *ty(void *p) {
   SceKernelMemBlockInfo in; in.size = sizeof in;
   if (!p || sceKernelGetMemBlockInfoByAddr(p, &in) < 0) return "-";
-  return in.type == CDRAM ? "CDRAM" : in.type == PHY ? "LPDDR fisica" : in.type == UNC ? "LPDDR" : "otra";
+  return in.type == CDRAM ? "CDRAM" : in.type == PHY ? "LPDDR physical" : in.type == UNC ? "LPDDR" : "other";
 }
 
 // --- Programs: own patcher (like vita2d) with texture_v/texture_f from shaders.h ---
@@ -148,7 +148,7 @@ static inline int gBusy(uint32_t q) { return gq_done && (int)(*gq_done - q) < 0;
 static const SceGxmNotification *gEnd(void) { if (!gq_done) return 0; gq_n.address = gq_done; gq_n.value = ++gq; return &gq_n; }
 // logs (first 60) that "what" was rewritten with the GPU unfinished and how many scenes it had left
 static void gEv(const char *what, uint32_t q) {
-  if (g_ev++ < 60) alog("gpu: %s con la GPU sin terminar (le faltaban %u escenas)\n", what, q - *gq_done);
+  if (g_ev++ < 60) alog("gpu: %s with the GPU unfinished (%u scenes left)\n", what, q - *gq_done);
 }
 // waits (30 ms at most) for the GPU to finish scene q and adds the wait to g_wait_us
 static void gWait(uint32_t q) {
@@ -196,7 +196,7 @@ static int initDest(void) {
 }
 
 #ifdef NP_DEV
-#include "gpu_timer.c"  // how long the GPU takes on each scene (medir_gpu)
+#include "gpu_timer.c"  // how long the GPU takes on each scene (gpu_timer)
 #else
 #define cNote(ty, n, dr, px, sw) ((void)sizeof((dr) + (px) + (sw)))
 #define cAdr(f) (f)
@@ -213,8 +213,8 @@ static volatile uint32_t fr, ready, n_us;  // fr: Adrenaline scenes finished; n_
 static uint32_t used, drawn, cur;   // scene in which Adrenaline used psp_tex / in which surf[cur] was drawn
 static volatile uint32_t n_pres, n_swap, n_black_j, n_black_p, us_sum, us_max;  // (read in the record thread)
 static volatile uint32_t n_chk, n_bad;  // Vita frames checked and different from the normal image
-// draw_on: switch dibujar (always replace the image; otherwise only with the menu open); t_on: translator ready
-static int draw_on, t_on DEV(, c_wanted);  // c_wanted: GPU timer (medir_gpu)
+// draw_on: switch draw (always replace the image; otherwise only with the menu open); t_on: translator ready
+static int draw_on, t_on DEV(, c_wanted);  // c_wanted: GPU timer (gpu_timer)
 static volatile uint32_t menu, painted;  // menu open; its texture already has the text
 #define ACTIVE (ready && (draw_on || menu))  // the PSP image is replaced
 static void *psp_data;                // psp_tex data (destination of Adrenaline's copy)
@@ -228,7 +228,7 @@ void *sceDmacMemcpy(void *dst, const void *src, SceSize size);
 static void *hookDma(void *dst, const void *src, SceSize size) {
   if (ACTIVE && dst && dst == psp_data && size == 512 * 272 * 4) {  // the PSP image copy: to img[ki]
     ki = (ki + 1) % n_img; copy_fr = fr; n_dma++;
-    if (gBusy(img_q[ki])) { g_pimg++; gEv("imagen normal reescrita", img_q[ki]); gWait(img_q[ki]); }
+    if (gBusy(img_q[ki])) { g_pimg++; gEv("normal image rewritten", img_q[ki]); gWait(img_q[ki]); }
     TAI_CONTINUE(void *, ref_dma, img[ki], src, size);
     return dst;
   }
@@ -346,10 +346,10 @@ static int hookEnd(SceGxmContext *c, const SceGxmNotification *v, const SceGxmNo
         int r = trFrame(c, rg, s, src); g_tr_us += now() - t1; t_cnt[r]++; t_frame = rg->frame; t_ok = !r; hd = !r; t_rep = 0; cause = r;
         regGpu(gq, gq_done);  // the scene that reads this record's textures
       }
-      if (dump_on == 1 || dump_on == 3) dumpText(rg, hd == 2 ? "repite el dibujo de la Vita del frame anterior" : hd ? "dibujo de la Vita" :
-                                "imagen normal (copia de la imagen del PSP)", cause);
+      if (dump_on == 1 || dump_on == 3) dumpText(rg, hd == 2 ? "repeats the Vita drawing of the previous frame" : hd ? "Vita drawing" :
+                                "normal image (copy of the PSP image)", cause);
       regRelease();
-    } else if (dump_on == 1 || dump_on == 3) dumpText(0, menu ? "imagen normal con el menu" : "imagen normal (sin dibujar o sin traductor)", -1);
+    } else if (dump_on == 1 || dump_on == 3) dumpText(0, menu ? "normal image with the menu" : "normal image (no draw or no translator)", -1);
     // hd: 2 keeps the previous surface, 1 drawn by the translator, 0 the PSP image at double size (below)
     if (hd == 2) { drawn = fr + 1; t_hd++; goto finish; }
     if (hd) { t_hd++; cur_hd = 1; goto ready_hd; }
@@ -412,9 +412,9 @@ static void screenLog(void) {
   sig0 = sig;
   if (!extra || nlines >= 300) return;
   extra--; nlines++;
-  alog("pantalla: Adrenaline escenas %u (con la imagen del PSP %u), a la pantalla %u (cambios de buffer %u) | ScePspemu escenas %u, "
-       "a la pantalla %u (cambios de buffer %u) | dialogo del sistema %s | superficie: %s%s%s\n", a, u, aq, afb, pe, pq, pfb,
-       dl < 0 ? "?" : dl ? "abierto" : "no", cur_hd ? "dibujo de la Vita" : "imagen normal", covered ? ", tapado" : "",
+  alog("screen: Adrenaline scenes %u (with the PSP image %u), to the screen %u (buffer changes %u) | ScePspemu scenes %u, "
+       "to the screen %u (buffer changes %u) | system dialog %s | surface: %s%s%s\n", a, u, aq, afb, pe, pq, pfb,
+       dl < 0 ? "?" : dl ? "open" : "no", cur_hd ? "Vita drawing" : "normal image", covered ? ", covered" : "",
        menu ? ", menu L+R+START" : "");
 }
 
@@ -429,20 +429,20 @@ static void notifs(volatile uint32_t *nr) {
     uint32_t v = nr[i];
     if (found && v != prior[i] && i != gq_slot && !(c_on && i == c_slot) && !(viewed[i >> 5] >> (i & 31) & 1) && n_log < 60) {
       viewed[i >> 5] |= 1u << (i & 31); n_log++;
-      alog("notificaciones: la palabra %u la usa otro (%08x -> %08x)\n", i, prior[i], v);
+      alog("notifications: word %u is used by another (%08x -> %08x)\n", i, prior[i], v);
     }
     prior[i] = v;
   }
   found = 1;
   if (gq_done) {  // ours: does not go down or exceed gq
     uint32_t v = *gq_done;
-    if (((int)(v - ug) < 0 || (int)(v - gq) > 0) && bad_g++ < 20) alog("notificaciones: la palabra %u (nuestra) tiene %08x: la ultima vista %08x, la ultima mandada %08x\n", gq_slot, v, ug, gq);
+    if (((int)(v - ug) < 0 || (int)(v - gq) > 0) && bad_g++ < 20) alog("notifications: word %u (ours) has %08x: last seen %08x, last sent %08x\n", gq_slot, v, ug, gq);
     ug = v;
   }
 #ifdef NP_DEV
   if (c_on) {
     uint32_t v = *c_adr.address;
-    if (((int)(v - uc) < 0 || (int)(v - c_seq) > 0) && bad_c++ < 20) alog("notificaciones: la palabra %u (del cronometro) tiene %08x: la ultima vista %08x, la ultima mandada %08x\n", c_slot, v, uc, c_seq);
+    if (((int)(v - uc) < 0 || (int)(v - c_seq) > 0) && bad_c++ < 20) alog("notifications: word %u (the timer's) has %08x: last seen %08x, last sent %08x\n", c_slot, v, uc, c_seq);
     uc = v;
   }
 #endif
@@ -487,10 +487,10 @@ static void paintMenu(void) {
   const char *nl = nlVersion();
   char b[40];
   drawText(16, 10, "NativePatch", 0xFF40C8FFu);
-  sceClibSnprintf(b, sizeof b, "NativeLink  %s", nl ? nl : "no cargado");
+  sceClibSnprintf(b, sizeof b, "NativeLink  %s", nl ? nl : "not loaded");
   drawText(16, 38, b, 0xFFFFFFFFu);
   drawText(16, 58, "NativeDraw  " NATIVEDRAW_VERSION, 0xFFFFFFFFu);
-  drawText(16, 102, "L+R+START: cerrar", 0xFFA0A0A0u);
+  drawText(16, 102, "L+R+START: close", 0xFFA0A0A0u);
 }
 
 // Presenter thread: hooks the Adrenaline functions (retries for up to 60 s), waits 30 scenes, creates programs,
@@ -504,7 +504,7 @@ static int presThread(SceSize args, void *argp) {
     if (hk_ctrl < 0) hk_ctrl = taiHookFunctionImport(&ref_ctrl, "ScePspemu", 0x0F35909D, 0x2306FFED, hookCtrl);
     if (hk_end < 0 || hk_tex < 0) sceKernelDelayThread(100000);
   }
-  alog("presentador: ganchos sceGxmEndScene %08x sceGxmSetFragmentTexture %08x sceDmacMemcpy %08x sceCompatWriteSharedCtrl %08x\n",
+  alog("presenter: hooks sceGxmEndScene %08x sceGxmSetFragmentTexture %08x sceDmacMemcpy %08x sceCompatWriteSharedCtrl %08x\n",
        hk_end, hk_tex, hk_dma, hk_ctrl);
   // only count (who draws the screen): sceGxmDisplayQueueAddEntry and sceDisplaySetFrameBuf of both and
   // sceGxmEndScene of ScePspemu
@@ -514,15 +514,15 @@ static int presThread(SceSize args, void *argp) {
   hk_pq = taiHookFunctionImport(&ref_pq, "ScePspemu", 0xF76B66BD, 0xEC5C26B5, hookPq);
   hk_pfb = taiHookFunctionImport(&ref_pfb, "ScePspemu", 0x4FAACD11, 0x7A410B64, hookPfb);
   int rd = taiGetModuleExportFunc("SceCommonDialog", 0xE537816C, 0x043A353E, (uintptr_t *)&dlgRunning);
-  alog("pantalla: ganchos Adrenaline cola %08x buffer %08x | ScePspemu escenas %08x cola %08x buffer %08x | "
+  alog("screen: hooks Adrenaline queue %08x buffer %08x | ScePspemu scenes %08x queue %08x buffer %08x | "
        "sceCommonDialogIsRunning %08x\n", hk_aq, hk_afb, hk_pend, hk_pq, hk_pfb, rd);
   if (rd < 0) dlgRunning = 0;
   if (hk_end < 0 || hk_tex < 0) return sceKernelExitDeleteThread(0);
   while (fr < 30) sceKernelDelayThread(100000);  // GXM already initialized by Adrenaline
   int r1 = initProgs(), r2 = r1 >= 0 ? initDest() : 0;
-  t_on = r1 >= 0 && r2 >= 0 && draw_on && trInit() >= 0;  // translator: only with dibujar
-  alog("presentador: programas %08x, destino %08x (superficies en %s y %s) | libre despues (MB de una vez): CDRAM %u, "
-       "LPDDR fisica %u, LPDDR %u\n", r1, r2, ty(surf[0]), ty(surf[1]), probe(CDRAM), probe(PHY), probe(UNC));
+  t_on = r1 >= 0 && r2 >= 0 && draw_on && trInit() >= 0;  // translator: only with draw
+  alog("presenter: programs %08x, target %08x (surfaces in %s and %s) | free afterwards (MB in one go): CDRAM %u, "
+       "LPDDR physical %u, LPDDR %u\n", r1, r2, ty(surf[0]), ty(surf[1]), probe(CDRAM), probe(PHY), probe(UNC));
   if (r1 < 0 || r2 < 0) return sceKernelExitDeleteThread(0);
   volatile uint32_t *nr = sceGxmGetNotificationRegion();  // scene end: the last word Adrenaline does not use
   char ua[80]; int ka = 0;
@@ -530,7 +530,7 @@ static int presThread(SceSize args, void *argp) {
   ua[ka] = 0;
   for (gq_slot = 511; gq_slot > 400 && (g_adr[gq_slot >> 5] >> (gq_slot & 31) & 1); gq_slot--) {}
   if (nr) { gq_done = nr + gq_slot; *gq_done = 0; gq = 0; }
-  alog("gpu: fin de escenas en la notificacion %u (%p); Adrenaline usa:%s\n", gq_slot, gq_done, ka ? ua : " ninguna");
+  alog("gpu: end of scenes at notification %u (%p); Adrenaline uses:%s\n", gq_slot, gq_done, ka ? ua : " none");
   DEV(if (c_wanted) cStart(nr, g_adr);)
   ready = 1;
   for (uint32_t t = now(), seen = 0, k = 0, warned = 0, m0 = 0;;) {  // every 10 s: how many frames and what they cost
@@ -542,23 +542,23 @@ static int presThread(SceSize args, void *argp) {
     static uint32_t ln0, vl;  // slow scenes already logged and dumps requested because of them
     while (ln0 != c_ln) {
       uint32_t j = ln0++ % CL;
-      alog("gpu: escena lenta: %s, %u draws, %u miles de pixeles, %u.%u ms de GPU (%u.%u ms en cola)\n", cnames[c_slow[j].ty], c_slow[j].dr,
+      alog("gpu: slow scene: %s, %u draws, %u thousand pixels, %u.%u ms of GPU (%u.%u ms in queue)\n", cnames[c_slow[j].ty], c_slow[j].dr,
            c_slow[j].px, c_slow[j].us / 1000, c_slow[j].us / 100 % 10, c_slow[j].queue / 1000, c_slow[j].queue / 100 % 10);
-      if (vl < 3 && dump_level && !dump_req && (!dump_on || dump_on == 3)) { vl++; dump_req = 1; alog("volcado: pedido por una escena lenta (%u de 3)\n", vl); }
+      if (vl < 3 && dump_level && !dump_req && (!dump_on || dump_on == 3)) { vl++; dump_req = 1; alog("dump: requested by a slow scene (%u of 3)\n", vl); }
     }
 #endif
     dumpTick();
     repTick();
-    if (menu != m0) { m0 = menu; alog("presentador: menu %s\n", m0 ? "abierto" : "cerrado"); }
+    if (menu != m0) { m0 = menu; alog("presenter: menu %s\n", m0 ? "open" : "closed"); }
     static uint32_t tp0;
-    if (covered != tp0) { tp0 = covered; alog("traductor: %s\n", tp0 ? "algo tapa la imagen (no esta en el registro): imagen normal" : "vuelve el dibujo de la Vita"); }
-    if (warned < 2 && n_pres >= (warned ? 60 : 1)) alog("presentador: %s\n", warned++ ? "60 frames dibujados" : "primer frame dibujado");
+    if (covered != tp0) { tp0 = covered; alog("translator: %s\n", tp0 ? "something covers the image (not in the record): normal image" : "the Vita drawing is back"); }
+    if (warned < 2 && n_pres >= (warned ? 60 : 1)) alog("presenter: %s\n", warned++ ? "60 frames drawn" : "first frame drawn");
     if (++k < 200) continue;
     k = 0;
     uint32_t p = n_pres, m = us_max, s = us_sum, dt = (now() - t) / 1000, nd = n_dma, nr = n_chk, nm = n_bad;
     n_pres = 0; n_dma = 0; us_sum = 0; us_max = 0; t = now(); n_chk = n_bad = 0;
     if (psp_tex && !seen++)
-      alog("presentador: textura del juego %p (512x272, formato %08x, filtros %x/%x)\n", psp_tex,
+      alog("presenter: game texture %p (512x272, format %08x, filters %x/%x)\n", psp_tex,
            sceGxmTextureGetFormat(psp_tex), sceGxmTextureGetMinFilter(psp_tex), sceGxmTextureGetMagFilter(psp_tex));
     if (t_on) {
       static uint32_t dr0;  // (t_draws is not cleared: the translator uses it mid-frame for the timer)
@@ -566,11 +566,11 @@ static int presThread(SceSize args, void *argp) {
       char b[200]; int k = 0;
       for (int i = 1; i < TN; i++) if (t_cnt[i]) { k += sceClibSnprintf(b + k, sizeof b - k, " %s=%u", tnames[i], t_cnt[i]); t_cnt[i] = 0; }
       b[k] = 0;
-      alog("traductor: frames HD %u, con la imagen normal %u%s%s | draws dibujados %u\n", h, nn, k ? " | motivos:" : "", b, dr);
+      alog("translator: HD frames %u, normal image %u%s%s | draws drawn %u\n", h, nn, k ? " | reasons:" : "", b, dr);
       // Pacing: for each Adrenaline frame drawn by the Vita, how many PSP frames advanced since the previous one
       // (1 = none skipped; 0 = repeated the previous one). With skips or repeats, what a game draws every other
       // frame flashes.
-      alog("traductor: ritmo (frames del PSP que avanzo cada frame dibujado): 0 (repetido) %u, 1 %u, 2 %u, 3 %u, 4 %u, 5 o mas %u\n",
+      alog("translator: pace (PSP frames advanced per drawn frame): 0 (repeated) %u, 1 %u, 2 %u, 3 %u, 4 %u, 5 or more %u\n",
            t_skip[0], t_skip[1], t_skip[2], t_skip[3], t_skip[4], t_skip[5]);
       sceClibMemset((void *)t_skip, 0, sizeof t_skip);
     }
@@ -578,17 +578,17 @@ static int presThread(SceSize args, void *argp) {
       uint32_t an = g_an, as = g_asum, am = g_amax, f1 = g_f1, f2 = g_f2, ps = g_psurf, pi = g_pimg;
       uint32_t at = g_behind, wait_t = g_wait_us, sl = g_skip, rv = g_chk_us, tr = g_tr_us;
       g_an = g_asum = g_amax = g_f1 = g_f2 = g_psurf = g_pimg = g_behind = g_wait_us = g_skip = g_chk_us = g_tr_us = 0;
-      alog("gpu: al empezar cada frame, escenas nuestras sin terminar: promedio %u.%u, max %u | sin terminar: el frame anterior %u, "
-           "el de hace 2 %u | reescritos con la GPU sin terminar: vertices y paletas %u, imagen normal %u (texturas del registro: "
-           "en nativedraw_captura.log)\n", an ? as / an : 0, an ? as * 10 / an % 10 : 0, am, f1, f2, ps, pi);
-      alog("gpu: frames no mandados por la GPU atrasada %u, esperas a la GPU %u ms | CPU en 10 s: traductor %u ms, "
-           "revision de frames distintos %u ms | revisiones de la superficie saltadas (GPU sin terminar) %u\n",
+      alog("gpu: at each frame start, our unfinished scenes: average %u.%u, max %u | unfinished: previous frame %u, "
+           "2 frames ago %u | rewritten with the GPU unfinished: vertices and palettes %u, normal image %u (record textures: "
+           "in nativedraw_capture.log)\n", an ? as / an : 0, an ? as * 10 / an % 10 : 0, am, f1, f2, ps, pi);
+      alog("gpu: frames not sent because the GPU was behind %u, waits for the GPU %u ms | CPU in 10 s: translator %u ms, "
+           "different-frame check %u ms | surface checks skipped (GPU unfinished) %u\n",
            at, wait_t / 1000, tr / 1000, rv / 1000, sl);
       DEV(if (c_on) cReport(dt);)
     }
-    alog("presentador: %u frames en %u ms por la superficie (cambios %u en total, %u con copia propia), CPU %u us/frame (max %u) | "
-         "casi negros: juego %u, superficie %u | revisados %u, distintos de la imagen normal %u%s\n", p, dt, n_swap, nd, p ? s / p : 0, m, n_black_j, n_black_p, nr, nm,
-         p ? "" : psp_tex ? " (Adrenaline no uso la imagen del PSP: menu, PS1 o filtro Original)" : " (todavia sin la textura del juego)");
+    alog("presenter: %u frames in %u ms through the surface (changes %u total, %u with own copy), CPU %u us/frame (max %u) | "
+         "nearly black: game %u, surface %u | checked %u, different from the normal image %u%s\n", p, dt, n_swap, nd, p ? s / p : 0, m, n_black_j, n_black_p, nr, nm,
+         p ? "" : psp_tex ? " (Adrenaline did not use the PSP image: menu, PS1 or Original filter)" : " (no game texture yet)");
   }
   return 0;
 }
@@ -601,19 +601,19 @@ static int swOn(const char *p) {  // the file exists and does not start with "no
   return !(b[0] == 'n' && b[1] == 'o');
 }
 
-// Called by nativedraw.c on load: reads the switches (dibujar, reproducir, volcado), decides how many PSP image copies
+// Called by nativedraw.c on load: reads the switches (draw, replay, dump), decides how many PSP image copies
 // are needed and starts the presenter thread.
 void presStart(void) {
-  draw_on = swOn("ux0:data/nativedraw/dibujar");
-  DEV(c_wanted = swOn("ux0:data/nativedraw/medir_gpu");)
+  draw_on = swOn("ux0:data/nativedraw/draw");
+  DEV(c_wanted = swOn("ux0:data/nativedraw/gpu_timer");)
   repStart();
-  dump_level = dumpLevel();  // dumps: desactivado, pantallazo, frame, secuencia or auto
+  dump_level = dumpLevel();  // dumps: off, screenshot, frame, sequence or auto
   if (dump_level == 4 && !draw_on) dump_level = 3;  // (auto needs the Vita drawing to compare)
   dump_auto = dump_level == 4; dump_nf = dump_level <= 2 ? 1 : VN;
-  alog("volcado: nivel %s (ux0:data/nativedraw/volcado: desactivado, pantallazo, frame, secuencia o auto)\n", dump_names[dump_level]);
-  alog("presentador: %s; menu con L+R+START\n", draw_on ? "reemplaza la imagen siempre (dibujar)" :
-       "reemplaza la imagen solo con el menu abierto (crear ux0:data/nativedraw/dibujar para siempre)");
-  SceUID th = sceKernelCreateThread("nativedraw_presentador", presThread, 0xA0, 0x2000, 0, 0, 0);
+  alog("dump: level %s (ux0:data/nativedraw/dump: off, screenshot, frame, sequence or auto)\n", dump_names[dump_level]);
+  alog("presenter: %s; menu with L+R+START\n", draw_on ? "always replaces the image (draw)" :
+       "replaces the image only with the menu open (create ux0:data/nativedraw/draw for always)");
+  SceUID th = sceKernelCreateThread("nativedraw_presenter", presThread, 0xA0, 0x2000, 0, 0, 0);
   if (th >= 0) sceKernelStartThread(th, 0, 0);
 }
 // Called by nativedraw.c on unload: releases the hooks.

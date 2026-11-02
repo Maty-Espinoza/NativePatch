@@ -1,4 +1,4 @@
-# Exportaciones del modulo NativeLink (psp-build-exports las convierte en exports.c al compilar con el Makefile):
+# Exports of the NativeLink module (psp-build-exports turns them into exports.c when building with the Makefile):
 # solo lo que pide el cargador de modulos.
 PSP_BEGIN_EXPORTS
 

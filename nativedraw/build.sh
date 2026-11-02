@@ -17,7 +17,7 @@ for s in $(arm-none-eabi-nm -u $O/all.o | awk '{print $2}' | grep -v -E '^(__|ta
              SceKernelDmacMgr_SceDmacmgr SceGxm_SceGxm; do
     if [ -f $STUBS/${lib}_$s.S ]; then arm-none-eabi-as --defsym GEN_WEAK_EXPORTS=0 $STUBS/${lib}_$s.S -o $O/s_$s.o; ok=1; break; fi
   done
-  [ -n "$ok" ] || { echo "sin stub: $s"; exit 1; }
+  [ -n "$ok" ] || { echo "no stub: $s"; exit 1; }
 done
 arm-none-eabi-gcc $F -Wl,-q -o $O/nativedraw.elf $O/all.o $O/s_*.o $TAI/lib/libtaihen_stub.a -lgcc
 # vita-elf-create adds ~1.1 KB at the end of the code segment and fails if the data segment starts too close: it is

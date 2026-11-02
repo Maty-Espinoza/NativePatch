@@ -1,10 +1,10 @@
 @echo off
-rem Instala el ambiente de NativePatch en este PC: doble clic. No cambia las variables de entorno de Windows.
-rem Deja el repo, los compiladores del PSP y de la Vita (en Ubuntu/WSL) y el relevo con la Vita.
-rem Sirve suelto (bajado de GitHub): si no esta dentro del repo, baja install.sh de la rama dev.
-wsl -e true >nul 2>&1 || (echo Falta WSL con Ubuntu: en PowerShell como administrador "wsl --install", reiniciar y volver a correr esto. & pause & exit /b 1)
-where py >nul 2>&1 || echo Aviso: falta Python para Windows ^(python.org^): el relevo con la Vita lo necesita.
-if exist "%~dp0instalar.sh" (
+rem Installs the NativePatch environment on this PC: double-click. It does not change Windows environment variables.
+rem Leaves the repo, the PSP and Vita compilers (in Ubuntu/WSL) and the relay with the Vita.
+rem Works on its own (downloaded from GitHub): if it is not inside the repo, it fetches install.sh from the dev branch.
+wsl -e true >nul 2>&1 || (echo WSL with Ubuntu is missing: in PowerShell as administrator run "wsl --install", reboot and run this again. & pause & exit /b 1)
+where py >nul 2>&1 || echo Warning: Python for Windows is missing ^(python.org^): the relay with the Vita needs it.
+if exist "%~dp0install.sh" (
   wsl --cd "%~dp0." -e bash ./install.sh
 ) else (
   wsl -e bash -c "curl -fsSL https://raw.githubusercontent.com/Maty-Espinoza/NativePatch/dev/tools/windows/install.sh | bash"

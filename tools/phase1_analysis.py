@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-# Summarizes nativedraw_frames.log and nativedraw_tarde.log (NativeDraw extreme record, CSV) of one or more runs.
-# Usage: python3 tools/phase1_analysis.py <folder> [<folder> ...] [--tabla]
+# Summarizes nativedraw_frames.log and nativedraw_late.log (NativeDraw extreme record, CSV) of one or more runs.
+# Usage: python3 tools/phase1_analysis.py <folder> [<folder> ...] [--table]
 # Counts only "race" frames (over 30,000 commands). Per folder: fps, slow frames and what each part
-# cost the game per frame; with several, one column per folder. --tabla: also every 10 s of each
+# cost the game per frame; with several, one column per folder. --table: also every 10 s of each
 # run. Log columns: docs/dev/<language>/logs-and-switches.md (language: en or es).
 import csv, sys, os, statistics as st
 
@@ -17,42 +17,42 @@ def read_csv(d, f):
 # Drops frames of 0 us or of 200 ms or more.
 def summarize(d):
     F = [r for r in read_csv(d, 'nativedraw_frames.log') if 0 < r['frame_us'] < 200000]
-    C = [r for r in F if r['comandos'] > 30000]
-    T = [r for r in read_csv(d, 'nativedraw_tarde.log') if r['comandos'] > 30000]
+    C = [r for r in F if r['commands'] > 30000]
+    T = [r for r in read_csv(d, 'nativedraw_late.log') if r['commands'] > 30000]
     if not C: return None
     fus = sum(r['frame_us'] for r in C); n = len(C); m = lambda k: sum(r[k] for r in C) / n
-    idle = [r['cpu_libre_x1000'] for r in C if r['cpu_libre_x1000'] <= 1000]
+    idle = [r['cpu_idle_x1000'] for r in C if r['cpu_idle_x1000'] <= 1000]
     p = lambda v, q: sorted(v)[min(len(v) - 1, int(len(v) * q))] if v else 0
     return {
-        'frames de carrera': n, 'fps': n / (fus / 1e6),
-        'frames > 17,5 ms (%)': 100 * sum(r['frame_us'] > 17500 for r in C) / n,
+        'race frames': n, 'fps': n / (fus / 1e6),
+        'frames > 17.5 ms (%)': 100 * sum(r['frame_us'] > 17500 for r in C) / n,
         'frames > 20 ms (%)': 100 * sum(r['frame_us'] > 20000 for r in C) / n,
         'frame p99 (ms)': p([r['frame_us'] for r in C], .99) / 1000,
-        'espera a la Vita (us/frame)': m('compuerta_us'),
-        'syncs con la Vita atrasada (por frame)': m('syncs_atrasados'),
-        'espera al GE (us/frame)': m('sync_GE_us'), 'CPU libre del PSP (%)': st.mean(idle) / 10 if idle else 0,
-        'espejo: CPU (us/frame)': m('espejo_us'), 'espejo: paginas/frame': m('espejo_paginas'), 'ganchos (us/frame)': m('ganchos_us'),
-        'comandos/frame': m('comandos'), 'Vita: captura (us/frame)': m('captura_us'), 'Vita: CPU del capturador (us/frame)': m('captura_cpu_us'),
-        'atraso de la Vita, mediana (us)': st.median([r['atraso_us'] for r in T]) if T else 0,
-        'atraso p90 (us)': p([r['atraso_us'] for r in T], .9),
-        'Vita: recorrer la lista, mediana (us)': st.median([r['vita_recorrio_us'] for r in T]) if T else 0,
-        'juego: encolar -> sync, mediana (us)': st.median([r['encolada_hace_us'] for r in T]) if T else 0,
+        'wait for the Vita (us/frame)': m('gate_us'),
+        'syncs with the Vita behind (per frame)': m('late_syncs'),
+        'wait for the GE (us/frame)': m('sync_GE_us'), 'PSP idle CPU (%)': st.mean(idle) / 10 if idle else 0,
+        'mirror: CPU (us/frame)': m('mirror_us'), 'mirror: pages/frame': m('mirror_pages'), 'hooks (us/frame)': m('hooks_us'),
+        'commands/frame': m('commands'), 'Vita: capture (us/frame)': m('capture_us'), 'Vita: capturer CPU (us/frame)': m('capture_cpu_us'),
+        'Vita delay, median (us)': st.median([r['delay_us'] for r in T]) if T else 0,
+        'delay p90 (us)': p([r['delay_us'] for r in T], .9),
+        'Vita: list walk, median (us)': st.median([r['vita_walked_us'] for r in T]) if T else 0,
+        'game: enqueue -> sync, median (us)': st.median([r['enqueued_ago_us'] for r in T]) if T else 0,
     }, C
 
 folders = [a for a in sys.argv[1:] if not a.startswith('--')]
 R = [(d, summarize(d)) for d in folders]
 R = [(d, x) for d, x in R if x]
-if not R: sys.exit('sin datos')
+if not R: sys.exit('no data')
 print(f"{'':42s}" + ''.join(f"{os.path.basename(d.rstrip('/'))[:18]:>19s}" for d, _ in R))
 for k in R[0][1][0]:
     print(f"{k:42s}" + ''.join(f"{x[0][k]:19.1f}" for _, x in R))
-if '--tabla' in sys.argv:
+if '--table' in sys.argv:
     for d, (_, C) in R:
-        print(f"\n== {d}: cada 10 s (carrera): fps | espera a la Vita us | espera al GE us | CPU libre % | captura us")
+        print(f"\n== {d}: every 10 s (race): fps | wait for the Vita us | wait for the GE us | idle CPU % | capture us")
         b = {}
         for r in C: b.setdefault(r['t_ms'] // 10000, []).append(r)
         for k in sorted(b):
             v = b[k]; fus = sum(r['frame_us'] for r in v)
-            print(f"  {k * 10:5d} s {len(v) / (fus / 1e6):5.1f} | {sum(r['compuerta_us'] for r in v) / len(v):6.0f} | "
-                  f"{sum(r['sync_GE_us'] for r in v) / len(v):6.0f} | {sum(r['cpu_libre_x1000'] for r in v) / len(v) / 10:5.1f} | "
-                  f"{sum(r['captura_us'] for r in v) / len(v):6.0f}")
+            print(f"  {k * 10:5d} s {len(v) / (fus / 1e6):5.1f} | {sum(r['gate_us'] for r in v) / len(v):6.0f} | "
+                  f"{sum(r['sync_GE_us'] for r in v) / len(v):6.0f} | {sum(r['cpu_idle_x1000'] for r in v) / len(v) / 10:5.1f} | "
+                  f"{sum(r['capture_us'] for r in v) / len(v):6.0f}")

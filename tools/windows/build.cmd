@@ -1,12 +1,12 @@
 @echo off
-rem Compila NativeLink y NativeDraw en WSL (tools/build.sh) y los deja en Descargas y en vitabridge\enviar (el relevo
-rem los sube a la Vita si esta abierto). Doble clic, o: build.cmd <version de prueba> (ademas, copias con version).
+rem Builds NativeLink and NativeDraw in WSL (tools/build.sh) and leaves them in Downloads and vitabridge\send (the relay
+rem uploads them to the Vita if it is open). Double-click, or: build.cmd <test version> (also makes versioned copies).
 set R=%~dp0..\..
-wsl --cd "%R%" -e bash -c "V=$(wslpath '%USERPROFILE%\Downloads\vitabridge') sh tools/build.sh %1" || goto fallo
-echo listo: Descargas y vitabridge\enviar
+wsl --cd "%R%" -e bash -c "V=$(wslpath '%USERPROFILE%\Downloads\vitabridge') sh tools/build.sh %1" || goto failed
+echo done: Downloads and vitabridge\send
 pause
 exit /b 0
-:fallo
-echo == fallo la compilacion (ver el error arriba; la primera vez: install.cmd)
+:failed
+echo == build failed (see the error above; the first time: install.cmd)
 pause
 exit /b 1

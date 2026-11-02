@@ -3,8 +3,8 @@
 // tracks GE state, counts draws, state changes and textures, and feeds the frame record (record.c, included
 // here) drawn by the presenter. Publishes in the mailbox the last captured list (SB[3], awaited by the
 // NativeLink gate) and a heartbeat (SB[4]). Also: read-ahead readers, sublist memory, requests to the VRAM
-// mirror and the logs nativedraw_captura.log and, in development builds (NP_DEV), nativedraw_frames.log and
-// nativedraw_tarde.log.
+// mirror and the logs nativedraw_capture.log and, in development builds (NP_DEV), nativedraw_frames.log and
+// nativedraw_late.log.
 // Started by nativedraw.c (capStart); capture_test.c includes it to test it on the PC.
 #include <psp2/kernel/threadmgr.h>
 #include <psp2/kernel/clib.h>
@@ -21,7 +21,7 @@
 #define SB ((volatile uint32_t *)PSP(0x0A000000u))  // NativeLink mailbox (word map in nativelink/main.c)
 #define SB_MAGIC 0x424D4F53u
 #define SB_N 4096  // events in the mailbox ring (8 words each, from SB[0x400])
-#define LOGC "ux0:pspemu/nativedraw_captura.log"
+#define LOGC "ux0:pspemu/nativedraw_capture.log"
 // Mailbox event types (must match NativeLink)
 enum { EV_ENQ = 1, EV_HEAD, EV_STALL, EV_DSYNC, EV_LSYNC, EV_FLIP, EV_GEDONE, EV_SYNCEND, EV_CPU, EV_CPUSUM, EV_FRAME, EV_LIFE };
 static inline uint32_t now(void) { return sceKernelGetProcessTimeLow(); }  // Vita time in us
@@ -51,11 +51,11 @@ typedef struct {
   uint32_t rd_us, rd_n;  // capturer's own timed reads (1 in 16)
   uint32_t hit_us, hit_n;  // timed shared cache lines (1 in 8)
   uint32_t pv_ok, pv_bad, pv_late, pv_plan;  // read-ahead check (readers) and plan sublists
-  uint32_t chg[256];  // real changes of each "otro" register (what prevents merging draws)
+  uint32_t chg[256];  // real changes of each "other" register (what prevents merging draws)
 } Stats;
 static Stats acc, rep;
 static volatile int rep_ready;
-// Log level (ux0:data/nativedraw/registro): 0 minimo, 1 mediano (no file), 2 extremo (only in development builds).
+// Log level (ux0:data/nativedraw/log_level): 0 minimum, 1 medium (no file), 2 extreme (only in development builds).
 // NativeLink reads it at SB[0x4E].
 static uint32_t level = 1;
 #ifdef NP_DEV
@@ -139,7 +139,7 @@ static void markRt(uint32_t a, uint32_t n) {
 // hits lines taken from the shared cache
 typedef struct { uint32_t buf[64] __attribute__((aligned(16))); uint32_t a, n, own, hits; } Rd;
 static Rd R0, RR[2];  // capturer and readers
-static uint32_t tm_memo, tm_apply;  // us of the frame in memoTry (all) and in applying what was saved (extremo level)
+static uint32_t tm_memo, tm_apply;  // us of the frame in memoTry (all) and in applying what was saved (extreme level)
 static uint32_t runClk(SceUID t);
 static SceUID cap_uid;
 // Cache shared by readers and capturer: CL_N 64-byte lines (cl_data) each with a tag (cl_tag:
@@ -222,11 +222,11 @@ static Memo *rec;  // sublist being recorded (sublist memory)
 static void recDraw(int idx, int tex), recTex(uint32_t ta), recRead(uint32_t c), recVert(uint32_t a, uint32_t n);
 static uint32_t reg[256], mtx[5][96], mi[5];
 static uint8_t cls[256];  // state class of each command (C_*; 0: not state)
-enum { C_TEX = 1, C_MTX = 2, C_RT = 4, C_OTHER = 8, C_TL = 16 };  // C_TL: TEXLEVEL (0xC8), a separate "otro"
+enum { C_TEX = 1, C_MTX = 2, C_RT = 4, C_OTHER = 8, C_TL = 16 };  // C_TL: TEXLEVEL (0xC8), a separate "other"
 static uint32_t dirty, vaddr, iaddr, vset, last_prim = 99, last_vend, last_fb;
 // Textures seen in the frame (hash table: tgen == gen marks a slot used in this frame); gen: frame number
 static uint32_t tset[2048], tgen[2048], gen = 1, ntex, last_clut[2];  // (gen starts at 1: tgen 0 = empty)
-// Fills cls: which commands are texture state, render target state or "otro" (those that break a draw batch)
+// Fills cls: which commands are texture state, render target state or "other" (those that break a draw batch)
 static void initCls(void) {
   for (int c = 0x15; c < 256; c++) cls[c] = C_OTHER;
   for (int c = 0xA0; c <= 0xB1; c++) cls[c] = C_TEX;
@@ -265,7 +265,7 @@ static uint32_t vsize(uint32_t vt) {
 #define CLUTADDR() ((reg[0xB0] & 0xFFFFF0) | ((reg[0xB1] << 8) & 0x0F000000))
 
 #ifdef NP_DEV
-// --- Data lifetime (extremo level) ---
+// --- Data lifetime (extreme level) ---
 // The Vita draws 1 frame after reading the list, and its GPU reads vertices, textures and palettes directly from PSP
 // RAM. If the game rewrites them first, it draws something else. Sample: 1 in 64 draws (their vertices or indices),
 // 1 in 8 new textures of the frame and 1 in 16 palette loads (up to 8 vertex samples and 4 of the rest per frame,
@@ -284,7 +284,7 @@ static const uint8_t smp_rate[4] = { 63, 63, 7, 15 }, smp_max[4] = { 8, 4, 4, 4 
 static uint32_t smpHash(uint32_t a, uint32_t n);
 static void ltFlip(void);
 // Notes [a, a + n) (kind: 0 vertices, 1 indices, 2 texture, 3 palette) as a sample if the rate and frame limit
-// allow it; extremo level and RAM only (no VRAM)
+// allow it; extreme level and RAM only (no VRAM)
 static void smpAdd(uint32_t a, uint32_t n, uint32_t kind) {
   if (level < 2 || (++smp_k[kind] & smp_rate[kind]) || !n || smp_f[kind] >= smp_max[kind] || isVram(a) ||
       ramEnd(a) < a + (n > 256 ? 256 : n) || smp_w - smp_r >= SMP_N) return;
@@ -301,7 +301,7 @@ static struct { volatile uint32_t n[4], ch1[4], ch2[4], warn[4], wall[4], ms1, m
 #define smpAdd(a, n, kind) ((void)sizeof(n))
 #endif
 
-static int reg_on;  // frame record (switch dibujar)
+static int reg_on;  // frame record (switch draw)
 // Until when (Vita time) each frame carries the exact PSP image: set by dump.c for an
 // L+R+SELECT dump and used by record.c
 volatile uint32_t nd_exact_until;
@@ -387,7 +387,7 @@ static uint32_t qh, qt;  // the first unfinished one and the next free one
 static inline uint32_t rel(List *l, uint32_t d) { return ((((reg[0x10] & 0x0F0000) << 8) | d) + l->off) & 0x0FFFFFFF; }
 
 static void clog(const char *fmt, ...);
-DEV(static void rput(int k, const char *fmt, ...);)  // 0: nativedraw_frames.log, 1: nativedraw_tarde.log
+DEV(static void rput(int k, const char *fmt, ...);)  // 0: nativedraw_frames.log, 1: nativedraw_late.log
 static uint32_t no_capture, gp_flags;           // switches (gp_flags goes to NativeLink in SB[0x4A])
 // Copy of the GE state (for the sublist memory check)
 typedef struct { uint32_t reg[256], mtx[5][96], mi[5], v[8]; } GeState;
@@ -410,9 +410,9 @@ static void stLoad(GeState *g) {
 // already walked, its memory lines (64 bytes; nested sublists included) are compared with the copy saved in
 // the pool: if equal, its effects are applied (registers and matrices at exit, vertex/index
 // addresses, counters, textures) without interpreting it. If missing or changed, it is walked and recorded.
-// Approximate (statistics only): "cambios" and first-draw batches depend on entry state; chg[] is not added.
+// Approximate (statistics only): "changes" and first-draw batches depend on entry state; chg[] is not added.
 // Check: 1 in 32 applicable sublists is walked anyway and the state it leaves is compared with what was
-// saved (DISTINTAS in the log = memory error; memo_revisar: all; sin_memoria: off).
+// saved (MISMATCHES in the log = memory error; memo_check: all; no_memo: off).
 // Maximum sizes; capStart halves them while memory is short. With less, the pool empties repeatedly
 // in games with many sublists and everything is recorded again.
 // saved sublists, 64-byte pool lines (2 MB)
@@ -533,7 +533,7 @@ static void recEnd(List *l) {
   e->cmds = d->cmds; e->draws = d->draws;
   for (int i = 0; i < SW; i++)
     if (td[i]) {
-      if (e->sn >= SN) { static int nl; if (nl++ < 3) clog("memoria: sublista %08x suma mas de %d estadisticas: no se guarda\n", e->t, SN); e->state = 2; e->fail_gen = gen; return; }
+      if (e->sn >= SN) { static int nl; if (nl++ < 3) clog("memory: sublist %08x adds more than %d stats: not saved\n", e->t, SN); e->state = 2; e->fail_gen = gen; return; }
       e->si[e->sn] = i; e->sv[e->sn++] = td[i];
     }
   for (int c = 0; c < 256; c++)
@@ -639,7 +639,7 @@ static int memoVerify(int id, Rd *r, uint32_t t, uint32_t base, uint32_t off, ui
 // capturer comparing what it is about to use. From the end they first check what the capturer needs
 // last and stop when they meet it (pv_pos: what it already passed).
 // Risk: if the game changes a sublist after the check and before the capturer arrives, the old one is used
-// (the 1/32 check would show it as DISTINTAS). Switch sin_adelanto.
+// (the 1/32 check would show it as MISMATCHES). Switch no_lookahead.
 #define PV_N 1024
 static Memo *pv[2][PV_N], **pv_plan;
 static uint32_t pv_n[2], pv_c, pv_min = 8, pv_on = 1;
@@ -709,13 +709,13 @@ ok:;
   for (uint32_t i = 0; i < e->ntex; i++) if (texAdd(e->tex[i])) { acc.textures++; if (isVram(e->tex[i])) acc.tex_vram++; else smpAdd(e->tex[i], 256, 2); }
   uint32_t *a = (uint32_t *)&acc;
   if (level) for (uint32_t i = 0; i < e->sn; i++) a[e->si[i]] += e->sv[i];
-  else { acc.cmds += e->cmds; acc.draws += e->draws; }  // (minimo: only what appears in its line)
+  else { acc.cmds += e->cmds; acc.draws += e->draws; }  // (minimum: only what appears in its line)
   f_cmds += e->cmds; f_draws += e->draws; l->n += e->cmds;
   acc.memo_hit++; acc.memo_cmds += e->cmds;
   if (ta) tm_apply += now() - ta;
   return 1;
 }
-// End of the chk check: the walk must leave the same state as saved (g_memo); otherwise DISTINTA to the log
+// End of the chk check: the walk must leave the same state as saved (g_memo); otherwise MISMATCH to the log
 static void chkEnd(void) {
   Memo *e = chk;
   chk = NULL;
@@ -728,8 +728,8 @@ static void chkEnd(void) {
   acc.memo_bad++;
   static int nlog;
   if (nlog++ < 10)
-    clog("memoria: sublista %08x (base %06x) DISTINTA al recorrerla: %s %02x guardado=%06x recorrido=%06x | vertices %08x/%08x\n",
-         e->t, e->base, bad == 1 ? "registro" : bad == 2 ? "matriz" : bad == 3 ? "indice de matriz" : "direccion", bad == 1 ? c : 0,
+    clog("memory: sublist %08x (base %06x) MISMATCH when walked: %s %02x saved=%06x walked=%06x | vertices %08x/%08x\n",
+         e->t, e->base, bad == 1 ? "register" : bad == 2 ? "matrix" : bad == 3 ? "matrix index" : "address", bad == 1 ? c : 0,
          bad == 1 ? g_memo.reg[c] : 0, bad == 1 ? reg[c] : 0, g_memo.v[1], vaddr);
 }
 // Register c read by the sublist being recorded: if not yet written inside it, it is entry state (up to 16)
@@ -884,9 +884,9 @@ static int __attribute__((noinline)) walkList(List *l) {
 static uint32_t capt;  // sequence number of the last captured list
 
 #ifdef NP_DEV
-// --- Delays (extremo level) ---
+// --- Delays (extreme level) ---
 // Each sync where the Vita was behind (the list the game waits on finished capture after the game
-// reached the sync) goes to nativedraw_tarde.log with the source of the delay: when the game queued the list and when
+// reached the sync) goes to nativedraw_late.log with the source of the delay: when the game queued the list and when
 // it finished writing it (last stall), when the Vita began walking it, how long it took and how much was work. Vita
 // times become PSP times with off: the minimum difference (in the last second) between the Vita time when
 // reading an event and the one the PSP gave it (how long an event takes to arrive with the capturer free).
@@ -898,7 +898,7 @@ static struct { uint32_t ord, t0, w, kind; } pend[16];  // syncs waiting for a l
 static uint32_t npend;
 static inline uint32_t v2p(uint32_t t) { return t - off; }  // Vita time -> PSP time
 // If list d finished after the sync (PSP time t0) or the game waited (w us), writes the line of
-// nativedraw_tarde.log (kind: 'd' drawsync, 'l' listsync, 'e' before queueing)
+// nativedraw_late.log (kind: 'd' drawsync, 'l' listsync, 'e' before queueing)
 static void lateRec(uint32_t t0, uint32_t w, uint32_t kind, Done *d) {
   int late = (int)(v2p(d->t_end) - t0);
   if (late <= 0 && !w) return;  // arrived in time
@@ -1015,7 +1015,7 @@ static void pubList(List *l) {
   pub_ord = l->ord;
 }
 // Walks queued lists in order until one sits at its stall or the limit is spent; on finishing each one takes the
-// list lifetime sample and publishes in SB[3] that it is captured. sin_captura: only marks them captured
+// list lifetime sample and publishes in SB[3] that it is captured. no_capture: only marks them captured
 static void walk(void) {
   if (no_capture) { while (qh != qt) { capt = q[qh & 63].ord; qh++; acc.lists++; } SB[3] = capt; return; }
   while (qh != qt) {
@@ -1134,7 +1134,7 @@ static void event(volatile uint32_t *e) {
     walk();
     if (acc.cmds != c0) { uint32_t dt = now() - t0; acc.us += dt; f_us += dt; }
 #ifdef NP_DEV
-    if (level >= 2) {  // one line per frame in nativedraw_frames.log (extremo)
+    if (level >= 2) {  // one line per frame in nativedraw_frames.log (extreme)
       uint32_t cc = runClk(cap_uid), cal = SB[0x4D], fus = pfr[0] ? pfr[0] : 1;
       // PSP free CPU, per thousand
       uint32_t idle_pct = cal ? (uint32_t)((unsigned long long)pfr[5] * 1000000 / cal / fus) : 0;
@@ -1195,7 +1195,7 @@ static int capThread(SceSize args, void *argp) {
   uint32_t idle_t = 0, on = 0;
   for (;;) {
     if (SB[0] != SB_MAGIC) {  // no NativeLink in shadow mode
-      if (on) { clog("buzon de NativeLink desaparecio: captura en pausa\n"); on = 0; mir_on = 0; }
+      if (on) { clog("NativeLink mailbox gone: capture paused\n"); on = 0; mir_on = 0; }
       sceKernelDelayThread(50000);
       continue;
     }
@@ -1203,8 +1203,8 @@ static int capThread(SceSize args, void *argp) {
       on = 1; tail = SB[2]; resetQueue(); sec_t0 = now(); sceClibMemset(&acc, 0, sizeof acc);
       for (int w = 0; w < 16; w++) want_l[w] = want_d[w] = rt_pg[w] = mir_ok[0][w] = mir_ok[1][w] = 0;
       mir_u = 0; mir_reset = 1; mir_on = SB[1] >= 4;
-      clog("buzon de NativeLink (modo sombra) encontrado: eventos=%u listas=%u -> captura activa%s\n", tail, SB[6],
-           mir_on ? ", con espejo de la VRAM" : " (NativeLink sin espejo de la VRAM)");
+      clog("NativeLink mailbox (shadow mode) found: events=%u lists=%u -> capture active%s\n", tail, SB[6],
+           mir_on ? ", with VRAM mirror" : " (NativeLink without VRAM mirror)");
       if (reg_on) regBench();  // measures once the speed of the frame record copies
     }
     SB[4] = ++beat;
@@ -1230,7 +1230,7 @@ static int capThread(SceSize args, void *argp) {
 // --- Log (separate thread: writing to the card is slow) ---
 static char lbuf[8192];
 static volatile uint32_t lpos;
-// Appends a line with the time (ms) to the nativedraw_captura.log buffer; dropped if it does not fit
+// Appends a line with the time (ms) to the nativedraw_capture.log buffer; dropped if it does not fit
 static void clog(const char *fmt, ...) {
   char b[1024];
   va_list ap; va_start(ap, fmt);
@@ -1241,11 +1241,11 @@ static void clog(const char *fmt, ...) {
   sceClibMemcpy(lbuf + lpos, b, n); lpos += n;
 }
 #ifdef NP_DEV
-// nativedraw_frames.log and nativedraw_tarde.log: single-writer rings (the capturer); the log thread drains them
+// nativedraw_frames.log and nativedraw_late.log: single-writer rings (the capturer); the log thread drains them
 static char rb0[65536], rb1[16384];
 static struct { char *b; uint32_t n; volatile uint32_t w, r; const char *path; } RG[2] = {
-  { rb0, sizeof rb0, 0, 0, "ux0:pspemu/nativedraw_frames.log" }, { rb1, sizeof rb1, 0, 0, "ux0:pspemu/nativedraw_tarde.log" } };
-// Appends a line to ring k (0 frames, 1 tarde)
+  { rb0, sizeof rb0, 0, 0, "ux0:pspemu/nativedraw_frames.log" }, { rb1, sizeof rb1, 0, 0, "ux0:pspemu/nativedraw_late.log" } };
+// Appends a line to ring k (0 frames, 1 late)
 static void rput(int k, const char *fmt, ...) {
   char b[384];
   va_list ap; va_start(ap, fmt);
@@ -1272,58 +1272,58 @@ static void rflush(int k) {
 #endif
 #define PF(x) (r->x / f)  // per-frame statistic
 // Log thread (low priority): every 0.2 s, if the capturer left a second ready (rep), writes it as lines of
-// text by level; drains the rings every 2 s (or at half full) and nativedraw_captura.log every 5 s (or at
+// text by level; drains the rings every 2 s (or at half full) and nativedraw_capture.log every 5 s (or at
 // half of the buffer)
 static int repThread(SceSize args, void *argp) {
   uint32_t last_write = 0;
   for (;;) {
     sceKernelDelayThread(200000);
     static uint32_t nrep;
-    if (rep_ready && !level && ++nrep % 10) rep_ready = 0;  // minimo: 1 in 10 seconds
+    if (rep_ready && !level && ++nrep % 10) rep_ready = 0;  // minimum: 1 in 10 seconds
     if (rep_ready) {
       Stats *r = &rep;
       uint32_t f = r->frames ? r->frames : 1, d = r->draws ? r->draws : 1;
-      clog("seg: frames=%u listas/f=%u comandos/f=%u (max %u) draws/f=%u (max %u) | ARM us/f=%u (max %u) ns/comando=%u | lecturas/f propias=%u de_lectores=%u (lectores leyeron %u+%u) eventos/f=%u\n",
+      clog("sec: frames=%u lists/f=%u commands/f=%u (max %u) draws/f=%u (max %u) | ARM us/f=%u (max %u) ns/command=%u | reads/f own=%u from_readers=%u (readers read %u+%u) events/f=%u\n",
            r->frames, PF(lists), PF(cmds), r->cmds_max, PF(draws), r->draws_max, PF(us), r->us_max, r->cmds ? (uint32_t)((unsigned long long)r->us * 1000 / r->cmds) : 0, PF(own), PF(hits), PF(rown[0]), PF(rown[1]), PF(events));
-      if (!level) goto sync;  // (minimo: only this line and the vram and sync one)
+      if (!level) goto sync;  // (minimum: only this line and the vram and sync one)
       if (reg_on) {  // frame record
         uint32_t g = gr.fr ? gr.fr : 1, dd = gr.draws ? gr.draws : 1;
-        clog("  registro: frames=%u completos=%u incompletos: memoria=%u no_leido=%u tope=%u curvas=%u | por frame: draws=%u estados=%u KB=%u paletas=%u us=%u (estados %u vertices %u texturas %u [copiadas %u KB por DMA en %u us, de ellas con swizzle %u KB ordenadas en %u us; pendientes perdidos %u, sin la copia de su flip %u, con la GPU sin terminar (medido) %u] paletas %u) | de los draws: 3d=%u%% clear=%u%% mezcla=%u%% alfa_test=%u%% swizzle=%u%% | draws por seg con textura 5650/5551/4444/8888/T4/T8/T16/T32/DXT1/3/5: %u %u %u %u %u %u %u %u %u %u %u\n",
+        clog("  record: frames=%u complete=%u incomplete: memory=%u not_read=%u limit=%u curves=%u | per frame: draws=%u states=%u KB=%u palettes=%u us=%u (states %u vertices %u textures %u [copied %u KB by DMA in %u us, of them swizzled %u KB sorted in %u us; pending lost %u, without the copy of their flip %u, with the GPU unfinished (measured) %u] palettes %u) | of the draws: 3d=%u%% clear=%u%% blend=%u%% alpha_test=%u%% swizzle=%u%% | draws per sec with texture 5650/5551/4444/8888/T4/T8/T16/T32/DXT1/3/5: %u %u %u %u %u %u %u %u %u %u %u\n",
              gr.fr, gr.ok, gr.memo, gr.rd_fail, gr.limit, gr.curve, gr.draws / g, gr.st / g, gr.kb / g >> 10, gr.cl / g, gr.us / g,
              gr.us_e / g, gr.us_v / g, gr.us_t / g, gr.t_b / g >> 10, gr.us_l / g, gr.o_b / g >> 10, gr.us_o / g, gr.stomped, gr.n_late, gr.gpu, gr.us_p / g,
              gr.d3 * 100 / dd, gr.clear * 100 / dd, gr.blend * 100 / dd, gr.atest * 100 / dd, gr.swz * 100 / dd,
              gr.fmt[0], gr.fmt[1], gr.fmt[2], gr.fmt[3], gr.fmt[4], gr.fmt[5], gr.fmt[6], gr.fmt[7], gr.fmt[8], gr.fmt[9], gr.fmt[10]);
-        clog("  texturas (por frame): de la RAM %u copias %u KB (DMA %u us, ordenar %u us) | de la VRAM %u copias %u KB (DMA %u us, ordenar %u us) | "
-             "llamadas al DMA %u | copias de <1K %u, 1-4K %u, 4-16K %u, 16-64K %u, 64K+ %u | KB con swizzle por bytes de fila: 16 %u, 32 %u, "
-             "64 %u, 128 %u, 256 %u, 512+ %u | KB con swizzle respecto de la ultima copia: iguales %u, cambiaron %u, nuevas %u | KB sin swizzle %u | "
-             "texturas distintas %u\n", gr.t_n[0] / g, gr.t_kb[0] / g >> 10, gr.t_dma[0] / g, gr.t_ord[0] / g, gr.t_n[1] / g, gr.t_kb[1] / g >> 10,
+        clog("  textures (per frame): from RAM %u copies %u KB (DMA %u us, sort %u us) | from VRAM %u copies %u KB (DMA %u us, sort %u us) | "
+             "DMA calls %u | copies of <1K %u, 1-4K %u, 4-16K %u, 16-64K %u, 64K+ %u | KB swizzled by row bytes: 16 %u, 32 %u, "
+             "64 %u, 128 %u, 256 %u, 512+ %u | swizzled KB against the last copy: same %u, changed %u, new %u | KB not swizzled %u | "
+             "distinct textures %u\n", gr.t_n[0] / g, gr.t_kb[0] / g >> 10, gr.t_dma[0] / g, gr.t_ord[0] / g, gr.t_n[1] / g, gr.t_kb[1] / g >> 10,
              gr.t_dma[1] / g, gr.t_ord[1] / g, gr.t_calls / g, gr.t_size[0] / g, gr.t_size[1] / g, gr.t_size[2] / g, gr.t_size[3] / g, gr.t_size[4] / g,
              gr.t_rb[0] / g >> 10, gr.t_rb[1] / g >> 10, gr.t_rb[2] / g >> 10, gr.t_rb[3] / g >> 10, gr.t_rb[4] / g >> 10, gr.t_rb[5] / g >> 10,
              gr.t_same / g >> 10, gr.t_changed / g >> 10, gr.t_fresh / g >> 10, gr.t_lines / g >> 10, gr.t_tex / g);
       }
-      clog("  draws/f: 3d=%u 2d=%u clear=%u vacios=%u | tri=%u tira=%u abanico=%u rect=%u lineas=%u puntos=%u curvas=%u | vertices/f=%u\n",
+      clog("  draws/f: 3d=%u 2d=%u clear=%u empty=%u | tri=%u strip=%u fan=%u rect=%u lines=%u points=%u curves=%u | vertices/f=%u\n",
            PF(d3d), PF(dthr), PF(dclear), PF(dempty), PF(prim[3]), PF(prim[4]), PF(prim[5]), PF(prim[6]), PF(prim[1]) + PF(prim[2]),
            PF(prim[0]), PF(curves), PF(verts));
-      clog("  estado (draws/f): textura_nueva=%u cambia_textura=%u matriz=%u destino=%u otro=%u sin_cambio=%u (%u%%) | lotes/f=%u contiguos/f=%u sin_cortar_por_texlevel/f=%u solo_texlevel=%u cambios_de_destino/f=%u\n",
+      clog("  state (draws/f): new_texture=%u texture_change=%u matrix=%u target=%u other=%u no_change=%u (%u%%) | batches/f=%u contiguous/f=%u not_cut_by_texlevel/f=%u only_texlevel=%u target_changes/f=%u\n",
            PF(texnew), PF(ch_tex), PF(ch_mtx), PF(ch_rt), PF(ch_other), PF(ch_none), r->ch_none * 100 / d, PF(batches), PF(batches_cont),
            PF(batches_notl), PF(only_tl), PF(rt_switch));
       uint32_t awake = r->t0 > r->sleep_us ? r->t0 - r->sleep_us : 1;  // time the capturer was not sleeping
-      clog("  procesador (ms por seg): captura=%u de %u despierta (%u%%) trabajando=%u | ns/comando: reloj=%u procesador_max=%u procesador_estimado=%u | lectores=%u+%u | emulador nucleo0=%u nucleo1=%u nucleo2=%u sin_fijo=%u\n",
+      clog("  processor (ms per sec): capture=%u of %u awake (%u%%) working=%u | ns/command: clock=%u processor_max=%u processor_estimated=%u | readers=%u+%u | emulator core0=%u core1=%u core2=%u unpinned=%u\n",
            r->cpu_cap / 1000, awake / 1000, (uint32_t)((unsigned long long)r->cpu_cap * 100 / awake), r->us / 1000,
            r->cmds ? (uint32_t)((unsigned long long)r->us * 1000 / r->cmds) : 0,
            r->cmds ? (uint32_t)((unsigned long long)r->cpu_cap * 1000 / r->cmds) : 0,
            r->cmds ? (uint32_t)((unsigned long long)r->us * r->cpu_cap / awake * 1000 / r->cmds) : 0,
            r->cpu_rdr[0] / 1000, r->cpu_rdr[1] / 1000, r->cpu_core[0] / 1000, r->cpu_core[1] / 1000, r->cpu_core[2] / 1000,
            r->cpu_core[3] / 1000);
-      clog("  memoria de sublistas (por frame): aplicadas=%u (comprobadas_por_lectores=%u) comandos_sin_recorrer=%u (%u%% de todos) lineas_comprobadas=%u comparar_us=%u | nuevas=%u cambiaron=%u otra_entrada=%u sin_guardar=%u | lectores/f: lineas=%u comprobadas=%u no_iguales=%u tarde=%u | adelanto/f: plan=%u comprobadas=%u no_iguales=%u tarde=%u | por seg: deposito_vaciado=%u revisadas=%u DISTINTAS=%u\n",
+      clog("  sublist memory (per frame): applied=%u (checked_by_readers=%u) commands_not_walked=%u (%u%% of all) lines_checked=%u compare_us=%u | new=%u changed=%u other_entry=%u not_saved=%u | readers/f: lines=%u checked=%u not_equal=%u late=%u | lookahead/f: plan=%u checked=%u not_equal=%u late=%u | per sec: pool_emptied=%u reviewed=%u MISMATCHES=%u\n",
            PF(memo_hit), PF(memo_pre), PF(memo_cmds), r->cmds ? (uint32_t)((unsigned long long)r->memo_cmds * 100 / r->cmds) : 0, PF(memo_lines), PF(memo_us),
            PF(memo_miss), PF(memo_fail), PF(memo_dep), PF(memo_no), PF(lv_lines), PF(lv_ok), PF(lv_bad), PF(lv_late), PF(pv_plan), PF(pv_ok), PF(pv_bad), PF(pv_late),
            r->memo_reset, r->memo_chk, r->memo_bad);
-      clog("  memoria/f: texturas=%u (en vram %u) draws_tex_vram=%u draws_vert_vram=%u | vertices=%u KB indices=%u KB | paletas=%u (vram %u) copias=%u (vram %u)\n",
+      clog("  memory/f: textures=%u (in vram %u) draws_tex_vram=%u draws_vert_vram=%u | vertices=%u KB indices=%u KB | palettes=%u (vram %u) copies=%u (vram %u)\n",
            PF(textures), PF(tex_vram), PF(dtex_vram), PF(dvert_vram), PF(vbytes) >> 10, PF(ibytes) >> 10, PF(cluts), PF(clut_vram),
            PF(transfers), PF(tr_vram));
     sync:
-      clog("  vram y sync (por seg): sublistas_vram=%u saltos_vram=%u listas_perdidas=%u abortadas=%u invalidas=%u signal=%u bjump=%u | drawsync=%u esperaron=%u (%u us c/u) atrasada_al_sync=%u atrasada_al_flip=%u listsync=%u reinicios=%u\n",
+      clog("  vram and sync (per sec): vram_sublists=%u vram_jumps=%u lost_lists=%u aborted=%u invalid=%u signal=%u bjump=%u | drawsync=%u waited=%u (%u us each) behind_at_sync=%u behind_at_flip=%u listsync=%u resets=%u\n",
            r->vcalls, r->vjumps, r->lost, r->aborted, r->bad, r->signals, r->bjumps, r->syncs, r->syncs_waited,
            r->syncs_waited ? r->sync_wait_us / r->syncs_waited : 0, r->behind, r->flips_behind, r->lsyncs, r->resyncs);
       if (!level) goto finish;
@@ -1337,14 +1337,14 @@ static int repThread(SceSize args, void *argp) {
         uint32_t e[8] = { MS.chk, MS.fresh, MS.ch_l, MS.ch_d, MS.us, MS.nlists, MS.prior, 0 }, x[8];
         for (int i = 0; i < 8; i++) { x[i] = e[i] - le[i]; le[i] = e[i]; }
         if (mir_on) {
-          clog("  espejo: paginas pedidas listas=%u datos=%u validas=%u/%u en_destinos=%u | por seg: copias=%u paginas_copiadas=%u (KB/f %u) ocupado=%u vita_usando=%u | sublistas_vram/f recorridas=%u cortadas=%u texturas_en_destino/f=%u\n",
+          clog("  mirror: pages requested lists=%u data=%u valid=%u/%u in_targets=%u | per sec: copies=%u pages_copied=%u (KB/f %u) busy=%u vita_using=%u | vram_sublists/f walked=%u cut=%u textures_in_target/f=%u\n",
                pl, pd, po0, po1, pr, c - lc, pg - lp, (pg - lp) * 4 / f, bz - lb, vu - lv, PF(v_ok), PF(v_cut), PF(tex_rt));
-          if (EXTREME) clog("  espejo (por seg): listas=%u con_la_copia_anterior=%u | muestreo: revisadas=%u nuevas=%u cambiaron listas=%u datos=%u hilo_us=%u\n",
+          if (EXTREME) clog("  mirror (per sec): lists=%u with_previous_copy=%u | sampling: reviewed=%u new=%u changed lists=%u data=%u thread_us=%u\n",
                x[5], x[6], x[0], x[1], x[2], x[3], x[4]);
         }
         lc = c; lp = pg; lb = bz; lv = vu;
       }
-      char top[160]; int k = 0;  // the 10 most changing "otro" registers (command: changes per frame)
+      char top[160]; int k = 0;  // the 10 most changing "other" registers (command: changes per frame)
       for (int j = 0; j < 10; j++) {
         int best = -1;
         for (int c = 0; c < 256; c++) if (r->chg[c] && (best < 0 || r->chg[c] > r->chg[best])) best = c;
@@ -1353,10 +1353,10 @@ static int repThread(SceSize args, void *argp) {
         r->chg[best] = 0;
       }
       top[k] = 0;
-      clog("  cambios \"otro\" mas frecuentes (comando:por frame):%s\n", top);
+      clog("  most frequent \"other\" changes (command:per frame):%s\n", top);
 #ifdef NP_DEV
       if (SB[1] >= 3 && level >= 2) {
-        clog("  T6 GE del PSP (por frame): ocupado=%u us en %u tramos (el mas largo %u us) en_stall=%u%% | sync/f=%u esperas_al_GE=%u (%u us c/u) GE_ocupado_al_llamar=%u | T4 CPU del juego (por frame): cache=%u (%u KB) dma=%u (%u KB) a_la_vram/seg=%u vaciar_todo/seg=%u sin_anotar/seg=%u\n",
+        clog("  T6 PSP GE (per frame): busy=%u us in %u runs (longest %u us) in_stall=%u%% | sync/f=%u waits_for_GE=%u (%u us each) GE_busy_at_call=%u | T4 game CPU (per frame): cache=%u (%u KB) dma=%u (%u KB) to_vram/sec=%u flush_all/sec=%u not_noted/sec=%u\n",
              PF(ge_us), PF(ge_runs), r->ge_max, r->ge_n ? r->ge_stall * 100 / r->ge_n : 0, PF(sy_n), PF(sy_wait),
              r->sy_wait ? r->sy_us / r->sy_wait : 0, PF(sy_busy), PF(dc_n), PF(dc_kb), PF(dm_n), PF(dm_kb), r->cpu_vram, r->dc_all, r->cpu_drop);
         static uint32_t l[22];  // data lifetime: the last second's figures (accumulated in LT)
@@ -1365,24 +1365,24 @@ static int repThread(SceSize args, void *argp) {
         c[20] = LT.ms1; c[21] = LT.ms2;
         uint32_t x[22]; for (int k = 0; k < 22; k++) { x[k] = c[k] - l[k]; l[k] = c[k]; }
         uint32_t nn = x[0] + x[1] + x[2] + x[3] ? x[0] + x[1] + x[2] + x[3] : 1;
-        clog("  vida de los datos (por seg; cambiaron 1 / 2 frames despues; aviso: rango / vaciar_todo): vertices=%u (%u / %u, aviso %u / %u) indices=%u (%u / %u, %u / %u) texturas=%u (%u / %u, %u / %u) paletas=%u (%u / %u, %u / %u) | revisadas a los %u / %u ms | total: vertices %u de %u, texturas %u de %u\n",
+        clog("  data life (per sec; changed 1 / 2 frames later; notice: range / flush_all): vertices=%u (%u / %u, notice %u / %u) indices=%u (%u / %u, %u / %u) textures=%u (%u / %u, %u / %u) palettes=%u (%u / %u, %u / %u) | reviewed at %u / %u ms | total: vertices %u of %u, textures %u of %u\n",
              x[0], x[4], x[8], x[12], x[16], x[1], x[5], x[9], x[13], x[17], x[2], x[6], x[10], x[14], x[18], x[3], x[7], x[11], x[15], x[19],
              x[20] / nn / 10, x[21] / nn / 10, LT.ch2[0], LT.n[0], LT.ch2[2], LT.n[2]);
       }
 #endif
       if (r->pf_n) {  // what each frame cost the game and the syncs where the Vita was behind
         uint32_t g = r->pf_n, cal = SB[0x4D], ms = r->pf_us / 1000 + 1;
-        clog("  impacto en el PSP (por frame del juego): frames=%u frame_us=%u CPU_libre=%u%% compuerta_us=%u (esperas/seg=%u sin_esperar/seg=%u) sync_GE_us=%u ganchos_us=%u espejo_us=%u paginas=%u | Vita atrasada: syncs/seg=%u atraso_us=%u c/u | lectura propia: %u us (%u cronometradas) | linea de la cache compartida: %u ns (%u) | compuerta: %s, esperas antes de encolar/seg=%u (%u us c/u)\n",
+        clog("  PSP impact (per game frame): frames=%u frame_us=%u CPU_idle=%u%% gate_us=%u (waits/sec=%u no_wait/sec=%u) sync_GE_us=%u hooks_us=%u mirror_us=%u pages=%u | Vita behind: syncs/sec=%u delay_us=%u each | own read: %u us (%u timed) | shared cache line: %u ns (%u) | gate: %s, waits before enqueue/sec=%u (%u us each)\n",
              g, r->pf_us / g, cal ? r->pf_spin / cal * 100 / ms : 0, r->pf_gate / g, r->pf_gate_n, r->pf_nowait, r->pf_sync / g, r->pf_post / g,
              r->pf_mir / g, r->pf_pg / g, r->pf_late, r->pf_late ? r->pf_late_us / r->pf_late : 0, r->rd_n ? r->rd_us / r->rd_n : 0, r->rd_n, r->hit_n ? r->hit_us * 1000 / r->hit_n : 0, r->hit_n,
-             gp_flags & 8 ? "en el sync (compuerta_sync)" : SB[0x54] == 1 ? "antes de encolar" : SB[0x54] == 2 ? "en el sync (la lista cambio 10 veces)" : "en el sync (probando)",
+             gp_flags & 8 ? "at the sync (gate_sync)" : SB[0x54] == 1 ? "before enqueue" : SB[0x54] == 2 ? "at the sync (the list changed 10 times)" : "at the sync (probing)",
              r->eg_n, r->eg_n ? r->eg_us / r->eg_n : 0);
       }
 #ifdef NP_DEV
       if (level >= 2) {  // list lifetime (accumulated since start)
-        clog("  vida de la lista (acumulado): revisadas en el flip de su frame=%u (cambio el nivel de arriba %u, sublistas %u) | en el flip siguiente=%u (%u, %u)\n",
+        clog("  list life (accumulated): reviewed at the flip of its frame=%u (top level changed %u, sublists %u) | at the next flip=%u (%u, %u)\n",
              lf_n[0], lf_top[0], lf_sub[0], lf_n[1], lf_top[1], lf_sub[1]);
-        clog("  vida de la lista segun NativeLink (acumulado; revisadas, cambio arriba, cambio sublistas): drawsync de su frame %u %u %u | antes de encolar la siguiente %u %u %u | drawsync siguiente %u %u %u | antes de encolar la subsiguiente %u %u %u | listsync %u %u %u / %u %u %u | del drawsync al encolado siguiente: %u us (max %u)\n",
+        clog("  list life per NativeLink (accumulated; reviewed, top changed, sublists changed): drawsync of its frame %u %u %u | before enqueuing the next %u %u %u | next drawsync %u %u %u | before enqueuing the one after %u %u %u | listsync %u %u %u / %u %u %u | from drawsync to next enqueue: %u us (max %u)\n",
              vd[1][0][0], vd[1][0][1], vd[1][0][2], vd[0][0][0], vd[0][0][1], vd[0][0][2], vd[1][1][0], vd[1][1][1], vd[1][1][2],
              vd[0][1][0], vd[0][1][1], vd[0][1][2], vd[2][0][0], vd[2][0][1], vd[2][0][2], vd[2][1][0], vd[2][1][1], vd[2][1][2],
              gap.n ? gap.sum / gap.n : 0, gap.max);
@@ -1446,10 +1446,10 @@ static void ltFlip(void) {
   }
   while (smp_r != smp_w && smp[smp_r & (SMP_N - 1)].st == 2) smp_r++;
 }
-static uint32_t probe_ge;  // asks NativeLink for the thread watching the GE (T6): ux0:data/nativedraw/medir_ge
+static uint32_t probe_ge;  // asks NativeLink for the thread watching the GE (T6): ux0:data/nativedraw/ge_timing
 #endif
-// Mirror thread (every 5 ms): passes medir_ge, the switches (SB[0x4A]) and the level (SB[0x4E]) to NativeLink; at
-// extremo level hashes 4 requested pages per turn and counts those that changed between copies; every
+// Mirror thread (every 5 ms): passes ge_timing, the switches (SB[0x4A]) and the level (SB[0x4E]) to NativeLink; at
+// extreme level hashes 4 requested pages per turn and counts those that changed between copies; every
 // 0.1 s rewrites the requests in the mailbox
 static int mirThread(SceSize args, void *argp) {
   DEV(static uint32_t seen[512], hs[512], buf[64] __attribute__((aligned(16)));)
@@ -1463,7 +1463,7 @@ static int mirThread(SceSize args, void *argp) {
     if (!mir_on) continue;
 #ifdef NP_DEV
     uint32_t t0 = now(), done = SB[0x40];
-    for (uint32_t k = 0, m = 0; k < 512 && m < 4 && level >= 2; k++) {  // (extremo only)
+    for (uint32_t k = 0, m = 0; k < 512 && m < 4 && level >= 2; k++) {  // (extreme only)
       uint32_t p = rr = (rr + 1) & 511, w = p >> 5, b = 1u << (p & 31);
       if (!((want_l[w] | want_d[w]) & b)) continue;
       // the newest finished copy of p, from either mirror
@@ -1550,36 +1550,36 @@ static int swOn(const char *p) {
 // cache (each one turns itself off if memory is short) and starts the capturer, the mirror thread and both readers
 void capStart(void) {
   SceIoStat st;
-  sceIoRemove("ux0:pspemu/nativedraw_captura_prev.log");
-  sceIoRename(LOGC, "ux0:pspemu/nativedraw_captura_prev.log");
-  SceUID r = sceKernelCreateThread("nativedraw_captura_log", repThread, 0xB0, 0x2000, 0, 0, NULL);  // first: so the
+  sceIoRemove("ux0:pspemu/nativedraw_capture_prev.log");
+  sceIoRename(LOGC, "ux0:pspemu/nativedraw_capture_prev.log");
+  SceUID r = sceKernelCreateThread("nativedraw_capture_log", repThread, 0xB0, 0x2000, 0, 0, NULL);  // first: so the
   if (r >= 0) sceKernelStartThread(r, 0, NULL);                                                      // log survives
   {  // log level
     char b[8] = { 0 };
-    SceUID fd = sceIoOpen("ux0:data/nativedraw/registro", SCE_O_RDONLY, 0);
+    SceUID fd = sceIoOpen("ux0:data/nativedraw/log_level", SCE_O_RDONLY, 0);
     if (fd >= 0) { sceIoRead(fd, b, 7); sceIoClose(fd); level = DEV(b[0] == 'e' ? 2 :) b[0] == 'm' && b[1] == 'i' ? 0 : 1; }
   }
-  if (EXTREME) { uint32_t t0 = now(), x = 0; for (int i = 0; i < 10000; i++) x += now(); clog("costo de leer la hora: %u ns (%u)\n", (now() - t0) / 10, x & 1); }
-  clog("NativeDraw " NATIVEDRAW_VERSION ": capturador (memoria de sublistas, espejo de la VRAM, registro del frame)\n");
+  if (EXTREME) { uint32_t t0 = now(), x = 0; for (int i = 0; i < 10000; i++) x += now(); clog("clock read cost: %u ns (%u)\n", (now() - t0) / 10, x & 1); }
+  clog("NativeDraw " NATIVEDRAW_VERSION ": capturer (sublist memory, VRAM mirror, frame record)\n");
 #ifdef NP_DEV
   static const char *rot[2][2] = { { "ux0:pspemu/nativedraw_frames.log", "ux0:pspemu/nativedraw_frames_prev.log" },
-                                   { "ux0:pspemu/nativedraw_tarde.log", "ux0:pspemu/nativedraw_tarde_prev.log" } };
+                                   { "ux0:pspemu/nativedraw_late.log", "ux0:pspemu/nativedraw_late_prev.log" } };
   for (int k = 0; k < 2; k++) { sceIoRemove(rot[k][1]); sceIoRename(rot[k][0], rot[k][1]); }
-  if (level >= 2) rput(0, "t_ms,frame_us,compuerta_us,esperas,sin_esperar,sync_GE_us,cpu_libre_x1000,espejo_us,espejo_paginas,ganchos_us,"
-          "comandos,draws,captura_us,captura_cpu_us,aplicadas,comprobadas_lectores,lecturas_propias,de_lectores,listas_pendientes,syncs_atrasados,"
-          "lista_dir,lista_kb,memoria_us,aplicar_us\n");
-  if (level >= 2) rput(1, "t_ms,tipo,espera_us,lista,atraso_us,comandos,listas_antes,encolada_hace_us,ultimo_stall_hace_us,vita_empezo_tras_us,"
-          "vita_recorrio_us,trabajo_us,lecturas_propias,de_lectores,aplicadas,procesador_us\n");
+  if (level >= 2) rput(0, "t_ms,frame_us,gate_us,waits,no_wait,sync_GE_us,cpu_idle_x1000,mirror_us,mirror_pages,hooks_us,"
+          "commands,draws,capture_us,capture_cpu_us,applied,checked_readers,own_reads,from_readers,pending_lists,late_syncs,"
+          "list_addr,list_kb,memory_us,apply_us\n");
+  if (level >= 2) rput(1, "t_ms,type,wait_us,list,delay_us,commands,lists_before,enqueued_ago_us,last_stall_ago_us,vita_started_after_us,"
+          "vita_walked_us,work_us,own_reads,from_readers,applied,processor_us\n");
 #endif
-  static const char *sw[] = { "ux0:data/nativedraw/sin_compuerta", "ux0:data/nativedraw/sin_espejo" DEV(, "ux0:data/nativedraw/sin_libre", "ux0:data/nativedraw/compuerta_sync") };
+  static const char *sw[] = { "ux0:data/nativedraw/no_gate", "ux0:data/nativedraw/no_mirror" DEV(, "ux0:data/nativedraw/no_idle", "ux0:data/nativedraw/gate_sync") };
   for (int k = 0; k < (int)(sizeof sw / sizeof *sw); k++) if (swOn(sw[k])) gp_flags |= 1u << k;
-  if (swOn("ux0:data/nativedraw/espejo_espera")) gp_flags |= 32;  // the PSP flip waits for the mirror copy
-  DEV(no_capture = swOn("ux0:data/nativedraw/sin_captura");)
-  DEV(pv_on = !swOn("ux0:data/nativedraw/sin_adelanto");)
-  reg_on = swOn("ux0:data/nativedraw/dibujar");  // frame record
+  if (swOn("ux0:data/nativedraw/mirror_wait")) gp_flags |= 32;  // the PSP flip waits for the mirror copy
+  DEV(no_capture = swOn("ux0:data/nativedraw/no_capture");)
+  DEV(pv_on = !swOn("ux0:data/nativedraw/no_lookahead");)
+  reg_on = swOn("ux0:data/nativedraw/draw");  // frame record
   if (reg_on) regInit();
-  clog("registro: %s (ux0:data/nativedraw/registro: minimo, mediano o extremo) | interruptores%s%s%s%s%s%s%s%s\n", level == 2 ? "extremo" : level ? "mediano" : "minimo", gp_flags & 1 ? " sin_compuerta" : "", gp_flags & 2 ? " sin_espejo" : "",
-       gp_flags & 4 ? " sin_libre" : "", gp_flags & 8 ? " compuerta_sync" : "", gp_flags & 32 ? " espejo_espera" : "", no_capture ? " sin_captura" : "", pv_on ? "" : " sin_adelanto", gp_flags || no_capture || !pv_on ? "" : ": ninguno (todo normal)");
+  clog("log level: %s (ux0:data/nativedraw/log_level: minimum, medium or extreme) | switches%s%s%s%s%s%s%s%s\n", level == 2 ? "extreme" : level ? "medium" : "minimum", gp_flags & 1 ? " no_gate" : "", gp_flags & 2 ? " no_mirror" : "",
+       gp_flags & 4 ? " no_idle" : "", gp_flags & 8 ? " gate_sync" : "", gp_flags & 32 ? " mirror_wait" : "", no_capture ? " no_capture" : "", pv_on ? "" : " no_lookahead", gp_flags || no_capture || !pv_on ? "" : ": none (all normal)");
   for (uint32_t a = 0x08000000u; a < 0x0C000000u && nr < 4;) {  // PSP RAM ranges mapped in this process
     SceKernelMemBlockInfo in; in.size = sizeof in;
     int e = sceKernelGetMemBlockInfoByAddr((void *)PSP(a), &in);
@@ -1587,60 +1587,60 @@ void capStart(void) {
     if (e < 0 || end <= PSP(a)) { a += 0x100000; continue; }
     uint32_t lo = base > PSP(a) ? base - 0x68000000u : a, hi = end - 0x68000000u;
     if (hi > 0x0C000000u) hi = 0x0C000000u;
-    clog("RAM del PSP legible: %08x-%08x (bloque de la Vita %08x, %u KB)\n", lo, hi, base, in.mappedSize >> 10);
+    clog("PSP RAM readable: %08x-%08x (Vita block %08x, %u KB)\n", lo, hi, base, in.mappedSize >> 10);
     if (nr && rhi[nr - 1] == lo) rhi[nr - 1] = hi;
     else { rlo[nr] = lo; rhi[nr++] = hi; }
     a = hi;
   }
   initCls();
-  if (!okRam(0x0A000000u) || !okRam(0x08800000u)) { clog("la RAM del PSP no cubre el buzon o el juego: sin captura\n"); return; }
-  if (sceIoGetstat("ux0:data/nativedraw/sin_memoria", &st) >= 0) clog("memoria de sublistas: apagada (sin_memoria)\n");
+  if (!okRam(0x0A000000u) || !okRam(0x08800000u)) { clog("PSP RAM does not cover the mailbox or the game: no capture\n"); return; }
+  if (sceIoGetstat("ux0:data/nativedraw/no_memo", &st) >= 0) clog("sublist memory: off (no_memo)\n");
   else {
     void *mm = NULL;
     uint32_t sz = 0;
     SceUID mb = -1;
     for (; MEMO_N >= 512 && !mm; MEMO_N /= 2, POOL_N /= 2, memo_sh++) {  // (if memory is short: half)
       sz = (MEMO_N * sizeof(Memo) + POOL_N * 64 + 0xFFF) & ~0xFFF;
-      mb = sceKernelAllocMemBlock("nativedraw_memoria", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, sz, NULL);
+      mb = sceKernelAllocMemBlock("nativedraw_memory", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, sz, NULL);
       if (mb >= 0 && sceKernelGetMemBlockBase(mb, &mm) < 0) mm = NULL;
       if (mm) break;
     }
-    if (!mm) clog("memoria de sublistas: sin memoria (%08x)\n", mb);
+    if (!mm) clog("sublist memory: out of memory (%08x)\n", mb);
     else {
       sceClibMemset(mm, 0, MEMO_N * sizeof(Memo));
       memo = mm; pool = (uint32_t *)((char *)mm + MEMO_N * sizeof(Memo));
-      memo_chk = sceIoGetstat("ux0:data/nativedraw/memo_revisar", &st) >= 0;
+      memo_chk = sceIoGetstat("ux0:data/nativedraw/memo_check", &st) >= 0;
       __sync_synchronize();
       memo_on = 1;
-      clog("memoria de sublistas: %u sublistas, deposito de %u KB (%u KB en total)%s\n", MEMO_N, POOL_N * 64 >> 10, sz >> 10,
-           memo_chk ? "; REVISION de todas (memo_revisar)" : "; revision de 1 de cada 32");
+      clog("sublist memory: %u sublists, pool of %u KB (%u KB total)%s\n", MEMO_N, POOL_N * 64 >> 10, sz >> 10,
+           memo_chk ? "; CHECK of all (memo_check)" : "; check of 1 in 32");
     }
   }
   // The capturer runs on any of the 3 cores (pinned to one it gets less time: it shares it with audio or the
-  // Media Engine). Switch nucleo_captura ("0", "1" or "2") pins it if a game needs that.
-  char nc[8] = { 0 }; uint32_t cmask = 0x70000; const char *cname = "libre (0, 1 o 2)";
-  SceUID nf = sceIoOpen("ux0:data/nativedraw/nucleo_captura", SCE_O_RDONLY, 0);
+  // Media Engine). Switch capture_core ("0", "1" or "2") pins it if a game needs that.
+  char nc[8] = { 0 }; uint32_t cmask = 0x70000; const char *cname = "free (0, 1 or 2)";
+  SceUID nf = sceIoOpen("ux0:data/nativedraw/capture_core", SCE_O_RDONLY, 0);
   if (nf >= 0) { sceIoRead(nf, nc, 7); sceIoClose(nf); }
   if (nc[0] >= '0' && nc[0] <= '2') { cmask = 0x10000 << (nc[0] - '0'); nc[1] = 0; cname = nc; }
-  SceUID t = sceKernelCreateThread("nativedraw_captura", capThread, 0x61, 0x4000, 0, cmask, NULL);
+  SceUID t = sceKernelCreateThread("nativedraw_capture", capThread, 0x61, 0x4000, 0, cmask, NULL);
   // Priority 0x61: just below the emulator threads at 0x60 (ScePspemuRemoteMe: Media Engine, decodes the
   // game audio; TitleInfo, AvcAuInput) and the audio output ones (0x40-0x43). Higher cuts the audio; much
   // lower starves the capturer.
   if (t >= 0) sceKernelStartThread(t, 0, NULL);
   cap_uid = t;
-  clog("hilos: captura %08x (nucleo %s, prioridad 0x61, debajo de los hilos de audio; ux0:data/nativedraw/nucleo_captura) log %08x; hilos del emulador vistos: %d\n", t, cname, r, emu_n);
+  clog("threads: capture %08x (core %s, priority 0x61, below the audio threads; ux0:data/nativedraw/capture_core) log %08x; emulator threads seen: %d\n", t, cname, r, emu_n);
   // mirror thread: priority 0xBE, below the readers
-  SceUID et = sceKernelCreateThread("nativedraw_espejo", mirThread, 0xBE, 0x2000, 0, 0x10000 /* core 0 */, NULL);
+  SceUID et = sceKernelCreateThread("nativedraw_mirror", mirThread, 0xBE, 0x2000, 0, 0x10000 /* core 0 */, NULL);
   if (et >= 0) sceKernelStartThread(et, 0, NULL);
-  clog("espejo de la VRAM: hilo %08x (nucleo 0, prioridad 0xBE); copias en %08x y %08x\n", et, MIRROR, MIRROR2);
+  clog("VRAM mirror: thread %08x (core 0, priority 0xBE); copies at %08x and %08x\n", et, MIRROR, MIRROR2);
 #ifdef NP_DEV
-  probe_ge = sceIoGetstat("ux0:data/nativedraw/medir_ge", &st) >= 0;
-  clog("T6 (hilo de NativeLink que mira el GE): %s\n", probe_ge ? "pedido (medir_ge)" : "apagado (crear ux0:data/nativedraw/medir_ge para medir)");
+  probe_ge = sceIoGetstat("ux0:data/nativedraw/ge_timing", &st) >= 0;
+  clog("T6 (NativeLink thread watching the GE): %s\n", probe_ge ? "requested (ge_timing)" : "off (create ux0:data/nativedraw/ge_timing to measure)");
 #endif
-  if (sceIoGetstat("ux0:data/nativedraw/captura_sin_lectores", &st) >= 0) { clog("lectores: apagados (captura_sin_lectores)\n"); return; }
+  if (sceIoGetstat("ux0:data/nativedraw/capture_no_readers", &st) >= 0) { clog("readers: off (capture_no_readers)\n"); return; }
   void *m = NULL;
-  SceUID blk = sceKernelAllocMemBlock("nativedraw_lineas", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, (CL_N * 68 + 0xFFF) & ~0xFFF, NULL);
-  if (blk < 0 || sceKernelGetMemBlockBase(blk, &m) < 0) { clog("lectores: sin memoria para la cache (%08x)\n", blk); return; }
+  SceUID blk = sceKernelAllocMemBlock("nativedraw_lines", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, (CL_N * 68 + 0xFFF) & ~0xFFF, NULL);
+  if (blk < 0 || sceKernelGetMemBlockBase(blk, &m) < 0) { clog("readers: no memory for the cache (%08x)\n", blk); return; }
   cl_tag = (volatile uint32_t *)((char *)m + CL_N * 64);
   for (int i = 0; i < CL_N; i++) cl_tag[i] = 0xFFFFFFFFu;
   __sync_synchronize();
@@ -1648,9 +1648,9 @@ void capStart(void) {
   static int ids[2] = { 0, 1 };
   static const int cores[2] = { 0x10000, 0x40000 };  // core 0 (emulator) and 2 (Media Engine): spare time only
   for (int k = 0; k < 2; k++) {
-    SceUID lt = sceKernelCreateThread(k ? "nativedraw_lector1" : "nativedraw_lector0", rdrThread, 0xB0, 0x2000, 0, cores[k], NULL);
+    SceUID lt = sceKernelCreateThread(k ? "nativedraw_reader1" : "nativedraw_reader0", rdrThread, 0xB0, 0x2000, 0, cores[k], NULL);
     if (lt >= 0) sceKernelStartThread(lt, sizeof(int), &ids[k]);
     rdr_uid[k] = lt;
-    clog("lector %d: %08x (nucleo %d, prioridad 0xB0)\n", k, lt, k ? 2 : 0);
+    clog("reader %d: %08x (core %d, priority 0xB0)\n", k, lt, k ? 2 : 0);
   }
 }
