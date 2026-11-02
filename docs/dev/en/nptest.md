@@ -44,3 +44,8 @@ Sources: the PPSSPP docs (`psp-hardware/gpu`), `assets/compat.ini` and its issue
 like; it says nothing about the plugins, which only run on the Vita. PPSSPP is not the reference: the normal image on the
 Vita is. Known differences to confirm: 8-bit UVs in through mode (`vertFmts`, cell 0), `bboxJump` (red shows), `mipLevel` and
 `clutStale`.
+
+## Reading a Vita run
+`python3 tools/nptest_report.py <run folder> [PPSSPP native_test.log]` prints, for each scene, the expected and the obtained
+result (needs a development build). `ok` only says the frame was drawn in HD, not that the image is right. A frame with no
+new record (`no_new_frame`, for example `limit`) is not in those lines: look at the `record:` lines of `nativedraw_capture.log`.

@@ -43,3 +43,9 @@ Fuentes: documentación de PPSSPP (`psp-hardware/gpu`), `assets/compat.ini` y su
 el log, las imágenes y hojas con todas las escenas. Dice si una escena se cuelga y cómo debería verse; no dice nada de los
 plugins, que solo corren en la Vita. PPSSPP no es la referencia: lo es la imagen normal en la Vita. Diferencias por
 confirmar: UV de 8 bits en coordenadas directas (`vertFmts`, celda 0), `bboxJump` (se ve el rojo), `mipLevel` y `clutStale`.
+
+## Leer una corrida en la Vita
+`python3 tools/nptest_report.py <carpeta> [native_test.log de PPSSPP]` muestra, por escena, el resultado esperado y el
+obtenido (necesita compilación de desarrollo). `ok` solo dice que el frame se dibujó en HD, no que la imagen esté bien. Un
+frame sin registro nuevo (`no_new_frame`, por ejemplo `limit`) no sale en esas líneas: mirar las líneas `record:` de
+`nativedraw_capture.log`.
