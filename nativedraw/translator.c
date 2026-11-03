@@ -36,6 +36,9 @@ static uint16_t *tib;        // 0, 1, 2... (indices for the GPU)
 // vr: what the frame draws on it (its scenes touch only that). have, dirty: for an image read while being drawn, the part
 // already in rtc and the part drawn since (x0, y0, x1, y1).
 typedef struct { uint32_t fb, fr; void *mem; SceGxmColorSurface cs; SceGxmValidRegion vr; float have[4], dirty[4]; } RT;
+// Scenes on different render targets may run at the same time: this object keeps those of a frame in order, because a
+// scene reads what the one before drew
+static SceGxmSyncObject *t_sync;
 static RT rts[2], rtc;  // rtc: copy of the part of an image that a draw reads while drawing on that same image
 // Reserves the surface of an intermediate image (alpha 255, like the main surface). Both are reserved in trInit,
 // before the dump: otherwise the dump takes the physical memory.
@@ -124,6 +127,7 @@ static int trInit(void) {
   if (!fragProg(0, 0, C_RGB) || !fragProg(1, 0, C_RGB)) return -3;
   for (int i = 0; i < 2; i++) rtMem(&rts[i]);
   rtMem(&rtc);
+  if ((r = sceGxmSyncObjectCreate(&t_sync)) < 0) { alog("translator: sync object %08x\n", r); return r; }
   // PSP RAM (0x08000000-0x0A000000) for the GPU (fails with 0x72000000)
   int r1 = sceGxmMapMemory((void *)0x70000000, 0x2000000, RD);
   int r3 = regMapGpu();
@@ -822,7 +826,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
   uint32_t *pal = tpal[s], np = 0, nv = 0, pal_prev = ~0u, pn = 0;  // np: words used; pal_prev/pn: the previous palette
   void *u;
   // SCENE: starts a scene on surface surf_tex with the vertex program and the matrix
-#define SCENE(surf_tex, reg) do { sceGxmBeginScene(c, 0, cur_rt ? rt_i : rt, reg, 0, 0, surf_tex, &ds); t_zs = t_st = t_sr = t_cl = ~0u; zsSet(c, 0, 0); sceGxmSetVertexProgram(c, nvp); \
+#define SCENE(surf_tex, reg) do { sceGxmBeginScene(c, 0, cur_rt ? rt_i : rt, reg, 0, t_sync, surf_tex, &ds); t_zs = t_st = t_sr = t_cl = ~0u; zsSet(c, 0, 0); sceGxmSetVertexProgram(c, nvp); \
     sceGxmReserveVertexDefaultUniformBuffer(c, &u); sceGxmSetUniformDataF(u, n_wvp, 0, 16, tr_wvp); } while (0)
   // OPEN: closes the open scene (if any) and opens one on dst (0: surface s); the first time on the surface,
   // puts the normal image (or black: trBase) underneath
@@ -947,7 +951,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
         sceClibMemcpy(q, qv, sizeof qv); extra = 4;
         sceGxmTextureInitLinear(&ts, dst->mem, SCE_GXM_TEXTURE_FORMAT_A8B8G8R8, LINE, H, 0);
         sceGxmEndScene(c, 0, gEnd()); cNote(C_INT, &gq_n, t_draws - d0, spx / 1000, ssw); opened = 0;
-        sceGxmBeginScene(c, 0, rt_c, &vr, 0, 0, &rtc.cs, &ds);
+        sceGxmBeginScene(c, 0, rt_c, &vr, 0, t_sync, &rtc.cs, &ds);
         t_zs = t_st = t_sr = t_cl = ~0u; zsSet(c, 0, 0); sceGxmSetCullMode(c, SCE_GXM_CULL_NONE);
         sceGxmSetVertexProgram(c, vp); sceGxmSetFragmentProgram(c, fp);
         sceGxmReserveVertexDefaultUniformBuffer(c, &u); sceGxmSetUniformDataF(u, p_wvp, 0, 16, tr_wvp);

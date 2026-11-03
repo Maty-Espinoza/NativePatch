@@ -335,7 +335,9 @@ static void draw(uint32_t d) {
   uint32_t fb = (reg[0x9C] & 0xFFFFF0) | ((reg[0x9D] << 8) & 0xFF000000);
   if (fb != last_fb) {
     acc.rt_switch++; last_fb = fb;
-    uint32_t h = ((reg[0xD6] >> 10) & 0x3FF) + 1, w = reg[0x9D] & 0x7FF;  // height: to the bottom edge of the scissor
+    // height: to the bottom edge of the scissor or of the region (0x16; 0: never set), whichever comes first
+    uint32_t h = ((reg[0xD5] >> 10) & 0x3FF) + 1, hr = ((reg[0x16] >> 10) & 0x3FF) + 1, w = reg[0x9D] & 0x7FF;
+    if (reg[0x16] & 0xFFFFF && hr < h) h = hr;
     markRt(fb, w * h * ((reg[0xD2] & 3) == 3 ? 4 : 2));
     if (reg[0x23] & 1) markRt(reg[0x9E] & 0xFFFFF0, (reg[0x9F] & 0x7FF) * h * 2);  // z (with z test)
   }

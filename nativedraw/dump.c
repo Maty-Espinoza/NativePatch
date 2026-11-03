@@ -255,6 +255,7 @@ static int dumpAlloc(void) {
   if (dump_level >= 2) dump_natblk = sceKernelAllocMemBlock("nativedraw_dump_nat", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW_UNCACHE, 0x100000, 0);
   dump_nat = dump_level >= 2 && dump_natblk >= 0 && sceKernelGetMemBlockBase(dump_natblk, &nn) >= 0 ? nn : 0; dump_natok = 0;
   if (dump_level >= 2) dump_rtblk = sceKernelAllocMemBlock("nativedraw_dump_rt", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW_UNCACHE, (LINE * H * 4 + 0x3FFFF) & ~0x3FFFFu, 0);
+  if (dump_level >= 2 && dump_rtblk < 0) dump_rtblk = sceKernelAllocMemBlock("nativedraw_dump_rt", SCE_KERNEL_MEMBLOCK_TYPE_USER_MAIN_PHYCONT_NC_RW, (LINE * H * 4 + 0xFFFFF) & ~0xFFFFFu, 0);
   dump_rt = dump_level >= 2 && dump_rtblk >= 0 && sceKernelGetMemBlockBase(dump_rtblk, &r) >= 0 ? r : 0;
   dump_bpend = VN; dump_mem = 1;
   alog("dump: memory ready, level %s (%u frames, %u blocks for records)\n", dump_names[dump_level], dump_nf, nb);
