@@ -19,7 +19,7 @@ enum { R_MEMO = 1, R_READ = 2, R_LIMIT = 4, R_CURVE = 8 };
 // (same, changed, new); unswizzled bytes; distinct textures
 // per frame
 static struct { uint32_t fr, ok, memo, rd_fail, limit, curve, draws, st, kb, cl, us, d3, clear, blend, atest, swz, fmt[16], us_e, us_v, us_t, us_p, t_b, us_l, stomped, n_late, gpu, o_b, us_o,
-  t_n[2], t_kb[2], t_dma[2], t_ord[2], t_calls, t_size[5], t_rb[6], t_same, t_changed, t_fresh, t_lines, t_tex,
+  t_n[2], t_kb[2], t_dma[2], t_ord[2], t_calls, t_size[5], t_rb[6], t_same, t_changed, t_lines, t_tex,
   c_hit, c_fill, c_chg, c_rec, c_fail, c_us; } ga, gr;
 // RN records: with fewer, the one the GPU just read would at times be the only free one, overwriting its textures
 #define RN 4
@@ -66,11 +66,19 @@ void *sceDmacMemcpy(void *dst, const void *src, SceSize size);
 #define OR_N (256 << 10)
 static uint8_t *rg_ord;
 static int rg_ordc;
-// Repetition measurement: for each group of 8 rows copied, the PSP address and a hash of its content (and length), in
-// a table of RH_N slots by address (a slot taken by another address counts as new).
-// Tells how much of what is still copied repeats between frames.
+// Sorting only what changed: each record remembers, per 128 bytes of its tx, the PSP address and hash of the sorted group
+// that starts there. If the same group arrives at the same place with the same hash, the rows are already there. A place
+// handed to another texture (rg_lay, rgLayout) forgets its groups.
 #define RH_N 16384
-static struct { uint32_t a, h; } *rg_hash;
+static struct { uint32_t a, h; } *rg_hash[RN];
+static uint32_t rg_lay[RN][TN_N][3];
+// (entry i of record k was just placed at offset o of tx, n bytes) If it is not what the record had there, forgets the area
+static void rgLayout(int k, uint32_t i, uint32_t a, uint32_t key, uint32_t o, uint32_t n) {
+  uint32_t *l = rg_lay[k][i];
+  if (l[0] == a && l[1] == key && l[2] == o) return;
+  l[0] = a; l[1] = key; l[2] = o;
+  for (uint32_t s = o >> 7; rg_hash[k] && s <= (o + n) >> 7 && s < RH_N; s++) rg_hash[k][s].a = 0;
+}
 // 1 if a DMA copy to cached memory c (from u, uncached) is seen when read later, even if c is already in the
 // cache (if the system does not invalidate it, the old data would be read)
 static int rgCoherent(uint8_t *c, uint8_t *u) {
@@ -84,8 +92,10 @@ static int rgCoherent(uint8_t *c, uint8_t *u) {
 // Copies m bytes from s (PSP memory; pa: its PSP address) to d (record textures), by CPU under 8 KB, where a DMA call
 // costs more than the bytes. rb: bytes per row if the texture is swizzled (0: as is); then m is whole groups of 8 rows and each group is sorted: block b (16 bytes wide) of row
 // r is at s + b * 128 + r * 16 and goes to d + r * rb + b * 16 (d is written in order: it is uncached memory).
+// kr: record whose tx holds d (-1: the texture cache), for skipping groups already sorted there; only groups read by DMA,
+// which leaves them in cached memory where the hash costs little.
 // Notes the t_* measurements of the "texturas:" line.
-static void rgTexCopy(uint8_t *d, const void *s, uint32_t m, uint32_t rb, uint32_t pa) {
+static void rgTexCopy(uint8_t *d, const void *s, uint32_t m, uint32_t rb, uint32_t pa, int kr) {
   uint32_t v = isVram(pa), t0 = now(), td = 0, k;
   ga.t_n[v]++; ga.t_kb[v] += m;
   for (k = 0; k < 4 && m >= 1024u << 2 * k; k++) {}
@@ -102,19 +112,20 @@ static void rgTexCopy(uint8_t *d, const void *s, uint32_t m, uint32_t rb, uint32
     const uint8_t *src = (const uint8_t *)s + o;
     if (l >= 8192) { sceDmacMemcpy(rg_ord, src, l); src = rg_ord; ga.t_calls++; td += now() - t1; }
     for (uint32_t g = 0; g < l; g += gb) {
-      uint32_t h = 2166136261u ^ gb;
+      if (kr >= 0 && rg_hash[kr] && !(src == rg_ord && rg_ordc)) rg_hash[kr][(d + o + g - rf[kr]->tx) >> 7].a = 0;
+      else if (kr >= 0 && rg_hash[kr]) {
+        uint32_t h = gb, a = pa + o + g, c = (d + o + g - rf[kr]->tx) >> 7;
+        for (uint32_t i = 0; i < gb; i += 4) h = (h ^ *(const uint32_t *)(src + g + i)) * 16777619u;
+        if (rg_hash[kr][c].a == a && rg_hash[kr][c].h == h) { ga.t_same += gb; continue; }
+        rg_hash[kr][c].a = a; rg_hash[kr][c].h = h;
+      }
+      ga.t_changed += gb;
       for (uint32_t r = 0; r < 8; r++)
         for (uint32_t b = 0; b < rb; b += 16) {
           const uint32_t *i = (const uint32_t *)(src + g + b * 8 + r * 16);
           uint32_t *x = (uint32_t *)(d + o + g + r * rb + b);
           x[0] = i[0]; x[1] = i[1]; x[2] = i[2]; x[3] = i[3];
-          h = ((((h ^ i[0]) * 16777619u ^ i[1]) * 16777619u ^ i[2]) * 16777619u ^ i[3]) * 16777619u;
         }
-      if (rg_hash) {  // repetition: same / changed / new compared to the last copy of this group
-        uint32_t a = pa + o + g, c = (a >> 7 ^ a >> 17) & (RH_N - 1);
-        if (rg_hash[c].a != a) ga.t_fresh += gb; else if (rg_hash[c].h == h) ga.t_same += gb; else ga.t_changed += gb;
-        rg_hash[c].a = a; rg_hash[c].h = h;
-      }
     }
   }
   uint32_t t = now() - t0;
@@ -197,14 +208,14 @@ static uint32_t rcHash(const void *p, uint32_t l) {
 }
 // Size of group g of e, and where it starts in the texture
 static uint32_t rcLen(RC *e, uint32_t g) { uint32_t n = e->key & 0x7FFFFFFF, o = g * e->gb; return n - o < e->gb ? n - o : e->gb; }
-// 1 if a group of [g0, g1) is out of use or changed (then it is marked in d). Every group is sampled; in turns, 1 of
-// every 16 groups per frame is also hashed whole, for changes the sample does not see.
+// 1 if a group of [g0, g1) is out of use or changed (then it is marked in d). In turns, 1 of every 4 groups per frame is
+// sampled and 1 of every 16 is also hashed whole, for changes the sample does not see.
 static int rcCheck(RC *e, uint32_t g0, uint32_t g1) {
   uint32_t t0 = now(), k = e - rc, r = 0;
   for (uint32_t g = g0; g < g1 && !r; g++) {
     const uint8_t *p = (const uint8_t *)PSP(e->a + g * e->gb);
     if (e->d >> g & 1) r = 1;
-    else if ((e->m >> g & 1) && (rcSample(p, rcLen(e, g), e->gb / 8) != e->s[g] || (!((g + k + gen) & 15) && rcHash(p, rcLen(e, g)) != e->h[g]))) {
+    else if ((e->m >> g & 1) && !((g + k + gen) & 3) && (rcSample(p, rcLen(e, g), e->gb / 8) != e->s[g] || (!((g + k + gen) & 15) && rcHash(p, rcLen(e, g)) != e->h[g]))) {
       e->m &= ~(1ull << g); e->d |= 1ull << g; ga.c_chg++; r = 1;
     }
   }
@@ -250,8 +261,11 @@ static void regInit(void) {
     if (b < 0 || sceKernelGetMemBlockBase(b, &p) < 0) { reg_on = 0; clog("frame record: no memory to sort textures (%08x)\n", b); return; }
     rg_ord = p;
   }
-  b = sceKernelAllocMemBlock("nativedraw_hashes", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, 0x20000, 0);  // (RH_N x 8 bytes)
-  if (b >= 0 && sceKernelGetMemBlockBase(b, &p) >= 0) { rg_hash = p; sceClibMemset(p, 0, 0x20000); }
+  b = sceKernelAllocMemBlock("nativedraw_hashes", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, RN * 0x20000, 0);  // (RH_N x 8 bytes each)
+  if (b >= 0 && sceKernelGetMemBlockBase(b, &p) >= 0) {
+    sceClibMemset(p, 0, RN * 0x20000);
+    for (int i = 0; i < RN; i++) rg_hash[i] = (void *)((uint8_t *)p + i * 0x20000);
+  }
   void *q = 0;
   b = sceKernelAllocMemBlock("nativedraw_tex_cache", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW_UNCACHE, RC_N, 0);
   SceUID c = sceKernelAllocMemBlock("nativedraw_tex_index", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, (sizeof(RC) * RC_E + 0x3FFFF) & ~0x3FFFFu, 0);
@@ -369,7 +383,7 @@ static uint32_t rgTex(uint32_t r0, uint32_t r1) {
     f->ta[i] = ta; f->tn[i] = key; f->to[i] = e ? (uint32_t)(rc_tx + e->o - f->tx) : f->ntx; f->tm[i] = 0; f->tq[i] = vr ? ~0u : 0; f->tr[i] = 8 * rb; f->nt++;
     f->tc[i] = e ? e - rc + 1 : 0;
     rg_tl[i] = pub_ord; rg_tc[i] = 0;
-    if (e) e->use = rg_seq[rg_w]; else f->ntx += (n + 63) & ~63u;
+    if (e) e->use = rg_seq[rg_w]; else { rgLayout(rg_w, i, ta, key, f->to[i], n); f->ntx += (n + 63) & ~63u; }
   }
   uint32_t g0 = r0 / 8, g1 = (r1 + 7) / 8, gb = 8 * rb;  // groups and bytes per group
   if (f->tc[i]) {  // what the cache holds of these rows, already checked, needs no copy
@@ -388,7 +402,7 @@ static uint32_t rgTex(uint32_t r0, uint32_t r1) {
       uint32_t sa = rgSrc(ta + o, m), t0 = now();
       if (!e) rgGpu(rg_w, "from RAM");
       if (!sa) { f->flags |= R_READ; return 0; }
-      rgTexCopy(f->tx + f->to[i] + o, (const void *)PSP(sa), m, swz ? rb : 0, ta + o);
+      rgTexCopy(f->tx + f->to[i] + o, (const void *)PSP(sa), m, swz ? rb : 0, ta + o, e ? -1 : rg_w);
       if (e) rcNote(e, g, h);
       ga.t_b += m; ga.us_l += now() - t0;
     }
@@ -424,7 +438,7 @@ static void regPend(void) {
       while (h < 64 && (m >> h & 1)) h++;
       uint32_t o = g * gb, l = (h * gb > n ? n : h * gb) - o, a = (f->ta[i] + o) & 0x1FFFFF;
       for (uint32_t pg = a >> 12, pe = (a + l - 1) >> 12; pg <= pe; pg++) { uint32_t q = CPY(b, pg); if (q < f->tq[i]) f->tq[i] = q; }
-      rgTexCopy(f->tx + f->to[i] + o, (const void *)PSP(base + a), l, f->tn[i] >> 31 ? gb / 8 : 0, f->ta[i] + o);
+      rgTexCopy(f->tx + f->to[i] + o, (const void *)PSP(base + a), l, f->tn[i] >> 31 ? gb / 8 : 0, f->ta[i] + o, f->tc[i] ? -1 : k);
       ga.t_b += l;
       g = h;
     }
@@ -488,7 +502,8 @@ static void regDraw(uint32_t n, uint32_t type, uint32_t vt, uint32_t idx) {
   f->draws_seen++;
   if (f->flags) return;  // already incomplete: nothing more is spent on this frame
   if (f->nd >= RD_N) { f->flags |= R_LIMIT; return; }
-  uint32_t t0 = now(), t1, v[NRS];
+  // (reading the clock costs: the times are sampled, 1 draw in 8)
+  uint32_t tm = !(f->draws_seen & 7), t0 = tm ? now() : 0, t1, v[NRS];
   if (rg_chg || !f->ne) {
     rg_chg = 0;
     for (int i = 0; i < NRS; i++) v[i] = reg[RS[i]];
@@ -497,7 +512,7 @@ static void regDraw(uint32_t n, uint32_t type, uint32_t vt, uint32_t idx) {
       sceClibMemcpy(f->e[f->ne++], v, sizeof v);
     }
   }
-  t1 = now(); ga.us_e += t1 - t0;
+  t1 = tm ? now() : 0; if (tm) ga.us_e += (t1 - t0) * 8;
   RDraw *d = &f->d[f->nd];
   d->st = f->ne - 1; d->prim = type; d->n = n; d->vt = vt; d->ioff = 0; d->clut = rg_clut; d->clen = rg_clut ? rg_clut_b : 0;
   uint32_t vs = vsize(vt), nv = n;
@@ -521,15 +536,14 @@ static void regDraw(uint32_t n, uint32_t type, uint32_t vt, uint32_t idx) {
     if (((reg[0x17] & 1) || (reg[0xC0] & 3) == 2) && !(d->loff = rgBlock(reg + 0x53, 72, &ll))) return;
   }
   d->toff = 0;
-  uint32_t t2 = now(); ga.us_v += t2 - t1;
+  uint32_t t2 = tm ? now() : 0; if (tm) ga.us_v += (t2 - t1) * 8;
   if ((reg[0x1E] & 1) && !(reg[0xD3] & 1)) {  // the texture, after the vertices (they give the rows it uses)
     uint32_t r0 = 0, r1 = 0;
     rgRows(vt, f->a + d->voff - 1, d->vlen, d->ioff ? f->a + d->ioff - 1 : 0, n, &r0, &r1);
     d->toff = rgTex(r0, r1);
   }
   f->nd++;
-  uint32_t t3 = now(); ga.us_t += t3 - t2;
-  rg_t += t3 - t0;
+  if (tm) { uint32_t t3 = now(); ga.us_t += (t3 - t2) * 8; rg_t += (t3 - t0) * 8; }
   // what each game uses (log statistics)
   uint32_t *s = f->e[d->st];
   ga.draws++;

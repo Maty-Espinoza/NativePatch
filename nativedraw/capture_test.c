@@ -108,7 +108,7 @@ static void build(int frame) {
 static uint32_t stateSum(void) { uint32_t h = 0; for (int i = 0; i < 256; i++) h = h * 31 + reg[i]; for (int m = 0; m < 5; m++) for (int i = 0; i < 96; i++) h = h * 31 + mtx[m][i]; return h * 31 + vaddr * 7 + iaddr; }
 // Result of one case, in memory shared with the process that compares them. col: columns before "|" per frame, without
 // and with state; the rest are totals of what each case must exercise.
-typedef struct { char col[8][64]; uint32_t st[8], hit, chk, bad, fail, pre, late, lines, pv, skip, whole, lost, rt1, pal, tex2, tc, xf, ok; } Res;
+typedef struct { char col[8][64]; uint32_t st[8], hit, chk, bad, fail, pre, late, lines, pv, skip, whole, lost, rt1, pal, tex2, tc, srt, xf, ok; } Res;
 static Res *res;
 static int report(const char *name, int ok) { printf("%s %s\n", ok ? "ok  " : "FAIL", name); return !ok; }
 // Frames from..7 of case a equal those of b (state too if st).
@@ -123,12 +123,12 @@ static int texCopyOk(uint32_t groups) {
   uint8_t *s = malloc(m), *d = malloc(m);
   rg_ord = malloc(OR_N);
   for (uint32_t i = 0; i < m; i++) s[i] = i * 31 + (i >> 8);
-  rgTexCopy(d, s, m, rb, 0x08800000u);
+  rgTexCopy(d, s, m, rb, 0x08800000u, -1);
   for (uint32_t g = 0; g < groups; g++)
     for (uint32_t r = 0; r < 8; r++)
       for (uint32_t b = 0; b < rb; b += 16)
         ok &= !memcmp(d + g * 8 * rb + r * rb + b, s + g * 8 * rb + b * 8 + r * 16, 16);
-  rgTexCopy(d, s, m, 0, 0x08800000u);
+  rgTexCopy(d, s, m, 0, 0x08800000u, -1);
   return ok && !memcmp(d, s, m);
 }
 // Runs each case in a child process (the capturer's state is global; a hang ends with the alarm) and compares them.
@@ -163,6 +163,7 @@ static int checkAll(void) {
   bad += report("frame record: a TRANSFER on the drawn image becomes a draw", r[REG0].xf);
   bad += report("frame record: a texture rewritten between lists gets a new copy", r[REG0].tex2);
   bad += report("texture cache: reused between frames, a change goes to the record, then back", r[REG0].tc);
+  bad += report("sorted textures: an unchanged group is skipped, a changed one is sorted again", r[REG0].srt);
   bad += report("frame record: the loaded palette survives changes in memory", r[REG0].pal);
   bad += report("frame record: an image only counts as drawn in its frame", r[REG0].rt1);
   bad += report("texture copy: right by CPU and by DMA", texCopyOk(1) && texCopyOk(32));
@@ -250,7 +251,8 @@ int main(int argc, char **argv) {
     uint8_t *p1 = rf[rg_w]->tx + rgTex(0, 8) - 1;
     res->tc = p0 == p1 && ga.t_n[0] == cp;
     *W(0x08C31000) = 6; NEXT();
-    uint8_t *p2 = rf[rg_w]->tx + rgTex(0, 8) - 1;
+    uint8_t *p2 = p1;  // (a group is sampled 1 frame in 4)
+    for (int k = 0; k < 4 && p2 == p1; k++) { p2 = rf[rg_w]->tx + rgTex(0, 8) - 1; if (p2 == p1) { gen++; NEXT(); } }
     res->tc = res->tc && p2 != p1 && *(uint32_t *)p2 == 6;
     for (int k = 0; k < RN + 1; k++) { NEXT(); }
     uint8_t *p3 = rf[rg_w]->tx + rgTex(0, 8) - 1;
@@ -259,6 +261,16 @@ int main(int argc, char **argv) {
     uint32_t s0 = rcSample((uint8_t *)W(0x08C31000), 8192, 1024);
     W(0x08C31000)[(1024 + 640) / 4] = 7;
     res->tc = res->tc && s0 != rcSample((uint8_t *)W(0x08C31000), 8192, 1024) && !rcGet(0x08C32000, 2048, 256);
+    {
+      uint32_t m = 16384, same;
+      uint8_t *sr = malloc(m), *ds = rf[0]->tx;
+      for (uint32_t i = 0; i < m; i++) sr[i] = i * 31;
+      rg_ordc = 1; rgTexCopy(ds, sr, m, 128, 0x08900000u, 0); same = ga.t_same;
+      rgTexCopy(ds, sr, m, 128, 0x08900000u, 0);
+      res->srt = ga.t_same - same == m;
+      sr[0] ^= 0xFF; same = ga.t_same; rgTexCopy(ds, sr, m, 128, 0x08900000u, 0);
+      res->srt = res->srt && ga.t_same - same == m - 1024 && ds[0] == sr[0];
+    }
 #undef NEXT
     rf[rg_w]->flags = 1; regFlip(0x04000000, 512, 0);
     RFrame *x = rf[rg_w];  // 64x64 from RAM to (8, 14) of the image being drawn, and one that is not on it

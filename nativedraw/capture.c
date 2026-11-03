@@ -1353,11 +1353,11 @@ static int repThread(SceSize args, void *argp) {
              gr.fmt[0], gr.fmt[1], gr.fmt[2], gr.fmt[3], gr.fmt[4], gr.fmt[5], gr.fmt[6], gr.fmt[7], gr.fmt[8], gr.fmt[9], gr.fmt[10]);
         clog("  textures (per frame): from RAM %u copies %u KB (DMA %u us, sort %u us) | from VRAM %u copies %u KB (DMA %u us, sort %u us) | "
              "DMA calls %u | copies of <1K %u, 1-4K %u, 4-16K %u, 16-64K %u, 64K+ %u | KB swizzled by row bytes: 16 %u, 32 %u, "
-             "64 %u, 128 %u, 256 %u, 512+ %u | swizzled KB against the last copy: same %u, changed %u, new %u | KB not swizzled %u | "
+             "64 %u, 128 %u, 256 %u, 512+ %u | swizzled KB against the last copy: same %u, changed %u | KB not swizzled %u | "
              "distinct textures %u\n", gr.t_n[0] / g, gr.t_kb[0] / g >> 10, gr.t_dma[0] / g, gr.t_ord[0] / g, gr.t_n[1] / g, gr.t_kb[1] / g >> 10,
              gr.t_dma[1] / g, gr.t_ord[1] / g, gr.t_calls / g, gr.t_size[0] / g, gr.t_size[1] / g, gr.t_size[2] / g, gr.t_size[3] / g, gr.t_size[4] / g,
              gr.t_rb[0] / g >> 10, gr.t_rb[1] / g >> 10, gr.t_rb[2] / g >> 10, gr.t_rb[3] / g >> 10, gr.t_rb[4] / g >> 10, gr.t_rb[5] / g >> 10,
-             gr.t_same / g >> 10, gr.t_changed / g >> 10, gr.t_fresh / g >> 10, gr.t_lines / g >> 10, gr.t_tex / g);
+             gr.t_same / g >> 10, gr.t_changed / g >> 10, gr.t_lines / g >> 10, gr.t_tex / g);
         clog("  texture cache (per frame): reused %u KB, copied %u KB, changed groups %u, textures in the record %u, no room %u, check %u us\n",
              gr.c_hit / g >> 10, gr.c_fill / g >> 10, gr.c_chg / g, gr.c_rec / g, gr.c_fail / g, gr.c_us / g);
       }
