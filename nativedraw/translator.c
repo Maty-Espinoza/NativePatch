@@ -1043,7 +1043,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     if (prim < 3) prim = 3;
     if (prim != 6 && (res = trTris(w, &n, room, &prim, sc, (clr & 1) || !(RE(e, 0x50) & 1), w3d))) break;
     DEV(t_c[TC_VOUT] += n; t_c[TC_CUT] += n != nb; t_c[TC_SAME] += same;)
-    if (!n) continue;
+    if (!n) { pd = 0; continue; }  // (t, tw and th are this draw's now, not those of the state in the context)
     int keep = 1;  // (0: the next draw cannot share t)
     if (tex && d->toff && (1u << (RE(e, 0xB8) & 15)) < tw) {
       uint32_t k = trNarrow(&t, f->tx + d->toff - 1, RE(e, 0xC3) & 15, tw, 1u << (RE(e, 0xB8) & 15), th, w, n, pal + np, TP_B / 4 - np);
