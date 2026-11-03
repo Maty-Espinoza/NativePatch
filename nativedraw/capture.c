@@ -1607,7 +1607,6 @@ void capStart(void) {
   DEV(no_capture = swOn("ux0:data/nativedraw/no_capture");)
   DEV(pv_on = !swOn("ux0:data/nativedraw/no_lookahead");)
   reg_on = swOn("ux0:data/nativedraw/draw");  // frame record
-  DEV(rc_off = swOn("ux0:data/nativedraw/no_tex_cache");)
   if (reg_on) regInit();
   clog("log level: %s (ux0:data/nativedraw/log_level: minimum, medium or extreme) | switches%s%s%s%s%s%s%s%s\n", level == 2 ? "extreme" : level ? "medium" : "minimum", gp_flags & 1 ? " no_gate" : "", gp_flags & 2 ? " no_mirror" : "",
        gp_flags & 4 ? " no_idle" : "", gp_flags & 8 ? " gate_sync" : "", gp_flags & 32 ? " mirror_wait" : "", no_capture ? " no_capture" : "", pv_on ? "" : " no_lookahead", gp_flags || no_capture || !pv_on ? "" : ": none (all normal)");

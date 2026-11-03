@@ -90,6 +90,12 @@ proof.
   capturer went from 19.4 to 8.3 ms per frame, textures from 14.5 to 4.1 ms, copies from 746 to 3 KB and DMA calls from 44 to
   0, with nothing out of the store and no visual errors reported [measured, 0.0.10.1]. The check itself costs ~2.5 ms per
   frame. VRAM textures (KOF 96 fights, DMA ~1 ms + sort ~2 ms per frame) are not cached.
+- **Cache sample and small textures:** words spaced exactly one row apart all land in the first column, usually transparent, so
+  a whole new sprite goes unseen. Street Fighter Alpha 3 MAX rebuilds its characters from 64x64 T4 textures of 2 KB in RAM, and they
+  came out with foreign pieces. Now each word is in another column, and textures under 8 KB stay out of the cache: they cost
+  little to copy and change often. Metal Slug XX stays at capturer 9.7 ms, textures 5.3 ms, check ~3.2 ms [measured, 0.0.11.3].
+- **Street Fighter Alpha 3 MAX in HD** (fans, 0.0.11.3): ~700 draws per frame, the intermediate image takes ~16 ms of GPU and the
+  surface ~4 ms, and the translator ~57 % of a core: the fight shows ~32 HD frames per second while the game runs at 60.
 - **Capturer behind = garbage vertices:** if copying textures takes longer than a frame, the gate (5 ms at most) lets
   the game through and vertices the game was already rewriting get copied (positions of ~2^31, uv 65535; the GPU filled
   the whole screen with one texture: Metal Slug XX's "white glitch"). A vertex outside ±4096 sends the frame with the

@@ -86,6 +86,13 @@ directa.
   a 3 KB y las llamadas al DMA de 44 a 0, sin nada fuera del almacén y sin errores visuales reportados [medido, 0.0.10.1].
   La revisión cuesta ~2,5 ms por frame. Las texturas de la VRAM (peleas de KOF 96, DMA ~1 ms + ordenar ~2 ms por frame) no
   pasan por el caché.
+- **Muestra del caché y texturas chicas:** valores separados justo por una fila caen todos en la primera columna, normalmente
+  transparente, y un sprite nuevo pasa inadvertido. Street Fighter Alpha 3 MAX arma sus personajes con texturas T4 de 64x64 y 2 KB en
+  la RAM, y salían con piezas ajenas. Ahora cada valor está en otra columna, y las texturas de menos de 8 KB quedan fuera del
+  caché: copiarlas cuesta poco y cambian seguido. Metal Slug XX queda en capturador 9,7 ms, texturas 5,3 ms, revisión ~3,2 ms
+  [medido, 0.0.11.3].
+- **Street Fighter Alpha 3 MAX en HD** (abanicos, 0.0.11.3): ~700 draws por frame, la imagen intermedia toma ~16 ms de GPU, la
+  superficie ~4 ms y el traductor ~57 % de un núcleo: la pelea muestra ~32 frames HD por segundo con el juego a 60.
 - **Capturador atrasado = vértices basura:** si copiar texturas tarda más que un frame, la compuerta (5 ms como mucho)
   deja pasar al juego y se copian vértices que el juego ya reescribía (posiciones de ~2^31, uv 65535; la GPU rellenaba
   toda la pantalla con una textura: "glitch blanco" de Metal Slug XX). Un vértice fuera de ±4096 manda el frame con la

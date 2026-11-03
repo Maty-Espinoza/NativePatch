@@ -2,18 +2,20 @@
 
 The only list of pending work. Ordered from what comes next to what can wait. Each item says where it came from
 (a document in `docs/dev/en/`, `docs/agent/en/`, `docs/changelog/en/` or the claude.ai project). Done items are removed;
-what was done is in `CHANGELOG.md`. Updated 2026-11-02 (NativeLink 0.0.4 + NativeDraw 0.0.10 confirmed; before: tests up to NativeDraw 0.0.8.29 + NativeLink 0.0.3.11). How the work is done: `docs/agent/en/workflow.md`; stage 3 plan and results:
+what was done is in `CHANGELOG.md`. Updated 2026-11-02 (NativeLink 0.0.4 + NativeDraw 0.0.11 confirmed; before: tests up to NativeDraw 0.0.8.29 + NativeLink 0.0.3.11). How the work is done: `docs/agent/en/workflow.md`; stage 3 plan and results:
 `docs/agent/en/stage3-plan.md`.
 
 ## Next
 - [ ] **3D** (after the fans; the user's order, 2026-11-02): start with a light game, not GT. Store the matrices in the record
       and translate depth; GT needs reusing recorded sublists (`Performance for drawing GT`).
 - [ ] **Texture cache, what is left:** VRAM textures (KOF 96 fights: DMA ~1 ms + sort ~2 ms per frame; only after understanding the
-      tiles: if they are stale data, a cache can make them worse); the check costs ~2.5 ms per frame (Metal Slug XX), see what
+      tiles: if they are stale data, a cache can make them worse); the check costs ~3.2 ms per frame (Metal Slug XX), see what
       can go; translator caches (palettes, translated draws, identical scenes; the translator spends ~8–10 ms of CPU per
       frame).
-- [ ] **Triangle fans (prim 5) in the translator:** Street Fighter Alpha 3 MAX fights fall to the normal image with reason
-      `primitive`. With them it is the 2D benchmark at 60 fps (~600 draws per frame).
+- [ ] **Street Fighter Alpha 3 MAX fights:** ~32 HD frames per second with the game at 60: intermediate image ~16 ms of GPU, surface
+      ~4 ms, translator ~57 % of a core, ~700 draws per frame. Joining draws and translator caches would help. Windows of up to 316
+      frames in 10 s fall to the normal image (`other_target`), and 7 with `bad_texture` (a user's "suspicious flash"?).
+      One capturer `resets` in the 0.0.11.3 run, unexplained. Background seen moving wrong on 0.0.11.1: not seen since.
 - [ ] KOF 96 fights: seconds at 42–57 fps with the GPU at 90–98 % and the capturer at ~11 ms; suspected GPU limit, not proven.
 - [ ] **NPTEST on 0.0.8.32, real differences left:** `firstState` (alpha test set only in the first lists is lost), `vertFmts`
       (8-bit positions: the PSP does not draw the sprite where the translator does), `paletteRt`, `depthTex`. Animated

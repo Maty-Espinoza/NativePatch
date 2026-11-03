@@ -4,6 +4,14 @@ Versions: `docs/dev/en/versions.md`. The detail of each step is in `docs/changel
 removed from there before the first release; this file stays as the summary). Versions marked "(test)" were sent to
 the Vita but not yet confirmed as a numbered release.
 
+## NativeDraw 0.0.11 (2026-11-02)
+Tests 0.0.11.1–0.0.11.3, checked on the Vita with Street Fighter Alpha 3 MAX and Metal Slug XX. NativeLink stays at 0.0.4.
+- **Triangle fans (prim 5)** in the translator and `tools/dump.py`: Street Fighter fights are drawn in HD.
+- **Texture cache fixed:** the sample read only the first column of each group, usually transparent, so characters showed
+  old pieces. It now reads a different column in each row, and textures under 8 KB stay out of the cache.
+- **Dumps:** without memory for 3 frames they save 1 instead of failing (the cache takes ~4.25 MB).
+- **Metal Slug XX (per frame, median):** capturer 9.7 ms, textures 5.3 ms, reused 736 KB.
+
 ## NativeDraw 0.0.10 (2026-11-02)
 Test 0.0.10.1, checked on the Vita with Metal Slug XX. NativeLink stays at 0.0.4.
 - **Texture cache between frames, RAM textures only:** a texture stays sorted in a 4 MB store the GPU reads, and draws use

@@ -132,7 +132,6 @@ typedef struct { uint32_t a, key, gb, o, use; uint64_t m, d; uint32_t s[64], h[6
 static RC *rc;
 static uint8_t *rc_tx;
 static uint32_t rc_pos;  // where the next new entry is looked for (the memory is used in a ring)
-static int rc_off;      // switch no_tex_cache
 #define RC_B(e) ((((e)->key & 0x7FFFFFFF) + 63) & ~63u)
 static volatile int rg_pend;
 // Turn of the oldest record that the presenter or the GPU can still read
@@ -253,7 +252,6 @@ static void regInit(void) {
   }
   b = sceKernelAllocMemBlock("nativedraw_hashes", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, 0x20000, 0);  // (RH_N x 8 bytes)
   if (b >= 0 && sceKernelGetMemBlockBase(b, &p) >= 0) { rg_hash = p; sceClibMemset(p, 0, 0x20000); }
-  if (rc_off) return;
   void *q = 0;
   b = sceKernelAllocMemBlock("nativedraw_tex_cache", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW_UNCACHE, RC_N, 0);
   SceUID c = sceKernelAllocMemBlock("nativedraw_tex_index", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, (sizeof(RC) * RC_E + 0x3FFFF) & ~0x3FFFFu, 0);
