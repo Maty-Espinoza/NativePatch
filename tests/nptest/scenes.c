@@ -1,6 +1,7 @@
 // scenes.c: NPTEST scenes, one technique each (see main.c). Three groups: what NativeDraw draws today (expect "ok"),
 // what it rejects with a known reason, and techniques with no code in the translator yet (expect "?").
 #include "nptest.h"
+#include <math.h>
 #define A16 __attribute__((aligned(16)))
 #define N 64
 static u32 A16 t8888[N * N], pal[256], pal2[256], t_c[N * N];
@@ -269,6 +270,33 @@ static void ortho(int f) {
   b[1].u = b[1].v = 1; b[1].x = CX(0) + N; b[1].y = CY(0) + N; b[1].z = 0;
   t32(); sceGuEnable(GU_TEXTURE_2D); sceGuTexScale(1, 1); sceGuColor(WHITE);
   sceGuDrawArray(GU_SPRITES, GU_TEXTURE_32BITF | GU_VERTEX_32BITF | GU_TRANSFORM_3D, 2, 0, b);
+}
+// A lit, fogged, textured cube turning in perspective, with depth and back faces culled: the common 3D path
+static void cube3d(int f) {
+  static const signed char q[6][4][3] = { { {-1,-1,1},{1,-1,1},{1,1,1},{-1,1,1} }, { {1,-1,-1},{-1,-1,-1},{-1,1,-1},{1,1,-1} },
+    { {1,-1,1},{1,-1,-1},{1,1,-1},{1,1,1} }, { {-1,-1,-1},{-1,-1,1},{-1,1,1},{-1,1,-1} },
+    { {-1,1,1},{1,1,1},{1,1,-1},{-1,1,-1} }, { {-1,-1,-1},{1,-1,-1},{1,-1,1},{-1,-1,1} } };
+  static const signed char nr[6][3] = { {0,0,1},{0,0,-1},{1,0,0},{-1,0,0},{0,1,0},{0,-1,0} };
+  struct V { float u, v, nx, ny, nz, x, y, z; } *b = sceGuGetMemory(36 * sizeof(struct V));
+  static const int ix[6] = { 0, 1, 2, 0, 2, 3 };
+  for (int s = 0; s < 6; s++) for (int k = 0; k < 6; k++) {
+    const signed char *p = q[s][ix[k]];
+    b[s * 6 + k] = (struct V){ ix[k] == 1 || ix[k] == 2, ix[k] >= 2, nr[s][0], nr[s][1], nr[s][2], p[0], p[1], p[2] };
+  }
+  float n = 1, ff = 20, t = 1.0f / 0.8f, a = f * 0.03f, cs = cosf(a), sn = sinf(a);
+  ScePspFMatrix4 pr = { { t * 272 / 480, 0, 0, 0 }, { 0, t, 0, 0 }, { 0, 0, -(ff + n) / (ff - n), -1 }, { 0, 0, -2 * ff * n / (ff - n), 0 } },
+                 vw = { { 1, 0, 0, 0 }, { 0, 1, 0, 0 }, { 0, 0, 1, 0 }, { 0, 0, -5, 1 } },
+                 md = { { cs, 0, -sn, 0 }, { 0, 1, 0, 0 }, { sn, 0, cs, 0 }, { 0, 0, 0, 1 } };
+  sceGuSetMatrix(GU_PROJECTION, &pr); sceGuSetMatrix(GU_VIEW, &vw); sceGuSetMatrix(GU_MODEL, &md);
+  ScePspFVector3 lp = { 0.5f, 0.5f, 1 };
+  sceGuEnable(GU_DEPTH_TEST); sceGuDepthFunc(GU_GEQUAL); sceGuDepthRange(65535, 0); sceGuClearDepth(0); sceGuClear(GU_DEPTH_BUFFER_BIT);
+  sceGuEnable(GU_CULL_FACE); sceGuFrontFace(GU_CW);
+  sceGuEnable(GU_LIGHTING); sceGuEnable(GU_LIGHT0); sceGuLight(0, GU_DIRECTIONAL, GU_DIFFUSE, &lp);
+  sceGuLightColor(0, GU_DIFFUSE, WHITE); sceGuAmbient(0xFF404040); sceGuColor(WHITE);
+  sceGuEnable(GU_FOG); sceGuFog(4, 8, 0xFF804020);
+  t32(); sceGuEnable(GU_TEXTURE_2D); sceGuTexScale(1, 1); sceGuTexOffset(0, 0); sceGuTexFunc(GU_TFX_MODULATE, GU_TCC_RGB);
+  sceGuDrawArray(GU_TRIANGLES, GU_TEXTURE_32BITF | GU_NORMAL_32BITF | GU_VERTEX_32BITF | GU_TRANSFORM_3D, 36, 0, b);
+  sceGuDisable(GU_FOG); sceGuDisable(GU_LIGHTING); sceGuDisable(GU_LIGHT0); sceGuDisable(GU_CULL_FACE); sceGuDisable(GU_DEPTH_TEST);
 }
 static void weights(int f) {
   struct { float w; u32 c; s16 x, y, z, pad; } *v = sceGuGetMemory(2 * 16);
@@ -594,7 +622,7 @@ const Scene scenes[] = {
   S(texFuncs, "ok"), S(blendOps, "ok"), S(blendFactors, "ok"), S(alphaTest, "ok"), S(scissorRect, "ok"), S(layers, "ok"),
   S(rtOne, "ok"), S(rtTwo, "ok"), S(rtFmts, "ok"), S(xferRam, "ok"), S(xferVram, "ok"),
   { "fb565", "ok", fbPlain, 0, GU_PSM_5650 }, { "fb5551", "ok", fbPlain, 0, GU_PSM_5551 }, { "lateList", "ok", lateList, F_SELF, GU_PSM_8888 },
-  S(points, "primitive"), S(lineStrip, "primitive"), S(bezier, "?"), S(spline, "?"), S(ortho, "3d"),
+  S(points, "primitive"), S(lineStrip, "primitive"), S(bezier, "?"), S(spline, "?"), S(ortho, "ok"), S(cube3d, "ok"),
   S(weights, "vertex"), S(morph, "vertex"), S(decal, "texture_function"), S(tfxBlend, "texture_function"), S(tfxAdd, "texture_function"),
   S(dxt1, "format"), S(dxt3, "format"), S(dxt5, "format"), S(t16, "format"), S(t32p, "format"),
   S(colorTest, "color_test_or_logic"), S(logicOp, "color_test_or_logic"), S(fixGray, "blend"), S(blendAbs, "blend"), S(blendDst, "blend"), S(blend2x, "blend"),

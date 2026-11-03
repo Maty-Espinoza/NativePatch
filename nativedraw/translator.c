@@ -6,14 +6,14 @@
 #include "record.h"
 #include "shaders_nd.h"
 // Result of trCheck/trFrame: T_OK or the reason the frame was not drawn (tnames: its name in the log)
-enum { T_OK, T_NEW, T_3D, T_PRIM, T_FMT, T_BLEND, T_TFUNC, T_ODD, T_DEST, T_VERT, T_LIMIT, T_TEX, T_PROG, T_OUT, T_MASK, TN };
-static const char *tnames[TN] = { "ok", "no_new_frame", "3d", "primitive", "format", "blend", "texture_function",
+enum { T_OK, T_NEW, T_PRIM, T_FMT, T_BLEND, T_TFUNC, T_ODD, T_DEST, T_VERT, T_LIMIT, T_TEX, T_PROG, T_OUT, T_MASK, TN };
+static const char *tnames[TN] = { "ok", "no_new_frame", "primitive", "format", "blend", "texture_function",
                                 "color_test_or_logic", "other_target", "vertex", "limit", "bad_texture", "program", "vertex_out", "mask" };
 // counters for the 10 s log (read and cleared by the presenter)
 static volatile uint32_t t_cnt[TN], t_hd, t_nat, t_draws;
 static volatile uint32_t t_skip[6];  // PSP frames advanced by each drawn frame (0: repeated, 5: 5 or more)
 static uint32_t t_seen[TN];   // times each reason was seen (the first one is logged in detail)
-typedef struct { float x, y, z, u, v; uint32_t c; } TV;  // translated vertex (24 bytes, the nd_v format)
+typedef struct { float x, y, z, w, u, v, f; uint32_t c; } TV;  // translated vertex (32 bytes, the nd_v format); f: fog (1: none)
 static TV *tv[2];            // translated vertices, one per surface
 static uint32_t *tpal[2];    // translated palettes (8888), aligned to 64: 16 entries (64 bytes) or 256 (1 KB)
 #define TV_N (64 << 10)      // vertices per surface (and limit of the 16-bit indices)
@@ -61,7 +61,7 @@ static uint32_t texAddr(const uint32_t *e) { return (RE(e, 0xA0) & 0xFFFFF0) | (
 static SceGxmVertexProgram *nvp;
 static const SceGxmProgram *pft, *pfc, *pv;
 static SceGxmShaderPatcherId ift, ifc;
-static const SceGxmProgramParameter *n_wvp, *n_tf, *n_atx, *n_atc;
+static const SceGxmProgramParameter *n_wvp, *n_tf, *n_atx, *n_atc, *n_env, *n_fgx, *n_fgc;
 typedef struct { uint32_t key; SceGxmFragmentProgram *p; } FP;
 static FP fps[64];
 static uint32_t nfps;
@@ -102,11 +102,12 @@ static int trInit(void) {
                                *pc = sceGxmProgramFindParameterByName(pv, "aColor");
   n_wvp = sceGxmProgramFindParameterByName(pv, "wvp");
   n_tf = sceGxmProgramFindParameterByName(pft, "tf"); n_atx = sceGxmProgramFindParameterByName(pft, "at");
-  n_atc = sceGxmProgramFindParameterByName(pfc, "at");
-  if (!pa || !pt || !pc || !n_wvp || !n_tf || !n_atx || !n_atc) { alog("translator: shader parameters not found\n"); return -2; }
-  SceGxmVertexAttribute at[3] = { { 0, 0, SCE_GXM_ATTRIBUTE_FORMAT_F32, 3, sceGxmProgramParameterGetResourceIndex(pa) },
-                                  { 0, 12, SCE_GXM_ATTRIBUTE_FORMAT_F32, 2, sceGxmProgramParameterGetResourceIndex(pt) },
-                                  { 0, 20, SCE_GXM_ATTRIBUTE_FORMAT_U8N, 4, sceGxmProgramParameterGetResourceIndex(pc) } };
+  n_atc = sceGxmProgramFindParameterByName(pfc, "at"); n_env = sceGxmProgramFindParameterByName(pft, "env");
+  n_fgx = sceGxmProgramFindParameterByName(pft, "fog"); n_fgc = sceGxmProgramFindParameterByName(pfc, "fog");
+  if (!pa || !pt || !pc || !n_wvp || !n_tf || !n_atx || !n_atc || !n_env || !n_fgx || !n_fgc) { alog("translator: shader parameters not found\n"); return -2; }
+  SceGxmVertexAttribute at[3] = { { 0, 0, SCE_GXM_ATTRIBUTE_FORMAT_F32, 4, sceGxmProgramParameterGetResourceIndex(pa) },
+                                  { 0, 16, SCE_GXM_ATTRIBUTE_FORMAT_F32, 3, sceGxmProgramParameterGetResourceIndex(pt) },
+                                  { 0, 28, SCE_GXM_ATTRIBUTE_FORMAT_U8N, 4, sceGxmProgramParameterGetResourceIndex(pc) } };
   SceGxmVertexStream st = { sizeof(TV), SCE_GXM_INDEX_SOURCE_INDEX_16BIT };
   if ((r = sceGxmShaderPatcherCreateVertexProgram(pat, iv, at, 3, &st, 1, &nvp)) < 0) { alog("translator: vertex program %08x\n", r); return r; }
   if (!fragProg(0, 0, C_RGB) || !fragProg(1, 0, C_RGB)) return -3;
@@ -180,12 +181,16 @@ static uint32_t colorMask(const uint32_t *e) {
   return (clr & 1) && !(clr >> 8 & 1) ? SCE_GXM_COLOR_MASK_NONE : g;
 }
 
-// Checks whether draw d of frame f can be drawn (through mode, primitive, vertices without weights, destination, blend,
+// 1 if draw d of state e reads a texture: with the texture on, and UVs in the vertex or generated (0xC0)
+static int hasTex(const uint32_t *e, const RDraw *d) {
+  return !(RE(e, 0xD3) & 1) && (RE(e, 0x1E) & 1) && ((d->vt & 3) || (!(d->vt >> 23 & 1) && (RE(e, 0xC0) & 3)));
+}
+
+// Checks whether draw d of frame f can be drawn (primitive, vertices without weights, destination, blend,
 // texture format and function). T_OK if so; otherwise the reason. What depends on other draws is checked by trFrame.
 static int trCheck(RFrame *f, RDraw *d) {
   const uint32_t *e = f->e[d->st];
   uint32_t vt = d->vt, clr = RE(e, 0xD3) & 1, afn, aref;
-  if (!(vt >> 23 & 1)) return T_3D;
   if (d->prim < 3 || d->prim > 6) return T_PRIM;  // triangles, strip, fan, rectangles
   if ((vt >> 9 & 3) || (vt >> 18 & 7)) return T_VERT;  // weights or morph
   if ((RE(e, 0x9D) & 0x7FF) > 512) return T_DEST;
@@ -194,10 +199,10 @@ static int trCheck(RFrame *f, RDraw *d) {
   if (RE(e, 0x27) & 1 || RE(e, 0x28) & 1) return T_ODD;
   if ((RE(e, 0x22) & 1) && !alphaFn(e, &afn, &aref)) return T_MASK;
   if (blendKey(e) == ~0u) return T_BLEND;
-  if ((RE(e, 0x1E) & 1) && (vt & 3)) {
+  if (hasTex(e, d)) {
     uint32_t fmt = RE(e, 0xC3) & 15, tf = RE(e, 0xC9) & 7;
     if (fmt > 5 || (fmt >= 4 && !d->clut)) return T_FMT;
-    if (tf != 0 && tf != 3) return T_TFUNC;
+    if (tf > 4) return T_TFUNC;
     // (texture with no copy in the record: trFrame checks whether it is an intermediate image of this frame)
   }
   return T_OK;
@@ -237,19 +242,143 @@ static void trOutLog(RFrame *f, RDraw *d, uint32_t i, uint32_t k, uint32_t sz, c
 }
 #endif
 
-// Decodes the vertices of draw d (through mode) to o: computes the size and position of each field from the GE vertex
+// --- 3D: what the GE does per vertex, done here. T3 holds a draw's data, with the matrices already multiplied ---
+typedef struct { uint32_t on, type, comp; float p[3], a[3], sd[3], cut, ex, ca[3], cd[3], cs[3]; } LT;
+typedef struct {
+  float m[16], w[12], wv[12];              // model -> clip, -> world, -> eye
+  float us, vs, uo, vo, tw, th, tm[12];    // UV scale and offset, texture size, texture matrix
+  float sx, sy, sz, tx, ty, tz;            // viewport less offset
+  float f1, f2, em[4], am[4], ad[4], as[4], ac[4], sp;  // fog; emissive, ambient, diffuse, specular, scene ambient colors
+  uint32_t gen, prj, ls0, ls1, upd, fog, lit, rev;      // 0xC0, 0xC1, 0x53, and on/off switches
+  uint32_t kw, km, kl; const uint32_t *ke;              // what t3Set last read
+  LT l[4];
+} T3;
+static T3 t3;
+static float f24(uint32_t v) { union { uint32_t u; float f; } x = { v << 8 }; return x.f; }
+static inline float tsqrt(float x) { __asm__("vsqrt.f32 %0, %1" : "=t"(x) : "t"(x)); return x; }
+static float tpow(float b, int e) { float r = 1; for (; e > 0; e >>= 1, b *= b) if (e & 1) r *= b; return r; }
+static void tnorm(float *v) { float d = v[0] * v[0] + v[1] * v[1] + v[2] * v[2]; if (d > 0) { d = 1 / tsqrt(d); v[0] *= d; v[1] *= d; v[2] *= d; } }
+static void rgbf(uint32_t c, float *o) { o[0] = (c & 255) / 255.0f; o[1] = (c >> 8 & 255) / 255.0f; o[2] = (c >> 16 & 255) / 255.0f; o[3] = (c >> 24 & 255) / 255.0f; }
+// Fills t for draw d of state e, reading only what changed since the last draw (kw, km, kl, ke; trFrame clears ke):
+// matrices (a 4x3 block is 3 words per basis vector and translation) and their product, registers, and with the block
+// of 0x53-0x9A materials and lights.
+static void t3Set(RFrame *f, RDraw *d, const uint32_t *e, T3 *t) {
+  if (d->woff == t->kw && d->moff == t->km && d->loff == t->kl && e == t->ke) return;
+  const uint32_t *w = (const uint32_t *)(f->a + d->woff - 1), *v = (const uint32_t *)(f->a + d->moff - 1);
+  float vm[12], p[16];
+  for (int i = 0; i < 12; i++) { t->w[i] = f24(w[i]); vm[i] = f24(v[i]); t->tm[i] = f24(v[28 + i]); }
+  for (int i = 0; i < 16; i++) p[i] = f24(v[12 + i]);
+  for (int c = 0; c < 4; c++) {
+    const float *a = t->w + c * 3;
+    for (int r = 0; r < 3; r++) t->wv[c * 3 + r] = a[0] * vm[r] + a[1] * vm[3 + r] + a[2] * vm[6 + r] + (c == 3 ? vm[9 + r] : 0);
+    const float *b = t->wv + c * 3;
+    for (int r = 0; r < 4; r++) t->m[c * 4 + r] = b[0] * p[r] + b[1] * p[4 + r] + b[2] * p[8 + r] + (c == 3 ? p[12 + r] : 0);
+  }
+  t->kw = d->woff; t->km = d->moff;
+  int ne = e != t->ke, nl = ne || d->loff != t->kl;
+  t->ke = e; t->kl = d->loff;
+  if (!ne) goto lights;
+  t->sx = f24(RE(e, 0x42)); t->sy = f24(RE(e, 0x43)); t->sz = f24(RE(e, 0x44));
+  t->tx = f24(RE(e, 0x45)) - (RE(e, 0x4C) & 0xFFFF) / 16.0f; t->ty = f24(RE(e, 0x46)) - (RE(e, 0x4D) & 0xFFFF) / 16.0f; t->tz = f24(RE(e, 0x47));
+  t->us = f24(RE(e, 0x48)); t->vs = f24(RE(e, 0x49)); t->uo = f24(RE(e, 0x4A)); t->vo = f24(RE(e, 0x4B));
+  uint32_t b8 = RE(e, 0xB8), c0 = RE(e, 0xC0), c1 = RE(e, 0xC1);
+  t->tw = 1u << (b8 & 15); t->th = 1u << (b8 >> 8 & 15);
+  t->gen = c0 & 3; t->prj = c0 >> 8 & 3; t->ls0 = c1 & 3; t->ls1 = c1 >> 8 & 3;
+  t->fog = RE(e, 0x1F) & 1; t->f1 = f24(RE(e, 0xCD)); t->f2 = f24(RE(e, 0xCE));
+  t->lit = !(RE(e, 0xD3) & 1) && (RE(e, 0x17) & 1); t->rev = RE(e, 0x51) & 1;
+lights:
+  if (!d->loff || !nl) return;
+  const uint32_t *l = (const uint32_t *)(f->a + d->loff - 1) - 0x53;  // (l[r]: the value of register r)
+  t->upd = l[0x53] & 7; t->sp = f24(l[0x5B]);
+  rgbf(l[0x54] & 0xFFFFFF, t->em); rgbf((l[0x55] & 0xFFFFFF) | l[0x58] << 24, t->am); rgbf(l[0x56] & 0xFFFFFF, t->ad); rgbf(l[0x57] & 0xFFFFFF, t->as);
+  rgbf((l[0x5C] & 0xFFFFFF) | l[0x5D] << 24, t->ac);
+  for (int i = 0; i < 4; i++) {
+    LT *q = &t->l[i];
+    float s[4];
+    q->on = RE(e, 0x18 + i) & 1; q->type = l[0x5F + i] >> 8 & 3; q->comp = l[0x5F + i] & 3;
+    for (int k = 0; k < 3; k++) { q->p[k] = f24(l[0x63 + i * 3 + k]); q->sd[k] = f24(l[0x6F + i * 3 + k]); q->a[k] = f24(l[0x7B + i * 3 + k]); }
+    q->ex = f24(l[0x87 + i]); q->cut = f24(l[0x8B + i]);
+    rgbf(l[0x8F + i * 3] & 0xFFFFFF, s); sceClibMemcpy(q->ca, s, 12);
+    rgbf(l[0x90 + i * 3] & 0xFFFFFF, s); sceClibMemcpy(q->cd, s, 12);
+    rgbf(l[0x91 + i * 3] & 0xFFFFFF, s); sceClibMemcpy(q->cs, s, 12);
+    if (!q->type) tnorm(q->p);
+    tnorm(q->sd);
+  }
+}
+// World position of model point p
+static void t3World(const T3 *t, const float *p, float *o) {
+  for (int r = 0; r < 3; r++) o[r] = p[0] * t->w[r] + p[1] * t->w[3 + r] + p[2] * t->w[6 + r] + t->w[9 + r];
+}
+// Direction from world point wp to light l (normalized); *dist: its distance
+static void t3Dir(const LT *l, const float *wp, float *o, float *dist) {
+  *dist = 1;
+  for (int k = 0; k < 3; k++) o[k] = l->type ? l->p[k] - wp[k] : l->p[k];
+  if (!l->type) return;
+  *dist = tsqrt(o[0] * o[0] + o[1] * o[1] + o[2] * o[2]);
+  tnorm(o);
+}
+// GE lighting of a vertex: world point wp, unit normal n, vertex color vc (has: the vertex has a color). Returns the color
+static uint32_t t3Light(const T3 *t, const float *wp, const float *n, uint32_t vc, int has) {
+  float c[4], o[4], sum[3] = { 0, 0, 0 }, vf[4];
+  rgbf(vc, vf);
+  const float *mac = has && (t->upd & 1) ? vf : t->am, *mdc = has && (t->upd & 2) ? vf : t->ad, *msc = has && (t->upd & 4) ? vf : t->as;
+  for (int k = 0; k < 4; k++) c[k] = t->em[k] + t->ac[k] * mac[k];
+  for (int i = 0; i < 4; i++) {
+    const LT *l = &t->l[i];
+    float L[3], dist, k = 1;
+    if (!l->on) continue;
+    t3Dir(l, wp, L, &dist);
+    if (l->type) { float den = l->a[0] + l->a[1] * dist + l->a[2] * dist * dist; k = den > 0 ? 1 / den : 0; if (k > 1) k = 1; }
+    if (l->type == 2) {
+      float s = l->sd[0] * L[0] + l->sd[1] * L[1] + l->sd[2] * L[2];
+      k *= s >= l->cut ? tpow(s, (int)(l->ex + .5f)) : 0;
+    }
+    float nl = n[0] * L[0] + n[1] * L[1] + n[2] * L[2], dd = l->comp == 2 && nl > 0 ? tpow(nl, (int)(t->sp + .5f)) : nl;
+    for (int j = 0; j < 3; j++) c[j] += k * (l->ca[j] * mac[j] + (dd > 0 ? dd * l->cd[j] * mdc[j] : 0));
+    if (l->comp == 1 && nl >= 0) {
+      float h[3] = { L[0], L[1], L[2] + 1 };
+      tnorm(h);
+      float s = n[0] * h[0] + n[1] * h[1] + n[2] * h[2];
+      if (s > 0) { s = tpow(s, (int)(t->sp + .5f)) * k; for (int j = 0; j < 3; j++) sum[j] += s * l->cs[j] * msc[j]; }
+    }
+  }
+  for (int j = 0; j < 3; j++) c[j] += sum[j];
+  for (int k = 0; k < 4; k++) o[k] = c[k] < 0 ? 0 : c[k] > 1 ? 255 : c[k] * 255 + .5f;
+  return (uint32_t)o[0] | (uint32_t)o[1] << 8 | (uint32_t)o[2] << 16 | (uint32_t)o[3] << 24;
+}
+// Generated UV of a vertex, in 0-1: texture matrix (gen 1) or environment map (gen 2, from two lights' directions).
+// x: model position, uv: its UV, n: model normal (nw: in world, unit)
+static void t3Gen(const T3 *t, const float *x, float u0, float v0, const float *n, const float *nw, float *u, float *v) {
+  if (t->gen == 2) {
+    float wp[3], L[3], dist;
+    t3World(t, x, wp);
+    t3Dir(&t->l[t->ls0], wp, L, &dist); *u = (nw[0] * L[0] + nw[1] * L[1] + nw[2] * L[2] + 1) / 2;
+    t3Dir(&t->l[t->ls1], wp, L, &dist); *v = (nw[0] * L[0] + nw[1] * L[1] + nw[2] * L[2] + 1) / 2;
+    return;
+  }
+  float s[3] = { x[0], x[1], x[2] }, r[3];
+  if (t->prj == 1) { s[0] = u0; s[1] = v0; s[2] = 0; }
+  else if (t->prj >= 2) { sceClibMemcpy(s, n, 12); if (t->prj == 2) tnorm(s); }
+  for (int k = 0; k < 3; k++) r[k] = s[0] * t->tm[k] + s[1] * t->tm[3 + k] + s[2] * t->tm[6 + k] + t->tm[9 + k];
+  float q = r[2] != 0 ? 1 / r[2] : 1;
+  *u = r[0] * q; *v = r[1] * q;
+}
+
+// Decodes the vertices of draw d to o: computes the size and position of each field from the GE vertex
 // type (with its alignment), follows the indices if any, and leaves x, y doubled and u, v divided by tw x th.
+// t (0: through mode): the draw's 3D data; each vertex is transformed, lit and given its UV and fog like on the GE, and x,
+// y, z keep their clip w, so the GPU clips and corrects perspective. Rectangles are divided by w here.
 // col0: color if the vertex has none; sc: doubled scissor (x0, y0, x1, y1). Rectangles (2 corners) are clipped to the
 // scissor and come out as 4-vertex strips. *nout: vertices written. T_OK, T_VERT (data outside the record), T_LIMIT or
 // T_OUT (position outside +-4096: garbage vertices). The GE's z (integer, 0-65535) comes out as 0.5 down to 0: with the
 // matrix tr_wvp, clip z from 0 to almost 1, growing with the GE's, so the GE comparisons apply as they are.
-static int trVerts(RFrame *f, RDraw *d, TV *o, float tw, float th, uint32_t col0, const float *sc, uint32_t *nout) {
+static int trVerts(RFrame *f, RDraw *d, TV *o, float tw, float th, uint32_t col0, const float *sc, uint32_t *nout, const T3 *t) {
   static const uint8_t s4[4] = { 0, 1, 2, 4 }, cs[8] = { 0, 0, 0, 0, 2, 2, 2, 4 };
   uint32_t vt = d->vt, tc = vt & 3, ct = vt >> 2 & 7, nt = vt >> 5 & 3, pt = vt >> 7 & 3, sz = 0, al = 1, s;
-  uint32_t otc = 0, ocol = 0, opos = 0, dummy __attribute__((unused));
+  uint32_t otc = 0, ocol = 0, opos = 0, onrm = 0;
   // FLD: n components of size bytes, aligned to size (o: offset). Order: texture, color, normal, position
 #define FLD(n, size, o) s = (size); if (s) { sz = (sz + s - 1) & ~(s - 1); o = sz; sz += (n) * s; if (s > al) al = s; }
-  FLD(2, s4[tc], otc); FLD(1, cs[ct], ocol); FLD(3, s4[nt], dummy); FLD(3, s4[pt], opos);
+  FLD(2, s4[tc], otc); FLD(1, cs[ct], ocol); FLD(3, s4[nt], onrm); FLD(3, s4[pt], opos);
 #undef FLD
   sz = (sz + al - 1) & ~(al - 1);
   if (!sz || !pt) return T_VERT;
@@ -260,19 +389,55 @@ static int trVerts(RFrame *f, RDraw *d, TV *o, float tw, float th, uint32_t col0
     uint32_t k = !ib ? i : ix == 1 ? ib[i] : ix == 2 ? ((const uint16_t *)ib)[i] : ((const uint32_t *)ib)[i];
     if ((k + 1) * sz > d->vlen) return T_VERT;
     const uint8_t *p = vb + k * sz;
-    TV q = { 0, 0, .5f, 0, 0, ct ? col8888(p + ocol, ct) : col0 };
-    if (pt == 1) { q.x = (int8_t)p[opos]; q.y = (int8_t)p[opos + 1]; }
+    TV q = { 0, 0, .5f, 1, 0, 0, 1, ct ? col8888(p + ocol, ct) : col0 };
+    if (t) {
+      float x[3], n[3] = { 0, 0, 1 }, nw[3], wp[3], u = 0, v = 0;
+      static const float ks[4] = { 0, 1 / 128.0f, 1 / 32768.0f, 1 };
+      for (int a = 0; a < 3; a++) {
+        const uint8_t *b = p + opos + a * s4[pt];
+        x[a] = pt == 3 ? *(const float *)b : (pt == 2 ? *(const int16_t *)b : *(const int8_t *)b) * ks[pt];
+        if (nt) { b = p + onrm + a * s4[nt]; n[a] = nt == 3 ? *(const float *)b : (nt == 2 ? *(const int16_t *)b : *(const int8_t *)b) * ks[nt]; }
+      }
+      if (tc) {
+        const uint8_t *b = p + otc;
+        u = tc == 3 ? ((const float *)b)[0] : tc == 2 ? ((const uint16_t *)b)[0] * ks[2] : b[0] * ks[1];
+        v = tc == 3 ? ((const float *)b)[1] : tc == 2 ? ((const uint16_t *)b)[1] * ks[2] : b[1] * ks[1];
+      }
+      if (t->lit || t->gen == 2) {
+        if (t->rev) n[0] = -n[0], n[1] = -n[1], n[2] = -n[2];
+        for (int r = 0; r < 3; r++) nw[r] = n[0] * t->w[r] + n[1] * t->w[3 + r] + n[2] * t->w[6 + r];
+        tnorm(nw);
+      }
+      if (t->lit) { t3World(t, x, wp); q.c = t3Light(t, wp, nw, q.c, ct != 0); }
+      if (t->gen) t3Gen(t, x, u, v, n, nw, &u, &v);
+      else { u = u * t->us + t->uo; v = v * t->vs + t->vo; }
+      q.u = u * t->tw; q.v = v * t->th;
+      const float *m = t->m;
+      float cx = x[0] * m[0] + x[1] * m[4] + x[2] * m[8] + m[12], cy = x[0] * m[1] + x[1] * m[5] + x[2] * m[9] + m[13],
+            cz = x[0] * m[2] + x[1] * m[6] + x[2] * m[10] + m[14], w = x[0] * m[3] + x[1] * m[7] + x[2] * m[11] + m[15];
+      if (t->fog) {
+        float g = (x[0] * t->wv[2] + x[1] * t->wv[5] + x[2] * t->wv[8] + t->wv[11] + t->f1) * t->f2;
+        q.f = g < 0 ? 0 : g > 1 ? 1 : g;
+      }
+      if (!(w > -1e9f && w < 1e9f)) { DEV(trOutLog(f, d, i, k, sz, p);) return T_OUT; }
+      float wd = 1;
+      if (d->prim == 6) { if (w <= 0) continue; wd = 1 / w; }
+      q.x = (t->sx * cx + t->tx * w) * wd; q.y = (t->sy * cy + t->ty * w) * wd;
+      q.z = (.5f * w - (t->sz * cz + t->tz * w) / 131072.0f) * wd; q.w = w * wd;
+    }
+    else if (pt == 1) { q.x = (int8_t)p[opos]; q.y = (int8_t)p[opos + 1]; }
     else if (pt == 2) { q.x = ((const int16_t *)(p + opos))[0]; q.y = ((const int16_t *)(p + opos))[1]; q.z = .5f - ((const uint16_t *)(p + opos))[2] / 131072.0f; }
     else {
       q.x = ((const float *)(p + opos))[0]; q.y = ((const float *)(p + opos))[1];
       float z = ((const float *)(p + opos))[2];
       q.z = .5f - (z >= 65535 ? 65535 : z > 0 ? (int)z : 0) / 131072.0f;
     }
-    if (tc == 1) { q.u = p[otc] / 128.0f; q.v = p[otc + 1] / 128.0f; }  // (8 bits: 128 = 1 texel, also in through mode)
+    if (t) {}
+    else if (tc == 1) { q.u = p[otc] / 128.0f; q.v = p[otc + 1] / 128.0f; }  // (8 bits: 128 = 1 texel, also in through mode)
     else if (tc == 2) { q.u = ((const uint16_t *)(p + otc))[0]; q.v = ((const uint16_t *)(p + otc))[1]; }
     else if (tc == 3) { q.u = ((const float *)(p + otc))[0]; q.v = ((const float *)(p + otc))[1]; }
     // position outside what the GE draws (or NaN): data read late, when the game was already rewriting it
-    if (!(q.x > -4096 && q.x < 4096 && q.y > -4096 && q.y < 4096)) { DEV(trOutLog(f, d, i, k, sz, p);) return T_OUT; }
+    if (!t && !(q.x > -4096 && q.x < 4096 && q.y > -4096 && q.y < 4096)) { DEV(trOutLog(f, d, i, k, sz, p);) return T_OUT; }
     q.x *= 2; q.y *= 2; q.u /= tw; q.v /= th;
     if (d->prim == 6) {  // rectangle: 2 vertices (opposite corners) -> strip of 4, separated from the next with two
       r[i & 1] = q;      // repeated vertices; color and z are the second vertex's (like the GE). Corners given along
@@ -289,8 +454,9 @@ static int trVerts(RFrame *f, RDraw *d, TV *o, float tw, float th, uint32_t col0
         }
         uint32_t c = r[1].c;
         float z = r[1].z;
-        TV a = { r[0].x, r[0].y, z, r[0].u, r[0].v, c }, b = { r[1].x, r[0].y, z, r[!rot].u, r[rot].v, c },
-           cc = { r[0].x, r[1].y, z, r[rot].u, r[!rot].v, c }, dd = { r[1].x, r[1].y, z, r[1].u, r[1].v, c };
+        float fg = r[1].f;
+        TV a = { r[0].x, r[0].y, z, 1, r[0].u, r[0].v, fg, c }, b = { r[1].x, r[0].y, z, 1, r[!rot].u, r[rot].v, fg, c },
+           cc = { r[0].x, r[1].y, z, 1, r[rot].u, r[!rot].v, fg, c }, dd = { r[1].x, r[1].y, z, 1, r[1].u, r[1].v, fg, c };
         o[n++] = a; o[n++] = a; o[n++] = b; o[n++] = cc; o[n++] = dd; o[n++] = dd;
       }
     outside:;
@@ -303,22 +469,25 @@ static int trVerts(RFrame *f, RDraw *d, TV *o, float tw, float th, uint32_t col0
   return T_OK;
 }
 
-// Clips triangle p to scissor sc edge by edge (Sutherland-Hodgman), interpolating the new vertices, and writes the
-// polygon left to o as triangles. Returns the vertices written (15 at most).
+// Clips triangle p to scissor sc edge by edge (Sutherland-Hodgman) in clip space (x, y are x * w, y * w), interpolating
+// the new vertices, and writes the polygon left to o as triangles. Edge 4 first cuts what is behind the camera, where
+// the scissor comparison does not hold (w = 1 never fails it). Returns the vertices written (21 at most).
 static uint32_t trClipTri(const TV *p, const float *sc, TV *o) {
-  TV a[7], b[7], *in = a, *out = b;
+  TV a[8], b[8], *in = a, *out = b;
   uint32_t m = 3, n = 0;
   sceClibMemcpy(a, p, 3 * sizeof(TV));
-  for (int e = 0; e < 4; e++) {  // edges in sc order: left, top, right, bottom
+  for (int ei = 0; ei < 5; ei++) {  // edges: behind, then in sc order left, top, right, bottom
     uint32_t k = 0;
+    int e = ei - 1;
     float s = e < 2 ? 1 : -1;
     for (uint32_t i = 0; i < m; i++) {
       const TV *c = &in[i], *x = &in[(i + 1) % m];
-      float dc = s * ((e & 1 ? c->y : c->x) - sc[e]), dx = s * ((e & 1 ? x->y : x->x) - sc[e]);
+      float dc = e < 0 ? c->w - 1e-4f : s * ((e & 1 ? c->y : c->x) - sc[e] * c->w), dx = e < 0 ? x->w - 1e-4f : s * ((e & 1 ? x->y : x->x) - sc[e] * x->w);
       if (dc >= 0) out[k++] = *c;
       if ((dc >= 0) != (dx >= 0)) {
         float t = dc / (dc - dx);
-        TV q = { c->x + (x->x - c->x) * t, c->y + (x->y - c->y) * t, c->z, c->u + (x->u - c->u) * t, c->v + (x->v - c->v) * t, 0 };
+        TV q = { c->x + (x->x - c->x) * t, c->y + (x->y - c->y) * t, c->z + (x->z - c->z) * t, c->w + (x->w - c->w) * t, c->u + (x->u - c->u) * t,
+                 c->v + (x->v - c->v) * t, c->f + (x->f - c->f) * t, 0 };
         for (int sh = 0; sh < 32; sh += 8) {
           float c0 = c->c >> sh & 255, c1 = x->c >> sh & 255;
           q.c |= (uint32_t)(c0 + (c1 - c0) * t + .5f) << sh;
@@ -335,14 +504,17 @@ static uint32_t trClipTri(const TV *p, const float *sc, TV *o) {
 
 // Triangles, strip or fan (*prim 3, 4 or 5) of *np vertices at o, room for room: if a vertex is outside the scissor or flat is
 // set (each triangle takes the color of its last vertex), rewrites them as a clipped triangle list (*prim = 3) and
-// updates *np. T_OK or T_LIMIT.
-static int trTris(TV *o, uint32_t *np, uint32_t room, uint32_t *prim, const float *sc, int flat) {
+// updates *np. With w3d (3D draw) only a scissor smaller than the surface is clipped here: the GPU clips the rest. Odd
+// triangles of a strip are swapped to keep their winding. T_OK or T_LIMIT.
+static int trTris(TV *o, uint32_t *np, uint32_t room, uint32_t *prim, const float *sc, int flat, int w3d) {
   uint32_t n = *np, m = 0, cut = flat;
-  for (uint32_t i = 0; i < n; i++) cut |= o[i].x < sc[0] || o[i].y < sc[1] || o[i].x > sc[2] || o[i].y > sc[3];
+  if (!w3d || sc[0] > 0 || sc[1] > 0 || sc[2] < W || sc[3] < H)
+    for (uint32_t i = 0; i < n; i++) cut |= o[i].x < sc[0] * o[i].w || o[i].y < sc[1] * o[i].w || o[i].x > sc[2] * o[i].w || o[i].y > sc[3] * o[i].w;
   if (!cut) return T_OK;
   for (uint32_t i = 0; i + 2 < n; i += *prim == 3 ? 3 : 1) {
-    if (n + m + 15 > room) return T_LIMIT;
-    TV t[3] = { o[*prim == 5 ? 0 : i], o[i + 1], o[i + 2] };
+    if (n + m + 21 > room) return T_LIMIT;
+    int sw = *prim == 4 && (i & 1);
+    TV t[3] = { o[*prim == 5 ? 0 : sw ? i + 1 : i], o[sw ? i : i + 1], o[i + 2] };
     if (flat) t[0].c = t[1].c = t[2].c;
     m += trClipTri(t, sc, o + n + m);
   }
@@ -397,11 +569,12 @@ static uint32_t trBase(SceGxmContext *c, const SceGxmTexture *base, TV *o, uint3
     sceGxmSetVertexProgram(c, nvp); sceGxmReserveVertexDefaultUniformBuffer(c, &u); sceGxmSetUniformDataF(u, n_wvp, 0, 16, tr_wvp);
     return nv;
   }
-  TV q[4] = { { 0, 0, .5f, 0, 0, 0xFF000000u }, { W, 0, .5f, 0, 0, 0xFF000000u }, { 0, H, .5f, 0, 0, 0xFF000000u }, { W, H, .5f, 0, 0, 0xFF000000u } };
+  TV q[4] = { { 0, 0, .5f, 1, 0, 0, 1, 0xFF000000u }, { W, 0, .5f, 1, 0, 0, 1, 0xFF000000u }, { 0, H, .5f, 1, 0, 0, 1, 0xFF000000u }, { W, H, .5f, 1, 0, 0, 1, 0xFF000000u } };
   sceClibMemcpy(o + nv, q, sizeof q);
   sceGxmSetFragmentProgram(c, fragProg(0, 0, C_RGB));
   sceGxmReserveFragmentDefaultUniformBuffer(c, &u);
   sceGxmSetUniformDataF(u, n_atc, 0, 4, always);
+  sceGxmSetUniformDataF(u, n_fgc, 0, 4, always);
   sceGxmSetVertexStream(c, 0, o + nv);
   sceGxmDraw(c, SCE_GXM_PRIMITIVE_TRIANGLE_STRIP, SCE_GXM_INDEX_FORMAT_U16, tib, 4);
   return nv + 4;
@@ -409,7 +582,7 @@ static uint32_t trBase(SceGxmContext *c, const SceGxmTexture *base, TV *o, uint3
 
 // GE comparison (0-7) -> GXM depth function >> 22, which is also its stencil function >> 25
 static const uint8_t gcmp[8] = { 0, 7, 2, 5, 1, 3, 4, 6 };
-static uint32_t t_zs, t_st, t_sr;  // depth state, stencil state and stencil reference in the context; ~0u: unknown
+static uint32_t t_zs, t_st, t_sr, t_cl;  // depth state, stencil state, stencil reference and cull in the context; ~0u: unknown
 // Sets depth and stencil of the draw of state e (0: no tests or writes, for what goes underneath), if they changed. As
 // on the GE, without the depth test nothing is written; a clear writes depth and stencil if their bits are on (stencil:
 // sv, its alpha). The surface's stencil plays the GE's alpha; there is none in 565 and the color mask's alpha (0xE9)
@@ -440,6 +613,7 @@ static void zsSet(SceGxmContext *c, const uint32_t *e, uint32_t sv) {
 // tpal), vertices (trVerts, in tv) and uniforms of each draw, and draws it. T_OK if ready; if it fails midway
 // returns the reason and the surface is not used.
 static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base) {
+  t3.ke = 0;
   // disp: image being shown; ifb, iend, ipsm: intermediate images, where their memory ends, their format
   uint32_t disp = f->fb & 0x1FFFF0, ifb[2], iend[2], ipsm[2], nif = 0, n_disp = 0;
   // ord: intermediate images first and then, in a single scene, the surface (see trFrame). Valid only if just the
@@ -464,7 +638,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
       kd = k;
       if (rd_mask >> k & 1) ord = 0;
     }
-    if (!r && !(RE(e0, 0xD3) & 1) && (RE(e0, 0x1E) & 1) && (f->d[i].vt & 3) && !f->d[i].toff) {  // texture with no copy
+    if (!r && hasTex(e0, &f->d[i]) && !f->d[i].toff) {  // texture with no copy
       uint32_t ta = texAddr(e0);
       // only valid if in VRAM (0x04000000) and an intermediate image of an earlier draw of this frame
       for (k = 0; k < nif && !((ta & 0x0F000000) == 0x04000000 && (ta & 0x1FFFF0) == ifb[k]); k++) {}
@@ -491,7 +665,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
   uint32_t *pal = tpal[s], np = 0, nv = 0, pal_prev = ~0u, pn = 0;  // np: words used; pal_prev/pn: the previous palette
   void *u;
   // SCENE: starts a scene on surface surf_tex with the vertex program and the matrix
-#define SCENE(surf_tex) do { sceGxmBeginScene(c, 0, rt, 0, 0, 0, surf_tex, &ds); t_zs = t_st = t_sr = ~0u; zsSet(c, 0, 0); sceGxmSetVertexProgram(c, nvp); \
+#define SCENE(surf_tex) do { sceGxmBeginScene(c, 0, rt, 0, 0, 0, surf_tex, &ds); t_zs = t_st = t_sr = t_cl = ~0u; zsSet(c, 0, 0); sceGxmSetVertexProgram(c, nvp); \
     sceGxmReserveVertexDefaultUniformBuffer(c, &u); sceGxmSetUniformDataF(u, n_wvp, 0, 16, tr_wvp); } while (0)
   // OPEN: closes the open scene (if any) and opens one on dst (0: surface s); the first time on the surface,
   // puts the normal image (or black: trBase) underneath
@@ -513,13 +687,13 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
   for (uint32_t i = 0; i < f->nd && res == T_OK; i++) {
     RDraw *d = &f->d[i];
     const uint32_t *e = f->e[d->st];
-    uint32_t clr = RE(e, 0xD3), tex = !(clr & 1) && (RE(e, 0x1E) & 1) && (d->vt & 3), fb = RE(e, 0x9C) & 0x1FFFF0;
+    uint32_t clr = RE(e, 0xD3), tex = hasTex(e, d), fb = RE(e, 0x9C) & 0x1FFFF0, w3d = !(d->vt >> 23 & 1);
     RT *dst = fb == disp ? 0 : rtOf(fb, f->frame, 1);
     if (fb != disp && !dst) { res = T_DEST; break; }
     if (ord && (pass ? dst != 0 : dst == 0)) continue;
     if (!opened || dst != cur_rt) OPEN(dst);
     if ((clr & 1) && !(clr & 0x700)) continue;  // clear of nothing
-    uint32_t key = clr & 1 ? 0 : blendKey(e), mat = (RE(e, 0x55) & 0xFFFFFF) | (RE(e, 0x56) & 0xFF) << 24;
+    uint32_t key = clr & 1 ? 0 : blendKey(e), mat = (RE(e, 0x55) & 0xFFFFFF) | (RE(e, 0x58) & 0xFF) << 24;
     float tw = 1, th = 1;
     SceGxmTexture t;
     if (tex) {
@@ -545,7 +719,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
       }
       uint32_t tfl = RE(e, 0xC6), twr = RE(e, 0xC7);
       // GE filter and wrap (0xC6, 0xC7)
-      sceGxmTextureSetMinFilter(&t, (tfl & 7) == 1 ? SCE_GXM_TEXTURE_FILTER_LINEAR : SCE_GXM_TEXTURE_FILTER_POINT);
+      sceGxmTextureSetMinFilter(&t, tfl & 1 ? SCE_GXM_TEXTURE_FILTER_LINEAR : SCE_GXM_TEXTURE_FILTER_POINT);
       sceGxmTextureSetMagFilter(&t, tfl >> 8 & 1 ? SCE_GXM_TEXTURE_FILTER_LINEAR : SCE_GXM_TEXTURE_FILTER_POINT);
       sceGxmTextureSetUAddrMode(&t, twr & 1 ? SCE_GXM_TEXTURE_ADDR_CLAMP : SCE_GXM_TEXTURE_ADDR_REPEAT);
       sceGxmTextureSetVAddrMode(&t, twr >> 8 & 1 ? SCE_GXM_TEXTURE_ADDR_CLAMP : SCE_GXM_TEXTURE_ADDR_REPEAT);
@@ -559,19 +733,20 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
       if (rx < sc[2]) sc[2] = rx;
       if (ry < sc[3]) sc[3] = ry;
     }
-    if ((res = trVerts(f, d, o + nv, tw, th, mat, sc, &n))) break;
+    if (w3d) t3Set(f, d, e, &t3);
+    if ((res = trVerts(f, d, o + nv, tw, th, mat, sc, &n, w3d ? &t3 : 0))) break;
     if (nv + n > TV_N) { res = T_LIMIT; break; }
-    if (dst && !(clr & 1)) for (uint32_t j = 0; j < n; j++) if (o[nv + j].y > H) res = T_DEST;  // (past the surface's rows)
+    if (dst && !(clr & 1)) for (uint32_t j = 0; j < n; j++) if (o[nv + j].w > 0 && o[nv + j].y > H * o[nv + j].w) res = T_DEST;  // (past the surface's rows)
     if (res) break;
     uint32_t prim = d->prim;
-    if (prim != 6 && (res = trTris(o + nv, &n, TV_N - nv, &prim, sc, (clr & 1) || !(RE(e, 0x50) & 1)))) break;
+    if (prim != 6 && (res = trTris(o + nv, &n, TV_N - nv, &prim, sc, (clr & 1) || !(RE(e, 0x50) & 1), w3d))) break;
     if (!n) continue;
     if (tex && d->toff && (1u << (RE(e, 0xB8) & 15)) < tw) {
       uint32_t w = trNarrow(&t, f->tx + d->toff - 1, RE(e, 0xC3) & 15, tw, 1u << (RE(e, 0xB8) & 15), th, o + nv, n, pal + np, TP_B / 4 - np);
       if (w == ~0u) { res = T_LIMIT; break; }
       np += w;
     }
-    float ar = trArea(o + nv, n, prim);
+    float ar = w3d ? 0 : trArea(o + nv, n, prim);
     if (c_on) { spx += ar; ssw += tex && d->toff && (RE(e, 0xC2) & 1); }
     static uint32_t giant;  // giant draws (over 2 screens at double size): the first 40, in detail
     if (ar > 2.0f * LINE * H && giant < 40) {
@@ -598,18 +773,27 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     if (!(clr & 1) && (RE(e, 0x22) & 1)) alphaFn(e, &afn, &aref);
     float at[4] = { (float)afn, (float)aref, 0, 0 };
     sceGxmSetUniformDataF(u, tex ? n_atx : n_atc, 0, 4, at);
+    float fg[4], env[4];
+    rgbf(RE(e, 0xCF) & 0xFFFFFF, fg);
+    sceGxmSetUniformDataF(u, tex ? n_fgx : n_fgc, 0, 4, fg);
     if (tex) {
-      float tf[4] = { (c9 & 7) == 3 ? 1.0f : 0.0f, (float)(c9 >> 8 & 1), (float)(c9 >> 16 & 1), 0 };
+      float tf[4] = { (float)(c9 & 7), (float)(c9 >> 8 & 1), (float)(c9 >> 16 & 1), 0 };
       sceGxmSetUniformDataF(u, n_tf, 0, 4, tf);
+      rgbf(RE(e, 0xCA) & 0xFFFFFF, env);
+      sceGxmSetUniformDataF(u, n_env, 0, 4, env);
       sceGxmSetFragmentTexture(c, 0, &t);
     }
     zsSet(c, e, o[nv + n - 1].c >> 24);
+    // GE cull (0x1D on, 0x9B which winding on screen goes); not in clears or rectangles
+    uint32_t cl = w3d && prim != 6 && !(clr & 1) && (RE(e, 0x1D) & 1) ? (RE(e, 0x9B) & 1 ? SCE_GXM_CULL_CCW : SCE_GXM_CULL_CW) : SCE_GXM_CULL_NONE;
+    if (cl != t_cl) { t_cl = cl; sceGxmSetCullMode(c, cl); }
     sceGxmSetVertexStream(c, 0, o + nv);
     sceGxmDraw(c, prim == 3 ? SCE_GXM_PRIMITIVE_TRIANGLES : prim == 5 ? SCE_GXM_PRIMITIVE_TRIANGLE_FAN : SCE_GXM_PRIMITIVE_TRIANGLE_STRIP, SCE_GXM_INDEX_FORMAT_U16, tib, n);
     nv += n; t_draws++;
   }
   if (!has_base && res == T_OK) OPEN(0);  // (frame with no draws to the surface: it still gets the image underneath)
   if (opened) {  // (if something failed midway, the surface keeps what was drawn: not used)
+    sceGxmSetCullMode(c, SCE_GXM_CULL_NONE);
     sceGxmSetFrontDepthFunc(c, SCE_GXM_DEPTH_FUNC_ALWAYS);  // the context is Adrenaline's: its defaults back
     sceGxmSetFrontDepthWriteEnable(c, SCE_GXM_DEPTH_WRITE_ENABLED);
     sceGxmSetFrontStencilFunc(c, SCE_GXM_STENCIL_FUNC_ALWAYS, SCE_GXM_STENCIL_OP_KEEP, SCE_GXM_STENCIL_OP_KEEP, SCE_GXM_STENCIL_OP_KEEP, 0, 0);

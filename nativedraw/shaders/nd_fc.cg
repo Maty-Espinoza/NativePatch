@@ -1,5 +1,5 @@
-// Translator fragments without texture (and clears): the vertex color, with alpha test (like nd_ft).
-float4 main(float2 uv : TEXCOORD0, float4 col : COLOR, uniform float4 at) : COLOR
+// Translator fragments without texture (and clears): the vertex color, with fog and alpha test (like nd_ft).
+float4 main(float3 uv : TEXCOORD0, float4 col : COLOR, uniform float4 at, uniform float4 fog) : COLOR
 {
   float a = floor(col.a * 255.0 + 0.5);
   if (at.x < 0.5) discard;
@@ -10,5 +10,5 @@ float4 main(float2 uv : TEXCOORD0, float4 col : COLOR, uniform float4 at) : COLO
   else if (at.x < 5.5) { if (a > at.y) discard; }
   else if (at.x < 6.5) { if (a <= at.y) discard; }
   else { if (a < at.y) discard; }
-  return col;
+  return float4(lerp(fog.rgb, col.rgb, uv.z), col.a);
 }

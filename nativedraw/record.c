@@ -469,6 +469,17 @@ static int rgRows(uint32_t vt, const uint8_t *vb, uint32_t vlen, const uint8_t *
   *r0 = lo > 0 ? lo - 1 : 0; *r1 = hi + 2;  // (one row of margin per side, for the filter)
   return 1;
 }
+// n words at src, into area a, unless they equal the block at *last (offset + 1 from this frame). Returns its offset + 1
+// and leaves it in *last; 0 if it does not fit (R_LIMIT).
+static uint32_t rgBlock(const uint32_t *src, uint32_t n, uint32_t *last) {
+  RFrame *f = rf[rg_w];
+  if (*last && !sceClibMemcmp(f->a + *last - 1, src, n * 4)) return *last;
+  uint32_t o = (f->na + 15) & ~15u;
+  if (o + n * 4 > RA_N) { f->flags |= R_LIMIT; return 0; }
+  sceClibMemcpy(f->a + o, src, n * 4);
+  f->na = o + n * 4;
+  return *last = o + 1;
+}
 // (capturer, on each draw, before vaddr/iaddr advance) Adds the draw to the frame: the state (RS) if changed, the
 // indices and vertices up to the highest index, and the texture (only the rows the vertices use). If something does
 // not fit or cannot be read the frame stays incomplete and stops copying. Finally adds the per-game usage statistics.
@@ -497,6 +508,15 @@ static void regDraw(uint32_t n, uint32_t type, uint32_t vt, uint32_t idx) {
   }
   d->vlen = nv * vs;
   if (!(d->voff = rgCopy(vaddr, d->vlen))) return;
+  d->woff = d->moff = d->loff = 0;
+  static uint32_t lw, lm, ll;  // last matrix and light blocks of this frame
+  if (!f->nd) lw = lm = ll = 0;
+  if (!(vt >> 23 & 1)) {
+    uint32_t vm[40];
+    sceClibMemcpy(vm, mtx[1], 48); sceClibMemcpy(vm + 12, mtx[2], 64); sceClibMemcpy(vm + 28, mtx[3], 48);
+    if (!(d->woff = rgBlock(mtx[0], 12, &lw)) || !(d->moff = rgBlock(vm, 40, &lm))) return;
+    if (((reg[0x17] & 1) || (reg[0xC0] & 3) == 2) && !(d->loff = rgBlock(reg + 0x53, 72, &ll))) return;
+  }
   d->toff = 0;
   uint32_t t2 = now(); ga.us_v += t2 - t1;
   if ((reg[0x1E] & 1) && !(reg[0xD3] & 1)) {  // the texture, after the vertices (they give the rows it uses)
