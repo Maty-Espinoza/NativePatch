@@ -19,7 +19,7 @@ DEV(static volatile uint32_t t_c[TC_NC];)
 static uint32_t t_seen[TN];   // times each reason was seen (the first one is logged in detail)
 typedef struct { float x, y, z, w, u, v, f; uint32_t c; } TV;  // translated vertex (32 bytes, the nd_v format); f: fog (1: none)
 static TV *tv[2];            // translated vertices, one per surface
-static TV ts[1 << 13];       // a draw being translated: cached, because reading tv back is slow
+static TV ts[1 << 12];       // a draw being translated: cached, because reading tv back is slow
 static uint32_t *tpal[2];    // translated palettes (8888), aligned to 64: 16 entries (64 bytes) or 256 (1 KB)
 #define TV_N (64 << 10)      // vertices per surface (and limit of the 16-bit indices)
 #define TP_B (256 << 10)     // palette bytes per surface
@@ -98,7 +98,6 @@ static SceGxmFragmentProgram *fragProg(int tex, uint32_t key, uint32_t mask) {
 }
 
 #ifdef NP_DEV
-static void trBenchV(void);
 // Logs what the clock costs and the speed of a word read and written in cached memory and in the vertex memory (tv)
 static void trBench(void) {
   static uint32_t cm[1024];
@@ -153,7 +152,7 @@ static int trInit(void) {
   int r1 = sceGxmMapMemory((void *)0x70000000, 0x2000000, RD);
   int r3 = regMapGpu();
   alog("translator: PSP RAM for the GPU %08x, record textures %08x\n", r1, r3);
-  DEV(trBench(); trBenchV();)
+  DEV(trBench();)
   return r3 < 0 ? r3 : 0;
 }
 
@@ -316,6 +315,7 @@ typedef struct {
   float sx, sy, sz, tx, ty, tz;            // viewport less offset
   float f1, f2, em[4], am[4], ad[4], as[4], ac[4], sp;  // fog; emissive, ambient, diffuse, specular, scene ambient colors
   uint32_t gen, prj, ls0, ls1, upd, fog, lit, rev, nl;  // 0xC0, 0xC1, 0x53, on/off switches, lights on
+  uint32_t ei[4], ai[4], lc;                            // lit with no lights: emissive (0-255) and scene ambient (0-256) per channel, color
   uint32_t kw, km, kl; const uint32_t *ke;              // what t3Set last read
   LT l[4];
 } T3;
@@ -325,6 +325,12 @@ static inline float tsqrt(float x) { __asm__("vsqrt.f32 %0, %1" : "=t"(x) : "t"(
 static float tpow(float b, int e) { float r = 1; for (; e > 0; e >>= 1, b *= b) if (e & 1) r *= b; return r; }
 static void tnorm(float *v) { float d = v[0] * v[0] + v[1] * v[1] + v[2] * v[2]; if (d > 0) { d = 1 / tsqrt(d); v[0] *= d; v[1] *= d; v[2] *= d; } }
 static void rgbf(uint32_t c, float *o) { const float k = 1 / 255.0f; o[0] = (c & 255) * k; o[1] = (c >> 8 & 255) * k; o[2] = (c >> 16 & 255) * k; o[3] = (c >> 24 & 255) * k; }
+// Lit color with no lights on, for material color m (0xAABBGGRR): emissive + scene ambient * material
+static uint32_t t3Flat(const T3 *t, uint32_t m) {
+  uint32_t r = 0;
+  for (int k = 0; k < 4; k++) { uint32_t v = t->ei[k] + ((m >> k * 8 & 255) * t->ai[k] >> 8); r |= (v > 255 ? 255 : v) << k * 8; }
+  return r;
+}
 // Fills t for draw d of state e, reading only what changed since the last draw (kw, km, kl, ke; trFrame clears ke):
 // matrices (a 4x3 block is 3 words per basis vector and translation) and their product, registers, and with the block
 // of 0x53-0x9A materials and lights.
@@ -371,6 +377,8 @@ lights:
     if (!q->type) tnorm(q->p);
     tnorm(q->sd);
   }
+  for (int k = 0; k < 4; k++) { t->ei[k] = t->em[k] * 255 + .5f; t->ai[k] = t->ac[k] * 256 + .5f; }
+  t->lc = t3Flat(t, (l[0x55] & 0xFFFFFF) | l[0x58] << 24);
 }
 // World position of model point p
 static void t3World(const T3 *t, const float *p, float *o) {
@@ -471,12 +479,15 @@ static int trVerts(RFrame *f, RDraw *d, TV *o, float tw, float th, uint32_t col0
         u = tc == 3 ? ((const float *)b)[0] : tc == 2 ? ((const uint16_t *)b)[0] * ks[2] : b[0] * ks[1];
         v = tc == 3 ? ((const float *)b)[1] : tc == 2 ? ((const uint16_t *)b)[1] * ks[2] : b[1] * ks[1];
       }
-      if ((t->lit && t->nl) || t->gen == 2) {
+      if (t->lit || t->gen == 2) {
         if (t->rev) n[0] = -n[0], n[1] = -n[1], n[2] = -n[2];
-        for (int r = 0; r < 3; r++) nw[r] = n[0] * t->w[r] + n[1] * t->w[3 + r] + n[2] * t->w[6 + r];
-        tnorm(nw);
+        if (t->nl || t->gen == 2) {
+          for (int r = 0; r < 3; r++) nw[r] = n[0] * t->w[r] + n[1] * t->w[3 + r] + n[2] * t->w[6 + r];
+          tnorm(nw);
+        }
       }
-      if (t->lit) { if (t->nl) t3World(t, x, wp); q.c = t3Light(t, wp, nw, q.c, ct != 0); }
+      if (t->lit && t->nl) { t3World(t, x, wp); q.c = t3Light(t, wp, nw, q.c, ct != 0); }
+      else if (t->lit) q.c = ct && t->upd & 1 ? t3Flat(t, q.c) : t->lc;
       if (t->gen) t3Gen(t, x, u, v, n, nw, &u, &v);
       else { u = u * t->us + t->uo; v = v * t->vs + t->vo; }
       q.u = u * t->tw; q.v = v * t->th;
@@ -536,34 +547,6 @@ static int trVerts(RFrame *f, RDraw *d, TV *o, float tw, float th, uint32_t col0
   *nout = n;
   return T_OK;
 }
-
-#ifdef NP_DEV
-// Logs the ns per vertex of trVerts on synthetic draws of 8 vertices (UV, color, normal, position; 20 bytes), on cached memory:
-// without lighting, lit with no lights on, the same with fog, and with one light
-static void trBenchV(void) {
-  static uint8_t vb[5000 * 20];
-  static T3 x;
-  static const float id[12] = { 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0 };
-  uint32_t ns[4], nout, seed = 1;
-  float sc[4] = { -1e9f, -1e9f, 1e9f, 1e9f };
-  for (uint32_t i = 0; i < sizeof vb; i++) vb[i] = (seed = seed * 1103515245 + 12345) >> 16;
-  volatile uint32_t oa = __builtin_offsetof(RFrame, a);  // (f only serves to reach vb as its area a)
-  RFrame *f = (RFrame *)(vb - oa);
-  RDraw d;
-  sceClibMemset(&d, 0, sizeof d);
-  d.prim = 4; d.n = 8; d.vt = 2 | 7 << 2 | 2 << 5 | 2 << 7; d.vlen = 8 * 20;
-  sceClibMemcpy(x.w, id, sizeof id); sceClibMemcpy(x.wv, id, sizeof id); sceClibMemcpy(x.tm, id, sizeof id);
-  x.m[0] = x.m[5] = x.m[10] = x.m[15] = 1; x.sx = x.sy = x.sz = 1; x.tw = x.th = 256; x.us = x.vs = 1; x.f2 = .01f;
-  for (int k = 0; k < 4; k++) { x.am[k] = x.ad[k] = x.ac[k] = .5f; x.l[0].p[k & 1] = .5f; }
-  for (int c = 0; c < 4; c++) {
-    x.lit = c > 0; x.fog = c > 1; x.nl = c > 2; x.l[0].on = c > 2;
-    uint32_t t0 = now();
-    for (uint32_t i = 0; i < 625; i++) { d.voff = i * 160 + 1; trVerts(f, &d, ts, 256, 256, 0, sc, &nout, &x); }
-    ns[c] = (now() - t0) / 5;
-  }
-  alog("translator: speed: ns per vertex: 3D %u, lit %u, lit and fog %u, one light %u\n", ns[0], ns[1], ns[2], ns[3]);
-}
-#endif
 
 // Clips triangle p to scissor sc edge by edge (Sutherland-Hodgman) in clip space (x, y are x * w, y * w), interpolating
 // the new vertices, and writes the polygon left to o as triangles. Edge 4 first cuts what is behind the camera, where
