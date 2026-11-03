@@ -86,7 +86,7 @@ occupies it, NativeLink stays off. The Vita sees it at `0x68000000 + (address & 
 | 0x400 + 8·k | PSP | ring of 4096 events of 32 bytes: type \| data << 8, a, b, c, PSP time, sequence, extra |
 
 Events: 1 enqueue, 2 enqueue at the front, 3 stall, 4 DrawSync, 5 ListSync, 6 flip, 7 end of a GE segment (T6), 8 end
-of a sync, 9 CPU write (T4), 10 T4 summary, 11 frame cost for the game, 12 list lifetime.
+of a sync, 9 CPU write (T4), 10 T4 summary, 11 frame cost for the game, 12 list lifetime, 13 rest of the frame split (extreme level).
 
 The layout is the same in development and production builds (`NP_DEV`, `logs-and-switches.md`). In production these go
 unused: `SB[0x47]`, bits 4 and 8 of 0x4A and events 7, 8, 9, 10 and 12.

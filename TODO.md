@@ -6,6 +6,19 @@ what was done is in `CHANGELOG.md`. Updated 2026-11-02 (NativeLink 0.0.5 + Nativ
 `docs/agent/en/stage3-plan.md`.
 
 ## Next
+- [ ] **Ridge Racer, confirm 0.0.13.5 + 0.0.6.2** (tests since 2026-11-03; summary `claude/resumen_conversacion_2026-11-03_cuellos_botella.md`):
+      game at 60 in the race, 0 resets. Left: stutters and rare artifacts.
+- [ ] **Stutters, suspected:** `alog` writes to the card inside Adrenaline's drawing thread (`trReason`, "first frame with"): presenter spikes
+      of 50-558 ms fall in the seconds with those lines, with the translator at ~0. Move `alog` to a buffer written by another thread and measure.
+- [ ] **Artifacts in the race, suspected:** the few frames that still pass as HD (start of the lap, a jump). Dump one, or do not draw a frame
+      when the frames around it were not drawable.
+- [ ] **VRAM mirror limit:** 64 data pages per copy (`MIR_DATA`) while Ridge Racer asks for 250-500: each page refreshes every ~7 frames, reached on
+      every flip. Measure the GE time of a full copy (`ge_mirror` reads 0, unreliable) before raising it.
+- [ ] **Capturer budget in the heaviest stretch:** with the record it does not fit in the frame; the gate waits its 5 ms each frame and those frames go
+      with the normal image. Sublist memory does not apply while recording (applied=0). Copy the list at the sync (see below) or record less.
+- [ ] **Other fixed limits to review:** list queue 64, gate 5 ms, per-frame record sizes (only 1 hit in the runs).
+- [ ] **Translator on Adrenaline's thread** (~42-48 ms at extreme, vertices first): limits HD before the GPU (~32 ms). Move it to its own thread.
+- [ ] **Test for lag:** a capturer case that closes a frame with lists queued (`capture_test.c`); today only `test_link.py` (`resets`) covers it.
 - [ ] **Ridge Racer selector, small flash at one angle of the last car** (user, 0.0.12.12): minor; a dump if it stays.
 - [ ] **Ridge Racer selector, the last car showed the previous car's color for a moment** (user, 0.0.12.11): likely the texture cache
       checking 1 group in 4 per frame (accepted risk). Look again only if it causes bigger errors.

@@ -64,6 +64,7 @@ GitHub release built by `.github/workflows/toolchain.yml` on push.
 | `run_summary.py <folder>` | Summary of a run: fps every 10 s, sync waits, mirror, seconds where the Vita falls short, MISMATCHES. `--check [--ref <folder>] [--target 30\|60]` judges it (fps target order: `good-practices.md` §7). It finds the lines with regular expressions: if a log's text changes, change it there too |
 | `test_ci.sh`, `test_local.sh`, `test_link.py` | The three tests (below) |
 | `phase1_analysis.py <folder>...` | Summarizes `nativedraw_frames.log` and `nativedraw_late.log` (extreme log level): fps, slow frames and the cost of each part per frame |
+| `prof_summary.py <run> [from_s to_s]` | Ranks the `prof` lines of the extreme log level: where each frame goes, per piece (`../../dev/en/logs-and-switches.md`) |
 | `dump.py <dump folder> [K]` | Draws a dumped frame on the PC imitating the GE and compares it with the normal image and the Vita's (`../../dev/en/dumps.md`). Needs numpy and Pillow |
 
 ## Tests
