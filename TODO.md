@@ -6,6 +6,8 @@ what was done is in `CHANGELOG.md`. Updated 2026-11-02 (NativeLink 0.0.4 + Nativ
 `docs/agent/en/stage3-plan.md`.
 
 ## Next
+- [ ] **Ridge Racer, odd drawings in the opening movie** (user, 0.0.12.10): looks minor; check again after the performance work, with a
+      dump if it stays.
 - [ ] **3D** (after the fans; the user's order, 2026-11-02): start with a light game, not GT. Store the matrices in the record
       and translate depth; GT needs reusing recorded sublists (`Performance for drawing GT`).
 - [ ] **Texture cache, what is left:** VRAM textures (KOF 96 fights: DMA ~1 ms + sort ~2 ms per frame; only after understanding the

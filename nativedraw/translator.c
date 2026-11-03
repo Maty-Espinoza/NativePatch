@@ -693,6 +693,8 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     SCE_GXM_TEXTURE_FORMAT_U4U4U4U4_ABGR, SCE_GXM_TEXTURE_FORMAT_U8U8U8U8_ABGR, SCE_GXM_TEXTURE_FORMAT_P4_ABGR,
     SCE_GXM_TEXTURE_FORMAT_P8_ABGR };
   int res = T_OK;
+  static struct { uint32_t clut, c5, ne, off; } pc[128];  // palettes translated in this frame, by loaded palette and 0xC5
+  sceClibMemset(pc, 0, sizeof pc);
   // with ord, two passes: 0 draws to intermediate images, 1 those to the surface
   for (uint32_t pass = 0; pass <= ord && res == T_OK; pass++)
   for (uint32_t i = 0; i < f->nd && res == T_OK; i++) {
@@ -719,15 +721,24 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
       } else if (!d->toff || sceGxmTextureInitLinear(&t, f->tx + d->toff - 1, gf[fmt], tbw, (uint32_t)th, 0) < 0) { res = T_TEX; break; }
       if (fmt >= 4) {  // palette: to 8888, with shift, mask and start (0xC5)
         uint32_t c5 = RE(e, 0xC5), cf = c5 & 3, sh = c5 >> 2 & 31, mk = c5 >> 8 & 0xFF, st = (c5 >> 16 & 31) << 4;
-        uint32_t ne = fmt == 4 ? 16 : 256, bpe = cf == 3 ? 4 : 2, max = d->clen / bpe, *pp = pal + np;
-        if ((np + ne) * 4 > TP_B) { res = T_LIMIT; break; }
-        const uint8_t *src = f->a + d->clut - 1;
-        for (uint32_t k = 0; k < ne; k++) {
-          uint32_t j = ((k >> sh) & mk) | st;
-          pp[k] = pal8888(j < max ? (bpe == 4 ? ((const uint32_t *)src)[j] : ((const uint16_t *)src)[j]) : 0, cf);
+        uint32_t ne = fmt == 4 ? 16 : 256, bpe = cf == 3 ? 4 : 2, max = d->clen / bpe, *pp;
+        typeof(&pc[0]) q = &pc[(d->clut >> 4 ^ c5 ^ ne) & 127];
+        if (q->clut == d->clut && q->c5 == c5 && q->ne == ne) pp = pal + q->off;  // already translated in this frame
+        else {
+          static uint32_t pb[256];  // (built in cached memory: the GPU's is slow to write)
+          if ((np + ne) * 4 > TP_B) { res = T_LIMIT; break; }
+          const uint8_t *src = f->a + d->clut - 1;
+          for (uint32_t k = 0; k < ne; k++) {
+            uint32_t j = ((k >> sh) & mk) | st;
+            pb[k] = pal8888(j < max ? (bpe == 4 ? ((const uint32_t *)src)[j] : ((const uint16_t *)src)[j]) : 0, cf);
+          }
+          if (pn != ne || sceClibMemcmp(pal + pal_prev, pb, ne * 4)) {  // (same as the last: reused)
+            sceClibMemcpy(pal + np, pb, ne * 4);
+            pal_prev = np; pn = ne; np += ne;
+          }
+          pp = pal + pal_prev;
+          q->clut = d->clut; q->c5 = c5; q->ne = ne; q->off = pal_prev;
         }
-        if (pn == ne && !sceClibMemcmp(pal + pal_prev, pp, ne * 4)) pp = pal + pal_prev;  // same as the last: reused
-        else { pal_prev = np; pn = ne; np += ne; }
         sceGxmTextureSetPalette(&t, pp);
       }
       uint32_t tfl = RE(e, 0xC6), twr = RE(e, 0xC7);
