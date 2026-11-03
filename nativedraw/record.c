@@ -310,7 +310,7 @@ static void regBench(void) {
 static uint32_t rgCopy(uint32_t a, uint32_t n) {
   RFrame *f = rf[rg_w];
   uint32_t o = (f->na + 15) & ~15u;
-  if (o + n > RA_N) { f->flags |= R_LIMIT; return 0; }
+  if (o + n > RA_N) { DEV(if (p_on) pAdd(P_X_VERT, 0);) f->flags |= R_LIMIT; return 0; }
   for (uint32_t k = 0; k < n;) {
     uint32_t s = vtr(a + k), m = 4096 - ((a + k) & 4095);
     if (m > n - k) m = n - k;
@@ -348,7 +348,7 @@ static void rgVFlush(void) {
 static uint32_t rgVLater(uint32_t s, uint32_t n) {
   RFrame *f = rf[rg_w];
   uint32_t o = (f->na + 15) & ~15u;
-  if (o + n > RA_N) { f->flags |= R_LIMIT; return 0; }
+  if (o + n > RA_N) { DEV(if (p_on) pAdd(P_X_VERT, 0);) f->flags |= R_LIMIT; return 0; }
   if (vpn == VP_N) rgVFlush();
   vp[vpn].s = s; vp[vpn].d = o; vp[vpn++].n = n;
   f->na = o + n;
@@ -423,7 +423,7 @@ static uint32_t rgTex(uint32_t r0, uint32_t r1) {
     if (!vr && !e) ga.c_rec++;
     if (f->nt >= TN_N || (!e && f->ntx + n > TX_N)) {
       DEV(static uint32_t lim_n; if (lim_n < 20) { lim_n++; clog("record: texture limit at frame %u: %u textures, %u of %u bytes, %u more wanted\n", gen, f->nt, f->ntx, TX_N, n); })
-      f->flags |= R_LIMIT; return 0;
+      DEV(if (p_on) pAdd(P_X_TEX, 0);) f->flags |= R_LIMIT; return 0;
     }
     f->ta[i] = ta; f->tn[i] = key; f->to[i] = e ? (uint32_t)(rc_tx + e->o - f->tx) : f->ntx; f->tm[i] = 0; f->tq[i] = vr ? ~0u : 0; f->tr[i] = 8 * rb; f->nt++;
     f->tc[i] = e ? e - rc + 1 : 0;
@@ -548,7 +548,7 @@ static uint32_t rgBlock(const uint32_t *src, uint32_t n, uint32_t *last) {
   RFrame *f = rf[rg_w];
   if (*last && !sceClibMemcmp(f->a + *last - 1, src, n * 4)) return *last;
   uint32_t o = (f->na + 15) & ~15u;
-  if (o + n * 4 > RA_N) { f->flags |= R_LIMIT; return 0; }
+  if (o + n * 4 > RA_N) { DEV(if (p_on) pAdd(P_X_VERT, 0);) f->flags |= R_LIMIT; return 0; }
   sceClibMemcpy(f->a + o, src, n * 4);
   f->na = o + n * 4;
   return *last = o + 1;
@@ -560,14 +560,14 @@ static void regDraw(uint32_t n, uint32_t type, uint32_t vt, uint32_t idx) {
   RFrame *f = rf[rg_w];
   f->draws_seen++;
   if (f->flags) return;  // already incomplete: nothing more is spent on this frame
-  if (f->nd >= RD_N) { f->flags |= R_LIMIT; return; }
+  if (f->nd >= RD_N) { DEV(if (p_on) pAdd(P_X_DRAWS, 0);) f->flags |= R_LIMIT; return; }
   // (reading the clock costs: the times are sampled, 1 draw in 8)
   uint32_t tm = !(f->draws_seen & 7), t0 = tm ? now() : 0, t1, v[NRS];
   if (rg_chg || !f->ne) {
     rg_chg = 0;
     for (int i = 0; i < NRS; i++) v[i] = reg[RS[i]];
     if (!f->ne || sceClibMemcmp(v, f->e[f->ne - 1], sizeof v)) {  // new state
-      if (f->ne >= RE_N) { f->flags |= R_LIMIT; return; }
+      if (f->ne >= RE_N) { DEV(if (p_on) pAdd(P_X_STATES, 0);) f->flags |= R_LIMIT; return; }
       sceClibMemcpy(f->e[f->ne++], v, sizeof v);
     }
   }

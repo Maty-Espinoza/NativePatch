@@ -31,6 +31,7 @@ PStage P[PN];
 volatile uint32_t p_on;
 volatile SceUID nd_gfx_uid;  // Adrenaline's drawing thread (noted by the presenter)
 static uint32_t p_flip;      // time of the last PSP flip on the Vita clock
+static uint32_t p_draw;      // us of this frame in draw() (estimated from the timed ones)
 #endif
 
 // --- Statistics ---
@@ -320,6 +321,7 @@ static void regDraw(uint32_t n, uint32_t type, uint32_t vt, uint32_t idx), regCl
 // the previous one, advances vaddr/iaddr, notes new textures, requests VRAM textures from the mirror and marks the
 // render target so it is not requested as data
 static void draw(uint32_t d) {
+  DEV(uint32_t tp = p_on && !(acc.draws & 7) ? now() : 0;)  // (1 in 8 draws, timed)
   uint32_t n = d & 0xFFFF, type = (d >> 16) & 7, vt = reg[0x12], idx = (vt >> 11) & 3;
   if (!n) { acc.dempty++; return; }
   if (reg_on) regDraw(n, type, vt, idx);  // frame record
@@ -381,6 +383,7 @@ static void draw(uint32_t d) {
   if ((dirty & ~C_TL) || type != last_prim) acc.batches_notl++;  // if TEXLEVEL were per draw (does not break the batch)
   if (!same || idx || (vset && vstart != last_vend)) acc.batches_cont++;
   last_prim = type; last_vend = vaddr; dirty = vset = 0;
+  DEV(if (tp) p_draw += (now() - tp) * 8;)
 }
 
 #include "record.c"  // frame record: uses the code above
@@ -1023,6 +1026,27 @@ static void pubList(List *l) {
   __sync_synchronize();
   pub_ord = l->ord;
 }
+#ifdef NP_DEV
+// The list at the head made no progress for 50 ms with newer lists waiting: notes where it stopped, what it holds there
+// and what the next list looks like. Once per stop, the first 60 in the log.
+static void stuckNote(List *l) {
+  static uint32_t ord, n, t, cnt;
+  if (l->ord != ord || l->n != n) { ord = l->ord; n = l->n; t = now(); return; }
+  if (!t || now() - t < 50000 || qt - qh < 2) return;
+  t = 0;
+  if (!p_on) return;
+  pAdd(P_X_STUCK, 0);
+  if (cnt >= 60) return;
+  cnt++;
+  uint32_t a = (l->pc & ~3u) - 16, w[8] = { 0 }, ra = vtr(a);
+  if (ra && ramEnd(ra) >= ra + 32) for (int i = 0; i < 8; i++) w[i] = ((volatile uint32_t *)PSP(ra))[i];
+  List *x = &q[(qh + 1) & 63];
+  Done *pv = &done[(l->ord - 1) & 63];
+  clog("stuck: list %u at pc %08x stall %08x (start %08x) sublevel %u after %u commands (previous list %u) last op %08x | waiting lists %u, next %u pc %08x stall %08x | enqueued %u ms ago, last stall %u ms ago | around pc:"
+       " %08x %08x %08x %08x > %08x %08x %08x %08x\n", l->ord, l->pc, l->stall, l->lo, l->sp, l->n, pv->ord + 1 == l->ord ? pv->cmds : 0, l->prev, qt - qh - 1, x->ord, x->pc, x->stall,
+       (now() - (l->t_enq + off)) / 1000, (now() - (l->t_stall + off)) / 1000, w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7]);
+}
+#endif
 // Walks queued lists in order until one sits at its stall or the limit is spent; on finishing each one takes the
 // list lifetime sample and publishes in SB[3] that it is captured. no_capture: only marks them captured
 static void walk(void) {
@@ -1036,6 +1060,7 @@ static void walk(void) {
     DEV(uint32_t tw = now();)
     int finish = walkList(l);
     DEV(l->work += now() - tw;)
+    DEV(if (!finish) stuckNote(l);)
     if (!finish) return;
     recAbort(); chk = NULL;  // the list ended inside a sublist (END, jump to VRAM...): not saved
     // at all levels (NativeLink uses it) and before SB[3]: never the captured list with the stale sample
@@ -1043,6 +1068,7 @@ static void walk(void) {
     if (reg_on) rgVFlush();
     capt = l->ord; SB[3] = capt; qh++; acc.lists++;
     DEV(listDone(l);)
+    DEV(if (p_on) { uint32_t tl = now(); pAdd(P_L_LIST, tl - (l->t_enq + off)); pAdd(P_C_WORK, l->work); pAdd(P_C_STALL, tl - l->t_start - l->work); })
   }
 }
 
@@ -1090,7 +1116,7 @@ static void event(volatile uint32_t *e) {
   DEV(if (d0 < off_min) off_min = d0;)  // Vita - PSP clock difference
   DEV(if (!off_ok) { off = d0; off_ok = 1; })
   if (t == EV_ENQ || t == EV_HEAD) {
-    if (qt - qh >= 64) { acc.resyncs++; resetQueue(); }
+    if (qt - qh >= 64) { acc.resyncs++; DEV(if (p_on) pAdd(P_X_QUEUE, 0);) resetQueue(); }
     if (t == EV_HEAD) qh--;
     List *l = &q[(t == EV_HEAD ? qh : qt++) & 63];
     sceClibMemset(l, 0, sizeof *l);
@@ -1185,7 +1211,7 @@ static void event(volatile uint32_t *e) {
     // closes the frame record (a: displayed image, b: width | format << 16)
     DEV(uint32_t tp = PT();)
     if (reg_on) { regFlip(a, b, f_draws); reg_big = f_draws > RD_N; }
-    DEV(if (tp) { PA(P_C_FLIP, tp); pAdd(P_L_CLOSE, now() - p_flip); pAdd(P_C_TOTAL, f_us); })
+    DEV(if (tp) { PA(P_C_FLIP, tp); pAdd(P_L_CLOSE, now() - p_flip); pAdd(P_C_TOTAL, f_us); pAdd(P_C_DRAW, p_draw); p_draw = 0; })
     acc.frames++;
     if (qh != qt) acc.flips_behind++;
     if (f_cmds > acc.cmds_max) acc.cmds_max = f_cmds;
@@ -1356,13 +1382,14 @@ static void pSet(int k, uint32_t n, uint32_t us) { PStage *p = &P[k]; p->n += n;
 // Once per second: stages with no writer of their own, processor of each thread, and the "prof" lines
 static void profLog(const Stats *r) {
   static const char *names[PN] = { "frame", "game", "vblank", "gate", "sync_ge", "mirror_cpu", "hooks", "ge_busy", "ge_mirror", "lists",
-    "total", "read_own", "read_shared", "record", "rec_state", "rec_vertices", "rec_textures", "memory", "close", "vertex_dma", "sleep",
-    "wait_mirror", "copy_vram", "flip_to_closed", "flip_to_published", "published_to_taken",
+    "total", "read_own", "read_shared", "record", "rec_state", "rec_vertices", "rec_textures", "memory", "close", "vertex_dma", "sleep", "draw", "list_work", "list_at_stall",
+    "wait_mirror", "copy_vram", "flip_to_closed", "flip_to_published", "published_to_taken", "enqueued_to_captured",
     "period", "adrenaline_end", "image_dma", "checks", "wait_gpu", "presenter", "check", "textures", "vertices", "gxm", "scenes", "all", "end_scene",
     "complete", "not_taken", "no_record", "gpu_behind", "drawn", "repeated", "normal",
-    "adrenaline", "normal_image", "surface", "intermediate", "capture", "record", "adrenaline", "reader0", "reader1", "free0", "free1", "free2" };
+    "adrenaline", "normal_image", "surface", "intermediate", "capture", "record", "adrenaline", "reader0", "reader1", "free0", "free1", "free2",
+    "stuck", "queue_full", "record_bytes", "record_draws", "record_states", "record_textures" };
   static const struct { const char *g; int k0; } G[] = { { "psp", P_FRAME }, { "capture", P_C_TOTAL }, { "record", P_R_MIRROR }, { "latency", P_L_CLOSE },
-    { "adrenaline", P_A_PERIOD }, { "translator", P_T_CHECK }, { "frames", P_F_COMPLETE }, { "gpu", P_G_ADR }, { "cpu", P_U_CAP }, { 0, PN } };
+    { "adrenaline", P_A_PERIOD }, { "translator", P_T_CHECK }, { "frames", P_F_COMPLETE }, { "gpu", P_G_ADR }, { "cpu", P_U_CAP }, { "limits", P_X_STUCK }, { 0, PN } };
   static PStage l[PN];
   static uint32_t lc[8];
   uint32_t f = r->frames ? r->frames : 1;
