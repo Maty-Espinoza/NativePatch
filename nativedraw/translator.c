@@ -660,6 +660,11 @@ static float trArea(const TV *o, uint32_t n, uint32_t prim) {
 
 // pixels -> screen matrix, by columns (like the presenter's), and alpha test that always passes
 static const float tr_wvp[16] = { 2.0f / LINE, 0, 0, 0, 0, -2.0f / H, 0, 0, 0, 0, -2, 0, -1, 1, 1, 1 }, always[4] = { 1, 0, 0, 0 };
+// tr_wvp for a scene with valid region r (0: the whole surface): the GPU's viewport covers only the region
+static void trWvp(float *m, const SceGxmValidRegion *r) {
+  sceClibMemcpy(m, tr_wvp, sizeof tr_wvp);
+  if (r) { m[0] = 2.0f / (r->xMax + 1); m[5] = -2.0f / (r->yMax + 1); }
+}
 // What goes underneath in the surface (scene already open): the normal image base stretched, with the presenter's
 // program; without base, full-screen black (4 vertices at o + nv). Returns the vertices used from o.
 static uint32_t trBase(SceGxmContext *c, const SceGxmTexture *base, TV *o, uint32_t nv) {
@@ -920,7 +925,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
   void *u;
   // SCENE: starts a scene on surface surf_tex with the vertex program and the matrix
 #define SCENE(surf_tex, reg) do { sceGxmBeginScene(c, 0, cur_rt ? rt_i : rt, reg, 0, t_sync, surf_tex, cur_rt ? &ds : &dss); t_zs = t_st = t_sr = t_cl = ~0u; zsSet(c, 0, 0); sceGxmSetVertexProgram(c, nvp); \
-    sceGxmReserveVertexDefaultUniformBuffer(c, &u); sceGxmSetUniformDataF(u, n_wvp, 0, 16, tr_wvp); } while (0)
+    float wm[16]; trWvp(wm, reg); sceGxmReserveVertexDefaultUniformBuffer(c, &u); sceGxmSetUniformDataF(u, n_wvp, 0, 16, wm); } while (0)
   // OPEN: closes the open scene (if any) and opens one on dst (0: surface s); the first time on the surface,
   // puts the normal image (or black: trBase) underneath
 #define OPEN(dst_) do { RUN(); pd = 0; if (opened) { SURF_WAIT(); sceGxmEndScene(c, 0, gEnd()); cNote(cur_rt ? C_INT : C_TR, &gq_n, t_draws - d0, spx / 1000, ssw); } \
@@ -1076,7 +1081,8 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
         sceGxmBeginScene(c, 0, rt_c, &vr, 0, t_sync, &rtc.cs, &ds);
         t_zs = t_st = t_sr = t_cl = ~0u; zsSet(c, 0, 0); sceGxmSetCullMode(c, SCE_GXM_CULL_NONE);
         sceGxmSetVertexProgram(c, vp); sceGxmSetFragmentProgram(c, fp);
-        sceGxmReserveVertexDefaultUniformBuffer(c, &u); sceGxmSetUniformDataF(u, p_wvp, 0, 16, tr_wvp);
+        float wm[16]; trWvp(wm, &vr);
+        sceGxmReserveVertexDefaultUniformBuffer(c, &u); sceGxmSetUniformDataF(u, p_wvp, 0, 16, wm);
         sceGxmSetFragmentTexture(c, 0, &ts); sceGxmSetVertexStream(c, 0, q);
         sceGxmDraw(c, SCE_GXM_PRIMITIVE_TRIANGLE_STRIP, SCE_GXM_INDEX_FORMAT_U16, ib, 4);
         sceGxmEndScene(c, 0, gEnd()); cNote(C_INT, &gq_n, 1, 0, 0);
