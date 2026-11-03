@@ -228,7 +228,8 @@ static void dumpList(SceUID fd, const uint8_t *b) {
 }
 
 // Takes the dump memory by level: images (mandatory) and, from "frame", records, exact image and
-// intermediate image (optional: if none, the dump comes out without them). 0 if no memory for the images.
+// intermediate image (optional: if none, the dump comes out without them). Without memory for several frames it tries
+// with one. 0 if no memory for the images.
 // Records go in physical memory: the translator's intermediate images are reserved earlier.
 static int dumpAlloc(void) {
   uint32_t n = 0, ok = 1;
@@ -240,7 +241,7 @@ static int dumpAlloc(void) {
   }
   void *t = 0;
   if (ok) { dump_blk[n] = sceKernelAllocMemBlock("nativedraw_dump", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, 0x40000, 0); if (dump_blk[n] < 0 || sceKernelGetMemBlockBase(dump_blk[n++], &t) < 0) ok = 0; }
-  if (!ok) { alog("dump: no memory\n"); for (uint32_t i = 0; i < n; i++) if (dump_blk[i] >= 0) sceKernelFreeMemBlock(dump_blk[i]); for (int i = 0; i <= VN; i++) dump_blk[i] = 0; return 0; }
+  if (!ok) { alog("dump: no memory\n"); for (uint32_t i = 0; i < n; i++) if (dump_blk[i] >= 0) sceKernelFreeMemBlock(dump_blk[i]); for (int i = 0; i <= VN; i++) dump_blk[i] = 0; if (dump_nf > 1) { dump_nf = 1; return dumpAlloc(); } return 0; }
   dump_w = t;
   int nb = 0;
   for (int i = 0; i < (int)dump_nf && dump_level >= 2; i++) {  // records

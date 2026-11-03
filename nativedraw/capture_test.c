@@ -242,7 +242,7 @@ int main(int argc, char **argv) {
     rf[rg_w]->flags = 1;  // (not published)
     regFlip(0x04000000, 512, 0);
     // The same texture in frames in a row: copied once; changed, it goes to the record until nobody reads the entry
-    *W(0x08C31000) = 5; reg[0xA0] = 0xC31000;
+    *W(0x08C31000) = 5; reg[0xA0] = 0xC31000; reg[0xA8] = 0x080000 | 256; reg[0xB8] = 3 << 8 | 8;  // 256x8, 8 KB
     uint8_t *p0 = rf[rg_w]->tx + rgTex(0, 8) - 1;
     uint32_t cp = ga.t_n[0];
 #define NEXT() do { rf[rg_w]->nd = 1; rf[rg_w]->draws_seen = ~0u; regFlip(0x04000000, 512, 0); } while (0)
@@ -255,6 +255,10 @@ int main(int argc, char **argv) {
     for (int k = 0; k < RN + 1; k++) { NEXT(); }
     uint8_t *p3 = rf[rg_w]->tx + rgTex(0, 8) - 1;
     res->tc = res->tc && p3 == p1 && *(uint32_t *)p3 == 6;
+    // The sample reads other columns besides the first one, and small textures stay out of the cache
+    uint32_t s0 = rcSample((uint8_t *)W(0x08C31000), 8192, 1024);
+    W(0x08C31000)[(1024 + 640) / 4] = 7;
+    res->tc = res->tc && s0 != rcSample((uint8_t *)W(0x08C31000), 8192, 1024) && !rcGet(0x08C32000, 2048, 256);
 #undef NEXT
     rf[rg_w]->flags = 1; regFlip(0x04000000, 512, 0);
     RFrame *x = rf[rg_w];  // 64x64 from RAM to (8, 14) of the image being drawn, and one that is not on it

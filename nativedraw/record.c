@@ -165,9 +165,10 @@ static uint32_t rcAlloc(uint32_t n) {
   }
   return ~0u;
 }
-// Entry of the texture at a (a new one if it has none), or 0 if there is no room. Clears d once nobody reads the entry.
+// Entry of the texture at a (a new one if it has none), or 0 if there is no room or it is under 8 KB: small textures
+// cost little to copy, and a few sampled words would not see their changes. Clears d once nobody reads the entry.
 static RC *rcGet(uint32_t a, uint32_t key, uint32_t gb) {
-  if (!rc) return 0;
+  if (!rc || (key & 0x7FFFFFFF) < 8192) return 0;
   RC *e = 0, *f = 0;
   for (int i = 0; i < RC_E && !e; i++) if (rc[i].key == key && rc[i].a == a && rc[i].gb == gb) e = &rc[i];
   if (e) { if (e->d && !RC_LIVE(e, rcOldest())) e->d = 0; return e; }
@@ -179,10 +180,13 @@ static RC *rcGet(uint32_t a, uint32_t key, uint32_t gb) {
   f->a = a; f->key = key; f->gb = gb; f->o = o; f->m = f->d = 0; f->use = rg_seq[rg_w];
   return f;
 }
-// Sample of l bytes at p: 8 words spread along it, read directly (a few reads per group, not the whole group)
-static uint32_t rcSample(const uint8_t *p, uint32_t l) {
-  uint32_t h = l, s = (l / 8) & ~3u;
-  for (uint32_t i = 0; i < 8; i++) h = (h ^ *(const uint32_t *)(p + i * s)) * 16777619u;
+// Sample of l bytes at p, rows of rb bytes: 8 words read directly, one per row and each in another column
+static uint32_t rcSample(const uint8_t *p, uint32_t l, uint32_t rb) {
+  uint32_t h = l;
+  for (uint32_t i = 0; i < 8; i++) {
+    uint32_t o = (i * rb + (i * 5 & 7) * rb / 8) & ~3u;
+    if (o + 4 <= l) h = (h ^ *(const uint32_t *)(p + o)) * 16777619u;
+  }
   return h;
 }
 // Hash of the l bytes at p, read through the transit memory
@@ -201,7 +205,7 @@ static int rcCheck(RC *e, uint32_t g0, uint32_t g1) {
   for (uint32_t g = g0; g < g1 && !r; g++) {
     const uint8_t *p = (const uint8_t *)PSP(e->a + g * e->gb);
     if (e->d >> g & 1) r = 1;
-    else if ((e->m >> g & 1) && (rcSample(p, rcLen(e, g)) != e->s[g] || (!((g + k + gen) & 15) && rcHash(p, rcLen(e, g)) != e->h[g]))) {
+    else if ((e->m >> g & 1) && (rcSample(p, rcLen(e, g), e->gb / 8) != e->s[g] || (!((g + k + gen) & 15) && rcHash(p, rcLen(e, g)) != e->h[g]))) {
       e->m &= ~(1ull << g); e->d |= 1ull << g; ga.c_chg++; r = 1;
     }
   }
@@ -212,7 +216,7 @@ static int rcCheck(RC *e, uint32_t g0, uint32_t g1) {
 static void rcNote(RC *e, uint32_t g0, uint32_t g1) {
   for (uint32_t g = g0; g < g1; g++) {
     const uint8_t *p = (const uint8_t *)PSP(e->a + g * e->gb);
-    e->s[g] = rcSample(p, rcLen(e, g)); e->h[g] = rcHash(p, rcLen(e, g)); e->m |= 1ull << g;
+    e->s[g] = rcSample(p, rcLen(e, g), e->gb / 8); e->h[g] = rcHash(p, rcLen(e, g)); e->m |= 1ull << g;
     ga.c_fill += rcLen(e, g);
   }
 }
