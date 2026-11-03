@@ -2,13 +2,15 @@
 
 The only list of pending work. Ordered from what comes next to what can wait. Each item says where it came from
 (a document in `docs/dev/en/`, `docs/agent/en/`, `docs/changelog/en/` or the claude.ai project). Done items are removed;
-what was done is in `CHANGELOG.md`. Updated 2026-11-03 (NativeLink 0.0.6 + NativeDraw 0.0.13 confirmed). How the work is done: `docs/agent/en/workflow.md`; stage 3 plan and results:
+what was done is in `CHANGELOG.md`. Updated 2026-11-03 (NativeLink 0.0.6 + NativeDraw 0.0.14 confirmed). How the work is done: `docs/agent/en/workflow.md`; stage 3 plan and results:
 `docs/agent/en/stage3-plan.md`.
 
 ## Next
 Order agreed on 2026-11-03: first make the whole of Ridge Racer drawable in HD (the race included), then optimize with the
 game in its "final" form. Capturer, mirror and translator work goes after the race is drawable.
-- [ ] **Ridge Racer without `force_hd`:** with NativeDraw 0.0.14.11 a whole lap is drawn in HD and dumps match the normal image (green tunnel included), but only with the `force_hd` switch, which skips what cannot be drawn. Left, in the frames with the extra effect (targets 1fc000 and 195140, then 8 T8 draws on the screen from 195540; 4 targets in a frame): points on 1fc000, more than 2 intermediate images, a texture read inside an image. Find out what that effect does before implementing it.
+- [ ] **Ridge Racer, performance first (user, 2026-11-03):** the race goes in HD at ~10 frames per second: translator ~50 ms per frame (3D vertices ~27 ms, GXM ~8 ms), GPU ~31 ms in the selector. See the crowd artifacts after this.
+- [ ] **Ridge Racer, crowd section artifacts** (user, 0.0.14.15): look again after the performance work. Up to 3700 draws per frame, capturer ~22 ms even without recording (~1000 ns per command against 580 in 0.0.1: not the log level).
+- [ ] **Translator failures left:** color test that is not black under an add (`fails/003_color_test_or_logic`), the first frame of the flare before its texture is in the mirror, T8 with no copy (`fails/006_bad_texture`, not understood), points on images that are read, memory free after start: 0 MB in one go with the dev reservations.
 - [ ] **Ridge Racer, bright strip on the right edge and bars on the left in the bloom** (`stage3_0.0.14.8/rr1` dumps 271-273, `stage3_0.0.14.9` video). Cause unknown; dumps still lack the 088000 image (no memory for `dump_rt`).
 - [ ] **Ridge Racer, opening movie no longer plays in HD versions** (user, 0.0.14.11): check it after the race. Also dump 255 and the 2 videos in the claude.ai conversation of 2026-11-03.
 - [ ] **Sync object `t_sync`:** added on a suspicion that turned out not to be the tint's cause. Check whether it can go.

@@ -1,6 +1,6 @@
 # Cómo funcionan NativeLink y NativeDraw
 
-Referencia de la versión actual (NativeLink 0.0.6, NativeDraw 0.0.13). Para la idea general y el estado del proyecto:
+Referencia de la versión actual (NativeLink 0.0.6, NativeDraw 0.0.14). Para la idea general y el estado del proyecto:
 `overview.md`. Hoja de ruta: `architecture-and-roadmap.md` §6. Logs e interruptores: `logs-and-switches.md`. Qué se midió
 y qué límites se encontraron: `findings.md`. Cómo se llegó a cada pieza, versión por versión: `../../changelog/`.
 
@@ -150,7 +150,7 @@ quedan sin usar: `SB[0x47]`, los bits 4 y 8 de 0x4A y los eventos 7, 8, 9, 10 y 
   ese flip.
   Las texturas de la RAM quedan entre frames en un caché que lee la GPU (`RC` en `record.c`): cada frame se compara una
   muestra de cada grupo de 8 filas con la memoria del juego, y solo se vuelve a copiar lo que cambió.
-- **Traductor** (`translator.c`): solo 2D en modo "through" (coordenadas en píxeles): rectángulos, triángulos, tiras y abanicos;
+- **Traductor** (`translator.c`): 2D en modo "through" y 3D (el trabajo de vértices del GE en la CPU): líneas, rectángulos, triángulos, tiras y abanicos;
   texturas 5650/5551/4444/8888 y paletas de 4 y 8 bits; borrados; color por vértice o del material; funciones de textura
   modular y reemplazar; alfa test; mezcla (las combinaciones que GXM tiene); scissor en los rectángulos; **imágenes
   intermedias** (un juego dibuja en una imagen escondida de la VRAM y después la estira: cada una va a una superficie
@@ -161,6 +161,10 @@ quedan sin usar: `SB[0x47]`, los bits 4 y 8 de 0x4A y los eventos 7, 8, 9, 10 y 
   Adrenaline la ubica y escala igual que siempre (se respetan su escala, posición y proporción). La copia de la imagen
   del PSP que hace Adrenaline se desvía a 4 copias propias alternadas (la GPU la lee para NativeDraw después que para
   Adrenaline). Todo en memoria LPDDR (nunca CDRAM, que la usan los videos de la Vita) y siempre con z.
+- **Leer imágenes:** un frame puede leer la superficie que se está dibujando (se corta su escena), una imagen mientras dibuja sobre ella (desde
+  una copia, `rtc`) o la imagen del frame anterior. Los dibujos sobre imágenes que nadie lee después no se hacen: lo que dejan es para el
+  PSP, y la Vita lo toma del espejo (paletas que el juego construye con el GE, píxeles que muestrea con puntos).
+- **Un frame que no se puede dibujar** mantiene la última superficie, hasta 20 frames.
 - **HD solo cuando se sostiene:** el dibujo de la Vita se ve un frame después que la imagen normal, así que un frame en HD
   entre frames que no se pueden dibujar se ve como un salto atrás. Cuando un frame no se puede dibujar, la HD vuelve recién
   cuando los frames llevan un segundo entero siendo dibujables (`held_back` en el log); mientras tanto solo se revisan y se

@@ -238,6 +238,10 @@ int main(int argc, char **argv) {
   if (reg_on && res) {
     markRt(0x04100000, 4096); tFlip(0x04000000, 512, 0);
     res->rt1 = !rt_pg[0x100 >> 5];
+    // Only the start of an image is held in HD: the rest of its pages comes from the mirror
+    markRt(0x04100000, 4096); rt_fb[0] = 0x100000; rt_nb = 1;
+    res->rt1 &= rtRead(0x04100000) && !rtRead(0x04100400) && rtPage(0x04100400);
+    sceClibMemset(rt_pg, 0, sizeof rt_pg); rt_nb = 0;
     *W(0x08C30000) = 1; reg[0xA0] = 0xC30000; reg[0xA8] = 0x080000 | 8; reg[0xB8] = 3 << 8 | 3; reg[0xC3] = 3;  // 8x8, 8888
     pub_ord = 100; uint32_t t0 = rgTex(0, 8), t1 = rgTex(0, 8);
     pub_ord = 101; uint32_t t2 = rgTex(0, 8);

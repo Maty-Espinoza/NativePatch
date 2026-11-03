@@ -23,7 +23,7 @@ La escena 0 debe seguir primera: prueba el estado configurado solo en las primer
 - **Texturas:** 5650, 5551, 4444, 8888, T4, T8 (`texFmts`); swizzle (`texSwz`); filtro punto y lineal, repeat y clamp (`filterWrap`); shift, máscara y start de paleta, 4 formatos de paleta (`palettes`).
 - **Operaciones de píxel:** modulate, replace, TCC, doubling (`texFuncs`); add, subtract, reverse subtract, min, max (`blendOps`); factores de blend y fijos 0 o blanco (`blendFactors`); las 8 funciones de prueba de alfa (`alphaTest`); scissor (`scissorRect`); 200 capas (`layers`).
 - **Destinos y copias:** una y dos imágenes intermedias (`rtOne`, `rtTwo`); dibujo en 565 y 5551 (`rtFmts`, `fb565`, `fb5551`); TRANSFER desde RAM y VRAM (`xferRam`, `xferVram`); lista enviada después del flip (`lateList`); estado configurado solo en las primeras listas (`firstState`).
-- **Primitivas y vértices rechazados:** líneas (`sync`), `points`, `lineStrip`, `bezier`, `spline`, `primKeep`; `weights`, `morph`.
+- **Primitivas y vértices rechazados:** `points`, `bezier`, `spline`, `primKeep`; `weights`, `morph`.
 - **Texturas y píxeles rechazados:** `decal`, `tfxBlend`, `tfxAdd`, `dxt1`, `dxt3`, `dxt5`, `t16`, `t32p`; `colorTest`, `logicOp`; color fijo gris (`fixGray`), `blendAbs`, alfa de destino (`blendDst`), alfa 2x (`blend2x`).
 - **Límites:** destino de más de 512 de ancho (`wideTarget`), 3 intermedias (`threeRt`), dibujar sobre una imagen ya leída (`rtReread`), posición sobre 4096 (`offscreen`), 5000 dibujos (`manyDraws`), 300 texturas (`manyTex`), 512 filas (`tallTex`).
 - **Profundidad, stencil y máscaras:** `depth2d`, `stencilMask`, `stencilAlpha`, `alphaMask`, `pixelMask`, `regionClip`, scissor vacío (`scissorEmpty`), scissor en triángulos (`scissorTri`).

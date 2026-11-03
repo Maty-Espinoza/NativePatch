@@ -38,6 +38,8 @@ como máximo 4 por motivo y 64 por sesión. Usa 2 MB reservados al arrancar, as�
 diferencia de L+R+SELECT, que parte en el frame siguiente. `tools/dump.py` lee la carpeta. No ve frames que nunca se completaron
 (la causa está en `record not_read:`) ni frames mal dibujados sin un fallo.
 
+- Líneas `census:` de `nativedraw.log` (nivel extreme): todos los motivos por frame, qué son las texturas sin copia y la cadena de imágenes de cada tipo de frame. `record not_read:` de `nativedraw_capture.log`: la causa de cada frame incompleto y los frames solo recorridos.
+
 ## Archivos de cada volcado
 
 | Archivo | Qué es |

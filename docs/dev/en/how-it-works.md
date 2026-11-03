@@ -1,6 +1,6 @@
 # How NativeLink and NativeDraw work
 
-Reference for the current version (NativeLink 0.0.6, NativeDraw 0.0.13). For the general idea and the project status:
+Reference for the current version (NativeLink 0.0.6, NativeDraw 0.0.14). For the general idea and the project status:
 `overview.md`. Roadmap: `architecture-and-roadmap.md` §6. Logs and switches: `logs-and-switches.md`. What was measured
 and what limits were found: `findings.md`. How each piece was reached, version by version: `../../changelog/`.
 
@@ -150,7 +150,7 @@ unused: `SB[0x47]`, bits 4 and 8 of 0x4A and events 7, 8, 9, 10 and 12.
   that flip.
   Textures from RAM stay between frames in a cache the GPU reads (`RC` in `record.c`): each frame a sample of every group of
   8 rows is compared with the game's memory, and only what changed is copied again.
-- **Translator** (`translator.c`): only 2D in "through" mode (coordinates in pixels): rectangles, triangles, strips and fans;
+- **Translator** (`translator.c`): 2D in "through" mode and 3D (the GE's vertex work on the CPU): lines, rectangles, triangles, strips and fans;
   5650/5551/4444/8888 textures and 4- and 8-bit palettes; clears; color per vertex or from the material; modulate and replace
   texture functions; alpha test; blending (the combinations GXM has); scissor on the rectangles; **intermediate
   images** (a game draws into a hidden VRAM image and then stretches it: each one goes to its own surface at double size,
@@ -161,6 +161,10 @@ unused: `SB[0x47]`, bits 4 and 8 of 0x4A and events 7, 8, 9, 10 and 12.
   Adrenaline places and scales it as always (its scale, position and aspect ratio are respected). The copy of the PSP's
   image that Adrenaline makes is diverted to 4 alternating copies of its own (the GPU reads it for NativeDraw later than for
   Adrenaline). Everything in LPDDR memory (never CDRAM, which the Vita's videos use) and always with z.
+- **Reading images:** a frame can read the surface being drawn (its scene is cut), an image while drawing on it (from a copy, `rtc`) or the
+  image of the frame before. Draws on images nobody reads later are not done: what they leave is for the PSP, and the Vita takes it
+  from the mirror (palettes the game builds with the GE, pixels it samples with points).
+- **One frame that cannot be drawn** keeps the last surface, up to 20 frames.
 - **HD only when it holds:** the Vita drawing shows one frame behind the normal image, so a frame drawn in HD among frames
   that cannot be drawn looks like a jump back. When a frame cannot be drawn, HD only resumes once the frames have been
   drawable for a whole second (`held_back` in the log); meanwhile they are only checked and the normal image is shown.

@@ -137,6 +137,12 @@ directa.
 - **La copia del espejo se ve terminada ~20 ms después del flip** (`mirror_ge`, es un tope: el capturador mira entre listas), y NativeLink
   nunca encontró la copia de hace dos frames todavía en el GE (`busy=0`) [medido, 0.0.13.6].
 - **Reconstruir paletas por dibujo costaba 116 ms por frame** en el selector: 1000 dibujos de 256 entradas [medido].
+- **Bloom de Ridge Racer:** reduce la pantalla a 088000 (la memoria del z), resta, difumina sumándose a sí misma 4 veces con mezcla gris fija (src y dst * 4b4b4b) y la suma a la pantalla con color test. Casi todos los frames [medido, 0.0.14].
+- **La profundidad no sobrevive a un corte de escena:** con el corte entre el borrado y el mundo, el mundo desaparecía (la profundidad de fondo 1.0 es "cerca" para el GEQUAL del GE). Reordenar lo evita; si no, se fuerza guardar y cargar [medido, 0.0.14.5].
+- **Un capturador atrasado lee listas reescritas y la basura queda en el estado:** valores de emisión como 0x400011 teñían todo el mundo por segundos, hasta que el juego volvía a escribir el registro. Lo resolvieron grabar solo los frames que el presentador toma y restaurar el último estado limpio [medido, 0.0.14.8-0.0.14.10].
+- **El reflejo de lente y los halos los calcula el juego con el GE:** muestrea 64 píxeles con puntos, dibuja una paleta con el resultado y con ella dibuja sprites T8. La Vita lee el resultado del espejo, un frame tarde [medido, 0.0.14.13].
+- **Superficies sin terminar:** Adrenaline podía mostrar una superficie a medio dibujar. Mostrar la anterior resolvió los pedazos de un frame [video, 0.0.14.11].
+- **sceGxmCreateRenderTarget:** máximo 8 escenas por frame (con 24 da 805b0003 y el presentador queda apagado) [medido, 0.0.14.2].
 - **128 texturas por frame eran pocas:** Metal Slug XX llegaba al tope con 0,8 de 1,5 MB en uso y perdía frames. Ahora son
   256 [medido, 0.0.8.25–0.0.8.26].
 - Los juegos de Neo Geo hacen transparencias dibujando algo un frame sí y otro no: si la Vita repite o salta frames,

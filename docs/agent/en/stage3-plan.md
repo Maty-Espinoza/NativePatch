@@ -230,4 +230,4 @@ calculates how long each one took.
 | 3.2 | **done** (NativeDraw 0.0.5) |
 | 3.3 | Retro City (NativeDraw 0.0.6), **KOF 96** (NativeDraw 0.0.7; 60 fps in the fights since test 0.0.8.18) and **Metal Slug XX** (at its 30 fps; white glitch avoided in 0.0.8.21). 0.0.8.23 holds 30 fps in Metal Slug XX (`../../dev/en/findings.md`). Texture cache for RAM textures in 0.0.10. Triangle fans and cache fixes in 0.0.11 (Street Fighter Alpha 3 MAX fights in HD). Next: 3D |
 | 3.4 | partly advanced: comparison with the normal image (detects what the system draws on top) |
-| 3D | **Ridge Racer** (NativeDraw 0.0.12): menus and selector in HD; the race needs reading the shown image and an image read with a palette (`TODO.md`) |
+| 3D | **Ridge Racer** (NativeDraw 0.0.14): menus, selector and the whole race in HD, ~10 HD frames per second; artifacts in the crowd section (`TODO.md`) |

@@ -101,3 +101,4 @@ Milestones of the old numbering (details in `../../changelog/`):
 | 0.0.5 | 0.0.12 | (commit "NativeDraw 0.0.12 + NativeLink 0.0.5") | 3D in the translator, real GE registers, capturer and translator faster |
 | 0.0.6 | 0.0.13 | (commit "NativeDraw 0.0.13 + NativeLink 0.0.6") | Frame profile, gate always able to return before enqueuing, lists left behind dropped, own log off the drawing thread, HD only when it holds. Tests: NativeDraw 0.0.13.1–0.0.13.7, NativeLink 0.0.6.1–0.0.6.2 |
 | 0.0.4 | 0.0.11 | (commit "NativeDraw 0.0.11") | Triangle fans, cache sample fixed, small textures out of the cache, dumps fall back to one frame. Tests: NativeDraw 0.0.11.1–0.0.11.3 |
+| 0.0.6 | 0.0.14 | (commit "NativeDraw 0.0.14") | Ridge Racer race in HD: scenes cut, reads of the surface and of an image being drawn, what the PSP computes comes from the mirror, capturer skips frames nobody takes, failed frames saved. Tests: NativeDraw 0.0.14.1–0.0.14.15 |

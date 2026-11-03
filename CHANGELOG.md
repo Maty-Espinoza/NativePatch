@@ -4,6 +4,22 @@ Versions: `docs/dev/en/versions.md`. The detail of each step is in `docs/changel
 removed from there before the first release; this file stays as the summary). Versions marked "(test)" were sent to
 the Vita but not yet confirmed as a numbered release.
 
+## NativeDraw 0.0.14 (2026-11-03)
+Tests 0.0.14.1–0.0.14.15, checked on the Vita with Ridge Racer; NativeLink stays at 0.0.6. A whole lap of the race goes in HD (0 frames
+with the normal image in the race), about 10 HD frames per second with the game at 60. The crowd section still shows artifacts.
+- **Scenes:** a frame can read the surface mid-way (the scene is cut), an image being drawn (through a copy, `rtc`) and the image of the
+  frame before. Reordering only reaches the first draw that needs the game's order, and depth is stored and loaded when used after a cut.
+  Intermediate-image scenes touch only their region and use their own render targets (8 scenes each).
+- **What the PSP computes:** draws on images nobody reads are not done, and images started with points, palettes built by the GE and
+  data sharing pages with images come from the mirror (lens flare, lamp halos). Render target height from the scissor and region,
+  not MINZ.
+- **Blends and primitives:** gray fixed blend, color test that only rejects black under an add, lines as thin triangles, big fans in through mode.
+- **Capturer:** a frame is not recorded until the presenter took the one before; the state goes back to the last clean frame after a late one;
+  real GE values also for lights and materials; VRAM vertices go with the lists.
+- **Presenter:** a surface the GPU did not finish is not shown or overwritten; a single frame that cannot be drawn keeps the last surface.
+- **Development:** frames with a failed draw saved at once to `fails/`, census of the frame (extreme), cause of `not_read`, dumps wait for
+  the GPU; dumps for slow scenes removed.
+
 ## NativeDraw 0.0.13 + NativeLink 0.0.6 (2026-11-03)
 Tests 0.0.13.1–0.0.13.7 + NativeLink 0.0.6.1–0.0.6.2, checked on the Vita with Ridge Racer. The race runs at 59.9 fps on the normal
 image, without stutters or jumps; menus and the selector stay in HD.

@@ -37,6 +37,8 @@ at most 4 per reason and 64 per session. It uses 2 MB reserved at start, so it a
 L+R+SELECT, which starts on the next frame. `tools/dump.py` reads the folder. It does not see frames that were never complete (the
 cause is in `record not_read:`) nor frames drawn wrong without a failure.
 
+- `census:` lines of `nativedraw.log` (extreme level): every reason per frame, what textures with no copy are, and the chain of images of each kind of frame. `record not_read:` of `nativedraw_capture.log`: the cause of each incomplete frame and the frames only walked.
+
 ## Files of each dump
 
 | File | What it is |

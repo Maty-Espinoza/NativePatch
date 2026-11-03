@@ -24,13 +24,7 @@ static uint32_t *tpal[2];    // translated palettes (8888), aligned to 64: 16 en
 static uint32_t t_frame = ~0u, t_ok, t_rep, t_bad;
 static uint32_t t_mark[RD_N / 32 + 1];  // a bit per draw not done
 static uint32_t t_prevd = ~0u;  // image shown by the last frame drawn: its surface is the one not being drawn
-#ifdef NP_DEV
-// Switch force_hd (diagnosis): a frame with a draw it cannot do still goes in HD, skipping that draw
-static int t_force;
-static void failNote(RFrame *f, uint32_t i, int r);  // dump.c
-#else
-#define t_force 0
-#endif
+DEV(static void failNote(RFrame *f, uint32_t i, int r);)  // dump.c
 static uint16_t *tib;        // 0, 1, 2... (indices for the GPU)
 // Intermediate image: a game draw to another VRAM image (not the shown one) goes to our own double-size surface
 // (1024x544); if later in the same frame a texture is at that address, it is read from that surface.
@@ -744,7 +738,6 @@ static int trCheckFrame(RFrame *f, uint32_t *disp_p, uint32_t *ord_p) {
              RE(e, 0xE1) & 0xFFFFFF, RE(e, 0x22) & 1, RE(e, 0xC9) & 0xFFFFFF, RE(e, 0x9C) & 0xFFFFFF, RE(e, 0x9D) & 0x7FF, f->fb,
              f->fbw & 0xFFFF, RE(e, 0xD3) & 0xFFFF, RE(e, 0x27) & 1, RE(e, 0x28) & 1);
       }
-      DEV(if (t_force) { t_mark[i >> 5] |= 1u << (i & 31); t_cnt[r]++; continue; })
       return r;
     }
   }
@@ -975,12 +968,12 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     }
     if (w3d) t3Set(f, d, e, &t3);
     if ((res = trVerts(f, d, o + nv, tw, th, mat, sc, &n, w3d ? &t3 : 0))) {
-      DEV(failNote(f, i, res); if (t_force && res != T_LIMIT) { t_cnt[res]++; res = T_OK; continue; })
+      DEV(failNote(f, i, res);)
       break;
     }
     if (nv + n > TV_N) { res = T_LIMIT; break; }
     if (dst && !w3d && !(clr & 1)) for (uint32_t j = 0; j < n; j++) if (o[nv + j].y > H) res = T_DEST;  // (past the surface's rows)
-    DEV(if (res) failNote(f, i, res); if (t_force) res = T_OK;)
+    DEV(if (res) failNote(f, i, res);)
     if (res) break;
     uint32_t prim = d->prim;
     if (prim < 3 && (res = trLines(o + nv, &n, TV_N - nv, prim == 2))) break;

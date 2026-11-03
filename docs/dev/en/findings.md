@@ -137,6 +137,12 @@ proof.
 - **The mirror copy is seen finished ~20 ms after the flip** (`mirror_ge`, upper bound: the capturer looks between lists), and NativeLink
   never found the copy from two frames ago still in the GE (`busy=0`) [measured, 0.0.13.6].
 - **Palettes rebuilt per draw cost 116 ms per frame** in the selector: 1000 draws of 256 entries each [measured].
+- **Ridge Racer's bloom:** shrinks the screen into 088000 (the z memory), subtracts, blurs by adding itself 4 times with a gray fixed blend (src and dst * 4b4b4b) and adds it to the screen with a color test. Almost every frame [measured, 0.0.14].
+- **Depth does not survive a scene cut:** with the cut between the clear and the world, the world vanished (background depth 1.0 is "near" for the GE's GEQUAL). Reordering avoids it; otherwise force store and load [measured, 0.0.14.5].
+- **A late capturer reads rewritten lists and the garbage stays in the state:** emissive values like 0x400011 tinted the whole world for seconds, until the game set the register again. Recording only frames the presenter takes, and restoring the last clean state, solved it [measured, 0.0.14.8-0.0.14.10].
+- **Lens flare and lamp halos are computed by the game with the GE:** it samples 64 pixels with points, draws a palette with the result and draws T8 sprites with it. The Vita reads the result from the mirror, one frame late [measured, 0.0.14.13].
+- **Dumps from a surface the GPU has not finished, and scenes on different render targets:** Adrenaline could show a surface half drawn. Showing the older one fixed the one-frame tiles [video, 0.0.14.11].
+- **sceGxmCreateRenderTarget:** at most 8 scenes per frame (24 gives 805b0003, and the presenter stays off) [measured, 0.0.14.2].
 - **128 textures per frame was too few:** Metal Slug XX reached it with 0.8 of 1.5 MB in use and lost frames. It is 256 now
   [measured, 0.0.8.25–0.0.8.26].
 - Neo Geo games make transparencies by drawing something one frame on and one frame off: if the Vita repeats or skips
