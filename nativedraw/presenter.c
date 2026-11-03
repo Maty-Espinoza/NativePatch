@@ -168,7 +168,7 @@ static int initDest(void) {
   SceGxmRenderTargetParams rp;
   sceClibMemset(&rp, 0, sizeof rp);
   // several scenes per frame: translator intermediate images
-  rp.width = LINE; rp.height = H; rp.scenesPerFrame = 8; rp.driverMemBlock = -1;
+  rp.width = LINE; rp.height = H; rp.scenesPerFrame = 24; rp.driverMemBlock = -1;
   int r = sceGxmCreateRenderTarget(&rp, &rt);
   if (r < 0) return r;
   for (int i = 0; i < 2; i++) {
