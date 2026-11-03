@@ -289,6 +289,17 @@ static void dumpList(SceUID fd, const uint8_t *b) {
   if (k) sceIoWrite(fd, t, k);
 }
 
+#ifdef NP_DEV
+// With no memory for a dump: saves the corner of each intermediate image as it is now, in ux0:data/nativedraw/rt_<address>.bmp
+static void rtPeek(void) {
+  char p[64];
+  uint8_t *w = dump_w;
+  dump_w = fl_row;
+  for (int i = 0; i < 2; i++) if (rts[i].mem && rts[i].fb != ~0u) { sceClibSnprintf(p, sizeof p, "ux0:data/nativedraw/rt_%06x.bmp", rts[i].fb); bmp(p, rts[i].mem, 480, 272, LINE); }
+  dump_w = w;
+  alog("dump: intermediate images saved\n");
+}
+#endif
 // Takes the dump memory by level: images (mandatory) and, from "frame", records, exact image and
 // intermediate image (optional: if none, the dump comes out without them). Without memory for several frames it tries
 // with one. 0 if no memory for the images.
@@ -351,7 +362,7 @@ static void dumpTick(void) {
     // for 1.5 s each record frame carries its exact PSP image
     if (dump_level >= 2) nd_exact_until = now() + 1500000;
     dump_t0 = now();
-    if (!dump_mem && !dumpAlloc()) return;
+    if (!dump_mem && !dumpAlloc()) { DEV(rtPeek();) return; }
     dump_k = 0; dump_dif = 0; dump_lastn = 0; dump_on = 1;
     alog("dump: capturing %u frame(s), level %s\n", dump_nf, dump_names[dump_level]);
     return;
