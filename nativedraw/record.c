@@ -394,6 +394,7 @@ static uint32_t rgSrc(uint32_t a, uint32_t n) {
 }
 // Check of a RAM texture across lists: list of its last draw and groups of 8 rows known to be current in that list
 static uint32_t rg_tl[TN_N];
+static uint32_t rg_img[2] = { ~0u, ~0u };  // images the last flips showed (VRAM offsets), the latest first
 static uint64_t rg_tc[TN_N];
 // 1 if a group of [g0, g1) copied to texture i before this list differs from memory (not for swizzled ones in the
 // record: their copy is sorted; the cache has their sample and hash). The game may rewrite a texture between two lists
@@ -440,8 +441,8 @@ static uint32_t rgTex(uint32_t r0, uint32_t r1) {
   RC *e = 0;
   // First time in this frame: full size is reserved (rows not copied are not read)
   if (i == f->nt) {
-    // Image the GE drew in this frame (intermediate image): not copied
-    if (vr && rtRead(ta)) return 0;
+    // Image the GE drew in this frame (intermediate image) or one that was shown: not copied, the Vita holds it in HD
+    if (vr && (rtRead(ta) || (ta & 0x1FFFF0) == rg_img[0] || (ta & 0x1FFFF0) == rg_img[1])) return 0;
     if (!vr && !stale && (e = rcGet(ta, key, 8 * rb)) && rcCheck(e, r0 / 8, (r1 + 7) / 8)) e = 0;
     if (!vr && !e) ga.c_rec++;
     if (f->nt >= TN_N || (!e && f->ntx + n > TX_N)) {
@@ -727,6 +728,7 @@ static void regFlip(uint32_t fb, uint32_t fbw, uint32_t draws_counted) {
   // Complete: published (or left pending its textures) and writing moves to one nobody uses
   if (!f->flags && f->nd) {
     f->fb = fb & 0x0FFFFFFF; f->fbw = fbw; f->frame = gen; f->mir = mir_u; f->mirf = mir_on ? SB[0x40] : 0;
+    if (isVram(f->fb) && (f->fb & 0x1FFFF0) != rg_img[0]) { rg_img[1] = rg_img[0]; rg_img[0] = f->fb & 0x1FFFF0; }
     DEV(rg_tf[rg_w] = p_flip;)
     ga.ok++;
     __sync_synchronize();
