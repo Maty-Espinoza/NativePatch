@@ -302,7 +302,7 @@ static struct { volatile uint32_t n[4], ch1[4], ch2[4], warn[4], wall[4], ms1, m
 #define smpAdd(a, n, kind) ((void)sizeof(n))
 #endif
 
-static int reg_on;  // frame record (switch draw)
+static int reg_on, reg_big;  // frame record (switch draw); last frame had more draws than a record holds
 // Until when (Vita time) each frame carries the exact PSP image: set by dump.c for an
 // L+R+SELECT dump and used by record.c
 volatile uint32_t nd_exact_until;
@@ -822,7 +822,7 @@ static int __attribute__((noinline)) walkList(List *l) {
         // sample for the list lifetime
         if (!l->sp && l->nsub < 16 && !(l->ncall & 7) && !isVram(t)) l->subs[l->nsub++] = t;
         if (!l->sp) claimSet(l->ncall++, l->ord);
-        if (!l->sp && memo_on && !rec && !chk) {  // top-level sublist: sublist memory
+        if (!l->sp && memo_on && (!reg_on || reg_big) && !rec && !chk) {  // top-level sublist: sublist memory, unless a frame fits the record
           uint32_t tq = EXTREME ? now() : 0;
           int r = memoTry(l, t);
           if (tq) tm_memo += now() - tq;
