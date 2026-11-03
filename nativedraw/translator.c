@@ -13,6 +13,9 @@ static const char *tnames[TN] = { "ok", "no_new_frame", "primitive", "format", "
 static volatile uint32_t t_cnt[TN], t_hd, t_nat, t_draws;
 static volatile uint32_t t_skip[6];  // PSP frames advanced by each drawn frame (0: repeated, 5: 5 or more)
 DEV(static volatile uint32_t t_us[6];)  // us in trFrame: check, textures and palettes, vertices, GXM setup, scene changes, all
+// Vertices in detail. t_v: us in matrices, decoding, trTris, the rest. t_c: see the translator detail lines of the log
+DEV(enum { TC_VIN, TC_VOUT, TC_D3, TC_CUT, TC_FLAT, TC_SCIS, TC_LIT, TC_SAME, TC_VFAST, TC_VTEX, TC_VCOL, TC_FOG, TC_ATEST, TC_BLEND, TC_NC };)
+DEV(static volatile uint32_t t_v[4], t_c[TC_NC];)
 static uint32_t t_seen[TN];   // times each reason was seen (the first one is logged in detail)
 typedef struct { float x, y, z, w, u, v, f; uint32_t c; } TV;  // translated vertex (32 bytes, the nd_v format); f: fog (1: none)
 static TV *tv[2];            // translated vertices, one per surface
@@ -93,6 +96,26 @@ static SceGxmFragmentProgram *fragProg(int tex, uint32_t key, uint32_t mask) {
   return p;
 }
 
+#ifdef NP_DEV
+// Logs what the clock costs and the speed of a word read and written in cached memory and in the vertex memory (tv)
+static void trBench(void) {
+  static uint32_t cm[1024];
+  volatile uint32_t *m[2] = { cm, (volatile uint32_t *)tv[0] }, x = 0;
+  uint32_t t0 = now(), rd[2], wr[2];
+  for (int i = 0; i < 1000; i++) x += now();
+  uint32_t clk = now() - t0;
+  for (int k = 0; k < 2; k++) {
+    t0 = now();
+    for (int p = 0; p < 16; p++) for (int i = 0; i < 1024; i++) m[k][i] = i;
+    wr[k] = now() - t0; t0 = now();
+    for (int p = 0; p < 16; p++) for (int i = 0; i < 1024; i++) x += m[k][i];
+    rd[k] = now() - t0;
+  }
+  alog("translator: speed: clock %u ns | ns per word: cached read %u write %u, vertex memory read %u write %u\n", clk, rd[0] * 1000 / 16384, wr[0] * 1000 / 16384,
+       rd[1] * 1000 / 16384, wr[1] * 1000 / 16384);
+}
+#endif
+
 // Prepares the translator (called by presStart, only with draw): vertex, palette and index memory, registers the
 // shaders and finds their parameters, creates the basic programs, reserves the intermediate images and lets the GPU
 // read the PSP RAM and the record textures. 0 if ready; negative otherwise.
@@ -128,6 +151,7 @@ static int trInit(void) {
   int r1 = sceGxmMapMemory((void *)0x70000000, 0x2000000, RD);
   int r3 = regMapGpu();
   alog("translator: PSP RAM for the GPU %08x, record textures %08x\n", r1, r3);
+  DEV(trBench();)
   return r3 < 0 ? r3 : 0;
 }
 
@@ -967,10 +991,14 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
       if (ry < sc[3]) sc[3] = ry;
     }
     if (w3d) t3Set(f, d, e, &t3);
+    DEV(uint32_t tm = now(); t_v[0] += tm - tb;)
     if ((res = trVerts(f, d, o + nv, tw, th, mat, sc, &n, w3d ? &t3 : 0))) {
       DEV(failNote(f, i, res);)
       break;
     }
+    DEV(t_v[1] += now() - tm; t_c[TC_VIN] += d->n; t_c[TC_D3] += w3d; t_c[TC_LIT] += w3d && t3.lit ? d->n : 0;
+        t_c[TC_SCIS] += w3d && (sc[0] > 0 || sc[1] > 0 || sc[2] < W || sc[3] < H); t_c[TC_FLAT] += !(clr & 1) && !(RE(e, 0x50) & 1);
+        uint32_t nb = n;)
     if (nv + n > TV_N) { res = T_LIMIT; break; }
     if (dst && !w3d && !(clr & 1)) for (uint32_t j = 0; j < n; j++) if (o[nv + j].y > H) res = T_DEST;  // (past the surface's rows)
     DEV(if (res) failNote(f, i, res);)
@@ -978,7 +1006,11 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     uint32_t prim = d->prim;
     if (prim < 3 && (res = trLines(o + nv, &n, TV_N - nv, prim == 2))) break;
     if (prim < 3) prim = 3;
+    DEV(tm = now();)
     if (prim != 6 && (res = trTris(o + nv, &n, TV_N - nv, &prim, sc, (clr & 1) || !(RE(e, 0x50) & 1), w3d))) break;
+    DEV(t_v[2] += now() - tm; tm = now(); t_c[TC_VOUT] += n; t_c[TC_CUT] += n != nb;
+        static const RDraw *pd; t_c[TC_SAME] += pd && pd->st == d->st && pd->toff == d->toff && pd->clut == d->clut && pd->woff == d->woff &&
+                                                pd->moff == d->moff && pd->loff == d->loff && pd->prim == d->prim; pd = d;)
     if (!n) continue;
     if (tex && d->toff && (1u << (RE(e, 0xB8) & 15)) < tw) {
       uint32_t w = trNarrow(&t, f->tx + d->toff - 1, RE(e, 0xC3) & 15, tw, 1u << (RE(e, 0xB8) & 15), th, o + nv, n, pal + np, TP_B / 4 - np);
@@ -1028,7 +1060,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
         dy[1] = q->y < dy[1] ? q->y : dy[1]; dy[3] = q->y > dy[3] ? q->y : dy[3];
       }
     }
-    DEV(t_us[2] += now() - tb; tb = now();)
+    DEV(t_v[3] += now() - tm; t_us[2] += now() - tb; tb = now();)
     float ar = w3d ? 0 : trArea(o + nv, n, prim);
     if (c_on) { spx += ar; ssw += tex && d->toff && (RE(e, 0xC2) & 1); }
     static uint32_t giant;  // giant draws (over 2 screens at double size): the first 40, in detail
@@ -1049,6 +1081,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     uint32_t afn = 1, aref = 0, c9 = RE(e, 0xC9), b2 = !(clr & 1) && blend2x(e);
     if (!(clr & 1) && (RE(e, 0x22) & 1)) alphaFn(e, &afn, &aref);
     int fast = tex && !(c9 & 0x10007) && afn == 1 && !b2 && !(w3d && t3.fog);
+    DEV(t_c[fast ? TC_VFAST : tex ? TC_VTEX : TC_VCOL] += n; t_c[TC_FOG] += w3d && t3.fog; t_c[TC_ATEST] += afn != 1; t_c[TC_BLEND] += key != 0;)
     SceGxmFragmentProgram *p = fragProg(fast ? 2 : tex, key, colorMask(e));
     if (!p) { res = T_PROG; break; }
     sceGxmSetFragmentProgram(c, p);

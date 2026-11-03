@@ -221,7 +221,7 @@ static uint32_t used, drawn, cur;   // scene in which Adrenaline used psp_tex / 
 static volatile uint32_t n_pres, n_swap, n_black_j, n_black_p, us_sum, us_max;  // (read in the record thread)
 static volatile uint32_t n_chk, n_bad;  // Vita frames checked and different from the normal image
 // draw_on: switch draw (always replace the image; otherwise only with the menu open); t_on: translator ready
-static int draw_on, t_on DEV(, c_wanted);  // c_wanted: GPU timer (gpu_timer)
+static int draw_on, t_on DEV(, c_wanted, clk_on);  // c_wanted: GPU timer (gpu_timer); clk_on: highest stock clocks (clocks)
 static volatile uint32_t menu, painted;  // menu open; its texture already has the text
 #define ACTIVE (ready && (draw_on || menu))  // the PSP image is replaced
 static void *psp_data;                // psp_tex data (destination of Adrenaline's copy)
@@ -588,6 +588,7 @@ static int presThread(SceSize args, void *argp) {
     if (warned < 2 && n_pres >= (warned ? 60 : 1)) alog("presenter: %s\n", warned++ ? "60 frames drawn" : "first frame drawn");
     if (++k < 200) continue;
     k = 0;
+    DEV(if (clk_on) { scePowerSetArmClockFrequency(444); scePowerSetGpuXbarClockFrequency(166); })
     DEV(alog("clocks: GPU %d MHz (crossbar %d), CPU %d, bus %d\n", scePowerGetGpuClockFrequency(), scePowerGetGpuXbarClockFrequency(),
              scePowerGetArmClockFrequency(), scePowerGetBusClockFrequency());)
     uint32_t p = n_pres, m = us_max, s = us_sum, dt = (now() - t) / 1000, nd = n_dma, nr = n_chk, nm = n_bad;
@@ -603,7 +604,14 @@ static int presThread(SceSize args, void *argp) {
       b[k] = 0;
       alog("translator: HD frames %u, normal image %u%s%s | draws drawn %u\n", h, nn, k ? " | reasons:" : "", b, dr);
       DEV(if (h) alog("translator: us per HD frame: all %u | check %u, textures %u, vertices %u, GXM %u, scene changes %u\n", t_us[5] / h, t_us[0] / h, t_us[1] / h, t_us[2] / h, t_us[3] / h, t_us[4] / h);
-          for (int i = 0; i < 6; i++) t_us[i] = 0;)
+          for (int i = 0; i < 6; i++) t_us[i] = 0;
+          if (h) { alog("translator: vertices us per HD frame: matrices %u, decoding %u, triangles %u, the rest %u\n", t_v[0] / h, t_v[1] / h, t_v[2] / h, t_v[3] / h);
+            alog("translator: per HD frame: vertices in %u out %u lit %u | 3D draws %u (scissor under the surface %u), rewritten by trTris %u, flat %u, same state as the previous draw %u\n",
+                 t_c[TC_VIN] / h, t_c[TC_VOUT] / h, t_c[TC_LIT] / h, t_c[TC_D3] / h, t_c[TC_SCIS] / h, t_c[TC_CUT] / h, t_c[TC_FLAT] / h, t_c[TC_SAME] / h);
+            alog("translator: per HD frame: vertices by program: fast %u, textured %u, color %u | draws with fog %u, alpha test %u, blend %u\n",
+                 t_c[TC_VFAST] / h, t_c[TC_VTEX] / h, t_c[TC_VCOL] / h, t_c[TC_FOG] / h, t_c[TC_ATEST] / h, t_c[TC_BLEND] / h); }
+          for (int i = 0; i < 4; i++) t_v[i] = 0;
+          for (int i = 0; i < TC_NC; i++) t_c[i] = 0;)
       // Pacing: for each Adrenaline frame drawn by the Vita, how many PSP frames advanced since the previous one
       // (1 = none skipped; 0 = repeated the previous one). With skips or repeats, what a game draws every other
       // frame flashes.
@@ -643,7 +651,7 @@ static int swOn(const char *p) {  // the file exists and does not start with "no
 // are needed and starts the presenter thread.
 void presStart(void) {
   draw_on = swOn("ux0:data/nativedraw/draw");
-  DEV(c_wanted = swOn("ux0:data/nativedraw/gpu_timer");)
+  DEV(c_wanted = swOn("ux0:data/nativedraw/gpu_timer"); clk_on = swOn("ux0:data/nativedraw/clocks");)
   repStart();
   dump_level = dumpLevel();  // dumps: off, screenshot, frame, sequence or auto
   if (dump_level == 4 && !draw_on) dump_level = 3;  // (auto needs the Vita drawing to compare)
