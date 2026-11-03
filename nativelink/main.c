@@ -550,7 +550,7 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
       memset(&fr, 0, sizeof(fr));
       if (SB[0x4E] >= 1) sbPost(EV_FRAME, gn | nw << 8, fd, gu, su); // (the cost of this sbPost goes to the next frame)
     }
-    if (_sceGeGetCmd && !(log_frame & 31)) { // real GE registers: NativeDraw takes those no list it read has set
+    if (_sceGeGetCmd && !(log_frame & 31)) { // real GE registers, for NativeDraw to compare with the capture
       SB[0xA0] = 0;
       for (int i = 0x15; i < 256; i++) SB[0x100 + i] = _sceGeGetCmd(i);
       SB[0xA0] = log_frame + 1;

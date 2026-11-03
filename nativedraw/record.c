@@ -489,10 +489,13 @@ static void regDraw(uint32_t n, uint32_t type, uint32_t vt, uint32_t idx) {
   if (f->flags) return;  // already incomplete: nothing more is spent on this frame
   if (f->nd >= RD_N) { f->flags |= R_LIMIT; return; }
   uint32_t t0 = now(), t1, v[NRS];
-  for (int i = 0; i < NRS; i++) v[i] = reg[RS[i]];
-  if (!f->ne || sceClibMemcmp(v, f->e[f->ne - 1], sizeof v)) {  // new state
-    if (f->ne >= RE_N) { f->flags |= R_LIMIT; return; }
-    sceClibMemcpy(f->e[f->ne++], v, sizeof v);
+  if (rg_chg || !f->ne) {
+    rg_chg = 0;
+    for (int i = 0; i < NRS; i++) v[i] = reg[RS[i]];
+    if (!f->ne || sceClibMemcmp(v, f->e[f->ne - 1], sizeof v)) {  // new state
+      if (f->ne >= RE_N) { f->flags |= R_LIMIT; return; }
+      sceClibMemcpy(f->e[f->ne++], v, sizeof v);
+    }
   }
   t1 = now(); ga.us_e += t1 - t0;
   RDraw *d = &f->d[f->nd];
