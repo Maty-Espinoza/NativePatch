@@ -1153,14 +1153,20 @@ static void event(volatile uint32_t *e) {
     if ((pfr[1] >= 4500 || f_us >= 33000) && late_n < 400) { late_n++; clog("late frame %u: gate %u us, capture %u us, draws %u\n", gen, pfr[1], f_us, f_draws); }
     sceClibMemset(pfr, 0, sizeof pfr);
 #endif
-#ifdef NP_DEV
-    // log of state registers that differ from the real GE at the flip (NativeLink's snapshot), the first 40
-    static uint32_t snap, nsn;
-    if (SB[0xA0] && SB[0xA0] != snap && nsn < 40) {
+    // Real GE registers (NativeLink's snapshot): a value that stayed the same between two snapshots and differs from the
+    // capture replaces it, because the game can set state in lists read too late to see it
+    static uint32_t snap, snr[NRS];
+    if (SB[0xA0] && SB[0xA0] != snap) {
       snap = SB[0xA0];
-      for (int i = 0; i < NRS; i++) if (reg[RS[i]] != (SB[0x100 + RS[i]] & 0xFFFFFF) && nsn < 40) { nsn++; clog("register %02x: capture %06x real %08x (frame %u)\n", RS[i], reg[RS[i]], SB[0x100 + RS[i]], gen); }
+      for (int i = 0; i < NRS; i++) {
+        uint32_t v = SB[0x100 + RS[i]] & 0xFFFFFF;
+        if (v == snr[i] && reg[RS[i]] != v) {
+          DEV(static uint32_t nsn; if (nsn < 40) { nsn++; clog("register %02x: capture %06x real %06x (frame %u)\n", RS[i], reg[RS[i]], v, gen); })
+          reg[RS[i]] = v; rg_chg = 1;
+        }
+        snr[i] = v;
+      }
     }
-#endif
     // closes the frame record (a: displayed image, b: width | format << 16)
     if (reg_on) { regFlip(a, b, f_draws); reg_big = f_draws > RD_N; }
     acc.frames++;
