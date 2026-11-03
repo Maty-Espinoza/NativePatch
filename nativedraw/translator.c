@@ -12,6 +12,7 @@ static const char *tnames[TN] = { "ok", "no_new_frame", "primitive", "format", "
 // counters for the 10 s log (read and cleared by the presenter)
 static volatile uint32_t t_cnt[TN], t_hd, t_nat, t_draws;
 static volatile uint32_t t_skip[6];  // PSP frames advanced by each drawn frame (0: repeated, 5: 5 or more)
+DEV(static volatile uint32_t t_us[6];)  // us in trFrame: check, textures and palettes, vertices, GXM setup, scene changes, all
 static uint32_t t_seen[TN];   // times each reason was seen (the first one is logged in detail)
 typedef struct { float x, y, z, w, u, v, f; uint32_t c; } TV;  // translated vertex (32 bytes, the nd_v format); f: fog (1: none)
 static TV *tv[2];            // translated vertices, one per surface
@@ -622,6 +623,7 @@ static void zsSet(SceGxmContext *c, const uint32_t *e, uint32_t sv) {
 // returns the reason and the surface is not used.
 static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base) {
   t3.ke = 0;
+  DEV(uint32_t ta = now(), tb;)
   // disp: image being shown; ifb, iend, ipsm: intermediate images, where their memory ends, their format
   uint32_t disp = f->fb & 0x1FFFF0, ifb[2], iend[2], ipsm[2], nif = 0, n_disp = 0;
   // ord: intermediate images first and then, in a single scene, the surface (see trFrame). Valid only if just the
@@ -666,6 +668,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
       return r;
     }
   }
+  DEV(t_us[0] += now() - ta;)
   static uint32_t t_q[2];  // last scene that read the vertices and palettes of each surface
   // if the GPU is still reading them (unfinished scene) it waits
   if (gBusy(t_q[s])) { g_psurf++; gEv("vertices and palettes rewritten", t_q[s]); gWait(t_q[s]); }
@@ -699,7 +702,9 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     RT *dst = fb == disp ? 0 : rtOf(fb, f->frame, 1);
     if (fb != disp && !dst) { res = T_DEST; break; }
     if (ord && (pass ? dst != 0 : dst == 0)) continue;
+    DEV(tb = now();)
     if (!opened || dst != cur_rt) OPEN(dst);
+    DEV(t_us[4] += now() - tb; tb = now();)
     if ((clr & 1) && !(clr & 0x700)) continue;  // clear of nothing
     uint32_t key = clr & 1 ? 0 : blendKey(e), mat = (RE(e, 0x55) & 0xFFFFFF) | (RE(e, 0x58) & 0xFF) << 24;
     float tw = 1, th = 1;
@@ -732,6 +737,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
       sceGxmTextureSetUAddrMode(&t, twr & 1 ? SCE_GXM_TEXTURE_ADDR_CLAMP : SCE_GXM_TEXTURE_ADDR_REPEAT);
       sceGxmTextureSetVAddrMode(&t, twr >> 8 & 1 ? SCE_GXM_TEXTURE_ADDR_CLAMP : SCE_GXM_TEXTURE_ADDR_REPEAT);
     }
+    DEV(t_us[1] += now() - tb; tb = now();)
     uint32_t n = 0, d4 = RE(e, 0xD4), d5 = RE(e, 0xD5);
     float sc[4] = { 2.0f * (d4 & 0x3FF), 2.0f * (d4 >> 10 & 0x3FF), 2.0f * ((d5 & 0x3FF) + 1), 2.0f * ((d5 >> 10 & 0x3FF) + 1) };
     if (!(d5 & 0xFFFFF)) sc[0] = sc[1] = -1e9f, sc[2] = sc[3] = 1e9f;  // (no saved scissor: not clipped)
@@ -754,6 +760,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
       if (w == ~0u) { res = T_LIMIT; break; }
       np += w;
     }
+    DEV(t_us[2] += now() - tb; tb = now();)
     float ar = w3d ? 0 : trArea(o + nv, n, prim);
     if (c_on) { spx += ar; ssw += tex && d->toff && (RE(e, 0xC2) & 1); }
     static uint32_t giant;  // giant draws (over 2 screens at double size): the first 40, in detail
@@ -803,6 +810,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     sceGxmSetVertexStream(c, 0, o + nv);
     sceGxmDraw(c, prim == 3 ? SCE_GXM_PRIMITIVE_TRIANGLES : prim == 5 ? SCE_GXM_PRIMITIVE_TRIANGLE_FAN : SCE_GXM_PRIMITIVE_TRIANGLE_STRIP, SCE_GXM_INDEX_FORMAT_U16, tib, n);
     nv += n; t_draws++;
+    DEV(t_us[3] += now() - tb;)
   }
   if (!has_base && res == T_OK) OPEN(0);  // (frame with no draws to the surface: it still gets the image underneath)
   if (opened) {  // (if something failed midway, the surface keeps what was drawn: not used)
@@ -816,6 +824,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
 #undef OPEN
 #undef SCENE
   t_q[s] = gq;
+  DEV(t_us[5] += now() - ta;)
   if (res && !t_seen[res]++) alog("translator: first frame with '%s' on drawing\n", tnames[res]);
   return res;
 }

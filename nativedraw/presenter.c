@@ -568,6 +568,8 @@ static int presThread(SceSize args, void *argp) {
       for (int i = 1; i < TN; i++) if (t_cnt[i]) { k += sceClibSnprintf(b + k, sizeof b - k, " %s=%u", tnames[i], t_cnt[i]); t_cnt[i] = 0; }
       b[k] = 0;
       alog("translator: HD frames %u, normal image %u%s%s | draws drawn %u\n", h, nn, k ? " | reasons:" : "", b, dr);
+      DEV(if (h) alog("translator: us per HD frame: all %u | check %u, textures %u, vertices %u, GXM %u, scene changes %u\n", t_us[5] / h, t_us[0] / h, t_us[1] / h, t_us[2] / h, t_us[3] / h, t_us[4] / h);
+          for (int i = 0; i < 6; i++) t_us[i] = 0;)
       // Pacing: for each Adrenaline frame drawn by the Vita, how many PSP frames advanced since the previous one
       // (1 = none skipped; 0 = repeated the previous one). With skips or repeats, what a game draws every other
       // frame flashes.
