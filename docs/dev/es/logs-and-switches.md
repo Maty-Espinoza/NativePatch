@@ -76,7 +76,9 @@ o `auto` (se comparan 3 letras; `no` también lo apaga). Qué guarda cada uno, c
   surface | checked N, different from the normal image M`: frames que pasaron por la superficie de NativeDraw, su
   costo en el hilo de Adrenaline y la revisión de frames distintos (1 de cada 4, solo si la GPU ya terminó la superficie).
 - `translator: HD frames N, normal image M | reasons: ... | draws drawn N`: cuántos frames dibujó la Vita y por
-  qué los otros fueron con la imagen normal (`no_new_frame`, `3d`, `primitive`, `format`, `blend`...).
+  qué los otros fueron con la imagen normal (`no_new_frame`, `3d`, `primitive`, `format`, `blend`...; `held_back`: dibujable,
+  pero no dibujado porque pasó menos de un segundo desde un frame que no lo era).
+- Solo en compilación de desarrollo: `clocks: GPU N MHz (crossbar N), CPU N, bus N`, los relojes de la Vita que puso Adrenaline, cada 10 s.
 - `translator: pace (PSP frames advanced per drawn frame): 0 (repeated) N, 1 N, 2 N...`: con muchos repetidos
   o saltos los juegos de Neo Geo destellan (hacen transparencias dibujando algo un frame sí y otro no).
 - `gpu: at each frame start, our unfinished scenes: average, max | unfinished: previous frame N, 2 frames ago N |
@@ -135,7 +137,7 @@ piezas, no como velocidad real. Compara con `draw` en `no` para separar capturar
 |---|---|
 | `psp` | El frame del juego: `game` (su trabajo) + `vblank` (tiempo libre) + `gate`, `sync_ge`, `mirror_cpu`, `hooks`; `ge_busy` (con `ge_timing`). `ge_mirror` sale 0 y no es confiable |
 | `capture` | Capturador por frame; `draw`, `record` y `rec_*` se estiman de 1 de cada 8 dibujos, `read_*` de lecturas muestreadas. `list_work` y `list_at_stall`: trabajo y espera al juego, por lista |
-| `record` | Hilo de registro: `wait_mirror`, `copy_vram` |
+| `record` | Hilo de registro: `wait_mirror`, `copy_vram`; `mirror_ge`: desde el flip del PSP hasta que el GE terminó su copia del espejo (visto entre listas por el capturador: es un tope) |
 | `latency` | `flip_to_closed`, `flip_to_published`, `published_to_taken`, `enqueued_to_captured` |
 | `adrenaline` | Su hilo de dibujo: `period` (16,7 ms a 60 fps), `presenter` (lo que agregamos), `image_dma`, `wait_gpu`, `checks` |
 | `translator` | `check`, `textures`, `vertices`, `gxm`, `scenes`, `end_scene`, `all`. Un frame rechazado por la revisión no entra en `all` |

@@ -77,7 +77,9 @@ or `auto` (3 letters are compared; `no` also turns it off). What each one saves,
   surface | checked N, different from the normal image M`: frames that went through the NativeDraw surface, their
   cost on the Adrenaline thread, and the check of different frames (1 out of 4, only if the GPU has already finished the surface).
 - `translator: HD frames N, normal image M | reasons: ... | draws drawn N`: how many frames the Vita drew and
-  why the others went with the normal image (`no_new_frame`, `3d`, `primitive`, `format`, `blend`...).
+  why the others went with the normal image (`no_new_frame`, `3d`, `primitive`, `format`, `blend`...; `held_back`: drawable,
+  but not drawn because less than a second passed since a frame that was not).
+- Development builds only: `clocks: GPU N MHz (crossbar N), CPU N, bus N`, the Vita clocks Adrenaline has set, every 10 s.
 - `translator: pace (PSP frames advanced per drawn frame): 0 (repeated) N, 1 N, 2 N...`: with many repeated frames
   or jumps, Neo Geo games flicker (they do transparencies by drawing something one frame yes and the next no).
 - `gpu: at each frame start, our unfinished scenes: average, max | unfinished: previous frame N, 2 frames ago N |
@@ -136,7 +138,7 @@ pieces, not as real speed. Compare with `draw` set to `no` to separate capturing
 |---|---|
 | `psp` | The game's frame: `game` (its own work) + `vblank` (free time) + `gate`, `sync_ge`, `mirror_cpu`, `hooks`; `ge_busy` (needs `ge_timing`). `ge_mirror` reads 0 and is not reliable |
 | `capture` | Capturer per frame; `draw`, `record` and `rec_*` are estimated from 1 draw in 8, `read_*` from sampled reads. `list_work` and `list_at_stall`: work and wait for the game, per list |
-| `record` | Record thread: `wait_mirror`, `copy_vram` |
+| `record` | Record thread: `wait_mirror`, `copy_vram`; `mirror_ge`: from the PSP flip until the GE finished its mirror copy (seen between lists by the capturer: an upper bound) |
 | `latency` | `flip_to_closed`, `flip_to_published`, `published_to_taken`, `enqueued_to_captured` |
 | `adrenaline` | Its drawing thread: `period` (16.7 ms at 60 fps), `presenter` (what we add), `image_dma`, `wait_gpu`, `checks` |
 | `translator` | `check`, `textures`, `vertices`, `gxm`, `scenes`, `end_scene`, `all`. A frame refused by the check is not in `all` |

@@ -2,22 +2,35 @@
 
 The only list of pending work. Ordered from what comes next to what can wait. Each item says where it came from
 (a document in `docs/dev/en/`, `docs/agent/en/`, `docs/changelog/en/` or the claude.ai project). Done items are removed;
-what was done is in `CHANGELOG.md`. Updated 2026-11-02 (NativeLink 0.0.5 + NativeDraw 0.0.12 confirmed; before: tests up to NativeDraw 0.0.8.29 + NativeLink 0.0.3.11). How the work is done: `docs/agent/en/workflow.md`; stage 3 plan and results:
+what was done is in `CHANGELOG.md`. Updated 2026-11-03 (NativeLink 0.0.6 + NativeDraw 0.0.13 confirmed). How the work is done: `docs/agent/en/workflow.md`; stage 3 plan and results:
 `docs/agent/en/stage3-plan.md`.
 
 ## Next
-- [ ] **Ridge Racer, confirm 0.0.13.5 + 0.0.6.2** (tests since 2026-11-03; summary `claude/resumen_conversacion_2026-11-03_cuellos_botella.md`):
-      game at 60 in the race, 0 resets. Left: stutters and rare artifacts.
-- [ ] **Stutters, suspected:** `alog` writes to the card inside Adrenaline's drawing thread (`trReason`, "first frame with"): presenter spikes
-      of 50-558 ms fall in the seconds with those lines, with the translator at ~0. Move `alog` to a buffer written by another thread and measure.
-- [ ] **Artifacts in the race, suspected:** the few frames that still pass as HD (start of the lap, a jump). Dump one, or do not draw a frame
-      when the frames around it were not drawable.
-- [ ] **VRAM mirror limit:** 64 data pages per copy (`MIR_DATA`) while Ridge Racer asks for 250-500: each page refreshes every ~7 frames, reached on
-      every flip. Measure the GE time of a full copy (`ge_mirror` reads 0, unreliable) before raising it.
-- [ ] **Capturer budget in the heaviest stretch:** with the record it does not fit in the frame; the gate waits its 5 ms each frame and those frames go
-      with the normal image. Sublist memory does not apply while recording (applied=0). Copy the list at the sync (see below) or record less.
+Order agreed on 2026-11-03: first make the whole of Ridge Racer drawable in HD (the race included), then optimize with the
+game in its "final" form. Capturer, mirror and translator work goes after the race is drawable.
+- [ ] **HD in the race, 1: image read with a palette** (image 1FE000, 64 wide, T8: the GE draws an image in VRAM and reads it in
+      another format; today `bad_texture`). Use the PSP's own mirror copy for that read: let the record ask for the pages of a
+      render target read in another format (`markRt` keeps them out today). The copy of the flip already carries that frame's image.
+- [ ] **HD in the race, 2: image read while being drawn** (image 088000, 256 wide). GXM cannot sample the surface being written in
+      the same scene: cut the scene at that draw and read from a copy of the surface (one full-screen draw, ~1-2 ms of GPU). The
+      open `readBack` case of NPTEST.
+- [ ] **HD in the race, 3: `other_target`** every other pair of frames in the race (a third image or a destination wider than 512):
+      find out what it is from a dump of such a frame and support it.
+- [ ] **3D vertices in a GXM vertex shader** (matrices, lights, texgen and fog as uniforms per draw): an HD frame of the race costs
+      ~100 ms of CPU today (76 ms in `trVerts`), and the selector's translator 42-48 ms. The shader compiler runs in the container
+      (`nativedraw/shaders/build.sh`). The translator on its own thread does not help: ~10-15 % of CPU is free across the 3 cores.
+- [ ] **VRAM mirror limit:** 64 data pages per copy (`MIR_DATA`) while Ridge Racer asks for 250-500; reached on every flip and each
+      page refreshes every ~7 frames (HD frames could carry textures up to 7 frames old). `prof record: mirror_ge` reads ~20 ms but is an
+      upper bound (the capturer looks between lists): refine it (look inside `walk`) and then size the copy by measured GE time
+      instead of a fixed count.
+- [ ] **Capturer budget in the heaviest stretch:** with the record it does not fit in the frame (16 ms with record, 8 without);
+      the gate waits up to 5 ms each frame and those frames go incomplete. Split in `prof capture` (`rec_state`, `rec_vertices`,
+      `rec_textures`) before cutting. Copying the list at the sync on the PSP would remove the gate, but the vertices are not in the
+      list: the `data life` line (vertices changed 1-2 frames later) says how much slack that gives.
 - [ ] **Other fixed limits to review:** list queue 64, gate 5 ms, per-frame record sizes (only 1 hit in the runs).
-- [ ] **Translator on Adrenaline's thread** (~42-48 ms at extreme, vertices first): limits HD before the GPU (~32 ms). Move it to its own thread.
+- [ ] **Logs on another partition** (idea, 2026-11-03): with sd2vita the game's ISO and the logs share the microSD; if log writes ever
+      show up as PSP stalls (`frame_max` in `stats performance`), move them to `ur0:` or `uma0:`. Not needed so far: the race shows
+      `frame_max` 17 ms with the extreme log.
 - [ ] **Test for lag:** a capturer case that closes a frame with lists queued (`capture_test.c`); today only `test_link.py` (`resets`) covers it.
 - [ ] **Ridge Racer selector, small flash at one angle of the last car** (user, 0.0.12.12): minor; a dump if it stays.
 - [ ] **Ridge Racer selector, the last car showed the previous car's color for a moment** (user, 0.0.12.11): likely the texture cache
@@ -27,11 +40,7 @@ what was done is in `CHANGELOG.md`. Updated 2026-11-02 (NativeLink 0.0.5 + Nativ
 - [ ] **Ridge Racer, odd drawings in the opening movie** (user, 0.0.12.10): looks minor. Dump 245 caught a clean frame: the movie is one
       1 MB texture in RAM. Suspected, not proven: the texture cache samples 1 group in 4 per frame since 0.0.12.8 and shows old rows of
       a texture rewritten every frame. Next: a dump on a bad frame, or try with `no_tex_cache`.
-- [ ] **Ridge Racer race, next steps:** (1) game at 60 with HD at 30: the capturer needs ~21 ms for 13000 commands; let NativeLink copy
-      the list at the sync (~52 KB, vertices are not inside the list; no PSP DMA in Adrenaline 8, so by GE TRANSFER or CPU) so the game does not wait, and when the capturer is behind walk a
-      frame without recording it. (2) HD in the race: reading the shown image and an image while drawing on it (image 088000, 256 wide)
-      and an image read with a palette (1FE000, 64 wide, T8; try the mirror copy). (3) VRAM texture cache by tracking written pages (the
-      record thread spends ~19 ms per frame). (4) Translator vertices ~15-20 ms per frame in the selector.
+- [ ] **Ridge Racer race, VRAM texture cache** by tracking written pages (the record thread spends ~19 ms per frame).
 - [ ] **Texture cache, what is left:** VRAM textures (KOF 96 fights: DMA ~1 ms + sort ~2 ms per frame; only after understanding the
       tiles: if they are stale data, a cache can make them worse); the check costs ~3.2 ms per frame (Metal Slug XX), see what
       can go; translator caches (palettes, translated draws, identical scenes; the translator spends ~8–10 ms of CPU per

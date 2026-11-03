@@ -1,6 +1,6 @@
 # Cómo funcionan NativeLink y NativeDraw
 
-Referencia de la versión actual (NativeLink 0.0.3, NativeDraw 0.0.8.x). Para la idea general y el estado del proyecto:
+Referencia de la versión actual (NativeLink 0.0.6, NativeDraw 0.0.13). Para la idea general y el estado del proyecto:
 `overview.md`. Hoja de ruta: `architecture-and-roadmap.md` §6. Logs e interruptores: `logs-and-switches.md`. Qué se midió
 y qué límites se encontraron: `findings.md`. Cómo se llegó a cada pieza, versión por versión: `../../changelog/`.
 
@@ -119,7 +119,7 @@ quedan sin usar: `SB[0x47]`, los bits 4 y 8 de 0x4A y los eventos 7, 8, 9, 10 y 
 | lector 0 y 1 | 0 y 2 (0xB0, solo lo que sobra) | traen por adelantado las líneas de 64 bytes de la lista a una caché compartida y comprueban sublistas guardadas |
 | espejo | 0 (0xBE) | pasa a NativeLink los interruptores y el nivel; en extremo (compilación de desarrollo) mide cuánto cambia el espejo |
 | registro | (0xB0) | escribe `nativedraw_capture.log` cada segundo |
-| escritor | (0xA0) | escribe el log de NativeLink a la tarjeta |
+| escritor | (0xA0) | escribe el log de NativeLink y `nativedraw.log` a la tarjeta (los dos pasan por un anillo: escribir en la tarjeta bloquea decenas de ms y algunas líneas vienen del hilo de dibujo de Adrenaline) |
 | presentador | (0xA0) | engancha a Adrenaline, pinta el menú, atiende volcados y reproducción, escribe `nativedraw.log` cada 10 s |
 | cronómetro | (0x40) | compilación de desarrollo, con `gpu_timer`: mide cuánto tarda la GPU en cada escena |
 | hilo de dibujo de Adrenaline | el de Adrenaline | ahí corren el traductor y el presentador propiamente dichos (en los ganchos de GXM) |
@@ -161,6 +161,10 @@ quedan sin usar: `SB[0x47]`, los bits 4 y 8 de 0x4A y los eventos 7, 8, 9, 10 y 
   Adrenaline la ubica y escala igual que siempre (se respetan su escala, posición y proporción). La copia de la imagen
   del PSP que hace Adrenaline se desvía a 4 copias propias alternadas (la GPU la lee para NativeDraw después que para
   Adrenaline). Todo en memoria LPDDR (nunca CDRAM, que la usan los videos de la Vita) y siempre con z.
+- **HD solo cuando se sostiene:** el dibujo de la Vita se ve un frame después que la imagen normal, así que un frame en HD
+  entre frames que no se pueden dibujar se ve como un salto atrás. Cuando un frame no se puede dibujar, la HD vuelve recién
+  cuando los frames llevan un segundo entero siendo dibujables (`held_back` en el log); mientras tanto solo se revisan y se
+  muestra la imagen normal.
 - **Sincronización con la GPU:** cada escena propia escribe su número en una palabra libre de las notificaciones de GXM
   al terminar. No se le manda otro frame a la GPU si no terminó el de hace 2 (se repite la superficie), y antes de
   reescribir vértices, paletas o la copia de la imagen normal se espera a que termine la escena que los leía (como

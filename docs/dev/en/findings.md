@@ -127,6 +127,15 @@ proof.
   total it drops straight to 30 fps [measured]. Its list changes before the next enqueue, so the gate stays at the sync.
 - **Reading is the limit, not sorting:** hashing textures to skip the sort costs about the same as sorting. Ridge Racer's 3D vertices
   are scattered and outside the list; DMA over whole windows made the capturer slower (26 ms) [measured].
+- **Stutters in the Ridge Racer race came from writing `nativedraw.log` inside Adrenaline's drawing thread** (each change of the
+  translator's result wrote a line; a write to the card takes tens to hundreds of ms): presenter peaks of 50-558 ms with the
+  translator at ~0. With the log through a ring and the writer thread, the peaks are 5-8 ms [measured, 0.0.13.6].
+- **An HD frame in the race costs ~100 ms of CPU** (1900 draws; 76 ms are the 3D vertices), and in the race the game alternates every
+  2 frames between drawable and drawing to another target (`other_target`): an isolated HD frame is a stutter plus a one-frame
+  jump back. HD now waits for a second of drawable frames; the race stays on the normal image at 59.9 fps [measured, 0.0.13.7].
+- **Adrenaline runs the GPU at 222 MHz** (crossbar 111, CPU 333, bus 222): the selector's ~31 ms of GPU are not a low clock [measured].
+- **The mirror copy is seen finished ~20 ms after the flip** (`mirror_ge`, upper bound: the capturer looks between lists), and NativeLink
+  never found the copy from two frames ago still in the GE (`busy=0`) [measured, 0.0.13.6].
 - **Palettes rebuilt per draw cost 116 ms per frame** in the selector: 1000 draws of 256 entries each [measured].
 - **128 textures per frame was too few:** Metal Slug XX reached it with 0.8 of 1.5 MB in use and lost frames. It is 256 now
   [measured, 0.0.8.25–0.0.8.26].

@@ -99,4 +99,5 @@ Hitos de la numeración vieja (detalle en `../../changelog/`):
 | 0.0.4 | 0.0.10 | `b8f6d11` | Caché de texturas entre frames para texturas de la RAM. Metal Slug XX: capturador de 19,4 a 8,3 ms por frame. Prueba: NativeDraw 0.0.10.1 |
 | (prueba 0.0.4.1) | (prueba 0.0.12.1–0.0.12.14) | `9fa9f60`…`35e8e59` | 3D en la Vita con Ridge Racer: menús y selector en HD |
 | 0.0.5 | 0.0.12 | (commit "NativeDraw 0.0.12 + NativeLink 0.0.5") | 3D en el traductor, registros reales del GE, capturador y traductor más rápidos |
+| 0.0.6 | 0.0.13 | (commit "NativeDraw 0.0.13 + NativeLink 0.0.6") | Perfil del frame, compuerta siempre capaz de volver antes de encolar, listas abandonadas descartadas, log propio fuera del hilo de dibujo, HD solo cuando se sostiene. Pruebas: NativeDraw 0.0.13.1–0.0.13.7, NativeLink 0.0.6.1–0.0.6.2 |
 | 0.0.4 | 0.0.11 | (commit "NativeDraw 0.0.11") | Abanicos de triángulos, muestra del caché corregida, texturas chicas fuera del caché, volcados con respaldo a un frame. Pruebas: NativeDraw 0.0.11.1–0.0.11.3 |

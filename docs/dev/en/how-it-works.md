@@ -1,6 +1,6 @@
 # How NativeLink and NativeDraw work
 
-Reference for the current version (NativeLink 0.0.3, NativeDraw 0.0.8.x). For the general idea and the project status:
+Reference for the current version (NativeLink 0.0.6, NativeDraw 0.0.13). For the general idea and the project status:
 `overview.md`. Roadmap: `architecture-and-roadmap.md` §6. Logs and switches: `logs-and-switches.md`. What was measured
 and what limits were found: `findings.md`. How each piece was reached, version by version: `../../changelog/`.
 
@@ -119,7 +119,7 @@ unused: `SB[0x47]`, bits 4 and 8 of 0x4A and events 7, 8, 9, 10 and 12.
 | reader 0 and 1 | 0 and 2 (0xB0, only what is left over) | fetch ahead the 64-byte lines of the list into a shared cache and check stored sublists |
 | mirror | 0 (0xBE) | passes the switches and the level to NativeLink; at extreme (development build), measures how much the mirror changes |
 | log | (0xB0) | writes `nativedraw_capture.log` every second |
-| writer | (0xA0) | writes the NativeLink log to the card |
+| writer | (0xA0) | writes the NativeLink log and `nativedraw.log` to the card (both go through a ring: writing to the card blocks for tens of ms, and some lines come from Adrenaline's drawing thread) |
 | presenter | (0xA0) | hooks Adrenaline, paints the menu, handles dumps and replay, writes `nativedraw.log` every 10 s |
 | GPU timer | (0x40) | development build, with `gpu_timer`: measures how long the GPU takes in each scene |
 | Adrenaline's drawing thread | Adrenaline's own | the translator and the presenter proper run here (in the GXM hooks) |
@@ -161,6 +161,9 @@ unused: `SB[0x47]`, bits 4 and 8 of 0x4A and events 7, 8, 9, 10 and 12.
   Adrenaline places and scales it as always (its scale, position and aspect ratio are respected). The copy of the PSP's
   image that Adrenaline makes is diverted to 4 alternating copies of its own (the GPU reads it for NativeDraw later than for
   Adrenaline). Everything in LPDDR memory (never CDRAM, which the Vita's videos use) and always with z.
+- **HD only when it holds:** the Vita drawing shows one frame behind the normal image, so a frame drawn in HD among frames
+  that cannot be drawn looks like a jump back. When a frame cannot be drawn, HD only resumes once the frames have been
+  drawable for a whole second (`held_back` in the log); meanwhile they are only checked and the normal image is shown.
 - **Synchronization with the GPU:** each scene of its own writes its number in a free word of the GXM notifications
   when it finishes. Another frame is not sent to the GPU if the one from 2 frames ago has not finished (the surface is repeated), and before
   rewriting vertices, palettes or the copy of the normal image it waits for the scene that was reading them to finish (at

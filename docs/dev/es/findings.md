@@ -127,6 +127,15 @@ directa.
   directo a 30 fps [medido]. Su lista cambia antes de encolar la siguiente, así que la compuerta queda en el sync.
 - **El límite es leer, no ordenar:** calcular huellas de texturas para no ordenarlas cuesta casi lo mismo que ordenarlas. Los vértices 3D de
   Ridge Racer están repartidos y fuera de la lista; el DMA por ventanas completas empeoró el capturador (26 ms) [medido].
+- **Los tirones en la carrera de Ridge Racer venían de escribir `nativedraw.log` dentro del hilo de dibujo de Adrenaline** (cada
+  cambio del resultado del traductor escribía una línea; una escritura en la tarjeta tarda de decenas a cientos de ms): picos del
+  presentador de 50-558 ms con el traductor en ~0. Con el log por un anillo y el hilo escritor, los picos son de 5-8 ms [medido, 0.0.13.6].
+- **Un frame HD en la carrera cuesta ~100 ms de CPU** (1900 dibujos; 76 ms son los vértices 3D), y en la carrera el juego alterna cada
+  2 frames entre dibujable y dibujar a otro destino (`other_target`): un frame HD aislado es un tirón más un salto de un frame atrás.
+  La HD ahora espera un segundo de frames dibujables; la carrera queda en imagen normal a 59,9 fps [medido, 0.0.13.7].
+- **Adrenaline pone la GPU a 222 MHz** (crossbar 111, CPU 333, bus 222): los ~31 ms de GPU del selector no son un reloj bajo [medido].
+- **La copia del espejo se ve terminada ~20 ms después del flip** (`mirror_ge`, es un tope: el capturador mira entre listas), y NativeLink
+  nunca encontró la copia de hace dos frames todavía en el GE (`busy=0`) [medido, 0.0.13.6].
 - **Reconstruir paletas por dibujo costaba 116 ms por frame** en el selector: 1000 dibujos de 256 entradas [medido].
 - **128 texturas por frame eran pocas:** Metal Slug XX llegaba al tope con 0,8 de 1,5 MB en uso y perdía frames. Ahora son
   256 [medido, 0.0.8.25–0.0.8.26].

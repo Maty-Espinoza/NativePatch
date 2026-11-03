@@ -4,6 +4,20 @@ Versions: `docs/dev/en/versions.md`. The detail of each step is in `docs/changel
 removed from there before the first release; this file stays as the summary). Versions marked "(test)" were sent to
 the Vita but not yet confirmed as a numbered release.
 
+## NativeDraw 0.0.13 + NativeLink 0.0.6 (2026-11-03)
+Tests 0.0.13.1–0.0.13.7 + NativeLink 0.0.6.1–0.0.6.2, checked on the Vita with Ridge Racer. The race runs at 59.9 fps on the normal
+image, without stutters or jumps; menus and the selector stay in HD.
+- **Profile of a frame's whole journey** (`prof` lines at the extreme level, `tools/prof_summary.py`): PSP, capturer, record thread,
+  latencies, Adrenaline's thread, translator, GPU, CPU per thread and fixed limits reached.
+- **Gate:** the "10 changes = at the sync until closing" rule is gone; the gate can always return to before enqueuing.
+- **Capturer:** a list the game has left behind (past its sync, at its stall with no END) is dropped instead of sticking to it; a frame
+  closed with lists still queued is not drawn, nor the next one.
+- **Stutters:** `nativedraw.log` goes through a ring and the writer thread; writing it inside Adrenaline's drawing thread took
+  50-558 ms per line.
+- **HD only when it holds:** after a frame that cannot be drawn, HD resumes once the frames have been drawable for a second
+  (`held_back`); an HD frame in the race cost ~100 ms and showed as a jump.
+- Development log: `clocks:` (GPU 222 MHz) and `prof record: mirror_ge`.
+
 ## NativeDraw 0.0.12 + NativeLink 0.0.5 (2026-11-02)
 Tests 0.0.12.1–0.0.12.14 + NativeLink 0.0.4.1, checked on the Vita with Ridge Racer. Menus and the car selector are drawn in HD; the
 race still goes with the normal image.
