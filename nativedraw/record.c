@@ -318,7 +318,7 @@ static void rgWhy(RFrame *f, int k, uint32_t a, uint32_t b) {
   static uint32_t seen[NR_N];
   if (f->flags & R_READ) return;
   ga.nr[k]++;
-  if (seen[k]++ < 6) clog("record: not_read %s at frame %u: %08x %08x\n", nr_names[k], gen, a, b);
+  if (seen[k]++ < 6 || !(seen[k] & 63)) clog("record: not_read %s at frame %u: %08x %08x\n", nr_names[k], gen, a, b);
 }
 #endif
 // Marks the frame being written as not read, for reason k (a, b: its detail in development builds)
@@ -332,7 +332,10 @@ static uint32_t rgCopy(uint32_t a, uint32_t n) {
   for (uint32_t k = 0; k < n;) {
     uint32_t s = vtr(a + k), m = 4096 - ((a + k) & 4095);
     if (m > n - k) m = n - k;
-    if (!s || ramEnd(s) < s + m) { RG_READ(NR_VERT, a + k, m); return 0; }
+    if (!s || ramEnd(s) < s + m) {  // (in VRAM: from the next frame on it comes in the mirror, like the lists)
+      if (isVram(a + k)) want(a + k, m, 1);
+      RG_READ(NR_VERT, a + k, m); return 0;
+    }
     sceClibMemcpy(f->a + o + k, (const void *)PSP(s), m);
     k += m;
   }

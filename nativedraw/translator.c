@@ -819,6 +819,15 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
   if (r) return r;
   DEV(t_us[0] += now() - ta; if (p_on) pAdd(P_T_CHECK, now() - ta);)
   trRegions(f, disp);
+  // Depth lives in one scene: if the surface is drawn with depth after its scene was cut, it is stored and loaded. The other
+  // scenes use the same memory without storing it, so they do not touch it
+  SceGxmDepthStencilSurface dss = ds;
+  int zcut = 0;
+  for (uint32_t i = ord; i < f->nd && !zcut; i++) {
+    const uint32_t *e = f->e[f->d[i].st];
+    zcut = (RE(e, 0x9C) & 0x1FFFF0) == disp && !(RE(e, 0xD3) & 1) && RE(e, 0x23) & 1;
+  }
+  if (zcut) sceGxmDepthStencilSurfaceSetForceStoreMode(&dss, SCE_GXM_DEPTH_STENCIL_FORCE_STORE_ENABLED);
   static uint32_t t_q[2];  // last scene that read the vertices and palettes of each surface
   // if the GPU is still reading them (unfinished scene) it waits
   if (gBusy(t_q[s])) { g_psurf++; gEv("vertices and palettes rewritten", t_q[s]); gWait(t_q[s]); }
@@ -826,12 +835,14 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
   uint32_t *pal = tpal[s], np = 0, nv = 0, pal_prev = ~0u, pn = 0;  // np: words used; pal_prev/pn: the previous palette
   void *u;
   // SCENE: starts a scene on surface surf_tex with the vertex program and the matrix
-#define SCENE(surf_tex, reg) do { sceGxmBeginScene(c, 0, cur_rt ? rt_i : rt, reg, 0, t_sync, surf_tex, &ds); t_zs = t_st = t_sr = t_cl = ~0u; zsSet(c, 0, 0); sceGxmSetVertexProgram(c, nvp); \
+#define SCENE(surf_tex, reg) do { sceGxmBeginScene(c, 0, cur_rt ? rt_i : rt, reg, 0, t_sync, surf_tex, cur_rt ? &ds : &dss); t_zs = t_st = t_sr = t_cl = ~0u; zsSet(c, 0, 0); sceGxmSetVertexProgram(c, nvp); \
     sceGxmReserveVertexDefaultUniformBuffer(c, &u); sceGxmSetUniformDataF(u, n_wvp, 0, 16, tr_wvp); } while (0)
   // OPEN: closes the open scene (if any) and opens one on dst (0: surface s); the first time on the surface,
   // puts the normal image (or black: trBase) underneath
 #define OPEN(dst_) do { if (opened) { sceGxmEndScene(c, 0, gEnd()); cNote(cur_rt ? C_INT : C_TR, &gq_n, t_draws - d0, spx / 1000, ssw); } \
-    d0 = t_draws; spx = 0; ssw = 0; cur_rt = (dst_); opened = 1; SCENE(cur_rt ? &cur_rt->cs : &cs[s], cur_rt ? &cur_rt->vr : 0); \
+    d0 = t_draws; spx = 0; ssw = 0; cur_rt = (dst_); opened = 1; \
+    if (!cur_rt && has_base && zcut) sceGxmDepthStencilSurfaceSetForceLoadMode(&dss, SCE_GXM_DEPTH_STENCIL_FORCE_LOAD_ENABLED); \
+    SCENE(cur_rt ? &cur_rt->cs : &cs[s], cur_rt ? &cur_rt->vr : 0); \
     if (!cur_rt && !has_base) { has_base = 1; nv = trBase(c, base, o, nv); spx += W * H; } } while (0)
   RT *cur_rt = 0;  // destination of the open scene (0: the shown surface)
   int opened = 0, has_base = 0;

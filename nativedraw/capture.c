@@ -1230,8 +1230,15 @@ static void event(volatile uint32_t *e) {
     // drawn. A record marked incomplete stops copying, which is what lets the capturer catch up.
     int behind = qh != qt;
     if (behind) regLost(NR_BEHIND, qt - qh);
+    // A frame walked late may have read a list the game was already rewriting, and that garbage would stay in the state
+    // (for as long as the game does not set that register again): the next frame starts from the last clean one
+    static GeState st_good;
+    static int st_ok;
+    int clean = !behind && !(reg_on && rf[rg_w]->flags & R_READ);
     if (reg_on) { regFlip(a, b, f_draws); reg_big = f_draws > RD_N; }
     if (behind) regLost(NR_BEHIND_NEXT, qt - qh);
+    if (clean) { stSave(&st_good); st_ok = 1; }
+    else if (st_ok) { uint32_t kv = vaddr, ki = iaddr; stLoad(&st_good); vaddr = kv; iaddr = ki; }
     DEV(if (tp) { PA(P_C_FLIP, tp); if ((int)(now() - p_flip) > 0) pAdd(P_L_CLOSE, now() - p_flip); pAdd(P_C_TOTAL, f_us); pAdd(P_C_DRAW, p_draw); p_draw = 0; })
     acc.frames++;
     if (qh != qt) acc.flips_behind++;
