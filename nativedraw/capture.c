@@ -308,7 +308,7 @@ static int reg_on, reg_big;  // frame record (switch draw); last frame had more 
 // L+R+SELECT dump and used by record.c
 volatile uint32_t nd_exact_until;
 DEV(volatile uint32_t nd_dump_mark;)  // a GE NOP carrying 0x4E5044 asks for a dump (NPTEST); dumpTick takes it
-static void regDraw(uint32_t n, uint32_t type, uint32_t vt, uint32_t idx), regClut(uint32_t d), regMemo(uint32_t draws);
+static void regDraw(uint32_t n, uint32_t type, uint32_t vt, uint32_t idx), regClut(uint32_t d), regMemo(uint32_t draws), rgVFlush(void);
 // PRIM (command 0x04, d: count and primitive type): records the draw, counts its class and the state changes since
 // the previous one, advances vaddr/iaddr, notes new textures, requests VRAM textures from the mirror and marks the
 // render target so it is not requested as data
@@ -1033,6 +1033,7 @@ static void walk(void) {
     recAbort(); chk = NULL;  // the list ended inside a sublist (END, jump to VRAM...): not saved
     // at all levels (NativeLink uses it) and before SB[3]: never the captured list with the stale sample
     lifeTake(l);
+    if (reg_on) rgVFlush();
     capt = l->ord; SB[3] = capt; qh++; acc.lists++;
     DEV(listDone(l);)
   }
@@ -1346,6 +1347,7 @@ static int repThread(SceSize args, void *argp) {
       if (!level) goto sync;  // (minimum: only this line and the vram and sync one)
       if (reg_on) {  // frame record
         uint32_t g = gr.fr ? gr.fr : 1, dd = gr.draws ? gr.draws : 1;
+        clog("  3D vertices: DMA runs per frame %u\n", gr.fr ? gr.v_dma / gr.fr : 0);
         clog("  record: frames=%u complete=%u incomplete: memory=%u not_read=%u limit=%u curves=%u | per frame: draws=%u states=%u KB=%u palettes=%u us=%u (states %u vertices %u textures %u [copied %u KB by DMA in %u us, of them swizzled %u KB sorted in %u us; pending lost %u, without the copy of their flip %u, with the GPU unfinished (measured) %u] palettes %u) | of the draws: 3d=%u%% clear=%u%% blend=%u%% alpha_test=%u%% swizzle=%u%% | draws per sec with texture 5650/5551/4444/8888/T4/T8/T16/T32/DXT1/3/5: %u %u %u %u %u %u %u %u %u %u %u\n",
              gr.fr, gr.ok, gr.memo, gr.rd_fail, gr.limit, gr.curve, gr.draws / g, gr.st / g, gr.kb / g >> 10, gr.cl / g, gr.us / g,
              gr.us_e / g, gr.us_v / g, gr.us_t / g, gr.t_b / g >> 10, gr.us_l / g, gr.o_b / g >> 10, gr.us_o / g, gr.stomped, gr.n_late, gr.gpu, gr.us_p / g,

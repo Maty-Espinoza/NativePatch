@@ -6,6 +6,10 @@ what was done is in `CHANGELOG.md`. Updated 2026-11-02 (NativeLink 0.0.4 + Nativ
 `docs/agent/en/stage3-plan.md`.
 
 ## Next
+- [ ] **Ridge Racer selector, the last car showed the previous car's color for a moment** (user, 0.0.12.11): likely the texture cache
+      checking 1 group in 4 per frame (accepted risk). Look again only if it causes bigger errors.
+- [ ] **Ridge Racer selector, GPU ~31 ms per frame** (~4.2 M pixels, 1000 draws): the fast shader did not change it. Skip the image
+      underneath when the frame covers it; look at the GPU clock Adrenaline sets.
 - [ ] **Ridge Racer, odd drawings in the opening movie** (user, 0.0.12.10): looks minor; check again after the performance work, with a
       dump if it stays.
 - [ ] **3D** (after the fans; the user's order, 2026-11-02): start with a light game, not GT. Store the matrices in the record

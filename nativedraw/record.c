@@ -19,7 +19,7 @@ enum { R_MEMO = 1, R_READ = 2, R_LIMIT = 4, R_CURVE = 8 };
 // (same, changed, new); unswizzled bytes; distinct textures
 // per frame
 static struct { uint32_t fr, ok, memo, rd_fail, limit, curve, draws, st, kb, cl, us, d3, clear, blend, atest, swz, fmt[16], us_e, us_v, us_t, us_p, t_b, us_l, stomped, n_late, gpu, o_b, us_o,
-  t_n[2], t_kb[2], t_dma[2], t_ord[2], t_calls, t_size[5], t_rb[6], t_same, t_changed, t_lines, t_tex,
+  t_n[2], t_kb[2], t_dma[2], t_ord[2], t_calls, t_size[5], t_rb[6], v_dma, t_same, t_changed, t_lines, t_tex,
   c_hit, c_fill, c_chg, c_rec, c_fail, c_us; } ga, gr;
 // RN records: with fewer, the one the GPU just read would at times be the only free one, overwriting its textures
 #define RN 4
@@ -312,6 +312,37 @@ static uint32_t rgCopy(uint32_t a, uint32_t n) {
   f->na = o + n;
   return o + 1;
 }
+// Vertices of 3D draws from RAM wait here: nobody needs them before the list ends, and read together by DMA they cost a
+// fraction of many small reads. vp: where to read (s), where they go in area a (d) and how many bytes.
+#define VP_N 1024
+static struct { uint32_t s, d, n; } vp[VP_N];
+static uint32_t vpn;
+// Copies what waits: each run of entries that fits in the transit memory goes by DMA once, then piece by piece
+static void rgVFlush(void) {
+  RFrame *f = rf[rg_w];
+  for (uint32_t i = 0, j; i < vpn; i = j) {
+    uint32_t lo = vp[i].s, hi = lo + vp[i].n;
+    for (j = i + 1; j < vpn; j++) {
+      uint32_t a = vp[j].s < lo ? vp[j].s : lo, b = vp[j].s + vp[j].n > hi ? vp[j].s + vp[j].n : hi;
+      if (b - a > OR_N || ramEnd(a) < b) break;
+      lo = a; hi = b;
+    }
+    sceDmacMemcpy(rg_ord, (const void *)PSP(lo), hi - lo);
+    for (uint32_t k = i; k < j; k++) sceClibMemcpy(f->a + vp[k].d, rg_ord + vp[k].s - lo, vp[k].n);
+    ga.v_dma++;
+  }
+  vpn = 0;
+}
+// Reserves n bytes of area a for the vertices at address s and queues them. Offset + 1; 0 if they do not fit (R_LIMIT).
+static uint32_t rgVLater(uint32_t s, uint32_t n) {
+  RFrame *f = rf[rg_w];
+  uint32_t o = (f->na + 15) & ~15u;
+  if (o + n > RA_N) { f->flags |= R_LIMIT; return 0; }
+  if (vpn == VP_N) rgVFlush();
+  vp[vpn].s = s; vp[vpn].d = o; vp[vpn++].n = n;
+  f->na = o + n;
+  return o + 1;
+}
 int sceGxmMapMemory(void *base, SceSize size, int attr);
 // (translator, with GXM initialized) maps for the GPU, read-only, the textures of all records
 int regMapGpu(void) {
@@ -539,7 +570,9 @@ static void regDraw(uint32_t n, uint32_t type, uint32_t vt, uint32_t idx) {
     nv = mx + 1;
   }
   d->vlen = nv * vs;
-  if (!(d->voff = rgCopy(vaddr, d->vlen))) return;
+  // (3D: the texture rows do not come from the vertices, so they can wait)
+  int later = !(vt >> 23 & 1) && rg_ordc && !isVram(vaddr) && ramEnd(vaddr) >= vaddr + d->vlen && d->vlen <= OR_N;
+  if (!(d->voff = later ? rgVLater(vaddr, d->vlen) : rgCopy(vaddr, d->vlen))) return;
   d->woff = d->moff = d->loff = 0;
   static uint32_t lw, lm, ll;  // last matrix and light blocks of this frame
   if (!f->nd) lw = lm = ll = 0;
@@ -633,6 +666,7 @@ static void regXfer(uint32_t s, uint32_t t, uint32_t bp) {
 // is reading, nor the pending one, nor (if possible) the last one the presenter took. Then empties the new record and
 // copies the loaded palette into it again.
 static void regFlip(uint32_t fb, uint32_t fbw, uint32_t draws_counted) {
+  rgVFlush();
   RFrame *f = rf[rg_w];
   if (!rg_thr) regPend();
   // Counted draws that did not go through regDraw

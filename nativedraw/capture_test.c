@@ -163,7 +163,7 @@ static int checkAll(void) {
   bad += report("frame record: a TRANSFER on the drawn image becomes a draw", r[REG0].xf);
   bad += report("frame record: a texture rewritten between lists gets a new copy", r[REG0].tex2);
   bad += report("texture cache: reused between frames, a change goes to the record, then back", r[REG0].tc);
-  bad += report("sorted textures: an unchanged group is skipped, a changed one is sorted again", r[REG0].srt);
+  bad += report("sorted textures skip what did not change; vertices queued for DMA come out right", r[REG0].srt);
   bad += report("frame record: the loaded palette survives changes in memory", r[REG0].pal);
   bad += report("frame record: an image only counts as drawn in its frame", r[REG0].rt1);
   bad += report("texture copy: right by CPU and by DMA", texCopyOk(1) && texCopyOk(32));
@@ -270,6 +270,13 @@ int main(int argc, char **argv) {
       res->srt = ga.t_same - same == m;
       sr[0] ^= 0xFF; same = ga.t_same; rgTexCopy(ds, sr, m, 128, 0x08900000u, 0, rg_ord);
       res->srt = res->srt && ga.t_same - same == m - 1024 && ds[0] == sr[0];
+    }
+    {  // vertices that wait: two pieces out of order come out right in area a
+      RFrame *g = rf[rg_w];
+      *W(0x08C34000) = 0x11; *W(0x08C33000) = 0x22; rg_ordc = 1;
+      uint32_t v1 = rgVLater(0x08C34000, 4), v2 = rgVLater(0x08C33000, 4);
+      rgVFlush();
+      res->srt = res->srt && v1 && v2 && *(uint32_t *)(g->a + v1 - 1) == 0x11 && *(uint32_t *)(g->a + v2 - 1) == 0x22 && !vpn;
     }
 #undef NEXT
     rf[rg_w]->flags = 1; regFlip(0x04000000, 512, 0);
