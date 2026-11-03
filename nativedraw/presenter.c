@@ -356,12 +356,14 @@ static int hookEnd(SceGxmContext *c, const SceGxmNotification *v, const SceGxmNo
         if (t_ok && t_rep < 2) { t_rep++; hd = 2; cause = 0; t_skip[0]++; DEV(if (p_on) pAdd(P_F_REPEAT, 0);) } else t_cnt[T_NEW]++;
       } else {
         if (t_frame != ~0u && rg->frame > t_frame) { uint32_t g = rg->frame - t_frame; t_skip[g < 5 ? g : 5]++; }
-        // The Vita drawing shows one frame behind the normal image, so an HD frame right after one that was not
-        // drawable looks like a jump back: that frame is only checked (held back) and HD resumes with the next one
+        // The Vita drawing shows one frame behind the normal image, so an HD frame among frames that are not drawable
+        // looks like a jump back: HD only resumes once the frames have been drawable for a whole second; until then
+        // they are only checked (held back)
         uint32_t t1 = now(), dp, od;
-        int chk = !t_can && t_frame != ~0u, r = chk ? trCheckFrame(rg, &dp, &od) : trFrame(c, rg, s, src);
+        int chk = t1 - t_bad < 1000000 && t_frame != ~0u, r = chk ? trCheckFrame(rg, &dp, &od) : trFrame(c, rg, s, src);
         if (chk && !r) r = T_HOLD;
-        g_tr_us += now() - t1; t_cnt[r]++; t_frame = rg->frame; t_can = !r || r == T_HOLD; t_ok = !r; hd = !r; t_rep = 0; cause = r;
+        if (r && r != T_HOLD) t_bad = t1;
+        g_tr_us += now() - t1; t_cnt[r]++; t_frame = rg->frame; t_ok = !r; hd = !r; t_rep = 0; cause = r;
         DEV(trReason(rg->frame, r); if (p_on) pAdd(r ? P_F_NORMAL : P_F_DRAWN, 0);)
         if (!r) regGpu(gq, gq_done);  // the scene that reads this record's textures
       }

@@ -20,8 +20,8 @@ static uint32_t *tpal[2];    // translated palettes (8888), aligned to 64: 16 en
 #define TV_N (64 << 10)      // vertices per surface (and limit of the 16-bit indices)
 #define TP_B (256 << 10)     // palette bytes per surface
 #define C_RGB (SCE_GXM_COLOR_MASK_R | SCE_GXM_COLOR_MASK_G | SCE_GXM_COLOR_MASK_B)  // alpha is never written
-// last record frame seen, whether it was drawn fine, how many times it was repeated and whether it was drawable
-static uint32_t t_frame = ~0u, t_ok, t_rep, t_can;
+// last record frame seen, whether it was drawn fine, how many times it was repeated and when one was last not drawable
+static uint32_t t_frame = ~0u, t_ok, t_rep, t_bad;
 static uint16_t *tib;        // 0, 1, 2... (indices for the GPU)
 // Intermediate image: a game draw to another VRAM image (not the shown one) goes to our own double-size surface
 // (1024x544); if later in the same frame a texture is at that address, it is read from that surface.
