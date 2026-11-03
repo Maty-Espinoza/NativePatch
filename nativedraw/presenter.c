@@ -359,8 +359,8 @@ static int hookEnd(SceGxmContext *c, const SceGxmNotification *v, const SceGxmNo
       RFrame *rg = regTake();
       int cause = T_NEW;
       if (!rg) { t_cnt[T_NEW]++; DEV(if (p_on) pAdd(P_F_NOREC, 0);) }
-      else if (rg->frame == t_frame) {  // same frame: the surface is repeated up to 8 times (the capturer may not record every frame); otherwise, normal
-        if (t_ok && (t_rep < 8 || t_force)) { t_rep++; hd = 2; cause = 0; t_skip[0]++; DEV(if (p_on) pAdd(P_F_REPEAT, 0);) } else t_cnt[T_NEW]++;
+      else if (rg->frame == t_frame) {  // same frame: the surface is repeated up to 20 times (the capturer may not record every frame); otherwise, normal
+        if (t_ok && (t_rep < 20 || t_force)) { t_rep++; hd = 2; cause = 0; t_skip[0]++; DEV(if (p_on) pAdd(P_F_REPEAT, 0);) } else t_cnt[T_NEW]++;
       } else {
         if (t_frame != ~0u && rg->frame > t_frame) { uint32_t g = rg->frame - t_frame; t_skip[g < 5 ? g : 5]++; }
         // The Vita drawing shows one frame behind the normal image, so an HD frame among frames that are not drawable
@@ -370,8 +370,8 @@ static int hookEnd(SceGxmContext *c, const SceGxmNotification *v, const SceGxmNo
         uint32_t t1 = now(), dp, od;
         int chk = !t_force && t1 - t_bad < 1000000 && t_frame != ~0u, r = chk ? trCheckFrame(rg, &dp, &od) : trFrame(c, rg, s, src);
         if (chk && !r) r = T_HOLD;
-        // One frame that cannot be drawn among drawable ones: the last surface stays (up to 8 frames), not a jump to the normal image
-        int keep = r && r != T_HOLD && t_ok && t_rep < 8;
+        // One frame that cannot be drawn among drawable ones: the last surface stays (up to 20 frames), not a jump to the normal image
+        int keep = r && r != T_HOLD && t_ok && t_rep < 20;
         if (r && r != T_HOLD && !keep) t_bad = t1;
         g_tr_us += now() - t1; t_cnt[r]++; t_frame = rg->frame; cause = r;
         if (keep) { t_rep++; hd = 2; } else { t_ok = !r; hd = !r; t_rep = 0; }

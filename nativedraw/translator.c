@@ -23,6 +23,7 @@ static uint32_t *tpal[2];    // translated palettes (8888), aligned to 64: 16 en
 // last record frame seen, whether it was drawn fine, how many times it was repeated and when one was last not drawable
 static uint32_t t_frame = ~0u, t_ok, t_rep, t_bad;
 static uint32_t t_mark[RD_N / 32 + 1];  // a bit per draw not done
+static uint32_t t_prevd = ~0u;  // image shown by the last frame drawn: its surface is the one not being drawn
 #ifdef NP_DEV
 // Switch force_hd (diagnosis): a frame with a draw it cannot do still goes in HD, skipping that draw
 static int t_force;
@@ -224,12 +225,17 @@ static int hasTex(const uint32_t *e, const RDraw *d) {
   return !(RE(e, 0xD3) & 1) && (RE(e, 0x1E) & 1) && ((d->vt & 3) || (!(d->vt >> 23 & 1) && (RE(e, 0xC0) & 3)));
 }
 
+// 1 if image ta (in VRAM) has an intermediate image held from this or an earlier frame
+static int rtKept(uint32_t ta) {
+  for (int i = 0; i < 2; i++) if (rts[i].mem && rts[i].fb == (ta & 0x1FFFF0) && (ta & 0x0F000000) == 0x04000000) return 1;
+  return 0;
+}
 // Checks whether draw d of frame f can be drawn (primitive, vertices without weights, destination, blend,
 // texture format and function). T_OK if so; otherwise the reason. What depends on other draws is checked by trFrame.
 static int trCheck(RFrame *f, RDraw *d) {
   const uint32_t *e = f->e[d->st];
   uint32_t vt = d->vt, clr = RE(e, 0xD3) & 1, afn, aref;
-  if (d->prim < 3 || d->prim > 6) return T_PRIM;  // triangles, strip, fan, rectangles
+  if (!d->prim || d->prim > 6) return T_PRIM;  // lines, line strip, triangles, strip, fan, rectangles
   if ((vt >> 9 & 3) || (vt >> 18 & 7)) return T_VERT;  // weights or morph
   if ((RE(e, 0x9D) & 0x7FF) > 512) return T_DEST;
   if (colorMask(e) == ~0u) return T_MASK;
@@ -238,7 +244,7 @@ static int trCheck(RFrame *f, RDraw *d) {
   if ((RE(e, 0x22) & 1) && !alphaFn(e, &afn, &aref)) return T_MASK;
   if (blendKey(e) == ~0u) return T_BLEND;
   // (the gray blend uses the vertex alpha: the source's alpha must be 1, as in intermediate images, and modulated)
-  if (grayFix(e) && hasTex(e, d) && (d->toff || (RE(e, 0xC9) & 7))) return T_BLEND;
+  if (grayFix(e) && hasTex(e, d) && ((d->toff && !rtKept(texAddr(e))) || (RE(e, 0xC9) & 7))) return T_BLEND;
   if (hasTex(e, d)) {
     uint32_t fmt = RE(e, 0xC3) & 15, tf = RE(e, 0xC9) & 7;
     if (fmt > 5 || (fmt >= 4 && !d->clut)) return T_FMT;
@@ -563,6 +569,30 @@ static int trTris(TV *o, uint32_t *np, uint32_t room, uint32_t *prim, const floa
   return T_OK;
 }
 
+// Lines (strip: line strip) of *np vertices at o, room for room: GXM lines need another mode, so each segment becomes two
+// triangles one PSP pixel wide (2 at double size), left in o as a triangle list. x and y carry their w. Segments with a
+// point behind the camera are dropped. T_OK or T_LIMIT.
+static int trLines(TV *o, uint32_t *np, uint32_t room, int strip) {
+  uint32_t n = *np, m = 0;
+  for (uint32_t i = 0; i + 1 < n; i += strip ? 1 : 2) {
+    TV a = o[i], b = o[i + 1];
+    if (a.w <= 0 || b.w <= 0) continue;
+    if (n + m + 6 > room) return T_LIMIT;
+    float dx = b.x / b.w - a.x / a.w, dy = b.y / b.w - a.y / a.w, d = dx * dx + dy * dy;
+    if (d <= 0) continue;
+    d = 1 / tsqrt(d); dx *= d; dy *= d;
+    TV q[4] = { a, a, b, b };
+    q[0].x -= dy * a.w; q[0].y += dx * a.w; q[1].x += dy * a.w; q[1].y -= dx * a.w;
+    q[2].x -= dy * b.w; q[2].y += dx * b.w; q[3].x += dy * b.w; q[3].y -= dx * b.w;
+    TV *t = o + n + m;
+    t[0] = q[0]; t[1] = q[1]; t[2] = q[2]; t[3] = q[2]; t[4] = q[1]; t[5] = q[3];
+    m += 6;
+  }
+  sceClibMemmove(o, o + n, m * sizeof(TV));
+  *np = m;
+  return T_OK;
+}
+
 // Texture of tw x th texels (0xB8) in a buffer of tbw at src, narrower than the buffer, and t made with the buffer's
 // width: repeat and clamp would act at the buffer's edge. If the n vertices at o leave tw, copies its rows without the
 // gap to dst (room words), narrows t and rescales u. Returns the words used (0: not needed), ~0u if it does not fit.
@@ -695,6 +725,7 @@ static int trCheckFrame(RFrame *f, uint32_t *disp_p, uint32_t *ord_p) {
     if (!r && hasTex(e0, &f->d[i]) && !f->d[i].toff) {  // texture with no copy
       uint32_t ta = texAddr(e0), vr = (ta & 0x0F000000) == 0x04000000, old = 0;
       if (vr && (ta & 0x1FFFF0) == disp && (RE(e0, 0xC3) & 15) == (f->fbw >> 16 & 3) && kd >= 0) { if (i < ord) ord = i; }  // (cuts the surface's scene)
+      else if (vr && (ta & 0x1FFFF0) == t_prevd && (RE(e0, 0xC3) & 15) == (f->fbw >> 16 & 3)) {}  // (the image of the frame before)
       else {
         for (k = 0; k < nif && !(vr && (ta & 0x1FFFF0) == ifb[k]); k++) {}
         if (k == nif) for (int j = 0; j < 2; j++) old |= vr && rts[j].mem && rts[j].fb == (ta & 0x1FFFF0);
@@ -895,11 +926,12 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     if (tex) {
       uint32_t fmt = RE(e, 0xC3) & 15, a8 = RE(e, 0xA8), b8 = RE(e, 0xB8), tbw = a8 & 0x7FF;
       th = 1u << (b8 >> 8 & 15); tw = tbw;
-      int shown = !d->toff && (texAddr(e) & 0x0F1FFFF0) == (0x04000000 | disp);
-      RT *src = d->toff || shown ? 0 : rtOf(texAddr(e) & 0x1FFFF0, f->frame, 0);
-      if (src || shown) {  // intermediate or shown image: its double-size surface (512 x 272 of the PSP -> 1024 x 544)
+      uint32_t tv = texAddr(e) & 0x0F1FFFF0;
+      int shown = !d->toff && tv == (0x04000000 | disp), prev = !d->toff && tv == (0x04000000 | t_prevd) && !rtKept(tv);
+      RT *src = (d->toff && !(key && grayFix(e))) || shown || prev ? 0 : rtOf(texAddr(e) & 0x1FFFF0, f->frame, 0);
+      if (src || shown || prev) {  // intermediate or shown image: its double-size surface (512 x 272 of the PSP -> 1024 x 544)
         self = src && src == dst;
-        if (sceGxmTextureInitLinear(&t, shown ? surf[s] : src->mem, SCE_GXM_TEXTURE_FORMAT_A8B8G8R8, LINE, H, 0) < 0) { res = T_TEX; break; }
+        if (sceGxmTextureInitLinear(&t, shown ? surf[s] : prev ? surf[s ^ 1] : src->mem, SCE_GXM_TEXTURE_FORMAT_A8B8G8R8, LINE, H, 0) < 0) { res = T_TEX; break; }
         tw = LINE / 2; th = H / 2; fmt = 3;
       } else if (!d->toff || sceGxmTextureInitLinear(&t, f->tx + d->toff - 1, gf[fmt], tbw, (uint32_t)th, 0) < 0) { res = T_TEX; break; }
       if (fmt >= 4) {  // palette: to 8888, with shift, mask and start (0xC5)
@@ -947,10 +979,12 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
       break;
     }
     if (nv + n > TV_N) { res = T_LIMIT; break; }
-    if (dst && !(clr & 1)) for (uint32_t j = 0; j < n; j++) if (o[nv + j].w > 0 && o[nv + j].y > H * o[nv + j].w) res = T_DEST;  // (past the surface's rows)
-    DEV(if (t_force) res = T_OK;)
+    if (dst && !w3d && !(clr & 1)) for (uint32_t j = 0; j < n; j++) if (o[nv + j].y > H) res = T_DEST;  // (past the surface's rows)
+    DEV(if (res) failNote(f, i, res); if (t_force) res = T_OK;)
     if (res) break;
     uint32_t prim = d->prim;
+    if (prim < 3 && (res = trLines(o + nv, &n, TV_N - nv, prim == 2))) break;
+    if (prim < 3) prim = 3;
     if (prim != 6 && (res = trTris(o + nv, &n, TV_N - nv, &prim, sc, (clr & 1) || !(RE(e, 0x50) & 1), w3d))) break;
     if (!n) continue;
     if (tex && d->toff && (1u << (RE(e, 0xB8) & 15)) < tw) {
@@ -1046,7 +1080,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     }
     zsSet(c, e, o[nv + n - 1].c >> 24);
     // GE cull (0x1D on, 0x9B which winding on screen goes); not in clears or rectangles
-    uint32_t cl = w3d && prim != 6 && !(clr & 1) && (RE(e, 0x1D) & 1) ? (RE(e, 0x9B) & 1 ? SCE_GXM_CULL_CCW : SCE_GXM_CULL_CW) : SCE_GXM_CULL_NONE;
+    uint32_t cl = w3d && d->prim > 2 && prim != 6 && !(clr & 1) && (RE(e, 0x1D) & 1) ? (RE(e, 0x9B) & 1 ? SCE_GXM_CULL_CCW : SCE_GXM_CULL_CW) : SCE_GXM_CULL_NONE;
     if (cl != t_cl) { t_cl = cl; sceGxmSetCullMode(c, cl); }
     sceGxmSetVertexStream(c, 0, o + nv);
     sceGxmDraw(c, prim == 3 ? SCE_GXM_PRIMITIVE_TRIANGLES : prim == 5 ? SCE_GXM_PRIMITIVE_TRIANGLE_FAN : SCE_GXM_PRIMITIVE_TRIANGLE_STRIP, SCE_GXM_INDEX_FORMAT_U16, tib, n);
@@ -1067,6 +1101,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
 #undef OPEN
 #undef SCENE
   t_q[s] = gq;
+  if (res == T_OK) t_prevd = disp;
   DEV(t_us[5] += now() - ta;
       for (int i = 1; p_on && i < 6; i++) if ((int)(t_us[i] - ut[i]) >= 0) pAdd(P_T_CHECK + i, t_us[i] - ut[i]);)  // (t_us is zeroed every 10 s)
   if (res && !t_seen[res]++) alog("translator: first frame with '%s' on drawing\n", tnames[res]);
