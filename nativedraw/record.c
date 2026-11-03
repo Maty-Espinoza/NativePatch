@@ -710,6 +710,7 @@ static void regFlip(uint32_t fb, uint32_t fbw, uint32_t draws_counted) {
   rgVFlush();
   DEV(PA(P_C_VFLUSH, tv);)
   RFrame *f = rf[rg_w];
+  int slow = rg_pend >= 0 || (rg_pub >= 0 && rg_pub != rg_last);
   if (!rg_thr) regPend();
   // Counted draws that did not go through regDraw
   if (f->draws_seen < draws_counted) RG_READ(NR_COUNT, f->draws_seen, draws_counted);
@@ -752,9 +753,9 @@ static void regFlip(uint32_t fb, uint32_t fbw, uint32_t draws_counted) {
   f = rf[rg_w];
   f->nd = f->ne = f->na = f->flags = f->draws_seen = f->nt = f->ntx = f->dv = f->nimg = 0;
   rg_t = 0;
-  // The presenter has not taken the last frame: recording another is wasted, and a capturer that keeps up does not read
-  // lists the game is already rewriting. This frame is only walked
-  if (rg_pend >= 0 || (rg_pub >= 0 && rg_pub != rg_last)) { f->flags = R_SKIP; ga.skip++; }
+  // The presenter did not take the frame before this one: recording another is wasted, and a capturer that keeps up does
+  // not read lists the game is already rewriting. The next frame is only walked
+  if (slow) { f->flags = R_SKIP; ga.skip++; }
   // The GE keeps the palette it loaded whatever the memory holds now: its copy goes on to the new record (from memory
   // only if there is none)
   if (pal) { sceClibMemmove(f->a, pal, rg_clut_b); f->na = rg_clut_b; rg_clut = 1; }

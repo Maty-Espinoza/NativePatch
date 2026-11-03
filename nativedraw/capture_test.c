@@ -24,6 +24,8 @@
 // Does not simulate the Vita's notice to the PSP (the mirror copy the Vita announces in SB[0x48]).
 #define NP_DEV  // the test needs the extreme level (data and list life, delays)
 #include "capture.c"
+// regFlip with a presenter that takes each frame at once
+static void tFlip(uint32_t a, uint32_t b, uint32_t c) { regFlip(a, b, c); rg_last = rg_pub; }
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -108,7 +110,7 @@ static void build(int frame) {
 static uint32_t stateSum(void) { uint32_t h = 0; for (int i = 0; i < 256; i++) h = h * 31 + reg[i]; for (int m = 0; m < 5; m++) for (int i = 0; i < 96; i++) h = h * 31 + mtx[m][i]; return h * 31 + vaddr * 7 + iaddr; }
 // Result of one case, in memory shared with the process that compares them. col: columns before "|" per frame, without
 // and with state; the rest are totals of what each case must exercise.
-typedef struct { char col[8][64]; uint32_t st[8], hit, chk, bad, fail, pre, late, lines, pv, skip, whole, lost, rt1, pal, tex2, tc, srt, xf, ok; } Res;
+typedef struct { char col[8][64]; uint32_t st[8], hit, chk, bad, fail, pre, late, lines, pv, skip, whole, lost, rt1, pal, tex2, tc, srt, xf, late_pr, ok; } Res;
 static Res *res;
 static int report(const char *name, int ok) { printf("%s %s\n", ok ? "ok  " : "FAIL", name); return !ok; }
 // Frames from..7 of case a equal those of b (state too if st).
@@ -166,6 +168,7 @@ static int checkAll(void) {
   bad += report("sorted textures skip what did not change; vertices queued for DMA come out right", r[REG0].srt);
   bad += report("frame record: the loaded palette survives changes in memory", r[REG0].pal);
   bad += report("frame record: an image only counts as drawn in its frame", r[REG0].rt1);
+  bad += report("frame record: not recorded while the presenter does not take frames", r[REG0].late_pr);
   bad += report("texture copy: right by CPU and by DMA", texCopyOk(1) && texCopyOk(32));
   printf(bad ? "%d FAILED\n" : "all ok\n", bad);
   return bad;
@@ -224,7 +227,7 @@ int main(int argc, char **argv) {
     if (reg_on) {  // close the record as in the flip and check it
       int w = rg_w; RFrame *g = rf[w];
       uint32_t nd = g->nd, ne = g->ne, na = g->na, fl = g->flags, n_seen = g->draws_seen;
-      regFlip(0x04000000, 512, acc.draws);
+      tFlip(0x04000000, 512, acc.draws);
       printf("   record: draws=%u (counted %u, seen %u) states=%u bytes=%u flags=%x %s published=%d\n", nd, acc.draws, n_seen, ne, na, fl,
              !fl && nd == acc.draws ? "COMPLETE" : "incomplete", rg_pub);
       if (res) res->whole += !fl && nd == acc.draws;
@@ -233,7 +236,7 @@ int main(int argc, char **argv) {
     gen++; ntex = 0;
   }
   if (reg_on && res) {
-    markRt(0x04100000, 4096); regFlip(0x04000000, 512, 0);
+    markRt(0x04100000, 4096); tFlip(0x04000000, 512, 0);
     res->rt1 = !rt_pg[0x100 >> 5];
     *W(0x08C30000) = 1; reg[0xA0] = 0xC30000; reg[0xA8] = 0x080000 | 8; reg[0xB8] = 3 << 8 | 3; reg[0xC3] = 3;  // 8x8, 8888
     pub_ord = 100; uint32_t t0 = rgTex(0, 8), t1 = rgTex(0, 8);
@@ -241,12 +244,12 @@ int main(int argc, char **argv) {
     *W(0x08C30000) = 2; pub_ord = 102; uint32_t t3 = rgTex(0, 8);
     res->tex2 = t0 && t0 == t1 && t1 == t2 && t3 != t2 && *(uint32_t *)(rf[rg_w]->tx + t3 - 1) == 2;
     rf[rg_w]->flags = 1;  // (not published)
-    regFlip(0x04000000, 512, 0);
+    tFlip(0x04000000, 512, 0);
     // The same texture in frames in a row: copied once; changed, it goes to the record until nobody reads the entry
     *W(0x08C31000) = 5; reg[0xA0] = 0xC31000; reg[0xA8] = 0x080000 | 256; reg[0xB8] = 3 << 8 | 8;  // 256x8, 8 KB
     uint8_t *p0 = rf[rg_w]->tx + rgTex(0, 8) - 1;
     uint32_t cp = ga.t_n[0];
-#define NEXT() do { rf[rg_w]->nd = 1; rf[rg_w]->draws_seen = ~0u; regFlip(0x04000000, 512, 0); } while (0)
+#define NEXT() do { rf[rg_w]->nd = 1; rf[rg_w]->draws_seen = ~0u; tFlip(0x04000000, 512, 0); } while (0)
     NEXT();
     uint8_t *p1 = rf[rg_w]->tx + rgTex(0, 8) - 1;
     res->tc = p0 == p1 && ga.t_n[0] == cp;
@@ -279,7 +282,7 @@ int main(int argc, char **argv) {
       res->srt = res->srt && v1 && v2 && *(uint32_t *)(g->a + v1 - 1) == 0x11 && *(uint32_t *)(g->a + v2 - 1) == 0x22 && !vpn;
     }
 #undef NEXT
-    rf[rg_w]->flags = 1; regFlip(0x04000000, 512, 0);
+    rf[rg_w]->flags = 1; tFlip(0x04000000, 512, 0);
     RFrame *x = rf[rg_w];  // 64x64 from RAM to (8, 14) of the image being drawn, and one that is not on it
     reg[0x9C] = 0x88000; reg[0x9D] = 512; reg[0xD2] = 3; reg[0xD5] = 479 | 271 << 10; reg[0xB3] = 64 | 0x080000; reg[0xB2] = 0xC30000;
     reg[0xB4] = 0x88000; reg[0xB5] = 512 | 0x040000; reg[0xEB] = 0; reg[0xEC] = 8 | 14 << 10; reg[0xEE] = 63 | 63 << 10;
@@ -289,9 +292,14 @@ int main(int argc, char **argv) {
     regXfer(0x08C30000, 0x04154000, 4);
     res->xf = res->xf && x->nd == 1 && !x->flags;
     *W(0x08C20000) = 0x11223344; reg[0xB0] = 0xC20000; reg[0xB1] = 0x080000; last_clut[0] = CLUTADDR(); regClut(1);
-    *W(0x08C20000) = 0; regFlip(0x04000000, 512, 0);
+    *W(0x08C20000) = 0; tFlip(0x04000000, 512, 0);
     res->pal = *(uint32_t *)(rf[rg_w]->a + rg_clut - 1) == 0x11223344;
     resetQueue(); res->lost = rf[rg_w]->flags != 0;  // events lost in the middle of a frame
+    // A presenter that does not take frames: with the previous one untaken the next is only walked, and taking it resumes
+    rf[rg_w]->flags = 0; rf[rg_w]->nd = 1; rf[rg_w]->draws_seen = ~0u; tFlip(0x04000000, 512, 0); rg_last = -1;
+    rf[rg_w]->nd = 1; rf[rg_w]->draws_seen = ~0u; regFlip(0x04000000, 512, 0);
+    res->late_pr = rf[rg_w]->flags == R_SKIP;
+    rg_last = rg_pub; regFlip(0x04000000, 512, 0); res->late_pr &= !rf[rg_w]->flags;
   }
   printf("list life: flip of its frame %u (top %u, sublists %u) | next flip %u (%u, %u) (expected 8 (0, 0) | 7 (7, 0))\n", lf_n[0], lf_top[0], lf_sub[0], lf_n[1], lf_top[1], lf_sub[1]);
   // A sync arriving 100 us after queuing: the Vita is behind (line in nativedraw_late)
