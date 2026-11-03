@@ -14,7 +14,7 @@ static volatile uint32_t t_cnt[TN], t_hd, t_nat, t_draws;
 static volatile uint32_t t_skip[6];  // PSP frames advanced by each drawn frame (0: repeated, 5: 5 or more)
 DEV(static volatile uint32_t t_us[6];)  // us in trFrame: check, textures and palettes, vertices, GXM setup, scene changes, all
 // Vertices in detail. t_v: us in matrices, decoding, trTris, the rest. t_c: see the translator detail lines of the log
-DEV(enum { TC_VIN, TC_VOUT, TC_D3, TC_CUT, TC_FLAT, TC_SCIS, TC_LIT, TC_SAME, TC_VFAST, TC_VTEX, TC_VCOL, TC_FOG, TC_ATEST, TC_BLEND, TC_NC };)
+DEV(enum { TC_VIN, TC_VOUT, TC_D3, TC_CUT, TC_FLAT, TC_SCIS, TC_LIT, TC_SAME, TC_VFAST, TC_VTEX, TC_VCOL, TC_FOG, TC_ATEST, TC_BLEND, TC_L0, TC_LPT, TC_LSP, TC_ENV, TC_NC };)
 DEV(static volatile uint32_t t_v[4], t_c[TC_NC];)
 static uint32_t t_seen[TN];   // times each reason was seen (the first one is logged in detail)
 typedef struct { float x, y, z, w, u, v, f; uint32_t c; } TV;  // translated vertex (32 bytes, the nd_v format); f: fog (1: none)
@@ -1010,7 +1010,9 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
       DEV(failNote(f, i, res);)
       break;
     }
-    DEV(t_v[1] += now() - tm; t_c[TC_VIN] += d->n; t_c[TC_D3] += w3d; t_c[TC_LIT] += w3d && t3.lit ? d->n : 0;
+    DEV(if (w3d && t3.lit) for (int i = 0; i < 4; i++) if (t3.l[i].on) { t_c[TC_L0] += d->n; t_c[TC_LPT] += t3.l[i].type ? d->n : 0; t_c[TC_LSP] += t3.l[i].comp == 1 ? d->n : 0; }
+        t_c[TC_ENV] += w3d && t3.gen == 2 ? d->n : 0;
+        t_v[1] += now() - tm; t_c[TC_VIN] += d->n; t_c[TC_D3] += w3d; t_c[TC_LIT] += w3d && t3.lit ? d->n : 0;
         t_c[TC_SCIS] += w3d && (sc[0] > 0 || sc[1] > 0 || sc[2] < W || sc[3] < H); t_c[TC_FLAT] += !(clr & 1) && !(RE(e, 0x50) & 1);
         uint32_t nb = n;)
     if (nv + n > TV_N) { res = T_LIMIT; break; }
@@ -1028,7 +1030,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     if (tex && d->toff && (1u << (RE(e, 0xB8) & 15)) < tw) {
       uint32_t k = trNarrow(&t, f->tx + d->toff - 1, RE(e, 0xC3) & 15, tw, 1u << (RE(e, 0xB8) & 15), th, w, n, pal + np, TP_B / 4 - np);
       if (k == ~0u) { res = T_LIMIT; break; }
-      np += k; keep = !k;
+      np += k; keep = !k; same = same && !k;  // (narrowed: the texture in the context is no longer this one)
     }
     uint32_t gy = clr & 1 ? 0 : grayFix(e);
     if (gy) for (uint32_t j = 0; j < n; j++) {
