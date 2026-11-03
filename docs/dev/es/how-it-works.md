@@ -86,7 +86,7 @@ ocupa, NativeLink queda apagado. La Vita la ve en `0x68000000 + (dirección & 0x
 | 0x400 + 8·k | PSP | anillo de 4096 eventos de 32 bytes: tipo \| dato << 8, a, b, c, hora del PSP, orden, extra |
 
 Eventos: 1 encolar, 2 encolar al frente, 3 stall, 4 DrawSync, 5 ListSync, 6 flip, 7 fin de un tramo del GE (T6), 8 fin
-de un sync, 9 escritura de la CPU (T4), 10 resumen de T4, 11 costo del frame para el juego, 12 vida de la lista.
+de un sync, 9 escritura de la CPU (T4), 10 resumen de T4, 11 costo del frame para el juego, 12 vida de la lista, 13 resto del reparto del frame (nivel extremo).
 
 La disposición es la misma en compilación de desarrollo y de producción (`NP_DEV`, `logs-and-switches.md`). En producción
 quedan sin usar: `SB[0x47]`, los bits 4 y 8 de 0x4A y los eventos 7, 8, 9, 10 y 12.
