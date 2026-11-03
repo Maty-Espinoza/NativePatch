@@ -1218,8 +1218,13 @@ static void event(volatile uint32_t *e) {
     }
     // closes the frame record (a: displayed image, b: width | format << 16)
     DEV(uint32_t tp = PT();)
+    // Lists still queued: this frame misses their draws and the next starts with what is left of them, so neither is
+    // drawn. A record marked incomplete stops copying, which is what lets the capturer catch up.
+    int behind = qh != qt;
+    if (behind) regLost();
     if (reg_on) { regFlip(a, b, f_draws); reg_big = f_draws > RD_N; }
-    DEV(if (tp) { PA(P_C_FLIP, tp); pAdd(P_L_CLOSE, now() - p_flip); pAdd(P_C_TOTAL, f_us); pAdd(P_C_DRAW, p_draw); p_draw = 0; })
+    if (behind) regLost();
+    DEV(if (tp) { PA(P_C_FLIP, tp); if ((int)(now() - p_flip) > 0) pAdd(P_L_CLOSE, now() - p_flip); pAdd(P_C_TOTAL, f_us); pAdd(P_C_DRAW, p_draw); p_draw = 0; })
     acc.frames++;
     if (qh != qt) acc.flips_behind++;
     if (f_cmds > acc.cmds_max) acc.cmds_max = f_cmds;
