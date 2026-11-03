@@ -45,6 +45,7 @@ int (*_sceGeListUpdateStallAddr)(int qid, void *stall);
 int (*_sceGeListEnQueue)(const void *list, void *stall, int cbid, PspGeListArgs *arg);
 int (*_sceGeListEnQueueHead)(const void *list, void *stall, int cbid, PspGeListArgs *arg);
 int (*_sceDisplaySetFrameBuf)(void *topaddr, int bufferwidth, int pixelformat, int sync);
+u32 (*_sceGeGetCmd)(int cmd);
 
 // --- Mailbox shared with NativeDraw ----------------------------------------------------------------------------------
 // The game runs as if without plugin (real VRAM, lists untouched; Adrenaline shows its image). The hooks only note
@@ -52,6 +53,7 @@ int (*_sceDisplaySetFrameBuf)(void *topaddr, int bufferwidth, int pixelformat, i
 // 32-bit words at 0x0A000000 (zone reserved for the plugins, see zoneCheck), uncached:
 //   SB[0] "SOMB"  SB[1] version  SB[2] events written (PSP)  SB[3] last list captured (Vita, sequence number)
 //   SB[4] Vita heartbeat  SB[5] events read (Vita)  SB[6] lists enqueued (PSP)
+//   SB[0xA0] number of the GE register snapshot in SB[0x100 + cmd] (0 while writing it)
 //   SB[0x400] ring of SB_N 8-word events: type | datum << 8, a, b, c, PSP time (us), list sequence number
 //   (enqueues only) or extra (EV_FRAME, 3 words)
 // EV_FRAME (before each EV_FLIP), what each part costs the game in the frame: datum = waits at the gate |
@@ -548,6 +550,11 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
       memset(&fr, 0, sizeof(fr));
       if (SB[0x4E] >= 1) sbPost(EV_FRAME, gn | nw << 8, fd, gu, su); // (the cost of this sbPost goes to the next frame)
     }
+    if (_sceGeGetCmd && !(log_frame & 31)) { // real GE registers: NativeDraw takes those no list it read has set
+      SB[0xA0] = 0;
+      for (int i = 0x15; i < 256; i++) SB[0x100 + i] = _sceGeGetCmd(i);
+      SB[0xA0] = log_frame + 1;
+    }
     sbPost(EV_FLIP, 0, (u32)topaddr, bufferwidth | pixelformat << 16, log_frame);
   }
   // Every distinct buffer the game displays
@@ -662,6 +669,7 @@ int module_start(SceSize args, void *argp) {
   _sceGeDrawSync = (void *)FindProc("sceGE_Manager", "sceGe_driver", 0xB287BD61);
   _sceGeListSync = (void *)FindProc("sceGE_Manager", "sceGe_driver", 0x03444EB4);
   _sceDisplaySetFrameBuf = (void *)FindProc("sceDisplay_Service", "sceDisplay_driver", 0x289D82FE);
+  _sceGeGetCmd = (void *)FindProc("sceGE_Manager", "sceGe_driver", 0xDC93CFEF);
   if (!_sceGeListUpdateStallAddr || !_sceGeListEnQueue || !_sceGeListEnQueueHead || !_sceGeDrawSync || !_sceGeListSync ||
       !_sceDisplaySetFrameBuf) {
     LOG("ERROR: a GE or display function was not found: NativeLink hooks nothing\n");

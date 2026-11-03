@@ -222,7 +222,7 @@ typedef struct Memo Memo;
 static Memo *rec;  // sublist being recorded (sublist memory)
 static void recDraw(int idx, int tex), recTex(uint32_t ta), recRead(uint32_t c), recVert(uint32_t a, uint32_t n);
 static uint32_t reg[256], mtx[5][96], mi[5];
-static uint8_t cls[256];  // state class of each command (C_*; 0: not state)
+static uint8_t cls[256], seen[256];  // state class of each command (C_*; 0: not state); commands read in a list
 enum { C_TEX = 1, C_MTX = 2, C_RT = 4, C_OTHER = 8, C_TL = 16 };  // C_TL: TEXLEVEL (0xC8), a separate "other"
 static uint32_t dirty, vaddr, iaddr, vset, last_prim = 99, last_vend, last_fb;
 // Textures seen in the frame (hash table: tgen == gen marks a slot used in this frame); gen: frame number
@@ -872,7 +872,7 @@ static int __attribute__((noinline)) walkList(List *l) {
     }
     default:
       if (cls[c] && reg[c] != d) { dirty |= cls[c]; if (cls[c] & (C_OTHER | C_TL)) acc.chg[c]++; }
-      reg[c] = d; TOUCH(c);
+      reg[c] = d; seen[c] = 1; TOUCH(c);
     }
     if (--k == 0 || l->pc != pc + 4 || l->sp != sp0 || R0.a != ba || R0.n != bn) break;  // end of line or jump
     pc += 4; op = R0.buf[++i];
@@ -1151,6 +1151,15 @@ static void event(volatile uint32_t *e) {
     if ((pfr[1] >= 4500 || f_us >= 33000) && late_n < 400) { late_n++; clog("late frame %u: gate %u us, capture %u us, draws %u\n", gen, pfr[1], f_us, f_draws); }
     sceClibMemset(pfr, 0, sizeof pfr);
 #endif
+    // registers no list set (the game set them before the capture could read them) come from NativeLink's snapshot
+    static uint32_t snap;
+    if (SB[0xA0] && SB[0xA0] != snap) {
+      snap = SB[0xA0];
+      for (int i = 0x15; i < 256; i++) if (cls[i] && !seen[i] && reg[i] != (SB[0x100 + i] & 0xFFFFFF)) {
+        reg[i] = SB[0x100 + i] & 0xFFFFFF;
+        clog("register %02x comes from the snapshot: %06x\n", i, reg[i]);
+      }
+    }
     // closes the frame record (a: displayed image, b: width | format << 16)
     if (reg_on) { regFlip(a, b, f_draws); reg_big = f_draws > RD_N; }
     acc.frames++;
