@@ -14,7 +14,7 @@ enum {
   P_F_COMPLETE, P_F_UNTAKEN, P_F_NOREC, P_F_BEHIND, P_F_DRAWN, P_F_REPEAT, P_F_NORMAL,  // what happened to the frames
   P_G_ADR, P_G_NORM, P_G_TR, P_G_INT,  // GPU, in the order of gpu_timer.c (gpu_timer switch)
   P_U_CAP, P_U_REC, P_U_GFX, P_U_RD0, P_U_RD1, P_U_FREE0, P_U_FREE1, P_U_FREE2,  // processor received per second
-  P_X_STUCK, P_X_QUEUE, P_X_VERT, P_X_DRAWS, P_X_STATES, P_X_TEX,  // fixed limits reached (count only)
+  P_X_STUCK, P_X_QUEUE, P_X_LATE, P_X_NOEND, P_X_VERT, P_X_DRAWS, P_X_STATES, P_X_TEX,  // fixed limits reached (count only)
   PN
 };
 typedef struct { volatile uint32_t n, us, max; } PStage;

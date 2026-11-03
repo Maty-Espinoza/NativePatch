@@ -894,6 +894,7 @@ static int __attribute__((noinline)) walkList(List *l) {
 }
 
 static uint32_t capt;  // sequence number of the last captured list
+static uint32_t sync_seen, fin_ord;  // last list a sync waited on; the same as of the last flip (the GE finished it)
 
 #ifdef NP_DEV
 // --- Delays (extreme level) ---
@@ -1058,7 +1059,11 @@ static void walk(void) {
     if (l->ord != pub_ord) { pubList(l); recAbort(); chk = NULL; }
     DEV(if (!l->t_start) { l->t_start = now() | 1; l->own0 = R0.own; l->hit0 = R0.hits; l->memo0 = acc.memo_hit; l->cpu0 = level >= 2 ? runClk(cap_uid) : 0; })
     DEV(uint32_t tw = now();)
-    int finish = walkList(l);
+    // The game went past the sync of this list: at 2 frames behind its memory is being reused, so the rest is dropped; at
+    // its stall with no END, the GE did find one, later overwritten. Either way nothing more will come from it.
+    int past = fin_ord - l->ord, late = past >= 2, finish = late || walkList(l);
+    int no_end = !finish && past >= 0 && l->stall && l->pc == l->stall;
+    if (late || no_end) { finish = 1; acc.aborted++; regLost(); DEV(if (p_on) pAdd(late ? P_X_LATE : P_X_NOEND, 0);) }
     DEV(l->work += now() - tw;)
     DEV(if (!finish) stuckNote(l);)
     if (!finish) return;
@@ -1068,7 +1073,7 @@ static void walk(void) {
     if (reg_on) rgVFlush();
     capt = l->ord; SB[3] = capt; qh++; acc.lists++;
     DEV(listDone(l);)
-    DEV(if (p_on) { uint32_t tl = now(); pAdd(P_L_LIST, tl - (l->t_enq + off)); pAdd(P_C_WORK, l->work); pAdd(P_C_STALL, tl - l->t_start - l->work); })
+    DEV(if (p_on) { uint32_t tl = now(); if ((int)(tl - (l->t_enq + off)) > 0) pAdd(P_L_LIST, tl - (l->t_enq + off)); pAdd(P_C_WORK, l->work); pAdd(P_C_STALL, tl - l->t_start - l->work); })
   }
 }
 
@@ -1133,12 +1138,14 @@ static void event(volatile uint32_t *e) {
         break;
       }
   } else if (t == EV_DSYNC) {
+    sync_seen = c;
     DEV(syncSeen(c, e[4] - (a & ~1u), a & ~1u, 'd'); sync_ord_v = c;)
     DEV(gap.t_sync = e[4];)  // c: the last queued list; e[4]: after the gate (the GE wait comes later)
     acc.syncs++;
     if (a) { acc.syncs_waited++; acc.sync_wait_us += a & ~1u; }
     if (qh != qt) acc.behind++;
   } else if (t == EV_LSYNC) {
+    for (uint32_t i = qt; i != qh; i--) if (q[(i - 1) & 63].qid == a) { sync_seen = q[(i - 1) & 63].ord; break; }
     DEV(syncSeen(lastOrdOf(a), e[4] - (b & ~1u), b & ~1u, 'l'); sync_ord_v = lastOrdOf(a);)
     acc.lsyncs++;
 #ifdef NP_DEV
@@ -1174,6 +1181,7 @@ static void event(volatile uint32_t *e) {
 #endif
   } else if (t == EV_FLIP) {
     DEV(p_flip = e[4] + off;)
+    fin_ord = sync_seen;
     uint32_t t0 = now(), c0 = acc.cmds;  // what was queued before the flip is walked before closing the frame
     walk();
     if (acc.cmds != c0) { uint32_t dt = now() - t0; acc.us += dt; f_us += dt; }
@@ -1387,7 +1395,7 @@ static void profLog(const Stats *r) {
     "period", "adrenaline_end", "image_dma", "checks", "wait_gpu", "presenter", "check", "textures", "vertices", "gxm", "scenes", "all", "end_scene",
     "complete", "not_taken", "no_record", "gpu_behind", "drawn", "repeated", "normal",
     "adrenaline", "normal_image", "surface", "intermediate", "capture", "record", "adrenaline", "reader0", "reader1", "free0", "free1", "free2",
-    "stuck", "queue_full", "record_bytes", "record_draws", "record_states", "record_textures" };
+    "stuck", "queue_full", "list_skipped", "list_no_end", "record_bytes", "record_draws", "record_states", "record_textures" };
   static const struct { const char *g; int k0; } G[] = { { "psp", P_FRAME }, { "capture", P_C_TOTAL }, { "record", P_R_MIRROR }, { "latency", P_L_CLOSE },
     { "adrenaline", P_A_PERIOD }, { "translator", P_T_CHECK }, { "frames", P_F_COMPLETE }, { "gpu", P_G_ADR }, { "cpu", P_U_CAP }, { "limits", P_X_STUCK }, { 0, PN } };
   static PStage l[PN];
