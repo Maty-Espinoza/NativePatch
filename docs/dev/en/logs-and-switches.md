@@ -126,6 +126,28 @@ v13.12: the memory line adds `| lookahead/f: plan= checked= not_equal= late=` (t
   (us each)`. The total wait per frame is still in `gate_us` (at the sync or before enqueuing).
 - Extreme: `nativedraw_late.log` also notes the waits before enqueuing, with type `e`.
 
+## Frame profile (development builds, extreme level; `nativedraw/prof.h`)
+Follows one frame through every piece. Once per second `nativedraw_capture.log` gets `prof <group>:` lines, with
+`name=count/average_us/max_us`. `python3 tools/prof_summary.py <run> [from_s to_s]` ranks them; a stretch of the run can be
+chosen. For the whole picture also turn on `gpu_timer` (GPU) and `ge_timing` (GE). All of this lowers the fps: use it to compare
+pieces, not as real speed. Compare with `draw` set to `no` to separate capturing from drawing.
+
+| Group | What it shows |
+|---|---|
+| `psp` | The game's frame: `game` (its own work) + `vblank` (free time) + `gate`, `sync_ge`, `mirror_cpu`, `hooks`; `ge_busy` (needs `ge_timing`). `ge_mirror` reads 0 and is not reliable |
+| `capture` | Capturer per frame; `draw`, `record` and `rec_*` are estimated from 1 draw in 8, `read_*` from sampled reads. `list_work` and `list_at_stall`: work and wait for the game, per list |
+| `record` | Record thread: `wait_mirror`, `copy_vram` |
+| `latency` | `flip_to_closed`, `flip_to_published`, `published_to_taken`, `enqueued_to_captured` |
+| `adrenaline` | Its drawing thread: `period` (16.7 ms at 60 fps), `presenter` (what we add), `image_dma`, `wait_gpu`, `checks` |
+| `translator` | `check`, `textures`, `vertices`, `gxm`, `scenes`, `end_scene`, `all`. A frame refused by the check is not in `all` |
+| `frames` | `complete`, `not_taken`, `no_record`, `gpu_behind`, `drawn`, `repeated`, `normal` |
+| `gpu` | Time per scene type (needs `gpu_timer`) |
+| `cpu` | Processor received per second by each thread; `free0-2`: what each core has left (lowest-priority threads) |
+| `limits` | Times a fixed limit was reached: `stuck`, `queue_full`, `list_skipped`, `list_no_end`, `record_*` |
+
+`stuck:` lines (first 60): a list with no progress for 50 ms and newer lists waiting. NativeLink's `stats frame` line (every 10 s) gives vblank,
+all the time in hooks, lists, GE busy.
+
 ## Extreme level files
 - `nativedraw_frames.log` (CSV, one line per game frame): `frame_us`, `gate_us` (wait for the Vita), `waits`,
   `no_wait`, `sync_GE_us` (wait for the GE inside the sync), `cpu_idle_x1000`, `mirror_us` / `mirror_pages`,
