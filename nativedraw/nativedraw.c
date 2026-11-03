@@ -47,7 +47,7 @@ static void aFlush(void) {  // moves what the ring holds to the file
   __sync_lock_release(&flock);
 }
 void alog(const char *fmt, ...) {
-  if (nlog++ > 1000) return;
+  if (nlog++ > 4000) return;
   char b[512];
   va_list ap; va_start(ap, fmt);
   int n = sceClibSnprintf(b, 16, "%7u ", sceKernelGetProcessTimeLow() / 1000);

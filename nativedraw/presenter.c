@@ -359,6 +359,7 @@ static int hookEnd(SceGxmContext *c, const SceGxmNotification *v, const SceGxmNo
         // The Vita drawing shows one frame behind the normal image, so an HD frame among frames that are not drawable
         // looks like a jump back: HD only resumes once the frames have been drawable for a whole second; until then
         // they are only checked (held back)
+        DEV(if (p_on) trCensus(rg);)
         uint32_t t1 = now(), dp, od;
         int chk = t1 - t_bad < 1000000 && t_frame != ~0u, r = chk ? trCheckFrame(rg, &dp, &od) : trFrame(c, rg, s, src);
         if (chk && !r) r = T_HOLD;
@@ -599,6 +600,7 @@ static int presThread(SceSize args, void *argp) {
       alog("translator: pace (PSP frames advanced per drawn frame): 0 (repeated) %u, 1 %u, 2 %u, 3 %u, 4 %u, 5 or more %u\n",
            t_skip[0], t_skip[1], t_skip[2], t_skip[3], t_skip[4], t_skip[5]);
       sceClibMemset((void *)t_skip, 0, sizeof t_skip);
+      DEV(if (p_on) trCensusLog();)
     }
     if (gq_done) {  // scene end on the GPU
       uint32_t an = g_an, as = g_asum, am = g_amax, f1 = g_f1, f2 = g_f2, ps = g_psurf, pi = g_pimg;

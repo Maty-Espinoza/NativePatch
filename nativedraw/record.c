@@ -11,6 +11,12 @@
 static void clog(const char *fmt, ...);
 #include "record.h"
 enum { R_MEMO = 1, R_READ = 2, R_LIMIT = 4, R_CURVE = 8 };
+#ifdef NP_DEV
+// Why a frame stayed not_read (the first cause of each frame): names for the "record not_read:" log line
+enum { NR_VERT, NR_SWZ, NR_TEX, NR_X_USED, NR_X_FORM, NR_X_TEX, NR_COUNT, NR_LIST_PC, NR_LIST_MAX, NR_CALL, NR_DEPTH, NR_LATE, NR_NO_END, NR_RESET, NR_BEHIND, NR_BEHIND_NEXT, NR_N };
+static const char *nr_names[NR_N] = { "vertices", "swizzle_width", "texture", "xfer_over_texture", "xfer_form", "xfer_source", "draws_missed", "list_unreadable",
+  "list_too_long", "call_no_copy", "call_too_deep", "list_late", "list_no_end", "queue_reset", "behind", "after_behind" };
+#endif
 // Per-second statistics for the "record:" log line (ga accumulates, gr is the copy being written; us_*: time for
 // states, vertices, textures, palettes and DMA copies; gpu: textures written to a record the GPU could be reading;
 // o_b/us_o: swizzled bytes sorted and their time, included in us_l). t_*: "texturas:" line (rgTexCopy): copies, bytes,
@@ -20,7 +26,7 @@ enum { R_MEMO = 1, R_READ = 2, R_LIMIT = 4, R_CURVE = 8 };
 // per frame
 static struct { uint32_t fr, ok, memo, rd_fail, limit, curve, draws, st, kb, cl, us, d3, clear, blend, atest, swz, fmt[16], us_e, us_v, us_t, us_p, t_b, us_l, stomped, n_late, gpu, o_b, us_o,
   t_n[2], t_kb[2], t_dma[2], t_ord[2], t_calls, t_size[5], t_rb[6], v_dma, v_kb, v_runs, v_list, v_all, t_same, t_changed, t_lines, t_tex,
-  c_hit, c_fill, c_chg, c_rec, c_fail, c_us; } ga, gr;
+  c_hit, c_fill, c_chg, c_rec, c_fail, c_us DEV(, nr[16]); } ga, gr;
 // RN records: with fewer, the one the GPU just read would at times be the only free one, overwriting its textures
 #define RN 4
 static RFrame *rf[RN];                       // (cached LPDDR + uncached textures: ~2.4 MB each)
@@ -305,6 +311,18 @@ static void regBench(void) {
   clog("memory bench (MB/s): PSP RAM->cached %u, PSP RAM->uncached (DMA) %u, cached->uncached %u, "
        "uncached->cached %u, uncached->uncached (DMA) %u, cached->cached %u\n", t[0], t[1], t[2], t[3], t[4], t[5]);
 }
+#ifdef NP_DEV
+static void clog(const char *fmt, ...);
+// Counts cause k of frame f if it is the first, and logs the first 6 of each cause with two values that help find it
+static void rgWhy(RFrame *f, int k, uint32_t a, uint32_t b) {
+  static uint32_t seen[NR_N];
+  if (f->flags & R_READ) return;
+  ga.nr[k]++;
+  if (seen[k]++ < 6) clog("record: not_read %s at frame %u: %08x %08x\n", nr_names[k], gen, a, b);
+}
+#endif
+// Marks the frame being written as not read, for reason k (a, b: its detail in development builds)
+#define RG_READ(k, a, b) do { DEV(rgWhy(rf[rg_w], k, a, b);) rf[rg_w]->flags |= R_READ; } while (0)
 // Copies [a, a + n) of PSP memory to the record's area a (aligned to 16), 4 KB page at a time because VRAM is
 // translated to the mirror per page. Returns offset + 1; 0 if it does not fit (R_LIMIT) or cannot be read (R_READ).
 static uint32_t rgCopy(uint32_t a, uint32_t n) {
@@ -314,7 +332,7 @@ static uint32_t rgCopy(uint32_t a, uint32_t n) {
   for (uint32_t k = 0; k < n;) {
     uint32_t s = vtr(a + k), m = 4096 - ((a + k) & 4095);
     if (m > n - k) m = n - k;
-    if (!s || ramEnd(s) < s + m) { f->flags |= R_READ; return 0; }
+    if (!s || ramEnd(s) < s + m) { RG_READ(NR_VERT, a + k, m); return 0; }
     sceClibMemcpy(f->a + o + k, (const void *)PSP(s), m);
     k += m;
   }
@@ -408,7 +426,7 @@ static uint32_t rgTex(uint32_t r0, uint32_t r1) {
   uint32_t fmt = reg[0xC3] & 15, ta = TEXADDR(), tbw = reg[0xA8] & 0x7FF, th = 1u << ((reg[0xB8] >> 8) & 15), swz = reg[0xC2] & 1;
   if (fmt > 5 || !tbw || th > 512) return 0;
   uint32_t rb = tbw * bp[fmt] / 8, n = rb * (swz && th < 8 ? 8 : th), key = n | swz << 31, i, vr = isVram(ta);
-  if (swz && (rb & 15)) { f->flags |= R_READ; return 0; }
+  if (swz && (rb & 15)) { RG_READ(NR_SWZ, ta, rb); return 0; }
   if (r1 > th || r0 >= r1) r0 = 0, r1 = th;
   for (i = f->nt; i > 0 && !(f->ta[i - 1] == ta && f->tn[i - 1] == key); i--) {}  // (the latest entry of this address)
   i = i ? i - 1 : f->nt;
@@ -442,11 +460,11 @@ static uint32_t rgTex(uint32_t r0, uint32_t r1) {
     while (h < g1 && !(f->tm[i] >> h & 1)) h++;  // span of uncopied groups [g, h)
     uint32_t o = g * gb, m = (h * gb > n ? n : h * gb) - o;
     // From VRAM: copied later (regPend)
-    if (vr) { if (!rgSrc(ta + o, m)) { f->flags |= R_READ; return 0; } f->dv = 1; }
+    if (vr) { if (!rgSrc(ta + o, m)) { RG_READ(NR_TEX, ta + o, m); return 0; } f->dv = 1; }
     else {  // from RAM: now (the game may change it), by DMA
       uint32_t sa = rgSrc(ta + o, m), t0 = now();
       if (!e) rgGpu(rg_w, "from RAM");
-      if (!sa) { f->flags |= R_READ; return 0; }
+      if (!sa) { RG_READ(NR_TEX, ta + o, m); return 0; }
       rgTexCopy(f->tx + f->to[i] + o, (const void *)PSP(sa), m, swz ? rb : 0, ta + o, e ? -1 : rg_w, rg_ord);
       if (e) rcNote(e, g, h);
       ga.t_b += m; ga.us_l += now() - t0;
@@ -640,7 +658,7 @@ static void regCurve(void) { rf[rg_w]->flags |= R_CURVE; rf[rg_w]->draws_seen++;
 static void regMemo(uint32_t draws) { if (draws) { rf[rg_w]->flags |= R_MEMO; rf[rg_w]->draws_seen += draws; } }
 // Part of the frame's commands will never be walked (lost events, cut list): its draws are not even counted, so the
 // frame stays incomplete here.
-static void regLost(void) { if (reg_on) rf[rg_w]->flags |= R_READ; }
+#define regLost(k, a) do { if (reg_on) RG_READ(k, a, 0); } while (0)
 // (capturer, command 0xEA) TRANSFER from s to t, bp bytes per pixel. On the image being drawn the HD surface would lose
 // it: it goes in the frame as a draw, a rectangle with no blending whose texture is the source (RAM: copied now; VRAM:
 // from the flip's mirror). A VRAM texture the frame already used, or a copy over itself, would be read with the content
@@ -652,11 +670,11 @@ static void regXfer(uint32_t s, uint32_t t, uint32_t bp) {
   uint32_t sa = (s + r) & ~15u, u = sx + ((s + r) & 15) / bp, da = t + dy * dw * bp, sn = h * sw * bp, dn = h * dw * bp;
   if (!isVram(t)) { rcInval(da, dn); return; }
   for (uint32_t i = 0; i < f->nt; i++)
-    if (isVram(f->ta[i]) && f->ta[i] < da + dn && da < f->ta[i] + (f->tn[i] & 0x7FFFFFFF)) f->flags |= R_READ;
+    if (isVram(f->ta[i]) && f->ta[i] < da + dn && da < f->ta[i] + (f->tn[i] & 0x7FFFFFFF)) RG_READ(NR_X_USED, da, f->ta[i]);
   uint32_t st = reg[0x9D] & 0x7FF, fbp = (reg[0xD2] & 3) == 3 ? 4 : 2, o = (t & 0x1FFFFF) - (reg[0x9C] & 0x1FFFF0);
   if (o >= st * fbp * ((reg[0xD5] >> 10 & 0x3FF) + 1)) return;  // not on the image being drawn: the mirror has it
   if (isVram(s)) want(sa, sn, 0);
-  if (dw != st || bp != fbp || h > 512 || !sw || (isVram(s) && sa < da + dn && da < sa + sn)) f->flags |= R_READ;
+  if (dw != st || bp != fbp || h > 512 || !sw || (isVram(s) && sa < da + dn && da < sa + sn)) RG_READ(NR_X_FORM, sa, da);
   if (f->flags) return;
   if (f->nd >= RD_N || f->ne >= RE_N || ((f->na + 15) & ~15u) + 32 > RA_N) { f->flags |= R_LIMIT; return; }
   dx += o / fbp % st; dy += o / fbp / st;
@@ -672,7 +690,7 @@ static void regXfer(uint32_t s, uint32_t t, uint32_t bp) {
   toff = rgTex(0, h);
   uint32_t e[NRS];
   for (int i = 0; i < NRS; i++) { e[i] = reg[RS[i]]; reg[RS[i]] = v[i]; }
-  if (!toff) { f->flags |= R_READ; return; }
+  if (!toff) { RG_READ(NR_X_TEX, sa, da); return; }
   sceClibMemcpy(f->e[f->ne++], e, sizeof e);
   uint32_t a = (f->na + 15) & ~15u, c = 0xFFFFFFFFu;
   uint16_t vx[16] = { u, 0, c, c >> 16, dx, dy, 0, 0, u + w, h, c, c >> 16, dx + w, dy + h, 0, 0 };
@@ -694,7 +712,7 @@ static void regFlip(uint32_t fb, uint32_t fbw, uint32_t draws_counted) {
   RFrame *f = rf[rg_w];
   if (!rg_thr) regPend();
   // Counted draws that did not go through regDraw
-  if (f->draws_seen < draws_counted) f->flags |= R_READ;
+  if (f->draws_seen < draws_counted) RG_READ(NR_COUNT, f->draws_seen, draws_counted);
   ga.fr++; ga.us += rg_t; ga.st += f->ne; ga.kb += f->na; ga.t_tex += f->nt;
   if (f->flags & R_MEMO) ga.memo++;
   if (f->flags & R_READ) ga.rd_fail++;

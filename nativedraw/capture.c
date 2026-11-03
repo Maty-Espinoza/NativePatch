@@ -791,7 +791,7 @@ static int __attribute__((noinline)) walkList(List *l) {
     if ((pc & ~63u) == lpc) ra = lra | (pc & 63);
     else if ((ra = vtr(pc))) { lpc = pc & ~63u; lra = ra & ~63u; }
     if (!ra) {
-      regLost();
+      regLost(NR_LIST_PC, pc);
       if (!isVram(pc)) { acc.bad++; return 1; }
       want(pc, 4, 1);
       if (!l->sp) { acc.lost++; return 1; }
@@ -801,7 +801,7 @@ static int __attribute__((noinline)) walkList(List *l) {
     // consecutive commands left in the line (1: single word)
     uint32_t k = ra - ba < bn ? (64 - (pc & 63)) >> 2 : 1;
     if (l->stall && l->stall - pc < k * 4) k = (l->stall - pc) >> 2;  // (the stall inside the line)
-    if (l->n + k > LIST_MAX) { acc.aborted++; regLost(); return 1; }
+    if (l->n + k > LIST_MAX) { acc.aborted++; regLost(NR_LIST_MAX, pc); return 1; }
     if (rec && (pc & ~63u) != rec_last) recLine(pc & ~63u, ra & ~63u);
     uint32_t sp0 = l->sp, top = !sp0 && !isVram(pc);  // top level in RAM: lo/hi range for the list lifetime
     if (top && pc < l->lo) l->lo = pc;
@@ -819,7 +819,7 @@ static int __attribute__((noinline)) walkList(List *l) {
     case 0x08: case 0x0A: {
       uint32_t t = rel(l, d & 0xFFFFFC);
       if (!vtr(t)) {  // in VRAM without copy in the mirror (yet) or invalid
-        regLost();
+        regLost(NR_CALL, t);
         if (!isVram(t)) { acc.bad++; return 1; }
         want(t, 4096, 1);  // its page and the next: from the next frame on it is walked from the mirror
         if (c == 0x0A) { acc.vcalls++; break; }  // skipped
@@ -829,7 +829,7 @@ static int __attribute__((noinline)) walkList(List *l) {
       }
       if (c == 0x0A && isVram(t)) acc.v_ok++;
       if (c == 0x0A) {
-        if (l->sp >= 32) { acc.bad++; regLost(); return 1; }
+        if (l->sp >= 32) { acc.bad++; regLost(NR_DEPTH, pc); return 1; }
         acc.calls_ram++;
         // sample for the list lifetime
         if (!l->sp && l->nsub < 16 && !(l->ncall & 7) && !isVram(t)) l->subs[l->nsub++] = t;
@@ -1063,7 +1063,7 @@ static void walk(void) {
     // its stall with no END, the GE did find one, later overwritten. Either way nothing more will come from it.
     int past = fin_ord - l->ord, late = past >= 2, finish = late || walkList(l);
     int no_end = !finish && past >= 0 && l->stall && l->pc == l->stall;
-    if (late || no_end) { finish = 1; acc.aborted++; regLost(); DEV(if (p_on) pAdd(late ? P_X_LATE : P_X_NOEND, 0);) }
+    if (late || no_end) { finish = 1; acc.aborted++; regLost(late ? NR_LATE : NR_NO_END, l->pc); DEV(if (p_on) pAdd(late ? P_X_LATE : P_X_NOEND, 0);) }
     DEV(l->work += now() - tw;)
     DEV(if (!finish) stuckNote(l);)
     if (!finish) return;
@@ -1080,7 +1080,7 @@ static void walk(void) {
 // Empties the queue (lost events or mailbox reset): everything queued so far counts as captured
 static void resetQueue(void) {
   qh = qt = 0;
-  regLost();
+  regLost(NR_RESET, 0);
   capt = SB[6]; SB[3] = capt;  // what was lost counts as captured
 }
 
@@ -1221,9 +1221,9 @@ static void event(volatile uint32_t *e) {
     // Lists still queued: this frame misses their draws and the next starts with what is left of them, so neither is
     // drawn. A record marked incomplete stops copying, which is what lets the capturer catch up.
     int behind = qh != qt;
-    if (behind) regLost();
+    if (behind) regLost(NR_BEHIND, qt - qh);
     if (reg_on) { regFlip(a, b, f_draws); reg_big = f_draws > RD_N; }
-    if (behind) regLost();
+    if (behind) regLost(NR_BEHIND_NEXT, qt - qh);
     DEV(if (tp) { PA(P_C_FLIP, tp); if ((int)(now() - p_flip) > 0) pAdd(P_L_CLOSE, now() - p_flip); pAdd(P_C_TOTAL, f_us); pAdd(P_C_DRAW, p_draw); p_draw = 0; })
     acc.frames++;
     if (qh != qt) acc.flips_behind++;
@@ -1455,6 +1455,11 @@ static int repThread(SceSize args, void *argp) {
       if (reg_on) {  // frame record
         uint32_t g = gr.fr ? gr.fr : 1, dd = gr.draws ? gr.draws : 1;
         clog("  3D vertices (per frame): runs %u, by DMA %u (%u KB read) | draws %u, near the list %u\n", gr.v_runs / g, gr.v_dma / g, gr.v_kb / g >> 10, gr.v_all / g, gr.v_list / g);
+#ifdef NP_DEV
+        char nb[300]; int nk = 0;
+        for (int i = 0; i < NR_N; i++) if (gr.nr[i]) nk += sceClibSnprintf(nb + nk, sizeof nb - nk, " %s=%u", nr_names[i], gr.nr[i]);
+        if (nk) clog("  record not_read:%s\n", nb);
+#endif
         clog("  record: frames=%u complete=%u incomplete: memory=%u not_read=%u limit=%u curves=%u | per frame: draws=%u states=%u KB=%u palettes=%u us=%u (states %u vertices %u textures %u [copied %u KB by DMA in %u us, of them swizzled %u KB sorted in %u us; pending lost %u, without the copy of their flip %u, with the GPU unfinished (measured) %u] palettes %u) | of the draws: 3d=%u%% clear=%u%% blend=%u%% alpha_test=%u%% swizzle=%u%% | draws per sec with texture 5650/5551/4444/8888/T4/T8/T16/T32/DXT1/3/5: %u %u %u %u %u %u %u %u %u %u %u\n",
              gr.fr, gr.ok, gr.memo, gr.rd_fail, gr.limit, gr.curve, gr.draws / g, gr.st / g, gr.kb / g >> 10, gr.cl / g, gr.us / g,
              gr.us_e / g, gr.us_v / g, gr.us_t / g, gr.t_b / g >> 10, gr.us_l / g, gr.o_b / g >> 10, gr.us_o / g, gr.stomped, gr.n_late, gr.gpu, gr.us_p / g,

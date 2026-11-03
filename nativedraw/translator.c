@@ -666,6 +666,80 @@ static int trCheckFrame(RFrame *f, uint32_t *disp_p, uint32_t *ord_p) {
   return T_OK;
 }
 
+#ifdef NP_DEV
+// Census of a frame (extreme log level): looks at all its draws, not only up to the first problem. Every 10 s it
+// counts: frames with each reason, what the textures with no copy are, and the distinct chains of images. A chain is the
+// frame's draws grouped in runs: target, how many draws, whether they use depth and which image they read.
+enum { TC_SHOWN, TC_FORMAT, TC_SELF, TC_INSIDE, TC_UNKNOWN, TC_N };
+static const char *cnames_tex[TC_N] = { "shown_image", "other_format", "itself", "inside_an_image", "unknown" };
+static uint32_t cs_fr, cs_r[TN], cs_tex[TC_N], cs_many, cs_wide, cs_sig[48], cs_cnt[48], cs_nsig;
+static void trCensus(RFrame *f) {
+  typedef struct { uint32_t fb, w, psm, end; } TG;
+  typedef struct { uint32_t fb, w, psm, n, z, ta, fmt; } RN;
+  static RN run[32];
+  TG tg[8];
+  uint32_t disp = f->fb & 0x1FFFF0, ntg = 0, nrun = 0, mask = 0, tmask = 0, n_disp = 0, wide = 0;
+  for (uint32_t i = 0; i < f->nd; i++) n_disp += (RE(f->e[f->d[i].st], 0x9C) & 0x1FFFF0) == disp;
+  if (!n_disp && f->nd) disp = RE(f->e[f->d[f->nd - 1].st], 0x9C) & 0x1FFFF0;
+  for (uint32_t i = 0; i < f->nd; i++) {
+    RDraw *d = &f->d[i];
+    const uint32_t *e = f->e[d->st];
+    uint32_t fb = RE(e, 0x9C) & 0x1FFFF0, w = RE(e, 0x9D) & 0x7FF, psm = RE(e, 0xD2) & 3, ta = 0, fmt = 0, k;
+    int r = trCheck(f, d);
+    if (r) mask |= 1u << r;
+    wide |= w > 512;
+    for (k = 0; k < ntg && tg[k].fb != fb; k++) {}
+    if (k == ntg && ntg < 8) { tg[ntg].fb = fb; tg[ntg].w = w; tg[ntg].psm = psm; tg[ntg++].end = fb + w * (psm == 3 ? 4 : 2) * ((RE(e, 0xD5) >> 10 & 0x3FF) + 1); }
+    if (hasTex(e, d) && !d->toff) {
+      int c = TC_UNKNOWN;
+      ta = texAddr(e); fmt = RE(e, 0xC3) & 15;
+      uint32_t o = ta & 0x1FFFF0;
+      for (uint32_t j = 0; j < ntg; j++)
+        if (o >= tg[j].fb && o < tg[j].end) {
+          c = o != tg[j].fb ? TC_INSIDE : fmt != tg[j].psm ? TC_FORMAT : o == disp ? TC_SHOWN : tg[j].fb == fb ? TC_SELF : TC_N;
+          break;
+        }
+      if (c < TC_N) tmask |= 1u << c;
+    }
+    RN *q = nrun ? &run[nrun - 1] : 0;
+    if (!q || q->fb != fb || q->ta != ta || q->fmt != fmt) {
+      if (nrun == 32) continue;
+      q = &run[nrun++]; q->fb = fb; q->w = w; q->psm = psm; q->n = 0; q->z = 0; q->ta = ta; q->fmt = fmt;
+    }
+    q->n++; q->z |= !(RE(e, 0xD3) & 1) && (RE(e, 0x23) & 1);
+  }
+  cs_fr++; cs_many += ntg > 3; cs_wide += wide;
+  for (int i = 1; i < TN; i++) cs_r[i] += mask >> i & 1;
+  for (int i = 0; i < TC_N; i++) cs_tex[i] += tmask >> i & 1;
+  uint32_t sig = nrun * 16777619u;
+  for (uint32_t i = 0; i < nrun; i++) sig = (sig ^ run[i].fb ^ run[i].ta << 5 ^ run[i].fmt << 26 ^ run[i].z << 31) * 16777619u;
+  uint32_t k;
+  for (k = 0; k < cs_nsig && cs_sig[k] != sig; k++) {}
+  if (k < cs_nsig) { cs_cnt[k]++; return; }
+  if (cs_nsig == 48) return;
+  cs_sig[k] = sig; cs_cnt[k] = 1; cs_nsig++;
+  char b[440]; int n = sceClibSnprintf(b, sizeof b, "%u", f->nd);
+  for (uint32_t i = 0; i < nrun && n < (int)sizeof b - 40; i++) {
+    n += sceClibSnprintf(b + n, sizeof b - n, " %06x/%u/%u:%u%s", run[i].fb, run[i].w, run[i].psm, run[i].n, run[i].z ? "z" : "");
+    if (run[i].ta) n += sceClibSnprintf(b + n, sizeof b - n, "<%06x.%u", run[i].ta & 0xFFFFFF, run[i].fmt);
+  }
+  alog("census: chain %u at frame %u (shown %06x): %s\n", k, f->frame, disp, b);
+}
+// Every 10 s (presenter thread): what the census counted, then clears it
+static void trCensusLog(void) {
+  char b[400]; int n = 0;
+  for (int i = 1; i < TN; i++) if (cs_r[i]) n += sceClibSnprintf(b + n, sizeof b - n, " %s=%u", tnames[i], cs_r[i]);
+  n += sceClibSnprintf(b + n, sizeof b - n, " | no copy:");
+  for (int i = 0; i < TC_N; i++) if (cs_tex[i]) n += sceClibSnprintf(b + n, sizeof b - n, " %s=%u", cnames_tex[i], cs_tex[i]);
+  alog("census: frames %u, over 3 targets %u, target over 512 wide %u | frames with each reason:%s\n", cs_fr, cs_many, cs_wide, b);
+  n = 0;
+  for (uint32_t i = 0; i < cs_nsig && n < 380; i++) if (cs_cnt[i]) { n += sceClibSnprintf(b + n, sizeof b - n, " %u=%u", i, cs_cnt[i]); cs_cnt[i] = 0; }
+  if (n) alog("census: chains seen:%s\n", b);
+  cs_fr = cs_many = cs_wide = 0;
+  sceClibMemset(cs_r, 0, sizeof cs_r); sceClibMemset(cs_tex, 0, sizeof cs_tex);
+}
+#endif
+
 // Draws frame f of the record to surface s (cs[s]), in the Adrenaline thread. base: the normal image, which goes
 // underneath stretched (what the game does not redraw stays as on the PSP); 0: black background. First checks the frame
 // (trCheckFrame): if a draw fails, returns the reason without drawing. Then opens
