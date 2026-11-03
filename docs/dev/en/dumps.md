@@ -29,6 +29,14 @@ information is needed and how much it can cost.
   0.5 s) for the first frame that carries it: this way it is compared with the correct frame without the cost of `auto` for the whole game (in KOF
   96, `auto` dropped to 32–36 fps and changed the timings: the tiles that remained did not show up with `auto`).
 
+## Failed frames (development builds)
+When the translator cannot do a draw, that same frame is saved at once, without pressing anything, in
+`ux0:data/nativedraw/fails/NNN_<reason>/`: `f0_record.bin`, `f0_normal.bmp` (the PSP image of that moment) and `f0.txt` (which
+draw failed, its target and texture and all its GE registers). One frame per kind of failure (reason, target, format, primitive),
+at most 4 per reason and 64 per session. It uses 2 MB reserved at start, so it also catches failures of a single frame, unlike
+L+R+SELECT, which starts on the next frame. `tools/dump.py` reads the folder. It does not see frames that were never complete (the
+cause is in `record not_read:`) nor frames drawn wrong without a failure.
+
 ## Files of each dump
 
 | File | What it is |

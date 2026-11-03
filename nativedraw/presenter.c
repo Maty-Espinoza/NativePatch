@@ -551,6 +551,7 @@ static int presThread(SceSize args, void *argp) {
   while (fr < 30) sceKernelDelayThread(100000);  // GXM already initialized by Adrenaline
   int r1 = initProgs(), r2 = r1 >= 0 ? initDest() : 0;
   t_on = r1 >= 0 && r2 >= 0 && draw_on && trInit() >= 0;  // translator: only with draw
+  DEV(if (t_on) failInit();)
   alog("presenter: programs %08x, target %08x (surfaces in %s and %s) | free afterwards (MB in one go): CDRAM %u, "
        "LPDDR physical %u, LPDDR %u\n", r1, r2, ty(surf[0]), ty(surf[1]), probe(CDRAM), probe(PHY), probe(UNC));
   if (r1 < 0 || r2 < 0) return sceKernelExitDeleteThread(0);
@@ -569,12 +570,11 @@ static int presThread(SceSize args, void *argp) {
     if (!(k % 20)) screenLog();
     notifs(nr);
 #ifdef NP_DEV
-    static uint32_t ln0, vl;  // slow scenes already logged and dumps requested because of them
+    static uint32_t ln0;  // slow scenes already logged
     while (ln0 != c_ln) {
       uint32_t j = ln0++ % CL;
       alog("gpu: slow scene: %s, %u draws, %u thousand pixels, %u.%u ms of GPU (%u.%u ms in queue)\n", cnames[c_slow[j].ty], c_slow[j].dr,
            c_slow[j].px, c_slow[j].us / 1000, c_slow[j].us / 100 % 10, c_slow[j].queue / 1000, c_slow[j].queue / 100 % 10);
-      if (vl < 3 && dump_level == 4 && !dump_req && (!dump_on || dump_on == 3)) { vl++; dump_req = 1; alog("dump: requested by a slow scene (%u of 3)\n", vl); }
     }
 #endif
     dumpTick();

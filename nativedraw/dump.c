@@ -40,16 +40,10 @@ static uint32_t dump_bbn[VN], dump_bpend = VN;  // bytes in each; that of the la
 static int dump_bf[VN] = { VN, VN, VN };     // record block of each captured frame (VN: no record)
 // 1 if record block b already belongs to a captured frame
 static int dumpUsed(int b) { for (int i = 0; i < (int)dump_k; i++) if (dump_bf[i] == b) return 1; return 0; }
-// In the Adrenaline thread: copies record f to a free block (taken by the coming frame, dumpFrame). Format: a
-// header of 16 words and then each RFrame array aligned to 4 (read by replay.c and tools/dump.py; if
-// it changes, change both). Textures in the texture cache go after tx, so the dump stands alone. If it does not fit in
-// VB_N it stays without a record.
-static void dumpBin(RFrame *f) {
-  dump_bpend = VN;
-  int k = 0;
-  while (k < VN && (!dump_bb[k] || dumpUsed(k))) k++;
-  if (k == VN || !f) return;
-  uint8_t *b = dump_bb[k];
+// Copies record f to b. Format: a header of 16 words and then each RFrame array aligned to 4 (read by replay.c and
+// tools/dump.py; if it changes, change both). Textures in the texture cache go after tx, so it stands alone. Returns the
+// bytes, 0 if it does not fit in VB_N.
+static uint32_t recBin(RFrame *f, uint8_t *b) {
   static uint32_t to[TN_N];
   uint32_t ntx = f->ntx;
   for (uint32_t i = 0; i < f->nt; i++) {
@@ -57,21 +51,85 @@ static void dumpBin(RFrame *f) {
     if (f->tc[i]) { to[i] = ntx; ntx += ((f->tn[i] & 0x7FFFFFFF) + 63) & ~63u; }
   }
   uint32_t h[16] = { 0x47524E44, 4, f->frame, f->fb, f->fbw, f->nd, f->ne, f->na, f->flags, f->nt, ntx, f->mir, f->mirf, NRS, sizeof(RDraw), f->nimg }, o = 0;
-#define PUT(p, n) do { uint32_t n_ = (n); if (o + n_ > VB_N) return; sceClibMemcpy(b + o, p, n_); o += (n_ + 3) & ~3u; } while (0)
+#define PUT(p, n) do { uint32_t n_ = (n); if (o + n_ > VB_N) return 0; sceClibMemcpy(b + o, p, n_); o += (n_ + 3) & ~3u; } while (0)
   PUT(h, sizeof h); PUT(RS, NRS);
   PUT(f->ta, f->nt * 4); PUT(f->tn, f->nt * 4); PUT(to, f->nt * 4); PUT(f->tq, f->nt * 4); PUT(f->tm, f->nt * 8);
   RDraw *dd = (RDraw *)(b + o);
   PUT(f->d, f->nd * sizeof(RDraw)); PUT(f->e, f->ne * NRS * 4); PUT(f->a, f->na);
 #undef PUT
-  if (o + ntx > VB_N) return;
+  if (o + ntx > VB_N) return 0;
   sceDmacMemcpy(b + o, f->tx, f->ntx);
   for (uint32_t i = 0; i < f->nt; i++) {
     if (!f->tc[i]) continue;
     sceDmacMemcpy(b + o + to[i], f->tx + f->to[i], f->tn[i] & 0x7FFFFFFF);
     for (uint32_t j = 0; j < f->nd; j++) if (dd[j].toff == f->to[i] + 1) dd[j].toff = to[i] + 1;
   }
-  dump_bbn[k] = o + ntx; dump_bpend = k;
+  return o + ntx;
 }
+// In the Adrenaline thread: copies record f to a free block (taken by the coming frame, dumpFrame); if it does not fit,
+// the frame stays without a record.
+static void dumpBin(RFrame *f) {
+  dump_bpend = VN;
+  int k = 0;
+  while (k < VN && (!dump_bb[k] || dumpUsed(k))) k++;
+  if (k == VN || !f) return;
+  uint32_t n = recBin(f, dump_bb[k]);
+  if (n) { dump_bbn[k] = n; dump_bpend = k; }
+}
+#ifdef NP_DEV
+// Failed frames: when a draw of a frame cannot be done, that same frame is still in memory, so it is saved at once and
+// without asking, to ux0:data/nativedraw/fails/NNN_reason/ (record, normal image and a report of the draw). Memory is
+// reserved at start. One frame per kind of failure, at most FL_R per reason.
+#define FL_R 4
+static void bmp(const char *p, const uint8_t *px, uint32_t w, uint32_t h, uint32_t stride);
+static uint8_t *fl_b, *fl_img, fl_row[480 * 16 * 4];
+static uint32_t fl_n, fl_sig[64], fl_nsig, fl_nr[TN], fl_lent;
+static volatile uint32_t fl_busy;
+static int fl_r;
+static char fl_t[2048];
+static void failInit(void) {
+  void *p = 0;
+  SceUID b = sceKernelAllocMemBlock("nativedraw_fail", SCE_KERNEL_MEMBLOCK_TYPE_USER_MAIN_PHYCONT_NC_RW, VB_N, 0);
+  if (b >= 0 && sceKernelGetMemBlockBase(b, &p) >= 0) fl_b = p;
+  p = 0;
+  b = sceKernelAllocMemBlock("nativedraw_fail_img", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW_UNCACHE, (512 * 272 * 4 + 0x3FFFF) & ~0x3FFFFu, 0);
+  if (b >= 0 && sceKernelGetMemBlockBase(b, &p) >= 0) fl_img = p;
+  alog("fail: frames saved on failure: %s, normal image %s\n", fl_b ? "yes" : "no memory", fl_img ? "yes" : "no memory");
+}
+// (Adrenaline thread) Draw i of frame f failed with reason r: saves the frame if this kind of failure is new
+static void failNote(RFrame *f, uint32_t i, int r) {
+  if (!fl_b || fl_busy || fl_lent || fl_nsig >= 64 || fl_nr[r] >= FL_R) return;
+  RDraw *d = &f->d[i];
+  const uint32_t *e = f->e[d->st];
+  uint32_t sig = (r * 16777619u ^ (RE(e, 0x9C) & 0x1FFFF0) ^ d->prim << 26 ^ (RE(e, 0xC3) & 15) << 22) * 16777619u ^ (!d->toff && hasTex(e, d)) << 21;
+  for (uint32_t k = 0; k < fl_nsig; k++) if (fl_sig[k] == sig) return;
+  if (!(fl_n = recBin(f, fl_b))) return;
+  fl_sig[fl_nsig++] = sig; fl_nr[r]++; fl_r = r;
+  if (fl_img) sceDmacMemcpy(fl_img, img[ki], 512 * 272 * 4);
+  int n = sceClibSnprintf(fl_t, sizeof fl_t, "reason %s | frame %u, draw %u of %u | prim %u, vertices %u, vt %06x | target %06x/%u | texture %07x, has a copy %d\nregisters:",
+                          tnames[r], f->frame, i, f->nd, d->prim, d->n, d->vt, RE(e, 0x9C) & 0xFFFFFF, RE(e, 0x9D) & 0x7FF, texAddr(e), d->toff != 0);
+  for (int k = 0; k < NRS && n < (int)sizeof fl_t - 16; k++) n += sceClibSnprintf(fl_t + n, sizeof fl_t - n, " %02x=%06x", RS[k], e[k] & 0xFFFFFF);
+  sceClibSnprintf(fl_t + n, sizeof fl_t - n, "\n");
+  __sync_synchronize();
+  fl_busy = 1;
+}
+// (presenter thread) Writes the saved frame, unless a dump is using the memory
+static void failTick(void) {
+  if (!fl_busy || dump_mem) return;
+  char d[64], p[96];
+  sceIoMkdir("ux0:data/nativedraw/fails", 0777);
+  for (int n = 0; n < 1000; n++) { sceClibSnprintf(d, sizeof d, "ux0:data/nativedraw/fails/%03d_%s", n, tnames[fl_r]); if (sceIoMkdir(d, 0777) >= 0) break; }
+  sceClibSnprintf(p, sizeof p, "%s/f0_record.bin", d);
+  SceUID fd = sceIoOpen(p, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0666);
+  if (fd >= 0) { sceIoWrite(fd, fl_b, fl_n); sceIoClose(fd); }
+  sceClibSnprintf(p, sizeof p, "%s/f0.txt", d);
+  if ((fd = sceIoOpen(p, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0666)) >= 0) { sceIoWrite(fd, fl_t, sceClibStrnlen(fl_t, sizeof fl_t)); sceIoClose(fd); }
+  if (fl_img) { sceClibSnprintf(p, sizeof p, "%s/f0_normal.bmp", d); uint8_t *w = dump_w; dump_w = fl_row; bmp(p, fl_img, 480, 272, 512); dump_w = w; }
+  alog("fail: frame saved in %s\n", d);
+  __sync_synchronize();
+  fl_busy = 0;
+}
+#endif
 static uint8_t *dump_nat;          // the exact PSP image of the last drawn frame (from the record); 0: none
 static uint32_t dump_natf, dump_natw, dump_natok;  // format (0 5650, 1 5551, 2 4444, 3 8888), width, present
 static SceUID dump_natblk;
@@ -252,6 +310,7 @@ static int dumpAlloc(void) {
     void *q = 0;
     dump_bblk[i] = sceKernelAllocMemBlock("nativedraw_dump_rec", SCE_KERNEL_MEMBLOCK_TYPE_USER_MAIN_PHYCONT_NC_RW, VB_N, 0);
     dump_bb[i] = dump_bblk[i] >= 0 && sceKernelGetMemBlockBase(dump_bblk[i], &q) >= 0 ? q : 0;
+    DEV(if (!dump_bb[i] && !i && fl_b && !fl_busy) { dump_bb[0] = fl_b; dump_bblk[0] = 0; fl_lent = 1; })  // (the block of failed frames)
     nb += dump_bb[i] != 0;
   }
   void *r = 0, *nn = 0;
@@ -272,11 +331,13 @@ static void dumpFree(void) {  // frees all the dump memory
   if (dump_natblk > 0) sceKernelFreeMemBlock(dump_natblk);
   dump_natblk = 0; dump_nat = 0; dump_natok = 0;
   dump_rtblk = 0; dump_rt = 0; dump_mem = 0;
+  DEV(fl_lent = 0;)
 }
 // In the presenter thread (every 50 ms): in automatic it arms the dump (dump_on = 3, at most 10 per game); with an
 // L+R+SELECT request it takes the memory and starts capturing; when capture ends (dump_on = 2) it writes the
 // files to the first free dumps/NNN folder and frees the memory (except in automatic).
 static void dumpTick(void) {
+  DEV(failTick();)
   DEV(if (nd_dump_mark) { nd_dump_mark = 0; if (!dump_on || dump_on == 3) dump_req = 1; })
   if (dump_auto && !dump_on && dump_n < 10) {  // automatic: armed (the memory stays taken)
     if (!dump_mem && !dumpAlloc()) { dump_auto = 0; return; }

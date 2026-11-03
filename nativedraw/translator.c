@@ -26,6 +26,7 @@ static uint32_t t_frame = ~0u, t_ok, t_rep, t_bad;
 // Switch force_hd (diagnosis): a frame with a draw it cannot do still goes in HD, skipping that draw (t_mark, a bit per draw)
 static int t_force;
 static uint32_t t_mark[RD_N / 32 + 1];
+static void failNote(RFrame *f, uint32_t i, int r);  // dump.c
 #else
 #define t_force 0
 #endif
@@ -687,6 +688,7 @@ static int trCheckFrame(RFrame *f, uint32_t *disp_p, uint32_t *ord_p) {
       }
     }
     if (r) {
+      DEV(failNote(f, i, r);)
       if (!t_seen[r]++) {
         const uint32_t *e = f->e[f->d[i].st];
         alog("translator: first frame with '%s': draw %u of %u prim %u vt %06x tex %u fmt %u swz %u blend %u (%04x %06x %06x) alpha %u "
@@ -925,7 +927,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     }
     if (w3d) t3Set(f, d, e, &t3);
     if ((res = trVerts(f, d, o + nv, tw, th, mat, sc, &n, w3d ? &t3 : 0))) {
-      DEV(if (t_force && res != T_LIMIT) { t_cnt[res]++; res = T_OK; continue; })
+      DEV(failNote(f, i, res); if (t_force && res != T_LIMIT) { t_cnt[res]++; res = T_OK; continue; })
       break;
     }
     if (nv + n > TV_N) { res = T_LIMIT; break; }

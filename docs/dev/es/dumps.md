@@ -30,6 +30,14 @@ información hace falta y cuánto puede costar.
   0,5 s) al primer frame que la trae: así se compara con el frame correcto sin el costo de `auto` todo el juego (en KOF
   96, `auto` bajaba a 32–36 fps y cambiaba los tiempos: los mosaicos que quedaban no aparecían con `auto`).
 
+## Frames fallidos (versión de desarrollo)
+Cuando el traductor no puede hacer un dibujo, ese mismo frame se guarda al instante, sin apretar nada, en
+`ux0:data/nativedraw/fails/NNN_<motivo>/`: `f0_record.bin`, `f0_normal.bmp` (la imagen del PSP de ese momento) y `f0.txt` (qué
+dibujo falló, su destino y textura y todos sus registros del GE). Un frame por tipo de fallo (motivo, destino, formato, primitiva),
+como máximo 4 por motivo y 64 por sesión. Usa 2 MB reservados al arrancar, así que también atrapa fallos de un solo frame, a
+diferencia de L+R+SELECT, que parte en el frame siguiente. `tools/dump.py` lee la carpeta. No ve frames que nunca se completaron
+(la causa está en `record not_read:`) ni frames mal dibujados sin un fallo.
+
 ## Archivos de cada volcado
 
 | Archivo | Qué es |

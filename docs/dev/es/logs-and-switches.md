@@ -94,8 +94,8 @@ o `auto` (se comparan 3 letras; `no` también lo apaga). Qué guarda cada uno, c
   0.0.8.13): cuánto tarda la GPU en cada tipo de escena (Adrenaline, imagen normal, traductor en la superficie, imagen
   intermedia). `gpu times: detail`: 16 escenas seguidas (A Adrenaline, N imagen normal, T traductor, I intermedia:
   draws, ms de GPU / ms en cola).
-- `gpu: slow scene: <type>, draws, thousand pixels, ms` (0.0.8.20): cada escena nuestra de más de 30 ms; las 3
-  primeras piden un volcado. `translator: giant draw`: los primeros 40 draws de más de 2 pantallas de área.
+- `gpu: slow scene: <type>, draws, thousand pixels, ms` (0.0.8.20): cada escena nuestra de más de 30 ms.
+  `translator: giant draw`: los primeros 40 draws de más de 2 pantallas de área.
 - Motivo `vertex_out` (0.0.8.21): un vértice fuera de ±4096 o NaN (datos leídos tarde): el frame va con la imagen normal.
   En compilaciones de desarrollo, los primeros 40 también anotan `translator: vertex_out (n)` (frame, draw, tipo e índice de vértice) y los bytes del vértice
   y del draw; cada giant draw anota su tipo de vértice y sus bytes. `late frame <n>` (log del capturador, primeros 400): compuerta en su tope o

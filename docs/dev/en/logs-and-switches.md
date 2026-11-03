@@ -95,8 +95,8 @@ or `auto` (3 letters are compared; `no` also turns it off). What each one saves,
   0.0.8.13): how long the GPU takes for each type of scene (Adrenaline, normal image, translator on the surface, intermediate
   image). `gpu times: detail`: 16 consecutive scenes (A Adrenaline, N normal image, T translator, I intermediate:
   draws, GPU ms / queue ms).
-- `gpu: slow scene: <type>, draws, thousand pixels, ms` (0.0.8.20): each of our scenes over 30 ms; the first 3
-  ask for a dump. `translator: giant draw`: the first 40 draws with an area of more than 2 screens.
+- `gpu: slow scene: <type>, draws, thousand pixels, ms` (0.0.8.20): each of our scenes over 30 ms.
+  `translator: giant draw`: the first 40 draws with an area of more than 2 screens.
 - Reason `vertex_out` (0.0.8.21): a vertex outside ±4096 or NaN (data read too late): the frame goes with the normal image.
   In dev builds the first 40 also log `translator: vertex_out (n)` (frame, draw, vertex type and index) and the bytes of the vertex
   and the draw; each giant draw logs its vertex type and bytes. `late frame <n>` (capturer log, first 400): gate at its limit or a
