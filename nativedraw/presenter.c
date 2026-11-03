@@ -13,6 +13,7 @@
 #include <psp2/io/fcntl.h>
 #include <taihen.h>
 #include <psp2/compat.h>
+#include <psp2/power.h>
 #include "shaders.h"
 #include "version.h"
 #include "../installer/font.h"
@@ -355,10 +356,14 @@ static int hookEnd(SceGxmContext *c, const SceGxmNotification *v, const SceGxmNo
         if (t_ok && t_rep < 2) { t_rep++; hd = 2; cause = 0; t_skip[0]++; DEV(if (p_on) pAdd(P_F_REPEAT, 0);) } else t_cnt[T_NEW]++;
       } else {
         if (t_frame != ~0u && rg->frame > t_frame) { uint32_t g = rg->frame - t_frame; t_skip[g < 5 ? g : 5]++; }
-        uint32_t t1 = now();
-        int r = trFrame(c, rg, s, src); g_tr_us += now() - t1; t_cnt[r]++; t_frame = rg->frame; t_ok = !r; hd = !r; t_rep = 0; cause = r;
+        // The Vita drawing shows one frame behind the normal image, so an HD frame right after one that was not
+        // drawable looks like a jump back: that frame is only checked (held back) and HD resumes with the next one
+        uint32_t t1 = now(), dp, od;
+        int chk = !t_can && t_frame != ~0u, r = chk ? trCheckFrame(rg, &dp, &od) : trFrame(c, rg, s, src);
+        if (chk && !r) r = T_HOLD;
+        g_tr_us += now() - t1; t_cnt[r]++; t_frame = rg->frame; t_can = !r || r == T_HOLD; t_ok = !r; hd = !r; t_rep = 0; cause = r;
         DEV(trReason(rg->frame, r); if (p_on) pAdd(r ? P_F_NORMAL : P_F_DRAWN, 0);)
-        regGpu(gq, gq_done);  // the scene that reads this record's textures
+        if (!r) regGpu(gq, gq_done);  // the scene that reads this record's textures
       }
       if (dump_on == 1 || dump_on == 3) dumpText(rg, hd == 2 ? "repeats the Vita drawing of the previous frame" : hd ? "Vita drawing" :
                                 "normal image (copy of the PSP image)", cause);
@@ -570,6 +575,8 @@ static int presThread(SceSize args, void *argp) {
     if (warned < 2 && n_pres >= (warned ? 60 : 1)) alog("presenter: %s\n", warned++ ? "60 frames drawn" : "first frame drawn");
     if (++k < 200) continue;
     k = 0;
+    DEV(alog("clocks: GPU %d MHz (crossbar %d), CPU %d, bus %d\n", scePowerGetGpuClockFrequency(), scePowerGetGpuXbarClockFrequency(),
+             scePowerGetArmClockFrequency(), scePowerGetBusClockFrequency());)
     uint32_t p = n_pres, m = us_max, s = us_sum, dt = (now() - t) / 1000, nd = n_dma, nr = n_chk, nm = n_bad;
     n_pres = 0; n_dma = 0; us_sum = 0; us_max = 0; t = now(); n_chk = n_bad = 0;
     if (psp_tex && !seen++)

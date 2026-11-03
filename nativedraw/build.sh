@@ -14,7 +14,7 @@ arm-none-eabi-ld -r -o $O/all.o $O/nativedraw.o $O/capture.o $O/presenter.o
 for s in $(arm-none-eabi-nm -u $O/all.o | awk '{print $2}' | grep -v -E '^(__|tai|mem)' | sort -u); do
   ok=
   for lib in SceLibKernel_SceLibKernel SceIofilemgr_SceIofilemgr SceSysmem_SceSysmem SceKernelThreadMgr_SceThreadmgr \
-             SceKernelDmacMgr_SceDmacmgr SceGxm_SceGxm; do
+             SceKernelDmacMgr_SceDmacmgr SceGxm_SceGxm ScePower_ScePower; do
     if [ -f $STUBS/${lib}_$s.S ]; then arm-none-eabi-as --defsym GEN_WEAK_EXPORTS=0 $STUBS/${lib}_$s.S -o $O/s_$s.o; ok=1; break; fi
   done
   [ -n "$ok" ] || { echo "no stub: $s"; exit 1; }

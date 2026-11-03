@@ -1276,6 +1276,17 @@ static int idleThread(SceSize args, void *argp) {  // lowest priority: what it r
 }
 static SceUID idle_uid[3] = { -1, -1, -1 };
 #endif
+#ifdef NP_DEV
+// Mirror copy latency (prof mirror_ge): when the GE finishes the copy requested at the last flip (SB[0x40] reaches
+// SB[0x44]), how long after that flip it is. Seen once per loop of the capturer: an upper bound by its period.
+static void mirSeen(void) {
+  static uint32_t seen;
+  uint32_t d = SB[0x40];
+  if (!p_on || !mir_on || d == seen) return;
+  seen = d;
+  if (d == SB[0x44] && (int)(now() - p_flip) > 0) pAdd(P_R_GE, now() - p_flip);
+}
+#endif
 static int capThread(SceSize args, void *argp) {
   uint32_t idle_t = 0, on = 0;
   for (;;) {
@@ -1296,6 +1307,7 @@ static int capThread(SceSize args, void *argp) {
       if (reg_on) regBench();  // measures once the speed of the frame record copies
     }
     SB[4] = ++beat;
+    DEV(mirSeen();)
     if (reg_on && !rg_thr) regPend();  // VRAM textures of a frame waiting for the mirror copy of its flip
     uint32_t h = SB[2], work = 0;
     if ((int)(h - tail) < 0 || h - tail > SB_N) {  // events were lost (or NativeLink reset the mailbox)
@@ -1396,7 +1408,7 @@ static void pSet(int k, uint32_t n, uint32_t us) { PStage *p = &P[k]; p->n += n;
 static void profLog(const Stats *r) {
   static const char *names[PN] = { "frame", "game", "vblank", "gate", "sync_ge", "mirror_cpu", "hooks", "ge_busy", "ge_mirror", "lists",
     "total", "read_own", "read_shared", "record", "rec_state", "rec_vertices", "rec_textures", "memory", "close", "vertex_dma", "sleep", "draw", "list_work", "list_at_stall",
-    "wait_mirror", "copy_vram", "flip_to_closed", "flip_to_published", "published_to_taken", "enqueued_to_captured",
+    "wait_mirror", "copy_vram", "mirror_ge", "flip_to_closed", "flip_to_published", "published_to_taken", "enqueued_to_captured",
     "period", "adrenaline_end", "image_dma", "checks", "wait_gpu", "presenter", "check", "textures", "vertices", "gxm", "scenes", "all", "end_scene",
     "complete", "not_taken", "no_record", "gpu_behind", "drawn", "repeated", "normal",
     "adrenaline", "normal_image", "surface", "intermediate", "capture", "record", "adrenaline", "reader0", "reader1", "free0", "free1", "free2",

@@ -23,9 +23,29 @@
 #define PSP(a) (0x68000000u + ((a) & 0x0FFFFFFFu))  // uncached view of PSP RAM (CONVERT_ADDRESS)
 #define DESC ((volatile uint32_t *)PSP(0x0A7FF000u))
 
-static int nlog;
+static int nlog, writer;  // (writer: the writer thread runs; otherwise the logs are written directly)
 // Own log (ux0:pspemu/nativedraw.log): each line with the ms since the process started; ~1000 lines at most.
-// Opens, writes and closes each time (slow: do not use in fast paths).
+// The line goes to a ring (aring, aw/ar = bytes written/read) and the writer thread moves it to the card: writing
+// there blocks for tens of ms and some callers run in Adrenaline's drawing thread. A line that does not fit is dropped.
+static char aring[0x10000];
+static volatile uint32_t aw, ar;
+static volatile int alock, flock;  // (several threads log at once; the writer thread and alogNew both flush)
+static void aFlush(void) {  // moves what the ring holds to the file
+  while (__sync_lock_test_and_set(&flock, 1)) sceKernelDelayThread(100);
+  uint32_t w = aw;
+  __sync_synchronize();
+  if (ar != w) {
+    SceUID fd = sceIoOpen(LOGF, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_APPEND, 0666);
+    while (ar != w) {
+      uint32_t at = ar % sizeof aring, k = w - ar;
+      if (k > sizeof aring - at) k = sizeof aring - at;
+      if (fd >= 0) sceIoWrite(fd, aring + at, k);
+      ar += k;
+    }
+    if (fd >= 0) sceIoClose(fd);
+  }
+  __sync_lock_release(&flock);
+}
 void alog(const char *fmt, ...) {
   if (nlog++ > 1000) return;
   char b[512];
@@ -33,8 +53,18 @@ void alog(const char *fmt, ...) {
   int n = sceClibSnprintf(b, 16, "%7u ", sceKernelGetProcessTimeLow() / 1000);
   n += sceClibVsnprintf(b + n, sizeof b - n, fmt, ap); va_end(ap);
   if (n > (int)sizeof b - 1) { n = sizeof b - 1; b[n - 1] = '\n'; }  // (cut: the newline is kept)
-  SceUID fd = sceIoOpen(LOGF, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_APPEND, 0666);
-  if (fd >= 0) { sceIoWrite(fd, b, n); sceIoClose(fd); }
+  if (!writer) {
+    SceUID fd = sceIoOpen(LOGF, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_APPEND, 0666);
+    if (fd >= 0) { sceIoWrite(fd, b, n); sceIoClose(fd); }
+    return;
+  }
+  while (__sync_lock_test_and_set(&alock, 1)) sceKernelDelayThread(50);
+  if (aw - ar + n <= sizeof aring) {
+    for (int i = 0; i < n; i++) aring[(aw + i) % sizeof aring] = b[i];
+    __sync_synchronize();
+    aw += n;
+  }
+  __sync_lock_release(&alock);
 }
 static volatile int datum __attribute__((aligned(64))) = 1;  // non-empty .data (valid RW segment)
 // No libc: the compiler may generate calls to these two (structure copies in capture.c)
@@ -49,7 +79,6 @@ void *sceDmacMemcpy(void *dst, const void *src, SceSize size);
 // later: the PSP does not wait for the write (opening, writing and closing is slow).
 static char lring[0x40000];
 static volatile uint32_t lw, lr;
-static int writer;  // 1 if the writer thread runs (otherwise, written directly)
 // Copies n bytes from PSP RAM (a) to the ring, waiting if full.
 static void logPut(uint32_t a, uint32_t n) {
   while (n) {
@@ -72,8 +101,8 @@ static void logFlushOut(void) {  // (writer thread) moves what is in the ring to
   }
   if (fd >= 0) sceIoClose(fd);
 }
-static int writerThread(SceSize args, void *argp) {  // writer thread: empties the ring every 2 ms
-  for (;;) { logFlushOut(); sceKernelDelayThread(2000); }
+static int writerThread(SceSize args, void *argp) {  // writer thread: empties both rings every 2 ms
+  for (;;) { logFlushOut(); aFlush(); sceKernelDelayThread(2000); }
   return 0;
 }
 static uint32_t nlogs, ram_ok;  // log chunks served; PSP RAM is already mapped
@@ -163,6 +192,7 @@ static SceUID hookCT(const char *name, SceKernelThreadEntry entry, int prio, int
 
 // Starts a new log: the current one becomes nativedraw_prev.log and the new one begins with the version line
 void alogNew(void) {
+  if (writer) aFlush();
   sceIoRemove(LOGP);
   sceIoRename(LOGF, LOGP);
   nlog = 0;

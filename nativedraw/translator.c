@@ -6,9 +6,9 @@
 #include "record.h"
 #include "shaders_nd.h"
 // Result of trCheck/trFrame: T_OK or the reason the frame was not drawn (tnames: its name in the log)
-enum { T_OK, T_NEW, T_PRIM, T_FMT, T_BLEND, T_TFUNC, T_ODD, T_DEST, T_VERT, T_LIMIT, T_TEX, T_PROG, T_OUT, T_MASK, TN };
+enum { T_OK, T_NEW, T_PRIM, T_FMT, T_BLEND, T_TFUNC, T_ODD, T_DEST, T_VERT, T_LIMIT, T_TEX, T_PROG, T_OUT, T_MASK, T_HOLD, TN };
 static const char *tnames[TN] = { "ok", "no_new_frame", "primitive", "format", "blend", "texture_function",
-                                "color_test_or_logic", "other_target", "vertex", "limit", "bad_texture", "program", "vertex_out", "mask" };
+                                "color_test_or_logic", "other_target", "vertex", "limit", "bad_texture", "program", "vertex_out", "mask", "held_back" };
 // counters for the 10 s log (read and cleared by the presenter)
 static volatile uint32_t t_cnt[TN], t_hd, t_nat, t_draws;
 static volatile uint32_t t_skip[6];  // PSP frames advanced by each drawn frame (0: repeated, 5: 5 or more)
@@ -20,8 +20,8 @@ static uint32_t *tpal[2];    // translated palettes (8888), aligned to 64: 16 en
 #define TV_N (64 << 10)      // vertices per surface (and limit of the 16-bit indices)
 #define TP_B (256 << 10)     // palette bytes per surface
 #define C_RGB (SCE_GXM_COLOR_MASK_R | SCE_GXM_COLOR_MASK_G | SCE_GXM_COLOR_MASK_B)  // alpha is never written
-// last record frame drawn, whether it came out fine and how many times it was repeated
-static uint32_t t_frame = ~0u, t_ok, t_rep;
+// last record frame seen, whether it was drawn fine, how many times it was repeated and whether it was drawable
+static uint32_t t_frame = ~0u, t_ok, t_rep, t_can;
 static uint16_t *tib;        // 0, 1, 2... (indices for the GPU)
 // Intermediate image: a game draw to another VRAM image (not the shown one) goes to our own double-size surface
 // (1024x544); if later in the same frame a texture is at that address, it is read from that surface.
@@ -614,21 +614,15 @@ static void zsSet(SceGxmContext *c, const uint32_t *e, uint32_t sv) {
   if (r != t_sr) { t_sr = r; sceGxmSetFrontStencilRef(c, r); }
 }
 
-// Draws frame f of the record to surface s (cs[s]), in the Adrenaline thread. base: the normal image, which goes
-// underneath stretched (what the game does not redraw stays as on the PSP); 0: black background. First checks all draws
-// (trCheck, destinations and textures with no copy): if one fails, returns the reason without drawing. Then opens
-// one scene per destination change (surface s or an intermediate image; if possible, all intermediates first and the
-// surface last, in a single scene: each scene reads and writes its whole surface), sets up texture, palette (to 8888 in
-// tpal), vertices (trVerts, in tv) and uniforms of each draw, and draws it. T_OK if ready; if it fails midway
-// returns the reason and the surface is not used.
-static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base) {
-  t3.ke = 0;
-  DEV(uint32_t ta = now(), tb, ut[6]; sceClibMemcpy(ut, (void *)t_us, sizeof ut);)
+// Checks whether frame f can be drawn: every draw (trCheck), the destinations (at most 2 intermediate images that do
+// not share memory) and the textures with no copy (only an intermediate image of this frame, in its format). T_OK or
+// the reason, logging the first draw with each reason. Leaves in *disp_p the image being shown and in *ord_p whether the
+// intermediate images can all go first and the surface last, in a single scene (only if just the draws to the surface
+// read intermediate images and none is drawn after being read).
+static int trCheckFrame(RFrame *f, uint32_t *disp_p, uint32_t *ord_p) {
   // disp: image being shown; ifb, iend, ipsm: intermediate images, where their memory ends, their format
   uint32_t disp = f->fb & 0x1FFFF0, ifb[2], iend[2], ipsm[2], nif = 0, n_disp = 0;
-  // ord: intermediate images first and then, in a single scene, the surface (see trFrame). Valid only if just the
-  // draws to the surface read intermediate images and none is drawn after being read (rd_mask: bit per image)
-  uint32_t ord = 1, rd_mask = 0;
+  uint32_t ord = 1, rd_mask = 0;  // (rd_mask: bit per intermediate image read by a draw)
   for (uint32_t i = 0; i < f->nd; i++) n_disp += (RE(f->e[f->d[i].st], 0x9C) & 0x1FFFF0) == disp;
   // no draw to the shown image (game behind: the flip has the other one of the double buffer): use the last draw's one
   if (!n_disp && f->nd) disp = RE(f->e[f->d[f->nd - 1].st], 0x9C) & 0x1FFFF0;
@@ -668,6 +662,23 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
       return r;
     }
   }
+  *disp_p = disp; *ord_p = ord;
+  return T_OK;
+}
+
+// Draws frame f of the record to surface s (cs[s]), in the Adrenaline thread. base: the normal image, which goes
+// underneath stretched (what the game does not redraw stays as on the PSP); 0: black background. First checks the frame
+// (trCheckFrame): if a draw fails, returns the reason without drawing. Then opens
+// one scene per destination change (surface s or an intermediate image; if possible, all intermediates first and the
+// surface last, in a single scene: each scene reads and writes its whole surface), sets up texture, palette (to 8888 in
+// tpal), vertices (trVerts, in tv) and uniforms of each draw, and draws it. T_OK if ready; if it fails midway
+// returns the reason and the surface is not used.
+static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base) {
+  t3.ke = 0;
+  DEV(uint32_t ta = now(), tb, ut[6]; sceClibMemcpy(ut, (void *)t_us, sizeof ut);)
+  uint32_t disp, ord;
+  int r = trCheckFrame(f, &disp, &ord);
+  if (r) return r;
   DEV(t_us[0] += now() - ta; if (p_on) pAdd(P_T_CHECK, now() - ta);)
   static uint32_t t_q[2];  // last scene that read the vertices and palettes of each surface
   // if the GPU is still reading them (unfinished scene) it waits
