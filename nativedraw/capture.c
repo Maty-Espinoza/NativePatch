@@ -302,7 +302,7 @@ static struct { volatile uint32_t n[4], ch1[4], ch2[4], warn[4], wall[4], ms1, m
 #define smpAdd(a, n, kind) ((void)sizeof(n))
 #endif
 
-static int rg_chg = 1;  // some state register changed since the last recorded draw
+static int rg_chg = 1, rg_lchg = 1, rg_mchg = 1;  // since the last recorded draw: state, light or matrix values changed
 static int reg_on, reg_big;  // frame record (switch draw); last frame had more draws than a record holds
 // Until when (Vita time) each frame carries the exact PSP image: set by dump.c for an
 // L+R+SELECT dump and used by record.c
@@ -402,7 +402,7 @@ static void stSave(GeState *g) {
   sceClibMemcpy(g->v, v, sizeof v);
 }
 static void stLoad(GeState *g) {
-  rg_chg = 1; sceClibMemcpy(reg, g->reg, sizeof reg); sceClibMemcpy(mtx, g->mtx, sizeof mtx); sceClibMemcpy(mi, g->mi, sizeof mi);
+  rg_chg = rg_lchg = rg_mchg = 1; sceClibMemcpy(reg, g->reg, sizeof reg); sceClibMemcpy(mtx, g->mtx, sizeof mtx); sceClibMemcpy(mi, g->mi, sizeof mi);
   dirty = g->v[0]; vaddr = g->v[1]; iaddr = g->v[2]; vset = g->v[3]; last_prim = g->v[4]; last_vend = g->v[5];
   last_fb = g->v[6];
 }
@@ -554,7 +554,7 @@ static void recEnd(List *l) {
 }
 // Leaves the GE state as if sublist e had been walked
 static void memoApply(Memo *e) {
-  rg_chg = 1;
+  rg_chg = rg_lchg = rg_mchg = 1;
   for (uint32_t i = 0; i < e->nreg; i++) reg[e->rc[i]] = e->rv[i];
   for (int m = 0; m < 5; m++) if (e->mmask >> m & 1) { mi[m] = e->mi[m]; sceClibMemcpy(mtx[m], e->mtx + moff[m], msz[m] * 4); }
   vaddr = e->flags & M_VABS ? e->vaddr : vaddr + e->vaddr;
@@ -853,7 +853,7 @@ static int __attribute__((noinline)) walkList(List *l) {
     case 0x2B: case 0x3B: case 0x3D: case 0x3F: case 0x41: {
       int m = c == 0x2B ? 4 : (c - 0x3B) / 2, max = m == 4 ? 96 : m == 2 ? 16 : 12;
       if (rec) rec->mmask |= 1 << m;
-      if (mi[m] < (uint32_t)max) { if (mtx[m][mi[m]] != d) { mtx[m][mi[m]] = d; dirty |= C_MTX; } mi[m]++; }
+      if (mi[m] < (uint32_t)max) { if (mtx[m][mi[m]] != d) { mtx[m][mi[m]] = d; dirty |= C_MTX; rg_mchg = 1; } mi[m]++; }
       break;
     }
     case 0xC4: {  // palette load: a change only if another palette or size
@@ -873,7 +873,7 @@ static int __attribute__((noinline)) walkList(List *l) {
       break;
     }
     default:
-      if (cls[c] && reg[c] != d) { rg_chg = 1; dirty |= cls[c]; if (cls[c] & (C_OTHER | C_TL)) acc.chg[c]++; }
+      if (cls[c] && reg[c] != d) { rg_chg = rg_lchg = 1; dirty |= cls[c]; if (cls[c] & (C_OTHER | C_TL)) acc.chg[c]++; }
       reg[c] = d; TOUCH(c);
     }
     if (--k == 0 || l->pc != pc + 4 || l->sp != sp0 || R0.a != ba || R0.n != bn) break;  // end of line or jump
@@ -1347,7 +1347,7 @@ static int repThread(SceSize args, void *argp) {
       if (!level) goto sync;  // (minimum: only this line and the vram and sync one)
       if (reg_on) {  // frame record
         uint32_t g = gr.fr ? gr.fr : 1, dd = gr.draws ? gr.draws : 1;
-        clog("  3D vertices: DMA runs per frame %u\n", gr.fr ? gr.v_dma / gr.fr : 0);
+        clog("  3D vertices (per frame): runs %u, by DMA %u (%u KB read) | draws %u, near the list %u\n", gr.v_runs / g, gr.v_dma / g, gr.v_kb / g >> 10, gr.v_all / g, gr.v_list / g);
         clog("  record: frames=%u complete=%u incomplete: memory=%u not_read=%u limit=%u curves=%u | per frame: draws=%u states=%u KB=%u palettes=%u us=%u (states %u vertices %u textures %u [copied %u KB by DMA in %u us, of them swizzled %u KB sorted in %u us; pending lost %u, without the copy of their flip %u, with the GPU unfinished (measured) %u] palettes %u) | of the draws: 3d=%u%% clear=%u%% blend=%u%% alpha_test=%u%% swizzle=%u%% | draws per sec with texture 5650/5551/4444/8888/T4/T8/T16/T32/DXT1/3/5: %u %u %u %u %u %u %u %u %u %u %u\n",
              gr.fr, gr.ok, gr.memo, gr.rd_fail, gr.limit, gr.curve, gr.draws / g, gr.st / g, gr.kb / g >> 10, gr.cl / g, gr.us / g,
              gr.us_e / g, gr.us_v / g, gr.us_t / g, gr.t_b / g >> 10, gr.us_l / g, gr.o_b / g >> 10, gr.us_o / g, gr.stomped, gr.n_late, gr.gpu, gr.us_p / g,

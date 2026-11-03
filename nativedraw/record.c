@@ -19,7 +19,7 @@ enum { R_MEMO = 1, R_READ = 2, R_LIMIT = 4, R_CURVE = 8 };
 // (same, changed, new); unswizzled bytes; distinct textures
 // per frame
 static struct { uint32_t fr, ok, memo, rd_fail, limit, curve, draws, st, kb, cl, us, d3, clear, blend, atest, swz, fmt[16], us_e, us_v, us_t, us_p, t_b, us_l, stomped, n_late, gpu, o_b, us_o,
-  t_n[2], t_kb[2], t_dma[2], t_ord[2], t_calls, t_size[5], t_rb[6], v_dma, t_same, t_changed, t_lines, t_tex,
+  t_n[2], t_kb[2], t_dma[2], t_ord[2], t_calls, t_size[5], t_rb[6], v_dma, v_kb, v_runs, v_list, v_all, t_same, t_changed, t_lines, t_tex,
   c_hit, c_fill, c_chg, c_rec, c_fail, c_us; } ga, gr;
 // RN records: with fewer, the one the GPU just read would at times be the only free one, overwriting its textures
 #define RN 4
@@ -317,19 +317,21 @@ static uint32_t rgCopy(uint32_t a, uint32_t n) {
 #define VP_N 1024
 static struct { uint32_t s, d, n; } vp[VP_N];
 static uint32_t vpn;
-// Copies what waits: each run of entries that fits in the transit memory goes by DMA once, then piece by piece
+// Copies what waits: a run of entries close to each other in memory (gaps under 2 KB) goes by DMA once and is then
+// handed out piece by piece; a run under 4 KB is read directly, where a DMA call costs more than the bytes
 static void rgVFlush(void) {
   RFrame *f = rf[rg_w];
   for (uint32_t i = 0, j; i < vpn; i = j) {
     uint32_t lo = vp[i].s, hi = lo + vp[i].n;
     for (j = i + 1; j < vpn; j++) {
       uint32_t a = vp[j].s < lo ? vp[j].s : lo, b = vp[j].s + vp[j].n > hi ? vp[j].s + vp[j].n : hi;
-      if (b - a > OR_N || ramEnd(a) < b) break;
+      if (b - a > OR_N || ramEnd(a) < b || b - a > hi - lo + vp[j].n + 2048) break;
       lo = a; hi = b;
     }
-    sceDmacMemcpy(rg_ord, (const void *)PSP(lo), hi - lo);
-    for (uint32_t k = i; k < j; k++) sceClibMemcpy(f->a + vp[k].d, rg_ord + vp[k].s - lo, vp[k].n);
-    ga.v_dma++;
+    int dma = hi - lo >= 4096;
+    if (dma) { sceDmacMemcpy(rg_ord, (const void *)PSP(lo), hi - lo); ga.v_dma++; ga.v_kb += hi - lo; }
+    for (uint32_t k = i; k < j; k++) sceClibMemcpy(f->a + vp[k].d, dma ? rg_ord + vp[k].s - lo : (const uint8_t *)PSP(vp[k].s), vp[k].n);
+    ga.v_runs++;
   }
   vpn = 0;
 }
@@ -575,12 +577,20 @@ static void regDraw(uint32_t n, uint32_t type, uint32_t vt, uint32_t idx) {
   if (!(d->voff = later ? rgVLater(vaddr, d->vlen) : rgCopy(vaddr, d->vlen))) return;
   d->woff = d->moff = d->loff = 0;
   static uint32_t lw, lm, ll;  // last matrix and light blocks of this frame
-  if (!f->nd) lw = lm = ll = 0;
+  if (!f->nd) lw = lm = ll = 0, rg_mchg = 1;
   if (!(vt >> 23 & 1)) {
-    uint32_t vm[40];
-    sceClibMemcpy(vm, mtx[1], 48); sceClibMemcpy(vm + 12, mtx[2], 64); sceClibMemcpy(vm + 28, mtx[3], 48);
-    if (!(d->woff = rgBlock(mtx[0], 12, &lw)) || !(d->moff = rgBlock(vm, 40, &lm))) return;
-    if (((reg[0x17] & 1) || (reg[0xC0] & 3) == 2) && !(d->loff = rgBlock(reg + 0x53, 72, &ll))) return;
+    ga.v_all++; ga.v_list += vaddr - pub_pc + 0x40000 < 0x80000;
+    if (rg_mchg || !lw || !lm) {
+      uint32_t vm[40];
+      rg_mchg = 0;
+      sceClibMemcpy(vm, mtx[1], 48); sceClibMemcpy(vm + 12, mtx[2], 64); sceClibMemcpy(vm + 28, mtx[3], 48);
+      if (!rgBlock(mtx[0], 12, &lw) || !rgBlock(vm, 40, &lm)) return;
+    }
+    d->woff = lw; d->moff = lm;
+    if ((reg[0x17] & 1) || (reg[0xC0] & 3) == 2) {
+      if ((rg_lchg || !ll) && !rgBlock(reg + 0x53, 72, &ll)) return;
+      rg_lchg = 0; d->loff = ll;
+    }
   }
   d->toff = 0;
   uint32_t t2 = tm ? now() : 0; if (tm) ga.us_v += (t2 - t1) * 8;
