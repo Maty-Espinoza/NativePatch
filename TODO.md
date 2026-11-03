@@ -32,6 +32,7 @@ game in its "final" form. Capturer, mirror and translator work goes after the ra
       show up as PSP stalls (`frame_max` in `stats performance`), move them to `ur0:` or `uma0:`. Not needed so far: the race shows
       `frame_max` 17 ms with the extreme log.
 - [ ] **Test for lag:** a capturer case that closes a frame with lists queued (`capture_test.c`); today only `test_link.py` (`resets`) covers it.
+- [ ] **Ridge Racer, opening movie in HD (user, 0.0.14.4):** an error to look at later; dump 255 (`stage3_0.0.14.4/rr1/d255`) is a candidate, its Vita image differs from the normal one (a different moment, or a real error).
 - [ ] **Ridge Racer selector, small flash at one angle of the last car** (user, 0.0.12.12): minor; a dump if it stays.
 - [ ] **Ridge Racer selector, the last car showed the previous car's color for a moment** (user, 0.0.12.11): likely the texture cache
       checking 1 group in 4 per frame (accepted risk). Look again only if it causes bigger errors.

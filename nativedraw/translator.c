@@ -643,13 +643,14 @@ static void zsSet(SceGxmContext *c, const uint32_t *e, uint32_t sv) {
 // Checks whether frame f can be drawn: every draw (trCheck), the destinations (at most 2 intermediate images that do
 // not share memory) and the textures with no copy: the shown image read while drawing an intermediate one, or an
 // intermediate image in its format, of this frame (it may be the one being drawn) or kept from an earlier one. T_OK or
-// the reason, logging the first draw with each reason. Leaves in *disp_p the image being shown and in *ord_p whether the
-// intermediate images can all go first and the surface last, in a single scene (only if just the draws to the surface
-// read intermediate images and none is drawn after being read).
+// the reason, logging the first draw with each reason. Leaves in *disp_p the image being shown and in *ord_p how many
+// draws from the start can be reordered, intermediate images first and the surface after them in a single scene: up to
+// the first that needs the game's order (reads the surface, or draws on an image already read). Without that order a
+// surface scene would end right after its clear, and its depth does not survive to the next.
 static int trCheckFrame(RFrame *f, uint32_t *disp_p, uint32_t *ord_p) {
   // disp: image being shown; ifb, iend, ipsm: intermediate images, where their memory ends, their format
   uint32_t disp = f->fb & 0x1FFFF0, ifb[2], iend[2], ipsm[2], nif = 0, n_disp = 0;
-  uint32_t ord = 1, rd_mask = 0;  // (rd_mask: bit per intermediate image read by a draw)
+  uint32_t ord = f->nd, rd_mask = 0;  // (rd_mask: bit per intermediate image read by a draw)
   DEV(if (t_force) sceClibMemset(t_mark, 0, sizeof t_mark);)
   for (uint32_t i = 0; i < f->nd; i++) n_disp += (RE(f->e[f->d[i].st], 0x9C) & 0x1FFFF0) == disp;
   // no draw to the shown image (game behind: the flip has the other one of the double buffer): use the last draw's one
@@ -668,17 +669,17 @@ static int trCheckFrame(RFrame *f, uint32_t *disp_p, uint32_t *ord_p) {
         if (nif < 2) { ipsm[nif] = RE(e0, 0xD2) & 3; iend[nif] = end; ifb[nif++] = fb; } else r = T_DEST;
       }
       kd = k;
-      if (rd_mask >> k & 1) ord = 0;
+      if (rd_mask >> k & 1 && i < ord) ord = i;
     }
     if (!r && hasTex(e0, &f->d[i]) && !f->d[i].toff) {  // texture with no copy
       uint32_t ta = texAddr(e0), vr = (ta & 0x0F000000) == 0x04000000, old = 0;
-      if (vr && (ta & 0x1FFFF0) == disp && (RE(e0, 0xC3) & 15) == (f->fbw >> 16 & 3) && kd >= 0) ord = 0;  // (cuts the surface's scene)
+      if (vr && (ta & 0x1FFFF0) == disp && (RE(e0, 0xC3) & 15) == (f->fbw >> 16 & 3) && kd >= 0) { if (i < ord) ord = i; }  // (cuts the surface's scene)
       else {
         for (k = 0; k < nif && !(vr && (ta & 0x1FFFF0) == ifb[k]); k++) {}
         if (k == nif) for (int j = 0; j < 2; j++) old |= vr && rts[j].mem && rts[j].fb == (ta & 0x1FFFF0);
         // not read in another format: its bytes are not in the surface
         if (!old && (k == nif || (RE(e0, 0xC3) & 15) != ipsm[k])) r = T_TEX;
-        else if (!old) { rd_mask |= 1u << k; if (kd >= 0) ord = 0; }
+        else if (!old) { rd_mask |= 1u << k; if (kd >= 0 && i < ord) ord = i; }
       }
     }
     if (r) {
@@ -690,7 +691,7 @@ static int trCheckFrame(RFrame *f, uint32_t *disp_p, uint32_t *ord_p) {
              RE(e, 0xE1) & 0xFFFFFF, RE(e, 0x22) & 1, RE(e, 0xC9) & 0xFFFFFF, RE(e, 0x9C) & 0xFFFFFF, RE(e, 0x9D) & 0x7FF, f->fb,
              f->fbw & 0xFFFF, RE(e, 0xD3) & 0xFFFF, RE(e, 0x27) & 1, RE(e, 0x28) & 1);
       }
-      DEV(if (t_force) { t_mark[i >> 5] |= 1u << (i & 31); t_cnt[r]++; ord = 0; continue; })
+      DEV(if (t_force) { t_mark[i >> 5] |= 1u << (i & 31); t_cnt[r]++; continue; })
       return r;
     }
   }
@@ -832,7 +833,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
   int opened = 0, has_base = 0;
   uint32_t d0 = t_draws, ssw = 0;  // timer: draws at scene start, swizzled draws and scene pixels
   float spx = 0;
-  if (!ord) OPEN(0);  // (in game order: the surface first, as on the PSP)
+  if (!ord) OPEN(0);  // (all in game order: the surface first, as on the PSP)
   // GE texture format (0xC3) -> GXM
   static const SceGxmTextureFormat gf[6] = { SCE_GXM_TEXTURE_FORMAT_U5U6U5_BGR, SCE_GXM_TEXTURE_FORMAT_U1U5U5U5_ABGR,
     SCE_GXM_TEXTURE_FORMAT_U4U4U4U4_ABGR, SCE_GXM_TEXTURE_FORMAT_U8U8U8U8_ABGR, SCE_GXM_TEXTURE_FORMAT_P4_ABGR,
@@ -840,8 +841,8 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
   int res = T_OK;
   static struct { uint32_t clut, c5, ne, off; } pc[128];  // palettes translated in this frame, by loaded palette and 0xC5
   sceClibMemset(pc, 0, sizeof pc);
-  // with ord, two passes: 0 draws to intermediate images, 1 those to the surface
-  for (uint32_t pass = 0; pass <= ord && res == T_OK; pass++)
+  // three passes: of the first ord draws, 0 those to intermediate images and 1 those to the surface; 2 the rest, in order
+  for (uint32_t pass = 0; pass < 3 && res == T_OK; pass++)
   for (uint32_t i = 0; i < f->nd && res == T_OK; i++) {
     RDraw *d = &f->d[i];
     DEV(if (t_force && t_mark[i >> 5] >> (i & 31) & 1) continue;)
@@ -849,7 +850,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     uint32_t clr = RE(e, 0xD3), tex = hasTex(e, d), fb = RE(e, 0x9C) & 0x1FFFF0, w3d = !(d->vt >> 23 & 1);
     RT *dst = fb == disp ? 0 : rtOf(fb, f->frame, 1);
     if (fb != disp && !dst) { res = T_DEST; break; }
-    if (ord && (pass ? dst != 0 : dst == 0)) continue;
+    if (i < ord ? pass != (dst ? 0u : 1u) : pass != 2) continue;
     DEV(tb = now();)
     if (!opened || dst != cur_rt) OPEN(dst);
     DEV(t_us[4] += now() - tb; tb = now();)
