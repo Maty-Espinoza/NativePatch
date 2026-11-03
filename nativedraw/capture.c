@@ -1155,6 +1155,11 @@ static void event(volatile uint32_t *e) {
     static uint32_t snap;
     if (SB[0xA0] && SB[0xA0] != snap) {
       snap = SB[0xA0];
+      static uint32_t ncmp;
+      if (ncmp < 12 && gen > 200) {  // (diagnostic) every state register where the capture differs from the real GE
+        ncmp++;
+        for (int i = 0; i < NRS; i++) if (reg[RS[i]] != (SB[0x100 + RS[i]] & 0xFFFFFF)) clog("register %02x: capture %06x real %08x (frame %u)\n", RS[i], reg[RS[i]], SB[0x100 + RS[i]], gen);
+      }
       for (int i = 0x15; i < 256; i++) if (cls[i] && !seen[i] && reg[i] != (SB[0x100 + i] & 0xFFFFFF)) {
         reg[i] = SB[0x100 + i] & 0xFFFFFF;
         clog("register %02x comes from the snapshot: %06x\n", i, reg[i]);
