@@ -4,6 +4,18 @@ Versions: `docs/dev/en/versions.md`. The detail of each step is in `docs/changel
 removed from there before the first release; this file stays as the summary). Versions marked "(test)" were sent to
 the Vita but not yet confirmed as a numbered release.
 
+## NativeDraw 0.0.12 + NativeLink 0.0.5 (2026-11-02)
+Tests 0.0.12.1–0.0.12.14 + NativeLink 0.0.4.1, checked on the Vita with Ridge Racer. Menus and the car selector are drawn in HD; the
+race still goes with the normal image.
+- **3D in the translator:** matrices in the record, transform and perspective, depth, cull, lighting, fog, generated UVs, texture
+  functions decal, blend and add, doubled alpha blend factors. Material alpha comes from 0x58.
+- **Sublist memory** only runs when a frame does not fit the record (over 4096 draws).
+- **Lost GE state:** NativeLink reads the real registers every 32 frames; a stable value that differs from the capture replaces it.
+- **Speed:** fast fragment program, palettes translated once per frame, state lookup by table, VRAM textures in their own thread,
+  matrix and light blocks only when they change, close 3D vertices by DMA, draw timing sampled.
+- Slow scenes ask for dumps only at the `auto` level.
+- **Ridge Racer selector:** game ~57 fps, translator 193 to ~30-38 ms per frame, GPU ~31 ms. **Race (normal image):** 30-47 fps, capturer ~21 ms.
+
 ## NativeDraw 0.0.11 (2026-11-02)
 Tests 0.0.11.1–0.0.11.3, checked on the Vita with Street Fighter Alpha 3 MAX and Metal Slug XX. NativeLink stays at 0.0.4.
 - **Triangle fans (prim 5)** in the translator and `tools/dump.py`: Street Fighter fights are drawn in HD.

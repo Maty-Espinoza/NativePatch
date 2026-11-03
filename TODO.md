@@ -2,7 +2,7 @@
 
 The only list of pending work. Ordered from what comes next to what can wait. Each item says where it came from
 (a document in `docs/dev/en/`, `docs/agent/en/`, `docs/changelog/en/` or the claude.ai project). Done items are removed;
-what was done is in `CHANGELOG.md`. Updated 2026-11-02 (NativeLink 0.0.4 + NativeDraw 0.0.11 confirmed; before: tests up to NativeDraw 0.0.8.29 + NativeLink 0.0.3.11). How the work is done: `docs/agent/en/workflow.md`; stage 3 plan and results:
+what was done is in `CHANGELOG.md`. Updated 2026-11-02 (NativeLink 0.0.5 + NativeDraw 0.0.12 confirmed; before: tests up to NativeDraw 0.0.8.29 + NativeLink 0.0.3.11). How the work is done: `docs/agent/en/workflow.md`; stage 3 plan and results:
 `docs/agent/en/stage3-plan.md`.
 
 ## Next
@@ -15,12 +15,10 @@ what was done is in `CHANGELOG.md`. Updated 2026-11-02 (NativeLink 0.0.4 + Nativ
       1 MB texture in RAM. Suspected, not proven: the texture cache samples 1 group in 4 per frame since 0.0.12.8 and shows old rows of
       a texture rewritten every frame. Next: a dump on a bad frame, or try with `no_tex_cache`.
 - [ ] **Ridge Racer race, next steps:** (1) game at 60 with HD at 30: the capturer needs ~21 ms for 13000 commands; let NativeLink copy
-      the list at the sync (~52 KB, vertices are not inside the list) so the game does not wait, and when the capturer is behind walk a
+      the list at the sync (~52 KB, vertices are not inside the list; no PSP DMA in Adrenaline 8, so by GE TRANSFER or CPU) so the game does not wait, and when the capturer is behind walk a
       frame without recording it. (2) HD in the race: reading the shown image and an image while drawing on it (image 088000, 256 wide)
       and an image read with a palette (1FE000, 64 wide, T8; try the mirror copy). (3) VRAM texture cache by tracking written pages (the
       record thread spends ~19 ms per frame). (4) Translator vertices ~15-20 ms per frame in the selector.
-- [ ] **3D** (after the fans; the user's order, 2026-11-02): start with a light game, not GT. Store the matrices in the record
-      and translate depth; GT needs reusing recorded sublists (`Performance for drawing GT`).
 - [ ] **Texture cache, what is left:** VRAM textures (KOF 96 fights: DMA ~1 ms + sort ~2 ms per frame; only after understanding the
       tiles: if they are stale data, a cache can make them worse); the check costs ~3.2 ms per frame (Metal Slug XX), see what
       can go; translator caches (palettes, translated draws, identical scenes; the translator spends ~8–10 ms of CPU per
@@ -64,9 +62,9 @@ what was done is in `CHANGELOG.md`. Updated 2026-11-02 (NativeLink 0.0.4 + Nativ
       with `gpu_timer` set to `no`. `sceCommonDialogIsRunning` always says "no": useless for this. Postponed by the user.
       Earlier case (0.0.8.12): pressing PS to quit removed the background at the sides and the dialog did not appear; PS
       twice to the Vita menu and reopening Adrenaline fixed it. Low priority: solve it if it comes back.
-- [ ] Translator, not drawn yet (frame goes with the normal image): 3D (non-through mode), color test and logical
-      operations; blending with destination alpha or doubled factors (`blend`); joining draws with the same state.
-- [ ] Frame record: store the matrices (needed for 3D); copying from the PSP RAM costs ~6 µs per draw (KOF 96, ~2.4 ms
+- [ ] Translator, not drawn yet (frame goes with the normal image): lines and points, weights and morph, color test and logical
+      operations; destination alpha blending (`blend`); joining draws with the same state.
+- [ ] Frame record: copying from the PSP RAM costs ~6 µs per draw (KOF 96, ~2.4 ms
       per frame): make it cheaper if it matters; some KOF 96 frames hit the cap (`R_LIMIT`) in transitions.
 - [ ] Possible bugs noted while cleaning comments (not touched; confirm before changing): `replay.c` `repLoad`
       goes on with garbage data when a texture is bigger than the buffer and does not free memory on failure;

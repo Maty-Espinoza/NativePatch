@@ -80,6 +80,7 @@ occupies it, NativeLink stays off. The Vita sees it at `0x68000000 + (address & 
 | 0x4D | PSP | free CPU calibration |
 | 0x4E | Vita | log level (0 minimum, 1 medium, 2 extreme) |
 | 0x50–0x53, 0x60+, 0x80+ | Vita | sample of hashes of the last list captured (list lifetime and gate self-check) |
+| 0xA0, 0x100+ | PSP | number of the GE register snapshot (every 32 frames) and its values, by command |
 | 0x54 | PSP | gate mode (0 testing, 1 before enqueuing, 2 at the sync until the game is closed) |
 | 0x200–0x3FF / 0x8400–0x85FF | PSP | number of the last copy of each page in each mirror |
 | 0x400 + 8·k | PSP | ring of 4096 events of 32 bytes: type \| data << 8, a, b, c, PSP time, sequence, extra |
@@ -114,6 +115,7 @@ unused: `SB[0x47]`, bits 4 and 8 of 0x4A and events 7, 8, 9, 10 and 12.
 | Thread | Core / priority | What it does |
 |---|---|---|
 | capturer | any of the 3 (0x61; `capture_core` pins it) | follows the mailbox, walks each list and builds the frame record |
+| record | any (0x62, just below the capturer) | copies and sorts VRAM textures after the flip and publishes the frame |
 | reader 0 and 1 | 0 and 2 (0xB0, only what is left over) | fetch ahead the 64-byte lines of the list into a shared cache and check stored sublists |
 | mirror | 0 (0xBE) | passes the switches and the level to NativeLink; at extreme (development build), measures how much the mirror changes |
 | log | (0xB0) | writes `nativedraw_capture.log` every second |

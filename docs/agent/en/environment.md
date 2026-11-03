@@ -10,7 +10,7 @@ how the capturer is tested outside the Vita. Everything that needs PATH stays in
 | NativeLink | pspdev (gcc for MIPS, pspsdk) + `systemctrl.h` and `libpspsystemctrl_kernel.a` from Adrenaline | `tools/setup.sh` |
 | NativeDraw | vitasdk (gcc for ARM, vita-toolchain, vita-headers) + `taihen` package + stubs generated with `vita-libs-gen-2` | `tools/setup.sh` |
 | Installer (VPK) | vitasdk (`vita-make-fself`, `vita-mksfoex`, `vita-pack-vpk`) | same |
-| Translator shaders (`nativedraw/shaders/*.cg`) | Sony's compiler under qemu (JagerDesu/vita-shaders) | only when a `.cg` changes; the compiled `.h` is in the repo (`shaders/build.sh`) |
+| Translator shaders (`nativedraw/shaders/*.cg`) | Sony's compiler under qemu (JagerDesu/vita-shaders): `apt-get install qemu-user-static gcc-arm-linux-gnueabihf libc6-dev-armhf-cross`, clone, in `resolve.c` change `memmem(start, -1,` to `memmem(start, 0x300000,`, `make CC=arm-linux-gnueabihf-gcc`, then `SHACC=<folder> sh nativedraw/shaders/build.sh` | only when a `.cg` changes; the compiled `.h` is in the repo |
 
 vitasdk's GCC 15 uses C23 by default and `taihen.h` does not compile: the `arm-none-eabi-gcc` wrapper that `setup.sh`
 leaves adds `-std=gnu17`.

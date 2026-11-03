@@ -117,6 +117,17 @@ directa.
   primeras listas del juego. Este juego configura la prueba de alfa solo ahí, así que cada draw tenía "nunca pasa". Ahora
   el capturador recorre el anillo desde el inicio [medido, 0.0.8.29]. Las peleas de este juego usan abanicos de triángulos,
   que aún no se dibujan: imagen normal.
+- **3D en la Vita (Ridge Racer):** el traductor hace en la CPU el trabajo del GE por vértice; x, y, z conservan su w de recorte, así la GPU
+  recorta y corrige la perspectiva. Selector [medido]: traductor ~30-38 ms por frame, GPU ~31 ms con 4,2 M de píxeles y 1000 dibujos.
+- **La memoria de sublistas y el registro no se mezclan:** una sublista saltada deja el frame incompleto. Ahora solo corre en frames de más
+  de 4096 dibujos. Ridge Racer se saltaba el 6 % de sus comandos y perdía casi todos los frames por eso [medido].
+- **La captura puede perder estado del GE** fijado antes de leer las primeras listas; qué registro falta cambia entre corridas, por eso falla
+  solo a veces (Ridge Racer: `c9`, fondos negros). `sceGeGetCmd` da los valores reales y funciona en Adrenaline [medido].
+- **Qué decide los fps de Ridge Racer:** ~10 ms de trabajo propio más dos esperas en la compuerta de hasta 5 ms. Si pasa de 16,6 ms baja
+  directo a 30 fps [medido]. Su lista cambia antes de encolar la siguiente, así que la compuerta queda en el sync.
+- **El límite es leer, no ordenar:** calcular huellas de texturas para no ordenarlas cuesta casi lo mismo que ordenarlas. Los vértices 3D de
+  Ridge Racer están repartidos y fuera de la lista; el DMA por ventanas completas empeoró el capturador (26 ms) [medido].
+- **Reconstruir paletas por dibujo costaba 116 ms por frame** en el selector: 1000 dibujos de 256 entradas [medido].
 - **128 texturas por frame eran pocas:** Metal Slug XX llegaba al tope con 0,8 de 1,5 MB en uso y perdía frames. Ahora son
   256 [medido, 0.0.8.25–0.0.8.26].
 - Los juegos de Neo Geo hacen transparencias dibujando algo un frame sí y otro no: si la Vita repite o salta frames,

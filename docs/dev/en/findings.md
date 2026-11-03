@@ -117,6 +117,17 @@ proof.
 - **Black image with good data missing:** the capturer started at the events present when it saw the mailbox and skipped
   the game's first lists. This game sets the alpha test only there, so every draw had "never pass". The capturer now
   walks the ring from its start [measured, 0.0.8.29]. Fights in this game use triangle fans, not drawn yet: normal image.
+- **3D on the Vita (Ridge Racer):** the translator does the GE's vertex work on the CPU; x, y and z keep their clip w, so the GPU clips
+  and corrects perspective. Selector [measured]: translator ~30-38 ms per frame, GPU ~31 ms for 4.2 M pixels and 1000 draws.
+- **Sublist memory and the record do not mix:** a skipped sublist leaves the frame incomplete. It now runs only for frames over 4096
+  draws. Ridge Racer skipped 6 % of its commands and lost nearly every frame to it [measured].
+- **The capture can miss GE state** set before it reads the first lists; which registers changes between runs, so it fails only some
+  times (Ridge Racer: `c9`, black backgrounds). `sceGeGetCmd` gives the real values, and works in Adrenaline [measured].
+- **What decides the game's fps in Ridge Racer:** ~10 ms of its own work plus two waits at the gate of up to 5 ms each. Over 16.6 ms in
+  total it drops straight to 30 fps [measured]. Its list changes before the next enqueue, so the gate stays at the sync.
+- **Reading is the limit, not sorting:** hashing textures to skip the sort costs about the same as sorting. Ridge Racer's 3D vertices
+  are scattered and outside the list; DMA over whole windows made the capturer slower (26 ms) [measured].
+- **Palettes rebuilt per draw cost 116 ms per frame** in the selector: 1000 draws of 256 entries each [measured].
 - **128 textures per frame was too few:** Metal Slug XX reached it with 0.8 of 1.5 MB in use and lost frames. It is 256 now
   [measured, 0.0.8.25–0.0.8.26].
 - Neo Geo games make transparencies by drawing something one frame on and one frame off: if the Vita repeats or skips

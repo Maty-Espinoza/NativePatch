@@ -97,4 +97,6 @@ Hitos de la numeración vieja (detalle en `../../changelog/`):
 | v13.13 | Ridge Racer a 60 fps: interpretar de a línea, capturador en cualquier núcleo |
 | 0.0.4 | 0.0.9 | `c9c50f3` | Etapa 3: KOF 96 a 60 fps, Metal Slug XX a 30 fps, batería sintética NPTEST y comparador, paquete del emulador, arreglos de los volcados de NPTEST. Pruebas: NativeDraw 0.0.8.13–0.0.8.32 y NativeLink 0.0.3.1–0.0.3.11 |
 | 0.0.4 | 0.0.10 | `b8f6d11` | Caché de texturas entre frames para texturas de la RAM. Metal Slug XX: capturador de 19,4 a 8,3 ms por frame. Prueba: NativeDraw 0.0.10.1 |
+| (prueba 0.0.4.1) | (prueba 0.0.12.1–0.0.12.14) | `9fa9f60`…`35e8e59` | 3D en la Vita con Ridge Racer: menús y selector en HD |
+| 0.0.5 | 0.0.12 | (commit "NativeDraw 0.0.12 + NativeLink 0.0.5") | 3D en el traductor, registros reales del GE, capturador y traductor más rápidos |
 | 0.0.4 | 0.0.11 | (commit "NativeDraw 0.0.11") | Abanicos de triángulos, muestra del caché corregida, texturas chicas fuera del caché, volcados con respaldo a un frame. Pruebas: NativeDraw 0.0.11.1–0.0.11.3 |

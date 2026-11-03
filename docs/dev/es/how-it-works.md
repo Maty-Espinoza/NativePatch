@@ -80,6 +80,7 @@ ocupa, NativeLink queda apagado. La Vita la ve en `0x68000000 + (dirección & 0x
 | 0x4D | PSP | calibración de la CPU libre |
 | 0x4E | Vita | nivel de registro (0 mínimo, 1 mediano, 2 extremo) |
 | 0x50–0x53, 0x60+, 0x80+ | Vita | muestra de huellas de la última lista capturada (vida de la lista y autocomprobación de la compuerta) |
+| 0xA0, 0x100+ | PSP | número de la lectura de registros del GE (cada 32 frames) y sus valores, por comando |
 | 0x54 | PSP | modo de la compuerta (0 probando, 1 antes de encolar, 2 en el sync hasta cerrar el juego) |
 | 0x200–0x3FF / 0x8400–0x85FF | PSP | número de la última copia de cada página en cada espejo |
 | 0x400 + 8·k | PSP | anillo de 4096 eventos de 32 bytes: tipo \| dato << 8, a, b, c, hora del PSP, orden, extra |
@@ -114,6 +115,7 @@ quedan sin usar: `SB[0x47]`, los bits 4 y 8 de 0x4A y los eventos 7, 8, 9, 10 y 
 | Hilo | Núcleo / prioridad | Qué hace |
 |---|---|---|
 | capturador | cualquiera de los 3 (0x61; `capture_core` lo fija) | sigue el buzón, recorre cada lista y arma el registro del frame |
+| registro | cualquiera (0x62, justo bajo el capturador) | copia y ordena las texturas de VRAM tras el flip y publica el frame |
 | lector 0 y 1 | 0 y 2 (0xB0, solo lo que sobra) | traen por adelantado las líneas de 64 bytes de la lista a una caché compartida y comprueban sublistas guardadas |
 | espejo | 0 (0xBE) | pasa a NativeLink los interruptores y el nivel; en extremo (compilación de desarrollo) mide cuánto cambia el espejo |
 | registro | (0xB0) | escribe `nativedraw_capture.log` cada segundo |

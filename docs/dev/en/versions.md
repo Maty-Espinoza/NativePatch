@@ -97,4 +97,6 @@ Milestones of the old numbering (details in `../../changelog/`):
 | v13.13 | Ridge Racer at 60 fps: interpret line by line, capturer on any core |
 | 0.0.4 | 0.0.9 | `c9c50f3` | Stage 3: KOF 96 at 60 fps, Metal Slug XX at 30 fps, NPTEST synthetic battery and comparator, emulator package, fixes from the NPTEST dumps. Tests: NativeDraw 0.0.8.13–0.0.8.32 and NativeLink 0.0.3.1–0.0.3.11 |
 | 0.0.4 | 0.0.10 | `b8f6d11` | Texture cache between frames for RAM textures. Metal Slug XX: capturer 19.4 → 8.3 ms per frame. Test: NativeDraw 0.0.10.1 |
+| (test 0.0.4.1) | (test 0.0.12.1–0.0.12.14) | `9fa9f60`…`35e8e59` | 3D on the Vita with Ridge Racer: menus and selector in HD |
+| 0.0.5 | 0.0.12 | (commit "NativeDraw 0.0.12 + NativeLink 0.0.5") | 3D in the translator, real GE registers, capturer and translator faster |
 | 0.0.4 | 0.0.11 | (commit "NativeDraw 0.0.11") | Triangle fans, cache sample fixed, small textures out of the cache, dumps fall back to one frame. Tests: NativeDraw 0.0.11.1–0.0.11.3 |
