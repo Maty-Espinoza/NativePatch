@@ -13,9 +13,9 @@ static const char *tnames[TN] = { "ok", "no_new_frame", "primitive", "format", "
 static volatile uint32_t t_cnt[TN], t_hd, t_nat, t_draws;
 static volatile uint32_t t_skip[6];  // PSP frames advanced by each drawn frame (0: repeated, 5: 5 or more)
 DEV(static volatile uint32_t t_us[6];)  // us in trFrame: check, textures and palettes, vertices, GXM setup, scene changes, all
-// Vertices in detail. t_v: us in matrices, decoding, trTris, the rest. t_c: see the translator detail lines of the log
+// Vertices and draws in detail: see the translator detail lines of the log
 DEV(enum { TC_VIN, TC_VOUT, TC_D3, TC_CUT, TC_FLAT, TC_SCIS, TC_LIT, TC_SAME, TC_VFAST, TC_VTEX, TC_VCOL, TC_FOG, TC_ATEST, TC_BLEND, TC_L0, TC_LPT, TC_LSP, TC_ENV, TC_NC };)
-DEV(static volatile uint32_t t_v[4], t_c[TC_NC];)
+DEV(static volatile uint32_t t_c[TC_NC];)
 static uint32_t t_seen[TN];   // times each reason was seen (the first one is logged in detail)
 typedef struct { float x, y, z, w, u, v, f; uint32_t c; } TV;  // translated vertex (32 bytes, the nd_v format); f: fog (1: none)
 static TV *tv[2];            // translated vertices, one per surface
@@ -98,6 +98,7 @@ static SceGxmFragmentProgram *fragProg(int tex, uint32_t key, uint32_t mask) {
 }
 
 #ifdef NP_DEV
+static void trBenchV(void);
 // Logs what the clock costs and the speed of a word read and written in cached memory and in the vertex memory (tv)
 static void trBench(void) {
   static uint32_t cm[1024];
@@ -152,7 +153,7 @@ static int trInit(void) {
   int r1 = sceGxmMapMemory((void *)0x70000000, 0x2000000, RD);
   int r3 = regMapGpu();
   alog("translator: PSP RAM for the GPU %08x, record textures %08x\n", r1, r3);
-  DEV(trBench();)
+  DEV(trBench(); trBenchV();)
   return r3 < 0 ? r3 : 0;
 }
 
@@ -314,7 +315,7 @@ typedef struct {
   float us, vs, uo, vo, tw, th, tm[12];    // UV scale and offset, texture size, texture matrix
   float sx, sy, sz, tx, ty, tz;            // viewport less offset
   float f1, f2, em[4], am[4], ad[4], as[4], ac[4], sp;  // fog; emissive, ambient, diffuse, specular, scene ambient colors
-  uint32_t gen, prj, ls0, ls1, upd, fog, lit, rev;      // 0xC0, 0xC1, 0x53, and on/off switches
+  uint32_t gen, prj, ls0, ls1, upd, fog, lit, rev, nl;  // 0xC0, 0xC1, 0x53, on/off switches, lights on
   uint32_t kw, km, kl; const uint32_t *ke;              // what t3Set last read
   LT l[4];
 } T3;
@@ -323,7 +324,7 @@ static float f24(uint32_t v) { union { uint32_t u; float f; } x = { v << 8 }; re
 static inline float tsqrt(float x) { __asm__("vsqrt.f32 %0, %1" : "=t"(x) : "t"(x)); return x; }
 static float tpow(float b, int e) { float r = 1; for (; e > 0; e >>= 1, b *= b) if (e & 1) r *= b; return r; }
 static void tnorm(float *v) { float d = v[0] * v[0] + v[1] * v[1] + v[2] * v[2]; if (d > 0) { d = 1 / tsqrt(d); v[0] *= d; v[1] *= d; v[2] *= d; } }
-static void rgbf(uint32_t c, float *o) { o[0] = (c & 255) / 255.0f; o[1] = (c >> 8 & 255) / 255.0f; o[2] = (c >> 16 & 255) / 255.0f; o[3] = (c >> 24 & 255) / 255.0f; }
+static void rgbf(uint32_t c, float *o) { const float k = 1 / 255.0f; o[0] = (c & 255) * k; o[1] = (c >> 8 & 255) * k; o[2] = (c >> 16 & 255) * k; o[3] = (c >> 24 & 255) * k; }
 // Fills t for draw d of state e, reading only what changed since the last draw (kw, km, kl, ke; trFrame clears ke):
 // matrices (a 4x3 block is 3 words per basis vector and translation) and their product, registers, and with the block
 // of 0x53-0x9A materials and lights.
@@ -357,10 +358,11 @@ lights:
   t->upd = l[0x53] & 7; t->sp = f24(l[0x5B]);
   rgbf(l[0x54] & 0xFFFFFF, t->em); rgbf((l[0x55] & 0xFFFFFF) | l[0x58] << 24, t->am); rgbf(l[0x56] & 0xFFFFFF, t->ad); rgbf(l[0x57] & 0xFFFFFF, t->as);
   rgbf((l[0x5C] & 0xFFFFFF) | l[0x5D] << 24, t->ac);
+  t->nl = 0;
   for (int i = 0; i < 4; i++) {
     LT *q = &t->l[i];
     float s[4];
-    q->on = RE(e, 0x18 + i) & 1; q->type = l[0x5F + i] >> 8 & 3; q->comp = l[0x5F + i] & 3;
+    q->on = RE(e, 0x18 + i) & 1; t->nl += q->on; q->type = l[0x5F + i] >> 8 & 3; q->comp = l[0x5F + i] & 3;
     for (int k = 0; k < 3; k++) { q->p[k] = f24(l[0x63 + i * 3 + k]); q->sd[k] = f24(l[0x6F + i * 3 + k]); q->a[k] = f24(l[0x7B + i * 3 + k]); }
     q->ex = f24(l[0x87 + i]); q->cut = f24(l[0x8B + i]);
     rgbf(l[0x8F + i * 3] & 0xFFFFFF, s); sceClibMemcpy(q->ca, s, 12);
@@ -449,6 +451,7 @@ static int trVerts(RFrame *f, RDraw *d, TV *o, float tw, float th, uint32_t col0
   if (!sz || !pt) return T_VERT;
   const uint8_t *vb = f->a + d->voff - 1, *ib = d->ioff ? f->a + d->ioff - 1 : 0;  // (offsets + 1; 0: absent)
   uint32_t ix = d->vt >> 11 & 3, n = 0;
+  float itw = 1 / tw, ith = 1 / th;
   TV r[2];
   for (uint32_t i = 0; i < d->n; i++) {
     uint32_t k = !ib ? i : ix == 1 ? ib[i] : ix == 2 ? ((const uint16_t *)ib)[i] : ((const uint32_t *)ib)[i];
@@ -468,12 +471,12 @@ static int trVerts(RFrame *f, RDraw *d, TV *o, float tw, float th, uint32_t col0
         u = tc == 3 ? ((const float *)b)[0] : tc == 2 ? ((const uint16_t *)b)[0] * ks[2] : b[0] * ks[1];
         v = tc == 3 ? ((const float *)b)[1] : tc == 2 ? ((const uint16_t *)b)[1] * ks[2] : b[1] * ks[1];
       }
-      if (t->lit || t->gen == 2) {
+      if ((t->lit && t->nl) || t->gen == 2) {
         if (t->rev) n[0] = -n[0], n[1] = -n[1], n[2] = -n[2];
         for (int r = 0; r < 3; r++) nw[r] = n[0] * t->w[r] + n[1] * t->w[3 + r] + n[2] * t->w[6 + r];
         tnorm(nw);
       }
-      if (t->lit) { t3World(t, x, wp); q.c = t3Light(t, wp, nw, q.c, ct != 0); }
+      if (t->lit) { if (t->nl) t3World(t, x, wp); q.c = t3Light(t, wp, nw, q.c, ct != 0); }
       if (t->gen) t3Gen(t, x, u, v, n, nw, &u, &v);
       else { u = u * t->us + t->uo; v = v * t->vs + t->vo; }
       q.u = u * t->tw; q.v = v * t->th;
@@ -503,7 +506,7 @@ static int trVerts(RFrame *f, RDraw *d, TV *o, float tw, float th, uint32_t col0
     else if (tc == 3) { q.u = ((const float *)(p + otc))[0]; q.v = ((const float *)(p + otc))[1]; }
     // position outside what the GE draws (or NaN): data read late, when the game was already rewriting it
     if (!t && !(d->prim == 5 && pt == 2) && !(q.x > -4096 && q.x < 4096 && q.y > -4096 && q.y < 4096)) { DEV(trOutLog(f, d, i, k, sz, p);) return T_OUT; }
-    q.x *= 2; q.y *= 2; q.u /= tw; q.v /= th;
+    q.x *= 2; q.y *= 2; q.u *= itw; q.v *= ith;
     if (d->prim == 6) {  // rectangle: 2 vertices (opposite corners) -> strip of 4, separated from the next with two
       r[i & 1] = q;      // repeated vertices; color and z are the second vertex's (like the GE). Corners given along
                          // the other diagonal (rot) rotate the UVs: u follows y and v follows x
@@ -533,6 +536,34 @@ static int trVerts(RFrame *f, RDraw *d, TV *o, float tw, float th, uint32_t col0
   *nout = n;
   return T_OK;
 }
+
+#ifdef NP_DEV
+// Logs the ns per vertex of trVerts on synthetic draws of 8 vertices (UV, color, normal, position; 20 bytes), on cached memory:
+// without lighting, lit with no lights on, the same with fog, and with one light
+static void trBenchV(void) {
+  static uint8_t vb[5000 * 20];
+  static T3 x;
+  static const float id[12] = { 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0 };
+  uint32_t ns[4], nout, seed = 1;
+  float sc[4] = { -1e9f, -1e9f, 1e9f, 1e9f };
+  for (uint32_t i = 0; i < sizeof vb; i++) vb[i] = (seed = seed * 1103515245 + 12345) >> 16;
+  volatile uint32_t oa = __builtin_offsetof(RFrame, a);  // (f only serves to reach vb as its area a)
+  RFrame *f = (RFrame *)(vb - oa);
+  RDraw d;
+  sceClibMemset(&d, 0, sizeof d);
+  d.prim = 4; d.n = 8; d.vt = 2 | 7 << 2 | 2 << 5 | 2 << 7; d.vlen = 8 * 20;
+  sceClibMemcpy(x.w, id, sizeof id); sceClibMemcpy(x.wv, id, sizeof id); sceClibMemcpy(x.tm, id, sizeof id);
+  x.m[0] = x.m[5] = x.m[10] = x.m[15] = 1; x.sx = x.sy = x.sz = 1; x.tw = x.th = 256; x.us = x.vs = 1; x.f2 = .01f;
+  for (int k = 0; k < 4; k++) { x.am[k] = x.ad[k] = x.ac[k] = .5f; x.l[0].p[k & 1] = .5f; }
+  for (int c = 0; c < 4; c++) {
+    x.lit = c > 0; x.fog = c > 1; x.nl = c > 2; x.l[0].on = c > 2;
+    uint32_t t0 = now();
+    for (uint32_t i = 0; i < 625; i++) { d.voff = i * 160 + 1; trVerts(f, &d, ts, 256, 256, 0, sc, &nout, &x); }
+    ns[c] = (now() - t0) / 5;
+  }
+  alog("translator: speed: ns per vertex: 3D %u, lit %u, lit and fog %u, one light %u\n", ns[0], ns[1], ns[2], ns[3]);
+}
+#endif
 
 // Clips triangle p to scissor sc edge by edge (Sutherland-Hodgman) in clip space (x, y are x * w, y * w), interpolating
 // the new vertices, and writes the polygon left to o as triangles. Edge 4 first cuts what is behind the camera, where
@@ -724,9 +755,12 @@ static int trCheckFrame(RFrame *f, uint32_t *disp_p, uint32_t *ord_p) {
       if (k == nl && nl < 8) live[nl++] = ta & 0x1FFFF0;
     }
   }
+  const RDraw *cd = 0;
   for (uint32_t i = 0; i < f->nd; i++) {
     if (t_mark[i >> 5] >> (i & 31) & 1) continue;
-    int r = trCheck(f, &f->d[i]);
+    const RDraw *dk = &f->d[i];  // (what trCheck looks at is usually the same as in the last draw checked)
+    int r = cd && cd->st == dk->st && cd->prim == dk->prim && cd->vt == dk->vt && !cd->toff == !dk->toff && !cd->clut == !dk->clut ? T_OK : trCheck(f, &f->d[i]);
+    cd = dk;
     const uint32_t *e0 = f->e[f->d[i].st];
     uint32_t fb = RE(e0, 0x9C) & 0x1FFFF0, k;
     int kd = -1;  // destination intermediate image (-1: the surface)
@@ -916,7 +950,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
   // RUN: sends the pending draw, the n vertices at rv in primitive rp; draws with the state already set wait in it to be joined
 #define RUN() do { if (rn) { sceGxmSetVertexStream(c, 0, o + rv); \
     sceGxmDraw(c, rp == 3 ? SCE_GXM_PRIMITIVE_TRIANGLES : rp == 5 ? SCE_GXM_PRIMITIVE_TRIANGLE_FAN : SCE_GXM_PRIMITIVE_TRIANGLE_STRIP, SCE_GXM_INDEX_FORMAT_U16, tib, rn); rn = 0; } } while (0)
-  uint32_t rn = 0, rv = 0, rp = 0;
+  uint32_t rn = 0, rv = 0, rp = 0, key = 0;
   const RDraw *pd = 0;  // last draw whose state is set in the context, which the next one may share (t, tw, th included)
   SceGxmTexture t;
   float tw = 1, th = 1;
@@ -948,9 +982,10 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     DEV(t_us[4] += now() - tb; tb = now();)
     if ((clr & 1) && !(clr & 0x700)) continue;  // clear of nothing
     int self = 0;  // (the draw reads the image it draws on)
-    uint32_t extra = 0, key = clr & 1 ? 0 : blendKey(e), mat = (RE(e, 0x55) & 0xFFFFFF) | (RE(e, 0x58) & 0xFF) << 24;
+    uint32_t extra = 0, mat = (RE(e, 0x55) & 0xFFFFFF) | (RE(e, 0x58) & 0xFF) << 24;
     int same = pd && !(clr & 1) && pd->st == d->st && pd->vt == d->vt && pd->prim == d->prim && pd->toff == d->toff && pd->clut == d->clut &&
                pd->clen == d->clen && pd->woff == d->woff && pd->moff == d->moff && pd->loff == d->loff;
+    if (!same) key = clr & 1 ? 0 : blendKey(e);
     if (tex && !same) {
       uint32_t fmt = RE(e, 0xC3) & 15, a8 = RE(e, 0xA8), b8 = RE(e, 0xB8), tbw = a8 & 0x7FF;
       th = 1u << (b8 >> 8 & 15); tw = tbw;
@@ -1004,7 +1039,6 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
       if (ry < sc[3]) sc[3] = ry;
     }
     if (w3d) t3Set(f, d, e, &t3);
-    DEV(uint32_t tm = now(); t_v[0] += tm - tb;)
     // (each vertex can become at most 22 when clipped; a draw that big goes straight to tv)
     TV *w = d->n * 22 + 8 <= sizeof ts / sizeof *ts ? ts : o + nv;
     uint32_t room = w == ts ? sizeof ts / sizeof *ts : TV_N - nv;
@@ -1014,7 +1048,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     }
     DEV(if (w3d && t3.lit) for (int i = 0; i < 4; i++) if (t3.l[i].on) { t_c[TC_L0] += d->n; t_c[TC_LPT] += t3.l[i].type ? d->n : 0; t_c[TC_LSP] += t3.l[i].comp == 1 ? d->n : 0; }
         t_c[TC_ENV] += w3d && t3.gen == 2 ? d->n : 0;
-        t_v[1] += now() - tm; t_c[TC_VIN] += d->n; t_c[TC_D3] += w3d; t_c[TC_LIT] += w3d && t3.lit ? d->n : 0;
+        t_c[TC_VIN] += d->n; t_c[TC_D3] += w3d; t_c[TC_LIT] += w3d && t3.lit ? d->n : 0;
         t_c[TC_SCIS] += w3d && (sc[0] > 0 || sc[1] > 0 || sc[2] < W || sc[3] < H); t_c[TC_FLAT] += !(clr & 1) && !(RE(e, 0x50) & 1);
         uint32_t nb = n;)
     if (nv + n > TV_N) { res = T_LIMIT; break; }
@@ -1024,9 +1058,8 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     uint32_t prim = d->prim;
     if (prim < 3 && (res = trLines(w, &n, room, prim == 2))) break;
     if (prim < 3) prim = 3;
-    DEV(tm = now();)
     if (prim != 6 && (res = trTris(w, &n, room, &prim, sc, (clr & 1) || !(RE(e, 0x50) & 1), w3d))) break;
-    DEV(t_v[2] += now() - tm; tm = now(); t_c[TC_VOUT] += n; t_c[TC_CUT] += n != nb; t_c[TC_SAME] += same;)
+    DEV(t_c[TC_VOUT] += n; t_c[TC_CUT] += n != nb; t_c[TC_SAME] += same;)
     if (!n) continue;
     int keep = 1;  // (0: the next draw cannot share t)
     if (tex && d->toff && (1u << (RE(e, 0xB8) & 15)) < tw) {
@@ -1079,7 +1112,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
         dy[1] = q->y < dy[1] ? q->y : dy[1]; dy[3] = q->y > dy[3] ? q->y : dy[3];
       }
     }
-    DEV(t_v[3] += now() - tm; t_us[2] += now() - tb; tb = now();)
+    DEV(t_us[2] += now() - tb; tb = now();)
     float ar = w3d ? 0 : trArea(w, n, prim);
     if (c_on) { spx += ar; ssw += tex && d->toff && (RE(e, 0xC2) & 1); }
     static uint32_t giant;  // giant draws (over 2 screens at double size): the first 40, in detail

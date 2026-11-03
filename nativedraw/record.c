@@ -392,6 +392,11 @@ static uint32_t rgSrc(uint32_t a, uint32_t n) {
   uint32_t s = vtr(a);
   return vtr(a + n - 1) == s + n - 1 && ramEnd(s) >= s + n ? s : 0;
 }
+// 1 if every VRAM page of [a, a + n) has a copy in one of the mirrors (a page may be missing in the current one for a few frames)
+static int rgMirrored(uint32_t a, uint32_t n) {
+  for (uint32_t p = (a & 0x1FFFFF) >> 12, e = ((a & 0x1FFFFF) + n - 1) >> 12; p <= e; p++) if (!CPY(0, p) && !CPY(1, p)) return 0;
+  return 1;
+}
 // Check of a RAM texture across lists: list of its last draw and groups of 8 rows known to be current in that list
 static uint32_t rg_tl[TN_N];
 static uint32_t rg_img[2] = { ~0u, ~0u };  // images the last flips showed (VRAM offsets), the latest first
@@ -467,7 +472,7 @@ static uint32_t rgTex(uint32_t r0, uint32_t r1) {
     uint32_t o = g * gb, m = (h * gb > n ? n : h * gb) - o;
     // From VRAM: copied later (regPend)
     if (vr) {
-      if (!rgSrc(ta + o, m)) {
+      if (!rgMirrored(ta + o, m)) {
         DEV(static uint32_t tf; uint32_t pg = ((ta + o) & 0x1FFFFF) >> 12, bt = 1u << (pg & 31);
             if (tf++ % 64 < 2) clog("record: texture page %03x: wanted data %u list %u, target %u, valid %u %u, copies %u %u, current %u, draws %u\n", pg, !!(want_d[pg >> 5] & bt), !!(want_l[pg >> 5] & bt),
                                     !!(rt_pg[pg >> 5] & bt), !!(mir_ok[0][pg >> 5] & bt), !!(mir_ok[1][pg >> 5] & bt), CPY(0, pg), CPY(1, pg), mir_u, f->nd);)
@@ -515,8 +520,10 @@ static void regPend(void) {
       uint32_t h = g + 1;
       while (h < 64 && (m >> h & 1)) h++;
       uint32_t o = g * gb, l = (h * gb > n ? n : h * gb) - o, a = (f->ta[i] + o) & 0x1FFFFF;
-      for (uint32_t pg = a >> 12, pe = (a + l - 1) >> 12; pg <= pe; pg++) { uint32_t q = CPY(b, pg); if (q < f->tq[i]) f->tq[i] = q; }
-      rgTexCopy(f->tx + f->to[i] + o, (const void *)PSP(base + a), l, f->tn[i] >> 31 ? gb / 8 : 0, f->ta[i] + o, f->tc[i] ? -1 : k, rg_ord2);
+      uint32_t sb = b;  // (a page this mirror does not have yet: all the span from the other one)
+      for (uint32_t pg = a >> 12, pe = (a + l - 1) >> 12; pg <= pe; pg++) if (!CPY(sb, pg)) sb = b ^ 1;
+      for (uint32_t pg = a >> 12, pe = (a + l - 1) >> 12; pg <= pe; pg++) { uint32_t q = CPY(sb, pg); if (q < f->tq[i]) f->tq[i] = q; }
+      rgTexCopy(f->tx + f->to[i] + o, (const void *)PSP((sb ? MIRROR2 : MIRROR) + a), l, f->tn[i] >> 31 ? gb / 8 : 0, f->ta[i] + o, f->tc[i] ? -1 : k, rg_ord2);
       ga.t_b += l;
       g = h;
     }
@@ -763,7 +770,7 @@ static void regFlip(uint32_t fb, uint32_t fbw, uint32_t draws_counted) {
   }
   // Only what the GE draws from now on is held in HD; any other read of those pages comes from the mirror. A sublist
   // the memory applied did not go through draw(): its marks stay
-  if (!(f->flags & R_MEMO)) { sceClibMemset(rt_pg, 0, sizeof rt_pg); rt_nb = 0; last_fb = ~0u; }
+  if (!(f->flags & R_MEMO)) { sceClibMemset(rt_pg, 0, sizeof rt_pg); sceClibMemset(want_now, 0, sizeof want_now); rt_nb = 0; last_fb = ~0u; }
   const uint8_t *pal = rg_clut ? f->a + rg_clut - 1 : 0;
   f = rf[rg_w];
   f->nd = f->ne = f->na = f->flags = f->draws_seen = f->nt = f->ntx = f->dv = f->nimg = 0;

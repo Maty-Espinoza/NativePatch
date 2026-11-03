@@ -105,7 +105,7 @@ static inline int isVram(uint32_t a) { return (a & 0x0F000000u) == 0x04000000u; 
 // Bitmaps of 512 pages (2 MB): requested as list, as data, images drawn in this frame (regFlip empties it) and the
 // displayed image
 // (want_fb, requested by record.c for dumps)
-static uint32_t mir_on, want_l[16], want_d[16], rt_pg[16], want_fb[16];
+static uint32_t mir_on, want_l[16], want_d[16], want_now[16], rt_pg[16], want_fb[16];  // want_now: asked for as data in this frame
 static volatile uint32_t mir_ok[2][16], mir_reset;           // pages with a valid copy in each mirror
 // copy the current list is read with (0: none yet)
 static volatile uint32_t mir_u;
@@ -131,16 +131,17 @@ static void want(uint32_t a, uint32_t n, int list) {
   for (; p <= e && p < 512; p++) {
     uint32_t w = p >> 5, b = 1u << (p & 31);
     if (list) { if (!(want_l[w] & b)) { want_l[w] |= b; SB[0x20 + w] = want_l[w]; } }
-    else if (!(rt_pg[w] & b) && !(want_d[w] & b)) { want_d[w] |= b; SB[0x30 + w] = want_d[w] | want_fb[w]; }
+    else if (!(rt_pg[w] & b)) { want_now[w] |= b; if (!(want_d[w] & b)) { want_d[w] |= b; SB[0x30 + w] = want_d[w] | want_fb[w]; } }
   }
 }
-// Marks VRAM [a, a + n) as render target: not requested as data (and the request is dropped if already made)
+// Marks VRAM [a, a + n) as render target: not requested as data (and the request is dropped if already made, unless this
+// frame used it: the height of an image is an estimate and its pages may hold textures)
 static void markRt(uint32_t a, uint32_t n) {
   uint32_t o = a & 0x1FFFFF, p = o >> 12, e = (o + n - 1) >> 12;
   for (; p <= e && p < 512; p++) {
     uint32_t w = p >> 5, b = 1u << (p & 31);
     rt_pg[w] |= b;
-    if (want_d[w] & b) { want_d[w] &= ~b; if (mir_on) SB[0x30 + w] = want_d[w] | want_fb[w]; }
+    if (want_d[w] & ~want_now[w] & b) { want_d[w] &= ~b; if (mir_on) SB[0x30 + w] = want_d[w] | want_fb[w]; }
   }
 }
 

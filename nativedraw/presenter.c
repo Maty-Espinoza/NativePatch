@@ -607,13 +607,11 @@ static int presThread(SceSize args, void *argp) {
       alog("translator: HD frames %u, normal image %u%s%s | draws drawn %u\n", h, nn, k ? " | reasons:" : "", b, dr);
       DEV(if (h) alog("translator: us per HD frame: all %u | check %u, textures %u, vertices %u, GXM %u, scene changes %u\n", t_us[5] / h, t_us[0] / h, t_us[1] / h, t_us[2] / h, t_us[3] / h, t_us[4] / h);
           for (int i = 0; i < 6; i++) t_us[i] = 0;
-          if (h) { alog("translator: vertices us per HD frame: matrices %u, decoding %u, triangles %u, the rest %u\n", t_v[0] / h, t_v[1] / h, t_v[2] / h, t_v[3] / h);
-            alog("translator: per HD frame: vertices in %u out %u lit %u | 3D draws %u (scissor under the surface %u), rewritten by trTris %u, flat %u, same state as the previous draw %u\n",
+          if (h) { alog("translator: per HD frame: vertices in %u out %u lit %u | 3D draws %u (scissor under the surface %u), rewritten by trTris %u, flat %u, same state as the previous draw %u\n",
                  t_c[TC_VIN] / h, t_c[TC_VOUT] / h, t_c[TC_LIT] / h, t_c[TC_D3] / h, t_c[TC_SCIS] / h, t_c[TC_CUT] / h, t_c[TC_FLAT] / h, t_c[TC_SAME] / h);
             alog("translator: per HD frame: light on a vertex %u, of them point or spot %u, with specular %u | vertices with environment map %u\n", t_c[TC_L0] / h, t_c[TC_LPT] / h, t_c[TC_LSP] / h, t_c[TC_ENV] / h);
             alog("translator: per HD frame: vertices by program: fast %u, textured %u, color %u | draws with fog %u, alpha test %u, blend %u\n",
                  t_c[TC_VFAST] / h, t_c[TC_VTEX] / h, t_c[TC_VCOL] / h, t_c[TC_FOG] / h, t_c[TC_ATEST] / h, t_c[TC_BLEND] / h); }
-          for (int i = 0; i < 4; i++) t_v[i] = 0;
           for (int i = 0; i < TC_NC; i++) t_c[i] = 0;)
       // Pacing: for each Adrenaline frame drawn by the Vita, how many PSP frames advanced since the previous one
       // (1 = none skipped; 0 = repeated the previous one). With skips or repeats, what a game draws every other
