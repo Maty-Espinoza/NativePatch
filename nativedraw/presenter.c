@@ -355,8 +355,8 @@ static int hookEnd(SceGxmContext *c, const SceGxmNotification *v, const SceGxmNo
       RFrame *rg = regTake();
       int cause = T_NEW;
       if (!rg) { t_cnt[T_NEW]++; DEV(if (p_on) pAdd(P_F_NOREC, 0);) }
-      else if (rg->frame == t_frame) {  // same frame: the surface is repeated up to 2 times (30 fps); otherwise, normal
-        if (t_ok && (t_rep < 2 || t_force)) { t_rep++; hd = 2; cause = 0; t_skip[0]++; DEV(if (p_on) pAdd(P_F_REPEAT, 0);) } else t_cnt[T_NEW]++;
+      else if (rg->frame == t_frame) {  // same frame: the surface is repeated up to 8 times (the capturer may not record every frame); otherwise, normal
+        if (t_ok && (t_rep < 8 || t_force)) { t_rep++; hd = 2; cause = 0; t_skip[0]++; DEV(if (p_on) pAdd(P_F_REPEAT, 0);) } else t_cnt[T_NEW]++;
       } else {
         if (t_frame != ~0u && rg->frame > t_frame) { uint32_t g = rg->frame - t_frame; t_skip[g < 5 ? g : 5]++; }
         // The Vita drawing shows one frame behind the normal image, so an HD frame among frames that are not drawable

@@ -10,7 +10,7 @@
 // Complete = every command of the frame was walked and all its draws went through regDraw and fit.
 static void clog(const char *fmt, ...);
 #include "record.h"
-enum { R_MEMO = 1, R_READ = 2, R_LIMIT = 4, R_CURVE = 8 };
+enum { R_MEMO = 1, R_READ = 2, R_LIMIT = 4, R_CURVE = 8, R_SKIP = 16 };
 #ifdef NP_DEV
 // Why a frame stayed not_read (the first cause of each frame): names for the "record not_read:" log line
 enum { NR_VERT, NR_SWZ, NR_TEX, NR_X_USED, NR_X_FORM, NR_X_TEX, NR_COUNT, NR_LIST_PC, NR_LIST_MAX, NR_CALL, NR_DEPTH, NR_LATE, NR_NO_END, NR_RESET, NR_BEHIND, NR_BEHIND_NEXT, NR_N };
@@ -26,7 +26,7 @@ static const char *nr_names[NR_N] = { "vertices", "swizzle_width", "texture", "x
 // per frame
 static struct { uint32_t fr, ok, memo, rd_fail, limit, curve, draws, st, kb, cl, us, d3, clear, blend, atest, swz, fmt[16], us_e, us_v, us_t, us_p, t_b, us_l, stomped, n_late, gpu, o_b, us_o,
   t_n[2], t_kb[2], t_dma[2], t_ord[2], t_calls, t_size[5], t_rb[6], v_dma, v_kb, v_runs, v_list, v_all, t_same, t_changed, t_lines, t_tex,
-  c_hit, c_fill, c_chg, c_rec, c_fail, c_us DEV(, nr[16]); } ga, gr;
+  c_hit, c_fill, c_chg, c_rec, c_fail, c_us, skip DEV(, nr[16]); } ga, gr;
 // RN records: with fewer, the one the GPU just read would at times be the only free one, overwriting its textures
 #define RN 4
 static RFrame *rf[RN];                       // (cached LPDDR + uncached textures: ~2.4 MB each)
@@ -752,6 +752,9 @@ static void regFlip(uint32_t fb, uint32_t fbw, uint32_t draws_counted) {
   f = rf[rg_w];
   f->nd = f->ne = f->na = f->flags = f->draws_seen = f->nt = f->ntx = f->dv = f->nimg = 0;
   rg_t = 0;
+  // The presenter has not taken the last frame: recording another is wasted, and a capturer that keeps up does not read
+  // lists the game is already rewriting. This frame is only walked
+  if (rg_pend >= 0 || (rg_pub >= 0 && rg_pub != rg_last)) { f->flags = R_SKIP; ga.skip++; }
   // The GE keeps the palette it loaded whatever the memory holds now: its copy goes on to the new record (from memory
   // only if there is none)
   if (pal) { sceClibMemmove(f->a, pal, rg_clut_b); f->na = rg_clut_b; rg_clut = 1; }

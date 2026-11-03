@@ -1217,6 +1217,12 @@ static void event(volatile uint32_t *e) {
         }
         snr[i] = v;
       }
+      static uint32_t snl[72];  // the same with the lights and materials block (0x53-0x9A)
+      for (int i = 0; i < 72; i++) {
+        uint32_t v = SB[0x153 + i] & 0xFFFFFF;
+        if (v == snl[i] && reg[0x53 + i] != v) { reg[0x53 + i] = v; rg_lchg = 1; }
+        snl[i] = v;
+      }
     }
     // closes the frame record (a: displayed image, b: width | format << 16)
     DEV(uint32_t tp = PT();)
@@ -1255,7 +1261,7 @@ static void event(volatile uint32_t *e) {
       if (!rep_ready) { rep = acc; gr = ga; rep_ready = 1; }
       // the record yields complete 2D frames (drawn by the Vita): NativeLink copies all requested VRAM at each flip
       if (reg_on) {
-        if (ga.ok * 2 > ga.fr && ga.d3 * 10 < (ga.draws ? ga.draws : 1)) gp_flags |= 16; else gp_flags &= ~16u;
+        if ((ga.ok + ga.skip) * 2 > ga.fr && ga.d3 * 10 < (ga.draws ? ga.draws : 1)) gp_flags |= 16; else gp_flags &= ~16u;
       }
       sceClibMemset(&ga, 0, sizeof ga);
       // recording: keep the difference valid
@@ -1458,9 +1464,9 @@ static int repThread(SceSize args, void *argp) {
         uint32_t g = gr.fr ? gr.fr : 1, dd = gr.draws ? gr.draws : 1;
         clog("  3D vertices (per frame): runs %u, by DMA %u (%u KB read) | draws %u, near the list %u\n", gr.v_runs / g, gr.v_dma / g, gr.v_kb / g >> 10, gr.v_all / g, gr.v_list / g);
 #ifdef NP_DEV
-        char nb[300]; int nk = 0;
+        char nb[300]; int nk = 0; nb[0] = 0;
         for (int i = 0; i < NR_N; i++) if (gr.nr[i]) nk += sceClibSnprintf(nb + nk, sizeof nb - nk, " %s=%u", nr_names[i], gr.nr[i]);
-        if (nk) clog("  record not_read:%s\n", nb);
+        if (nk || gr.skip) clog("  record not_read:%s | frames only walked: %u\n", nb, gr.skip);
 #endif
         clog("  record: frames=%u complete=%u incomplete: memory=%u not_read=%u limit=%u curves=%u | per frame: draws=%u states=%u KB=%u palettes=%u us=%u (states %u vertices %u textures %u [copied %u KB by DMA in %u us, of them swizzled %u KB sorted in %u us; pending lost %u, without the copy of their flip %u, with the GPU unfinished (measured) %u] palettes %u) | of the draws: 3d=%u%% clear=%u%% blend=%u%% alpha_test=%u%% swizzle=%u%% | draws per sec with texture 5650/5551/4444/8888/T4/T8/T16/T32/DXT1/3/5: %u %u %u %u %u %u %u %u %u %u %u\n",
              gr.fr, gr.ok, gr.memo, gr.rd_fail, gr.limit, gr.curve, gr.draws / g, gr.st / g, gr.kb / g >> 10, gr.cl / g, gr.us / g,
