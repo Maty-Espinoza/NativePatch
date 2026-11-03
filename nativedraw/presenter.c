@@ -328,7 +328,10 @@ static int hookEnd(SceGxmContext *c, const SceGxmNotification *v, const SceGxmNo
     const uint32_t *pj = sceGxmTextureGetData(src);
     // GPU behind: if the scene from 2 frames ago is unfinished, no other is sent; the previous surface is repeated
     if (gBusy(fq[1]) && drawn == fr && dump_on != 1) { g_behind++; DEV(if (p_on) pAdd(P_F_BEHIND, 0);) drawn = fr + 1; goto finish; }
-    if (dump_on == 1 || dump_on == 3) dumpFrame(c, pj, drawn == fr && !(covered && copy_fr == fr));  // dump
+    if (dump_on == 1 || dump_on == 3) {  // dump: only of a surface the GPU finished
+      for (int i = 0; i < 100 && gBusy(fq[0]); i++) sceKernelDelayThread(5000);
+      dumpFrame(c, pj, drawn == fr && !(covered && copy_fr == fr));
+    }
     int nj = isBlack(pj, 512, 480, 272), np = drawn == fr && isBlack(surf[cur], LINE, W, H);  // np: previous frame
     n_black_j += nj; n_black_p += np;
     // The surface being shown (surf[cur]) is only read with the GPU finished: half-drawn it is no use for comparing

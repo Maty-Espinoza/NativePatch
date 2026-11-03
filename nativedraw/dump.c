@@ -165,7 +165,11 @@ static void dumpFrame(SceGxmContext *c, const void *pj, int has_surf) {
   sceDmacMemcpy(dump_ps[k], best_k >= 0 ? img[best_k] : pj, 512 * 272 * 4);
   dump_ok[k] = has_surf;
   if (has_surf) { sceDmacMemcpy(dump_hd[k], surf[cur], LINE * H * 4); sceClibMemcpy(dump_tx[k], dump_last, VL); }
-  if (k == 0) { dump_rtfb = dump_rt && rts[0].mem && rts[0].fb != ~0u ? rts[0].fb : ~0u; if (dump_rtfb != ~0u) sceDmacMemcpy(dump_rt, rts[0].mem, LINE * H * 4); }
+  if (k == 0) {  // (the second one if there is one: it is drawn last in the frame)
+    RT *ri = rts[1].mem && rts[1].fb != ~0u ? &rts[1] : &rts[0];
+    dump_rtfb = dump_rt && ri->mem && ri->fb != ~0u ? ri->fb : ~0u;
+    if (dump_rtfb != ~0u) sceDmacMemcpy(dump_rt, ri->mem, LINE * H * 4);
+  }
   else { sceClibSnprintf(dump_tx[k], VL, "surface: not used in this frame (Adrenaline showed the normal image)\n"); dump_bf[k] = VN; }
   if (k == 0 && dump_dif) sceClibSnprintf(dump_tx[0] + sceClibStrnlen(dump_tx[0], VL - 80), 80, "automatic dump: %u blocks that do not resemble any PSP image\n", dump_dif);
   if (++dump_k == dump_nf) dump_on = 2;
@@ -251,12 +255,12 @@ static int dumpAlloc(void) {
     nb += dump_bb[i] != 0;
   }
   void *r = 0, *nn = 0;
-  // exact PSP image and intermediate image
-  if (dump_level >= 2) dump_natblk = sceKernelAllocMemBlock("nativedraw_dump_nat", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW_UNCACHE, 0x100000, 0);
-  dump_nat = dump_level >= 2 && dump_natblk >= 0 && sceKernelGetMemBlockBase(dump_natblk, &nn) >= 0 ? nn : 0; dump_natok = 0;
+  // intermediate image and exact PSP image
   if (dump_level >= 2) dump_rtblk = sceKernelAllocMemBlock("nativedraw_dump_rt", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW_UNCACHE, (LINE * H * 4 + 0x3FFFF) & ~0x3FFFFu, 0);
   if (dump_level >= 2 && dump_rtblk < 0) dump_rtblk = sceKernelAllocMemBlock("nativedraw_dump_rt", SCE_KERNEL_MEMBLOCK_TYPE_USER_MAIN_PHYCONT_NC_RW, (LINE * H * 4 + 0xFFFFF) & ~0xFFFFFu, 0);
   dump_rt = dump_level >= 2 && dump_rtblk >= 0 && sceKernelGetMemBlockBase(dump_rtblk, &r) >= 0 ? r : 0;
+  if (dump_level >= 2) dump_natblk = sceKernelAllocMemBlock("nativedraw_dump_nat", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW_UNCACHE, 0x100000, 0);
+  dump_nat = dump_level >= 2 && dump_natblk >= 0 && sceKernelGetMemBlockBase(dump_natblk, &nn) >= 0 ? nn : 0; dump_natok = 0;
   dump_bpend = VN; dump_mem = 1;
   alog("dump: memory ready, level %s (%u frames, %u blocks for records)\n", dump_names[dump_level], dump_nf, nb);
   return 1;
