@@ -144,6 +144,17 @@ static void markRt(uint32_t a, uint32_t n) {
   }
 }
 
+static uint32_t rt_fb[8], rt_nb;  // images the frame drew on (their addresses in VRAM)
+// 1 if a is in a page marked as render target
+static int rtPage(uint32_t a) { uint32_t p = (a & 0x1FFFFF) >> 12; return rt_pg[p >> 5] >> (p & 31) & 1; }
+// 1 if a is the start of an image the frame drew on: the Vita holds it in HD. Anything else in those pages (data that shares a
+// page with an image, the z) comes from the mirror
+static int rtRead(uint32_t a) {
+  if (!rtPage(a)) return 0;
+  for (uint32_t i = 0; i < rt_nb; i++) if (rt_fb[i] == (a & 0x1FFFF0)) return 1;
+  return rt_nb == 8;
+}
+
 // Thread read buffer: the last n bytes read from address a; own reads of PSP RAM,
 // hits lines taken from the shared cache
 typedef struct { uint32_t buf[64] __attribute__((aligned(16))); uint32_t a, n, own, hits; } Rd;
@@ -338,7 +349,8 @@ static void draw(uint32_t d) {
     // height: to the bottom edge of the scissor or of the region (0x16; 0: never set), whichever comes first
     uint32_t h = ((reg[0xD5] >> 10) & 0x3FF) + 1, hr = ((reg[0x16] >> 10) & 0x3FF) + 1, w = reg[0x9D] & 0x7FF;
     if (reg[0x16] & 0xFFFFF && hr < h) h = hr;
-    markRt(fb, w * h * ((reg[0xD2] & 3) == 3 ? 4 : 2));
+    // (an image started with points is the game sampling pixels: the Vita does not draw it, it reads the result in the mirror)
+    if (type) { markRt(fb, w * h * ((reg[0xD2] & 3) == 3 ? 4 : 2)); if (rt_nb < 8) rt_fb[rt_nb++] = fb & 0x1FFFF0; }
     if (reg[0x23] & 1) markRt(reg[0x9E] & 0xFFFFF0, (reg[0x9F] & 0x7FF) * h * 2);  // z (with z test)
   }
   if (isVram(vaddr)) acc.dvert_vram++;
@@ -361,13 +373,13 @@ static void draw(uint32_t d) {
     if (isVram(ta)) {
       acc.dtex_vram++;
       uint32_t p = (ta & 0x1FFFFF) >> 12;
-      if (rt_pg[p >> 5] >> (p & 31) & 1) acc.tex_rt++;
+      if (rtRead(ta)) acc.tex_rt++;
       // if not a render target: requested from the mirror (level 0 bytes per the bpp of each GE format)
       else if (dirty & C_TEX || !((want_d[p >> 5] >> (p & 31)) & 1)) {
         static const uint8_t bpp[16] = { 16, 16, 16, 32, 4, 8, 16, 32, 4, 8, 8, 8, 8, 8, 8, 8 };
         uint32_t w = reg[0xA8] & 0x7FF, h = 1u << ((reg[0xB8] >> 8) & 0xF);
         if (!w) w = 1u << (reg[0xB8] & 0xF);
-        want(ta, w * h * bpp[reg[0xC3] & 0xF] / 8, 0);
+        want(ta, w * h * bpp[reg[0xC3] & 0xF] / 8, rtPage(ta));  // (in a page of an image: goes with the lists, not refused as data)
       }
     }
     if (dirty & C_TEX) acc.texnew++;
@@ -871,7 +883,7 @@ static int __attribute__((noinline)) walkList(List *l) {
     case 0xC4: {  // palette load: a change only if another palette or size
       if (rec) { recRead(0xB0); recRead(0xB1); }
       uint32_t ca = CLUTADDR();
-      acc.cluts++; if (isVram(ca)) { acc.clut_vram++; want(ca, (d & 0x3F) * 32, 0); } else smpAdd(ca, (d & 0x3F) * 32, 3); if (rec) rec->flags |= M_CLUT;
+      acc.cluts++; if (isVram(ca)) { acc.clut_vram++; want(ca, (d & 0x3F) * 32, rtPage(ca)); } else smpAdd(ca, (d & 0x3F) * 32, 3); if (rec) rec->flags |= M_CLUT;
       if (ca != last_clut[0] || d != last_clut[1]) { last_clut[0] = ca; last_clut[1] = d; dirty |= C_TEX; }
       if (reg_on) regClut(d);
       break;

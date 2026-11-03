@@ -22,10 +22,10 @@ static uint32_t *tpal[2];    // translated palettes (8888), aligned to 64: 16 en
 #define C_RGB (SCE_GXM_COLOR_MASK_R | SCE_GXM_COLOR_MASK_G | SCE_GXM_COLOR_MASK_B)  // alpha is never written
 // last record frame seen, whether it was drawn fine, how many times it was repeated and when one was last not drawable
 static uint32_t t_frame = ~0u, t_ok, t_rep, t_bad;
+static uint32_t t_mark[RD_N / 32 + 1];  // a bit per draw not done
 #ifdef NP_DEV
-// Switch force_hd (diagnosis): a frame with a draw it cannot do still goes in HD, skipping that draw (t_mark, a bit per draw)
+// Switch force_hd (diagnosis): a frame with a draw it cannot do still goes in HD, skipping that draw
 static int t_force;
-static uint32_t t_mark[RD_N / 32 + 1];
 static void failNote(RFrame *f, uint32_t i, int r);  // dump.c
 #else
 #define t_force 0
@@ -477,7 +477,7 @@ static int trVerts(RFrame *f, RDraw *d, TV *o, float tw, float th, uint32_t col0
     else if (tc == 2) { q.u = ((const uint16_t *)(p + otc))[0]; q.v = ((const uint16_t *)(p + otc))[1]; }
     else if (tc == 3) { q.u = ((const float *)(p + otc))[0]; q.v = ((const float *)(p + otc))[1]; }
     // position outside what the GE draws (or NaN): data read late, when the game was already rewriting it
-    if (!t && !(q.x > -4096 && q.x < 4096 && q.y > -4096 && q.y < 4096)) { DEV(trOutLog(f, d, i, k, sz, p);) return T_OUT; }
+    if (!t && !(d->prim == 5 && pt == 2) && !(q.x > -4096 && q.x < 4096 && q.y > -4096 && q.y < 4096)) { DEV(trOutLog(f, d, i, k, sz, p);) return T_OUT; }
     q.x *= 2; q.y *= 2; q.u /= tw; q.v /= th;
     if (d->prim == 6) {  // rectangle: 2 vertices (opposite corners) -> strip of 4, separated from the next with two
       r[i & 1] = q;      // repeated vertices; color and z are the second vertex's (like the GE). Corners given along
@@ -656,11 +656,27 @@ static int trCheckFrame(RFrame *f, uint32_t *disp_p, uint32_t *ord_p) {
   // disp: image being shown; ifb, iend, ipsm: intermediate images, where their memory ends, their format
   uint32_t disp = f->fb & 0x1FFFF0, ifb[2], iend[2], ipsm[2], nif = 0, n_disp = 0;
   uint32_t ord = f->nd, rd_mask = 0;  // (rd_mask: bit per intermediate image read by a draw)
-  DEV(if (t_force) sceClibMemset(t_mark, 0, sizeof t_mark);)
   for (uint32_t i = 0; i < f->nd; i++) n_disp += (RE(f->e[f->d[i].st], 0x9C) & 0x1FFFF0) == disp;
   // no draw to the shown image (game behind: the flip has the other one of the double buffer): use the last draw's one
   if (!n_disp && f->nd) disp = RE(f->e[f->d[f->nd - 1].st], 0x9C) & 0x1FFFF0;
+  // From the end: a draw on an image nobody reads later is not done. What it leaves is for the PSP (say a palette the game
+  // builds with the GE), and the Vita gets that from the mirror
+  sceClibMemset(t_mark, 0, sizeof t_mark);
+  uint32_t live[8], nl = 0;
+  for (uint32_t i = f->nd; i-- > 0;) {
+    RDraw *d = &f->d[i];
+    const uint32_t *e = f->e[d->st];
+    uint32_t fb = RE(e, 0x9C) & 0x1FFFF0, k;
+    for (k = 0; k < nl && live[k] != fb; k++) {}
+    if (fb != disp && k == nl && nl < 8) { t_mark[i >> 5] |= 1u << (i & 31); continue; }
+    uint32_t ta = texAddr(e);
+    if (hasTex(e, d) && !d->toff && (ta & 0x0F000000) == 0x04000000 && (ta & 0x1FFFF0) != disp) {
+      for (k = 0; k < nl && live[k] != (ta & 0x1FFFF0); k++) {}
+      if (k == nl && nl < 8) live[nl++] = ta & 0x1FFFF0;
+    }
+  }
   for (uint32_t i = 0; i < f->nd; i++) {
+    if (t_mark[i >> 5] >> (i & 31) & 1) continue;
     int r = trCheck(f, &f->d[i]);
     const uint32_t *e0 = f->e[f->d[i].st];
     uint32_t fb = RE(e0, 0x9C) & 0x1FFFF0, k;
@@ -787,7 +803,7 @@ static void trRegions(RFrame *f, uint32_t disp) {
     RDraw *d = &f->d[i];
     const uint32_t *e = f->e[d->st];
     uint32_t fb = RE(e, 0x9C) & 0x1FFFF0, vt = d->vt, x = 2 * (RE(e, 0x9D) & 0x7FF), y = 2 * ((RE(e, 0xD5) >> 10 & 0x3FF) + 1), tc = vt & 3, k;
-    if (fb == disp DEV(|| t_mark[i >> 5] >> (i & 31) & 1)) continue;
+    if (fb == disp || t_mark[i >> 5] >> (i & 31) & 1) continue;
     RT *r = rtOf(fb, f->frame, 1);
     if (!r) continue;
     k = r - rts;
@@ -862,7 +878,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
   for (uint32_t pass = 0; pass < 3 && res == T_OK; pass++)
   for (uint32_t i = 0; i < f->nd && res == T_OK; i++) {
     RDraw *d = &f->d[i];
-    DEV(if (t_force && t_mark[i >> 5] >> (i & 31) & 1) continue;)
+    if (t_mark[i >> 5] >> (i & 31) & 1) continue;
     const uint32_t *e = f->e[d->st];
     uint32_t clr = RE(e, 0xD3), tex = hasTex(e, d), fb = RE(e, 0x9C) & 0x1FFFF0, w3d = !(d->vt >> 23 & 1);
     RT *dst = fb == disp ? 0 : rtOf(fb, f->frame, 1);

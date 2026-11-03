@@ -428,7 +428,9 @@ static uint32_t rgTex(uint32_t r0, uint32_t r1) {
   static const uint8_t bp[6] = { 16, 16, 16, 32, 4, 8 };
   uint32_t fmt = reg[0xC3] & 15, ta = TEXADDR(), tbw = reg[0xA8] & 0x7FF, th = 1u << ((reg[0xB8] >> 8) & 15), swz = reg[0xC2] & 1;
   if (fmt > 5 || !tbw || th > 512) return 0;
-  uint32_t rb = tbw * bp[fmt] / 8, n = rb * (swz && th < 8 ? 8 : th), key = n | swz << 31, i, vr = isVram(ta);
+  uint32_t rb = tbw * bp[fmt] / 8, n = rb * (swz && th < 8 ? 8 : th), i, vr = isVram(ta);
+  if (vr && (ta & 0x1FFFFF) + n > 0x200000) n = 0x200000 - (ta & 0x1FFFFF);  // (a buffer wider than the texture, at the end of VRAM)
+  uint32_t key = n | swz << 31;
   if (swz && (rb & 15)) { RG_READ(NR_SWZ, ta, rb); return 0; }
   if (r1 > th || r0 >= r1) r0 = 0, r1 = th;
   for (i = f->nt; i > 0 && !(f->ta[i - 1] == ta && f->tn[i - 1] == key); i--) {}  // (the latest entry of this address)
@@ -439,7 +441,7 @@ static uint32_t rgTex(uint32_t r0, uint32_t r1) {
   // First time in this frame: full size is reserved (rows not copied are not read)
   if (i == f->nt) {
     // Image the GE drew in this frame (intermediate image): not copied
-    if (vr) { uint32_t p = (ta & 0x1FFFFF) >> 12; if (rt_pg[p >> 5] >> (p & 31) & 1) return 0; }
+    if (vr && rtRead(ta)) return 0;
     if (!vr && !stale && (e = rcGet(ta, key, 8 * rb)) && rcCheck(e, r0 / 8, (r1 + 7) / 8)) e = 0;
     if (!vr && !e) ga.c_rec++;
     if (f->nt >= TN_N || (!e && f->ntx + n > TX_N)) {
@@ -751,7 +753,7 @@ static void regFlip(uint32_t fb, uint32_t fbw, uint32_t draws_counted) {
   }
   // Only what the GE draws from now on is held in HD; any other read of those pages comes from the mirror. A sublist
   // the memory applied did not go through draw(): its marks stay
-  if (!(f->flags & R_MEMO)) { sceClibMemset(rt_pg, 0, sizeof rt_pg); last_fb = ~0u; }
+  if (!(f->flags & R_MEMO)) { sceClibMemset(rt_pg, 0, sizeof rt_pg); rt_nb = 0; last_fb = ~0u; }
   const uint8_t *pal = rg_clut ? f->a + rg_clut - 1 : 0;
   f = rf[rg_w];
   f->nd = f->ne = f->na = f->flags = f->draws_seen = f->nt = f->ntx = f->dv = f->nimg = 0;
