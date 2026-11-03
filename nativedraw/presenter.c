@@ -545,7 +545,7 @@ static int presThread(SceSize args, void *argp) {
       uint32_t j = ln0++ % CL;
       alog("gpu: slow scene: %s, %u draws, %u thousand pixels, %u.%u ms of GPU (%u.%u ms in queue)\n", cnames[c_slow[j].ty], c_slow[j].dr,
            c_slow[j].px, c_slow[j].us / 1000, c_slow[j].us / 100 % 10, c_slow[j].queue / 1000, c_slow[j].queue / 100 % 10);
-      if (vl < 3 && dump_level && !dump_req && (!dump_on || dump_on == 3)) { vl++; dump_req = 1; alog("dump: requested by a slow scene (%u of 3)\n", vl); }
+      if (vl < 3 && dump_level == 4 && !dump_req && (!dump_on || dump_on == 3)) { vl++; dump_req = 1; alog("dump: requested by a slow scene (%u of 3)\n", vl); }
     }
 #endif
     dumpTick();

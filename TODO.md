@@ -11,8 +11,14 @@ what was done is in `CHANGELOG.md`. Updated 2026-11-02 (NativeLink 0.0.4 + Nativ
       checking 1 group in 4 per frame (accepted risk). Look again only if it causes bigger errors.
 - [ ] **Ridge Racer selector, GPU ~31 ms per frame** (~4.2 M pixels, 1000 draws): the fast shader did not change it. Skip the image
       underneath when the frame covers it; look at the GPU clock Adrenaline sets.
-- [ ] **Ridge Racer, odd drawings in the opening movie** (user, 0.0.12.10): looks minor; check again after the performance work, with a
-      dump if it stays.
+- [ ] **Ridge Racer, odd drawings in the opening movie** (user, 0.0.12.10): looks minor. Dump 245 caught a clean frame: the movie is one
+      1 MB texture in RAM. Suspected, not proven: the texture cache samples 1 group in 4 per frame since 0.0.12.8 and shows old rows of
+      a texture rewritten every frame. Next: a dump on a bad frame, or try with `no_tex_cache`.
+- [ ] **Ridge Racer race, next steps:** (1) game at 60 with HD at 30: the capturer needs ~21 ms for 13000 commands; let NativeLink copy
+      the list at the sync (~52 KB, vertices are not inside the list) so the game does not wait, and when the capturer is behind walk a
+      frame without recording it. (2) HD in the race: reading the shown image and an image while drawing on it (image 088000, 256 wide)
+      and an image read with a palette (1FE000, 64 wide, T8; try the mirror copy). (3) VRAM texture cache by tracking written pages (the
+      record thread spends ~19 ms per frame). (4) Translator vertices ~15-20 ms per frame in the selector.
 - [ ] **3D** (after the fans; the user's order, 2026-11-02): start with a light game, not GT. Store the matrices in the record
       and translate depth; GT needs reusing recorded sublists (`Performance for drawing GT`).
 - [ ] **Texture cache, what is left:** VRAM textures (KOF 96 fights: DMA ~1 ms + sort ~2 ms per frame; only after understanding the
