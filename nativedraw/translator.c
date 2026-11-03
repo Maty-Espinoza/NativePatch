@@ -623,7 +623,7 @@ static void zsSet(SceGxmContext *c, const uint32_t *e, uint32_t sv) {
 // returns the reason and the surface is not used.
 static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base) {
   t3.ke = 0;
-  DEV(uint32_t ta = now(), tb;)
+  DEV(uint32_t ta = now(), tb, ut[6]; sceClibMemcpy(ut, (void *)t_us, sizeof ut);)
   // disp: image being shown; ifb, iend, ipsm: intermediate images, where their memory ends, their format
   uint32_t disp = f->fb & 0x1FFFF0, ifb[2], iend[2], ipsm[2], nif = 0, n_disp = 0;
   // ord: intermediate images first and then, in a single scene, the surface (see trFrame). Valid only if just the
@@ -668,7 +668,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
       return r;
     }
   }
-  DEV(t_us[0] += now() - ta;)
+  DEV(t_us[0] += now() - ta; if (p_on) pAdd(P_T_CHECK, now() - ta);)
   static uint32_t t_q[2];  // last scene that read the vertices and palettes of each surface
   // if the GPU is still reading them (unfinished scene) it waits
   if (gBusy(t_q[s])) { g_psurf++; gEv("vertices and palettes rewritten", t_q[s]); gWait(t_q[s]); }
@@ -829,13 +829,16 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     sceGxmSetFrontDepthFunc(c, SCE_GXM_DEPTH_FUNC_ALWAYS);  // the context is Adrenaline's: its defaults back
     sceGxmSetFrontDepthWriteEnable(c, SCE_GXM_DEPTH_WRITE_ENABLED);
     sceGxmSetFrontStencilFunc(c, SCE_GXM_STENCIL_FUNC_ALWAYS, SCE_GXM_STENCIL_OP_KEEP, SCE_GXM_STENCIL_OP_KEEP, SCE_GXM_STENCIL_OP_KEEP, 0, 0);
+    DEV(tb = PT();)
     sceGxmEndScene(c, 0, gEnd());
+    DEV(PA(P_T_END, tb);)
     cNote(cur_rt ? C_INT : C_TR, &gq_n, t_draws - d0, spx / 1000, ssw);
   }
 #undef OPEN
 #undef SCENE
   t_q[s] = gq;
-  DEV(t_us[5] += now() - ta;)
+  DEV(t_us[5] += now() - ta;
+      for (int i = 1; p_on && i < 6; i++) if ((int)(t_us[i] - ut[i]) >= 0) pAdd(P_T_CHECK + i, t_us[i] - ut[i]);)  // (t_us is zeroed every 10 s)
   if (res && !t_seen[res]++) alog("translator: first frame with '%s' on drawing\n", tnames[res]);
   return res;
 }

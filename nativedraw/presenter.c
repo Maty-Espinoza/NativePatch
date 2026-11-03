@@ -28,6 +28,8 @@ void alog(const char *fmt, ...);  // nativedraw.c
 #define LINE 1024  // surface width: twice the 512 of psp_tex (columns 960-1023 stay black)
 // process time in us
 static inline uint32_t now(void) { return sceKernelGetProcessTimeLow(); }
+#include "prof.h"
+DEV(extern volatile SceUID nd_gfx_uid;)
 
 // --- GPU memory ---
 // Nothing in CDRAM: the Adrenaline process has only 4 MB and the Vita videos use it. Surfaces go in physically
@@ -155,6 +157,7 @@ static void gWait(uint32_t q) {
   uint32_t t0 = now();
   while (gBusy(q) && now() - t0 < 30000) sceKernelDelayThread(100);
   g_wait_us += now() - t0;
+  DEV(if (p_on) pAdd(P_A_WAIT, now() - t0);)
 }
 
 // Creates the destination: 1024x544 render target, the two surfaces with their textures, the z, the PSP image copies
@@ -229,7 +232,9 @@ static void *hookDma(void *dst, const void *src, SceSize size) {
   if (ACTIVE && dst && dst == psp_data && size == 512 * 272 * 4) {  // the PSP image copy: to img[ki]
     ki = (ki + 1) % n_img; copy_fr = fr; n_dma++;
     if (gBusy(img_q[ki])) { g_pimg++; gEv("normal image rewritten", img_q[ki]); gWait(img_q[ki]); }
+    DEV(uint32_t tp = PT();)
     TAI_CONTINUE(void *, ref_dma, img[ki], src, size);
+    DEV(PA(P_A_DMA, tp);)
     return dst;
   }
   return TAI_CONTINUE(void *, ref_dma, dst, src, size);
@@ -294,7 +299,14 @@ static int hookEnd(SceGxmContext *c, const SceGxmNotification *v, const SceGxmNo
   gAdr(v); gAdr(f);
   f = cAdr(f);  // (timer: our own end notification if it has none)
   cNote(C_ADR, f, used == fr + 1, 0, 0);
+#ifdef NP_DEV
+  static uint32_t tper;
+  uint32_t tp = PT();
+  if (tp) nd_gfx_uid = sceKernelGetThreadId();
+  if (tp && used == fr + 1) { if (tper) pAdd(P_A_PERIOD, tp - tper); tper = tp; }
+#endif
   int r = TAI_CONTINUE(int, ref_end, c, v, f);
+  DEV(PA(P_A_END, tp);)
   n_us += used == fr + 1;
   static uint32_t fq[2];  // last scene of ours of the previous frame and the one before
   if (ACTIVE && used == fr + 1) {  // in this scene Adrenaline drew the PSP image: we pass it through the surface
@@ -311,7 +323,7 @@ static int hookEnd(SceGxmContext *c, const SceGxmNotification *v, const SceGxmNo
     }
     const uint32_t *pj = sceGxmTextureGetData(src);
     // GPU behind: if the scene from 2 frames ago is unfinished, no other is sent; the previous surface is repeated
-    if (gBusy(fq[1]) && drawn == fr && dump_on != 1) { g_behind++; drawn = fr + 1; goto finish; }
+    if (gBusy(fq[1]) && drawn == fr && dump_on != 1) { g_behind++; DEV(if (p_on) pAdd(P_F_BEHIND, 0);) drawn = fr + 1; goto finish; }
     if (dump_on == 1 || dump_on == 3) dumpFrame(c, pj, drawn == fr && !(covered && copy_fr == fr));  // dump
     int nj = isBlack(pj, 512, 480, 272), np = drawn == fr && isBlack(surf[cur], LINE, W, H);  // np: previous frame
     n_black_j += nj; n_black_p += np;
@@ -332,19 +344,20 @@ static int hookEnd(SceGxmContext *c, const SceGxmNotification *v, const SceGxmNo
       n_chk++; if (n >= (dump_auto ? 6 : 8) && n < 255) n_bad++;
       g_chk_us += now() - t1;
     }
+    DEV(if (p_on) pAdd(P_A_PRE, now() - t0);)
     int s = cur ^ 1, hd = 0;
     if (draw_on && t_on && !menu && rep_on == 2 && repDraw(c, s, src)) { hd = 1; t_frame = ~0u; }  // playback
     else if (draw_on && t_on && !menu) {  // the last complete frame of the record, drawn by the Vita
       RFrame *rg = regTake();
       int cause = T_NEW;
-      if (!rg) t_cnt[T_NEW]++;
+      if (!rg) { t_cnt[T_NEW]++; DEV(if (p_on) pAdd(P_F_NOREC, 0);) }
       else if (rg->frame == t_frame) {  // same frame: the surface is repeated up to 2 times (30 fps); otherwise, normal
-        if (t_ok && t_rep < 2) { t_rep++; hd = 2; cause = 0; t_skip[0]++; } else t_cnt[T_NEW]++;
+        if (t_ok && t_rep < 2) { t_rep++; hd = 2; cause = 0; t_skip[0]++; DEV(if (p_on) pAdd(P_F_REPEAT, 0);) } else t_cnt[T_NEW]++;
       } else {
         if (t_frame != ~0u && rg->frame > t_frame) { uint32_t g = rg->frame - t_frame; t_skip[g < 5 ? g : 5]++; }
         uint32_t t1 = now();
         int r = trFrame(c, rg, s, src); g_tr_us += now() - t1; t_cnt[r]++; t_frame = rg->frame; t_ok = !r; hd = !r; t_rep = 0; cause = r;
-        DEV(trReason(rg->frame, r);)
+        DEV(trReason(rg->frame, r); if (p_on) pAdd(r ? P_F_NORMAL : P_F_DRAWN, 0);)
         regGpu(gq, gq_done);  // the scene that reads this record's textures
       }
       if (dump_on == 1 || dump_on == 3) dumpText(rg, hd == 2 ? "repeats the Vita drawing of the previous frame" : hd ? "Vita drawing" :
@@ -380,6 +393,7 @@ static int hookEnd(SceGxmContext *c, const SceGxmNotification *v, const SceGxmNo
     fq[1] = fq[0]; fq[0] = gq;
     cur = s; drawn = fr + 1; n_pres++;
     uint32_t d = now() - t0;
+    DEV(if (p_on) pAdd(P_A_TOTAL, d);)
     us_sum += d;
     if (d > us_max) us_max = d;
   }

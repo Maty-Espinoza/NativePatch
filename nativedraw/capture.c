@@ -23,8 +23,15 @@
 #define SB_N 4096  // events in the mailbox ring (8 words each, from SB[0x400])
 #define LOGC "ux0:pspemu/nativedraw_capture.log"
 // Mailbox event types (must match NativeLink)
-enum { EV_ENQ = 1, EV_HEAD, EV_STALL, EV_DSYNC, EV_LSYNC, EV_FLIP, EV_GEDONE, EV_SYNCEND, EV_CPU, EV_CPUSUM, EV_FRAME, EV_LIFE };
+enum { EV_ENQ = 1, EV_HEAD, EV_STALL, EV_DSYNC, EV_LSYNC, EV_FLIP, EV_GEDONE, EV_SYNCEND, EV_CPU, EV_CPUSUM, EV_FRAME, EV_LIFE, EV_FRAME2 };
 static inline uint32_t now(void) { return sceKernelGetProcessTimeLow(); }  // Vita time in us
+#include "prof.h"
+#ifdef NP_DEV
+PStage P[PN];
+volatile uint32_t p_on;
+volatile SceUID nd_gfx_uid;  // Adrenaline's drawing thread (noted by the presenter)
+static uint32_t p_flip;      // time of the last PSP flip on the Vita clock
+#endif
 
 // --- Statistics ---
 // acc accumulates for one second; at the flip it is copied to rep and the log thread writes it. All fields are
@@ -1053,7 +1060,7 @@ DEV(static uint32_t pfr[8], lc, s_own, s_hit, s_memo, s_pre, s_late;)
 #define EMU_N 256
 // emulator threads (nativedraw.c, CreateThread hook)
 extern SceUID emu_th[EMU_N]; extern int emu_aff[EMU_N], emu_n;
-static SceUID cap_uid = -1, rdr_uid[2] = { -1, -1 };
+static SceUID cap_uid = -1, rdr_uid[2] = { -1, -1 }, rec_uid = -1;
 static uint32_t runClk(SceUID t) {  // processor us received by thread t (0 if it does not exist)
   SceKernelThreadInfo in; sceClibMemset(&in, 0, sizeof in); in.size = sizeof in;
   if (t < 0 || sceKernelGetThreadInfo(t, &in) < 0) return 0;
@@ -1133,7 +1140,14 @@ static void event(volatile uint32_t *e) {
     DEV(sceClibMemcpy(pfr, x, sizeof x); pfr[7] = e[6];)
     acc.pf_n++; acc.pf_us += a; acc.pf_gate += b; acc.pf_gate_n += x[2]; acc.pf_nowait += x[3]; acc.pf_sync += c; acc.pf_spin += e[5];
     acc.pf_mir += e[6] & 0xFFFF; acc.pf_pg += e[6] >> 16; acc.pf_post += e[7];
+#ifdef NP_DEV
+  } else if (t == EV_FRAME2 && p_on) {  // the frame split: game + vblank + hooks (a: vblank, b: hooks with their waits)
+    uint32_t waits = pfr[1] + pfr[4] + (pfr[7] & 0xFFFF), out = a + b;
+    pAdd(P_FRAME, pfr[0]); pAdd(P_GAME, pfr[0] > out ? pfr[0] - out : 0); pAdd(P_VBLANK, a); pAdd(P_GATE, pfr[1]); pAdd(P_SYNC, pfr[4]);
+    pAdd(P_MIRROR, pfr[7] & 0xFFFF); pAdd(P_HOOKS, b > waits ? b - waits : 0); pAdd(P_GE, e[5]); pAdd(P_GEMIR, e[6]); pAdd(P_LISTS, c);
+#endif
   } else if (t == EV_FLIP) {
+    DEV(p_flip = e[4] + off;)
     uint32_t t0 = now(), c0 = acc.cmds;  // what was queued before the flip is walked before closing the frame
     walk();
     if (acc.cmds != c0) { uint32_t dt = now() - t0; acc.us += dt; f_us += dt; }
@@ -1169,7 +1183,9 @@ static void event(volatile uint32_t *e) {
       }
     }
     // closes the frame record (a: displayed image, b: width | format << 16)
+    DEV(uint32_t tp = PT();)
     if (reg_on) { regFlip(a, b, f_draws); reg_big = f_draws > RD_N; }
+    DEV(if (tp) { PA(P_C_FLIP, tp); pAdd(P_L_CLOSE, now() - p_flip); pAdd(P_C_TOTAL, f_us); })
     acc.frames++;
     if (qh != qt) acc.flips_behind++;
     if (f_cmds > acc.cmds_max) acc.cmds_max = f_cmds;
@@ -1214,6 +1230,13 @@ void alogNew(void);  // nativedraw.c
 static volatile int logs_new;  // the capturer asks the log thread for new logs (a new game) and waits for it
 // Capturer thread: waits for the NativeLink mailbox, gives the heartbeat (SB[4]), processes new ring events
 // (SB[2] head, own tail; SB[5] processed), walks the lists and sleeps briefly if there is no work
+#ifdef NP_DEV
+static int idleThread(SceSize args, void *argp) {  // lowest priority: what it receives is what its core has free
+  for (;;) { uint32_t t = now(); while (now() - t < 900) {} sceKernelDelayThread(100); }
+  return 0;
+}
+static SceUID idle_uid[3] = { -1, -1, -1 };
+#endif
 static int capThread(SceSize args, void *argp) {
   uint32_t idle_t = 0, on = 0;
   for (;;) {
@@ -1328,6 +1351,38 @@ static void logsHead(void) {
           "vita_walked_us,work_us,own_reads,from_readers,applied,processor_us\n");
 #endif
 }
+#ifdef NP_DEV
+static void pSet(int k, uint32_t n, uint32_t us) { PStage *p = &P[k]; p->n += n; p->us += us; if (n && us / n > p->max) p->max = us / n; }
+// Once per second: stages with no writer of their own, processor of each thread, and the "prof" lines
+static void profLog(const Stats *r) {
+  static const char *names[PN] = { "frame", "game", "vblank", "gate", "sync_ge", "mirror_cpu", "hooks", "ge_busy", "ge_mirror", "lists",
+    "total", "read_own", "read_shared", "record", "rec_state", "rec_vertices", "rec_textures", "memory", "close", "vertex_dma", "sleep",
+    "wait_mirror", "copy_vram", "flip_to_closed", "flip_to_published", "published_to_taken",
+    "period", "adrenaline_end", "image_dma", "checks", "wait_gpu", "presenter", "check", "textures", "vertices", "gxm", "scenes", "all", "end_scene",
+    "complete", "not_taken", "no_record", "gpu_behind", "drawn", "repeated", "normal",
+    "adrenaline", "normal_image", "surface", "intermediate", "capture", "record", "adrenaline", "reader0", "reader1", "free0", "free1", "free2" };
+  static const struct { const char *g; int k0; } G[] = { { "psp", P_FRAME }, { "capture", P_C_TOTAL }, { "record", P_R_MIRROR }, { "latency", P_L_CLOSE },
+    { "adrenaline", P_A_PERIOD }, { "translator", P_T_CHECK }, { "frames", P_F_COMPLETE }, { "gpu", P_G_ADR }, { "cpu", P_U_CAP }, { 0, PN } };
+  static PStage l[PN];
+  static uint32_t lc[8];
+  uint32_t f = r->frames ? r->frames : 1;
+  SceUID u[8] = { cap_uid, rec_uid, nd_gfx_uid ? nd_gfx_uid : -1, rdr_uid[0], rdr_uid[1], idle_uid[0], idle_uid[1], idle_uid[2] };
+  for (int i = 0; i < 8; i++) { uint32_t c = runClk(u[i]); pAdd(P_U_CAP + i, c - lc[i]); lc[i] = c; }
+  pSet(P_C_OWN, f, r->rd_n ? (uint32_t)((unsigned long long)r->own * r->rd_us / r->rd_n) : 0);
+  pSet(P_C_SHARED, f, r->hit_n ? (uint32_t)((unsigned long long)r->hits * r->hit_us / r->hit_n) : 0);
+  pSet(P_C_RECORD, gr.fr, gr.us); pSet(P_C_STATE, gr.fr, gr.us_e); pSet(P_C_VERT, gr.fr, gr.us_v); pSet(P_C_TEX, gr.fr, gr.us_t);
+  pSet(P_C_MEMO, f, r->memo_us); pSet(P_C_SLEEP, f, r->sleep_us); pSet(P_F_COMPLETE, gr.ok, 0);
+  for (int g = 0; G[g].g; g++) {
+    char b[900]; int n = 0;
+    for (int k = G[g].k0; k < G[g + 1].k0 && n < (int)sizeof b - 64; k++) {
+      uint32_t c = P[k].n - l[k].n, us = P[k].us - l[k].us, mx = P[k].max;
+      l[k].n += c; l[k].us += us; P[k].max = 0;
+      n += sceClibSnprintf(b + n, sizeof b - n, " %s=%u/%u/%u", names[k], c, c ? us / c : 0, mx);
+    }
+    clog("prof %s:%s\n", G[g].g, b);
+  }
+}
+#endif
 static int repThread(SceSize args, void *argp) {
   uint32_t last_write = 0;
   for (;;) {
@@ -1450,6 +1505,7 @@ static int repThread(SceSize args, void *argp) {
              gap.n ? gap.sum / gap.n : 0, gap.max);
         gap.n = gap.sum = gap.max = 0;
       }
+      if (p_on) profLog(r);
 #endif
     finish:
       rep_ready = 0;
@@ -1624,6 +1680,7 @@ void capStart(void) {
   if (swOn("ux0:data/nativedraw/mirror_wait")) gp_flags |= 32;  // the PSP flip waits for the mirror copy
   DEV(no_capture = swOn("ux0:data/nativedraw/no_capture");)
   DEV(pv_on = !swOn("ux0:data/nativedraw/no_lookahead");)
+  DEV(p_on = level >= 2;)
   reg_on = swOn("ux0:data/nativedraw/draw");  // frame record
   if (reg_on) regInit();
   clog("log level: %s (ux0:data/nativedraw/log_level: minimum, medium or extreme) | switches%s%s%s%s%s%s%s%s\n", level == 2 ? "extreme" : level ? "medium" : "minimum", gp_flags & 1 ? " no_gate" : "", gp_flags & 2 ? " no_mirror" : "",
@@ -1680,7 +1737,14 @@ void capStart(void) {
   if (reg_on) {  // record thread: any core, just below the capturer
     SceUID rt = sceKernelCreateThread("nativedraw_record", recThread, 0x62, 0x4000, 0, 0x70000, NULL);
     if (rt >= 0 && sceKernelStartThread(rt, 0, NULL) >= 0) rg_thr = 1;
+    rec_uid = rt;
   }
+#ifdef NP_DEV
+  for (int k = 0; p_on && k < 3; k++) {
+    idle_uid[k] = sceKernelCreateThread("nativedraw_idle", idleThread, 0xBF, 0x1000, 0, 0x10000 << k, NULL);
+    if (idle_uid[k] >= 0) sceKernelStartThread(idle_uid[k], 0, NULL);
+  }
+#endif
   // mirror thread: priority 0xBE, below the readers
   SceUID et = sceKernelCreateThread("nativedraw_mirror", mirThread, 0xBE, 0x2000, 0, 0x10000 /* core 0 */, NULL);
   if (et >= 0) sceKernelStartThread(et, 0, NULL);

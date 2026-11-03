@@ -31,6 +31,10 @@ done
 rm $X/nativelink.log; python3 $R/tools/test_link.py $X | grep 'no game'
 python3 $R/tools/test_link.py $X >/dev/null || { echo "FAIL: a run with no game must pass"; exit 1; }
 
+printf '  1000 prof psp: frame=60/16000/20000 game=60/9000/12000\n  2000 prof psp: frame=60/20000/30000 game=60/9000/12000\n' > $B/prof.log
+python3 $R/tools/prof_summary.py $B/prof.log | grep -q 'game: 60.0 fps, frame 18.0 ms' || { echo "FAIL: prof_summary.py"; exit 1; }
+echo "ok   prof_summary.py"
+
 echo "== production build"
 cp -r $R/nativelink $B/nativelink
 make -s -C $B/nativelink clean ADRENALINE=$ADRENALINE

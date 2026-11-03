@@ -54,6 +54,7 @@ static int cThread(SceSize args, void *argp) {
       uint32_t t = now(), begin = prev;
       if ((int)(e->t - prev) > 0) { c_idle += e->t - prev; begin = e->t; }  // the GPU had nothing: idle gap
       uint32_t us = t - begin, k = e->ty, ms = us / 1000;
+      pAdd(P_G_ADR + k, us);
       c_n[k]++; c_us[k] += us; c_dr[k] += e->dr; c_queue[k] += begin - e->t; c_px[k] += e->px; c_sw[k] += e->sw;
       if (us > c_max[k]) c_max[k] = us;
       c_h[k][ms < 20 ? ms / 5 : ms < 30 ? 4 : 5]++;

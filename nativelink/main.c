@@ -64,12 +64,14 @@ u32 (*_sceGeGetCmd)(int cmd);
 // mirror, 4 no free-CPU thread, 8 gate always at the sync, 16 full mirror (all requested data pages on
 // every flip), 32 the flip waits for the mirror copy to finish.
 // SB[0x4E] = NativeDraw record level (0 minimal, 1 medium, 2 extreme): EV_FRAME and the free-CPU thread from
-// medium up; list life (EV_LIFE) and the game CPU events (T4: EV_CPU, EV_CPUSUM) only at extreme.
+// medium up; list life (EV_LIFE), the game CPU events (T4: EV_CPU, EV_CPUSUM) and EV_FRAME2 only at extreme.
+// EV_FRAME2 (development builds, right after EV_FRAME): a = wait for the vblank (us), b = all the time inside the hooks,
+// waits included (us), c = lists enqueued; e[5] = GE busy, e[6] = GE on the mirror copies (us, T6: only with ge_timing).
 #define SB ((volatile u32 *)(0x0A000000 | 0x40000000))
 #define SB_MAGIC 0x424D4F53 // "SOMB"
 #define SB_N 4096
 // Ring event types (NativeDraw uses the same numbers)
-enum { EV_ENQ = 1, EV_HEAD, EV_STALL, EV_DSYNC, EV_LSYNC, EV_FLIP, EV_GEDONE, EV_SYNCEND, EV_CPU, EV_CPUSUM, EV_FRAME, EV_LIFE };
+enum { EV_ENQ = 1, EV_HEAD, EV_STALL, EV_DSYNC, EV_LSYNC, EV_FLIP, EV_GEDONE, EV_SYNCEND, EV_CPU, EV_CPUSUM, EV_FRAME, EV_LIFE, EV_FRAME2 };
 // active: not opened with L or SELECT and the zone is free; mode_done: modeDecide already ran
 static int active, mode_done;
 static volatile u32 spin, spin_cal;  // free-CPU thread: spins and calibration (spins per ms)
@@ -77,6 +79,7 @@ static volatile u32 spin, spin_cal;  // free-CPU thread: spins and calibration (
 static struct { u32 gate_us, gate_n, nowait, sync_us, post_us, mir_us, mir_pages; } fr;
 static struct { u32 frames, frame_us, spin, gate_us, gate_n, nowait, sync_us, post_us, mir_us, mir_pages; } frs;
 static u32 sb_x[3];  // e[5..7] of EV_FRAME
+DEV(static struct { u32 vb_us, hook_us, lists, ge_us, gem_us; } fx, fxs;)  // EV_FRAME2 of this frame; sum for the log
 // List life: NativeDraw leaves a sample of 64-byte lines of the last list it captured (SB[0x50] sample number,
 // 0 while writing it; SB[0x51] how many, up to 32; SB[0x52] how many are top level; SB[0x53]
 // list sequence number; SB[0x60+k] address, SB[0x80+k] FNV hash of its 16 words, like lineHash in capture.c).
@@ -110,7 +113,7 @@ static void sbPost(u32 type, u32 aux, u32 a, u32 b, u32 c) {
   if (type <= EV_HEAD) {
     e[5] = SB[6] = ++sb_ord;
     sb_q[sb_ord & 15].qid = c; sb_q[sb_ord & 15].ord = sb_ord;
-  } else if (type == EV_FRAME) {
+  } else if (type == EV_FRAME DEV(|| type == EV_FRAME2)) {
     e[5] = sb_x[0]; e[6] = sb_x[1]; e[7] = sb_x[2];
   }
   asm volatile("sync"); // the entry before the counter
@@ -225,6 +228,7 @@ int (*_sceGeListSync)(int qid, int mode);
 int sceGeDrawSyncPatched(int mode) {
   if (!active || mode)
     return _sceGeDrawSync(mode);
+  DEV(u32 th = sceKernelGetSystemTimeLow();)
   DEV(lifeCheck(1);)
   u32 w = gateEnq() ? 0 : sbGate(sb_ord), t0; // with the gate before enqueuing, this only notes
   gateSync(sb_ord);
@@ -237,12 +241,14 @@ int sceGeDrawSyncPatched(int mode) {
   u32 dt = sceKernelGetSystemTimeLow() - t0;
   sbs.in_sync_us += dt; fr.sync_us += dt;
   DEV(sbPost(EV_SYNCEND, 0, dt, busy, 0);) // how long it really waited for the GE, and whether the GE was working at the call
+  DEV(fx.hook_us += sceKernelGetSystemTimeLow() - th;)
   return r;
 }
 int sceGeListSyncPatched(int qid, int mode) {
   if (active && !mode) {
     u32 ord = 0, w;
     int i;
+    DEV(u32 th = sceKernelGetSystemTimeLow();)
     DEV(lifeCheck(2);)
     for (i = 0; i < 16; i++) // ord: the last list enqueued with that qid
       if (sb_q[i].qid == (u32)qid && (int)(sb_q[i].ord - ord) > 0)
@@ -258,6 +264,7 @@ int sceGeListSyncPatched(int qid, int mode) {
     u32 dt = sceKernelGetSystemTimeLow() - t0;
     fr.sync_us += dt;
     DEV(sbPost(EV_SYNCEND, 0, dt, busy, 1);)
+    DEV(fx.hook_us += sceKernelGetSystemTimeLow() - th;)
     return r;
   }
   return _sceGeListSync(qid, mode);
@@ -278,7 +285,7 @@ static volatile u32 ge_kick; // time of the last enqueue (0: already seen)
 static struct { u32 busy_us, runs, run_max, stall_n, n; } ges;  // (log)
 // T6 thread. GE registers: 3 (bit 0) = running a list, 5 = current list address, 6 = stall.
 static int geThread(SceSize args, void *argp) {
-  u32 busy0 = 0, n = 0, nst = 0;
+  u32 busy0 = 0, n = 0, nst = 0, tp = 0;
   for (;;) {
     if (!active || !_sceGeGetReg || SB[0x47] != 1) { // only if NativeDraw asks for it (ge_timing)
       busy0 = ge_kick = 0;
@@ -293,6 +300,8 @@ static int geThread(SceSize args, void *argp) {
       u32 la = _sceGeGetReg(5), st = _sceGeGetReg(6);
       n++;
       if (st && (la & 0x0FFFFFFF) == (st & 0x0FFFFFFF)) nst++;
+      if (n > 1) { fx.ge_us += t - tp; if ((la & 0x0FFFFFFF) - 0x0A100000 < 0x4000) fx.gem_us += t - tp; } // (0x0A100000: the mirror's lists)
+      tp = t;
       ge_kick = 0;
     } else if (busy0 || ge_kick) { // finished (or was so short it was not seen: n = 0)
       u32 b0 = busy0 ? busy0 : ge_kick;
@@ -343,6 +352,22 @@ static void t4Flip(void) { // on the flip: frame totals
   memset(&t4, 0, sizeof(t4));
 }
 #endif
+#ifdef NP_DEV
+// Hooks of the sceDisplayWaitVblank* functions: how long the game waits for the screen on its own (EV_FRAME2)
+static int (*_vb[6])(int);
+#define VB(i) int vbPatched##i(int a) { u32 t0 = sceKernelGetSystemTimeLow(); int r = _vb[i](a); fx.vb_us += sceKernelGetSystemTimeLow() - t0; return r; }
+VB(0) VB(1) VB(2) VB(3) VB(4) VB(5)
+static void vbInstall(void) {
+  static const u32 nid[6] = { 0x36CDFADE, 0x8EB9EC49, 0x984C27E7, 0x46F186C3, 0x40F1469C, 0x77ED8B3A };
+  int (*const pt[6])(int) = { vbPatched0, vbPatched1, vbPatched2, vbPatched3, vbPatched4, vbPatched5 };
+  int i, n = 0;
+  for (i = 0; i < 6; i++) {
+    _vb[i] = (void *)FindProc("sceDisplay_Service", "sceDisplay_driver", nid[i]);
+    if (_vb[i]) { sctrlHENPatchSyscall((u32)_vb[i], pt[i]); n++; }
+  }
+  LOG("vblank hooks: %d of 6\n", n);
+}
+#endif
 // Development builds: finds sceGeGetReg and the cache and DMA functions, hooks those it finds and starts the T6 thread.
 // All builds: starts the free-CPU thread (after calibrating it). What it found goes to the log.
 static void t4t6Install(void) {
@@ -371,6 +396,7 @@ static void t4t6Install(void) {
   }
   if (_dmac) { sctrlHENPatchSyscall((u32)_dmac, dmacPatched); nm++; }
   if (_dmacTry) { sctrlHENPatchSyscall((u32)_dmacTry, dmacTryPatched); nm++; }
+  vbInstall();
   SceUID th = _sceGeGetReg ? sceKernelCreateThread("NativeLinkGE", geThread, 0x11, 0x800, 0, NULL) : -1;
   if (th >= 0) sceKernelStartThread(th, 0, NULL);
 #endif
@@ -466,10 +492,12 @@ static void modeDecide(void) {
 // Stall and enqueue hooks: call the original and note the event. Before enqueuing they go through the gate
 // (gateBeforeEnq) and the event datum is the time waited there (us | 1).
 int sceGeListUpdateStallAddrPatched(int qid, void *stall) {
+  DEV(u32 th = sceKernelGetSystemTimeLow();)
   int r = _sceGeListUpdateStallAddr(qid, stall);
   st.stalls++;
   if (active)
     sbPost(EV_STALL, 0, qid, (u32)stall, 0);
+  DEV(fx.hook_us += sceKernelGetSystemTimeLow() - th;)
   return r;
 }
 
@@ -477,6 +505,7 @@ int sceGeListEnQueuePatched(const void *list, void *stall, int cbid, PspGeListAr
   if (!mode_done)
     modeDecide();
   st.lists++;
+  DEV(u32 th = sceKernelGetSystemTimeLow(); fx.lists++;)
   u32 gw = active ? gateBeforeEnq() : 0;
   DEV(lifeCheck(0);) // before enqueuing: is the previous list still intact?
   int r = _sceGeListEnQueue(list, stall, cbid, arg);
@@ -484,6 +513,7 @@ int sceGeListEnQueuePatched(const void *list, void *stall, int cbid, PspGeListAr
     sbPost(EV_ENQ, gw, (u32)list, (u32)stall, r);
     DEV(if (!ge_kick) ge_kick = sceKernelGetSystemTimeLow() | 1;)
   }
+  DEV(fx.hook_us += sceKernelGetSystemTimeLow() - th;)
   return r;
 }
 
@@ -491,12 +521,14 @@ int sceGeListEnQueueHeadPatched(const void *list, void *stall, int cbid, PspGeLi
   if (!mode_done)
     modeDecide();
   st.heads++;
+  DEV(u32 th = sceKernelGetSystemTimeLow(); fx.lists++;)
   u32 gw = active ? gateBeforeEnq() : 0;
   int r = _sceGeListEnQueueHead(list, stall, cbid, arg);
   if (active && r >= 0) {
     sbPost(EV_HEAD, gw, (u32)list, (u32)stall, r);
     DEV(if (!ge_kick) ge_kick = sceKernelGetSystemTimeLow() | 1;)
   }
+  DEV(fx.hook_us += sceKernelGetSystemTimeLow() - th;)
   return r;
 }
 
@@ -522,6 +554,7 @@ static void memSnapshot(const char *why) {
 int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat, int sync) {
   if (!mode_done)
     modeDecide();
+  DEV(u32 th = sceKernelGetSystemTimeLow();)
   log_frame++;
   if (log_frame == 30)
     memSnapshot("start");
@@ -549,6 +582,11 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
       u32 gn = fr.gate_n > 255 ? 255 : fr.gate_n, nw = fr.nowait > 255 ? 255 : fr.nowait, gu = fr.gate_us, su = fr.sync_us;
       memset(&fr, 0, sizeof(fr));
       if (SB[0x4E] >= 1) sbPost(EV_FRAME, gn | nw << 8, fd, gu, su); // (the cost of this sbPost goes to the next frame)
+#ifdef NP_DEV
+      if (SB[0x4E] >= 2) { sb_x[0] = fx.ge_us; sb_x[1] = fx.gem_us; sbPost(EV_FRAME2, 0, fx.vb_us, fx.hook_us, fx.lists); }
+      fxs.vb_us += fx.vb_us; fxs.hook_us += fx.hook_us; fxs.lists += fx.lists; fxs.ge_us += fx.ge_us; fxs.gem_us += fx.gem_us;
+      memset(&fx, 0, sizeof(fx));
+#endif
     }
     if (_sceGeGetCmd && !(log_frame & 31)) { // real GE registers, for NativeDraw to compare with the capture
       SB[0xA0] = 0;
@@ -607,6 +645,9 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
           ges.busy_us / STATS_EVERY, ges.runs / STATS_EVERY, ges.run_max, ges.n ? ges.stall_n * 100 / ges.n : 0,
           t4s.n / STATS_EVERY, t4s.kb / STATS_EVERY, t4s.dn / STATS_EVERY, t4s.dkb / STATS_EVERY);
       memset(&ges, 0, sizeof(ges)); memset(&t4s, 0, sizeof(t4s));
+      LOG("stats frame (per frame): vblank=%lu us hooks_all=%lu us lists=%lu ge_busy=%lu us ge_mirror=%lu us\n", fxs.vb_us / STATS_EVERY,
+          fxs.hook_us / STATS_EVERY, fxs.lists / STATS_EVERY, fxs.ge_us / STATS_EVERY, fxs.gem_us / STATS_EVERY);
+      memset(&fxs, 0, sizeof(fxs));
 #endif
       u32 pl = 0, pd = 0, i;
       for (i = 0; i < 512; i++) pl += SB[0x20 + (i >> 5)] >> (i & 31) & 1, pd += SB[0x30 + (i >> 5)] >> (i & 31) & 1;
@@ -620,7 +661,9 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
     memset(&st, 0, sizeof(st));
   }
 
-  return _sceDisplaySetFrameBuf(topaddr, bufferwidth, pixelformat, sync);
+  int r = _sceDisplaySetFrameBuf(topaddr, bufferwidth, pixelformat, sync);
+  DEV(fx.hook_us += sceKernelGetSystemTimeLow() - th;)
+  return r;
 }
 
 // Adrenaline 8 can give the game memory that reaches the plugin zone (MEMSIZE in the SFO, high memory, 40 MB

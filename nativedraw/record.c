@@ -28,6 +28,14 @@ static int rg_w;  // the one being written
 static uint32_t rg_seq[RN], rg_s;  // number of each record's turn, and the last one given
 static volatile int rg_pub = -1, rg_using = -1;  // last complete; the one the presenter is reading
 static volatile int rg_last = -1;  // last one taken by the presenter
+DEV(static uint32_t rg_tf[RN]; static volatile uint32_t rg_tp[RN];)  // time of its PSP flip; when published (0: already taken)
+#ifdef NP_DEV
+static void rgPubNote(int k) {  // k is about to be published: notes the time; the one it replaces, if nobody took it, is lost
+  if (!p_on) return;
+  if (rg_pub >= 0 && rg_tp[rg_pub]) pAdd(P_F_UNTAKEN, 0);
+  rg_tp[k] = now(); pAdd(P_L_PUB, rg_tp[k] - rg_tf[k]);
+}
+#endif
 // (presenter) Reserves the last complete frame until regRelease; 0 if none or if the capturer is reusing it.
 // Notes which one it was (rg_last): the GPU keeps reading it until the scene noted with regGpu finishes.
 RFrame *regTake(void) {
@@ -36,6 +44,7 @@ RFrame *regTake(void) {
   rg_using = u; __sync_synchronize();
   if (rg_w == u || rg_pub != u) { rg_using = -1; return 0; }  // (the capturer chose it just before: left alone)
   rg_last = u;
+  DEV(if (p_on && rg_tp[u]) { pAdd(P_L_TAKE, now() - rg_tp[u]); rg_tp[u] = 0; })
   return rf[u];
 }
 void regRelease(void) { rg_using = -1; }
@@ -462,6 +471,7 @@ static void regPend(void) {
   RFrame *f = rf[k];
   int ready = (int)(SB[0x40] - f->tgt) >= 0;
   if (!ready && now() - rg_pend_t < 100000) return;
+  DEV(if (p_on) pAdd(P_R_MIRROR, now() - rg_pend_t);)
   uint32_t b = (ready ? f->tgt : SB[0x40]) & 1, base = b ? MIRROR2 : MIRROR, t0 = now();
   rgGpu(k, "from VRAM");
   for (uint32_t i = 0; i < f->nt; i++) {
@@ -487,11 +497,13 @@ static void regPend(void) {
     if (ok) { sceDmacMemcpy(f->tx + f->ntx, (const void *)PSP(base + a), n); f->nimg = f->ntx + 1; f->ntx += (n + 63) & ~63u; }
   }
   ga.us_l += now() - t0;
+  DEV(if (p_on) pAdd(P_R_COPY, now() - t0);)
   // The PSP already copied to that mirror again: discarded
   if ((int)(SB[0x44] - f->tgt) >= 2) { ga.stomped++; if (rg_pend == k) rg_pend = -1; return; }
   if (!ready) ga.n_late++;
   f->mirf = SB[0x40];
   __sync_synchronize();
+  DEV(if (rg_pend == k) rgPubNote(k);)
   if (rg_pend == k) { rg_pub = k; rg_pend = -1; }  // (the capturer may have replaced it meanwhile)
 }
 // Thread that finishes the frames: copies and sorts VRAM textures outside the capturer, which must keep up with the lists.
@@ -676,7 +688,9 @@ static void regXfer(uint32_t s, uint32_t t, uint32_t bp) {
 // is reading, nor the pending one, nor (if possible) the last one the presenter took. Then empties the new record and
 // copies the loaded palette into it again.
 static void regFlip(uint32_t fb, uint32_t fbw, uint32_t draws_counted) {
+  DEV(uint32_t tv = PT();)
   rgVFlush();
+  DEV(PA(P_C_VFLUSH, tv);)
   RFrame *f = rf[rg_w];
   if (!rg_thr) regPend();
   // Counted draws that did not go through regDraw
@@ -689,6 +703,7 @@ static void regFlip(uint32_t fb, uint32_t fbw, uint32_t draws_counted) {
   // Complete: published (or left pending its textures) and writing moves to one nobody uses
   if (!f->flags && f->nd) {
     f->fb = fb & 0x0FFFFFFF; f->fbw = fbw; f->frame = gen; f->mir = mir_u; f->mirf = mir_on ? SB[0x40] : 0;
+    DEV(rg_tf[rg_w] = p_flip;)
     ga.ok++;
     __sync_synchronize();
     // A dump wants the PSP image of this frame: its pages are requested from the mirror and the frame waits for its copy
@@ -702,7 +717,7 @@ static void regFlip(uint32_t fb, uint32_t fbw, uint32_t draws_counted) {
       // tgt: the mirror copy the PSP queued on this flip (NativeLink notes it before the event)
       f->tgt = SB[0x44]; rg_pend_t = now(); rg_pend = rg_w;
       if (!rg_thr) regPend();
-    } else rg_pub = rg_w;
+    } else { DEV(rgPubNote(rg_w);) rg_pub = rg_w; }
     // The next one: a free one the GPU finished reading; if none, a free one that is not the last the
     // presenter took; otherwise any free one
     int w = -1;
