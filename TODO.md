@@ -8,14 +8,10 @@ what was done is in `CHANGELOG.md`. Updated 2026-11-03 (NativeLink 0.0.6 + Nativ
 ## Next
 Order agreed on 2026-11-03: first make the whole of Ridge Racer drawable in HD (the race included), then optimize with the
 game in its "final" form. Capturer, mirror and translator work goes after the race is drawable.
-- [ ] **HD in the race, 1: image read with a palette** (image 1FE000, 64 wide, T8: the GE draws an image in VRAM and reads it in
-      another format; today `bad_texture`). Use the PSP's own mirror copy for that read: let the record ask for the pages of a
-      render target read in another format (`markRt` keeps them out today). The copy of the flip already carries that frame's image.
-- [ ] **HD in the race, 2: image read while being drawn** (image 088000, 256 wide). GXM cannot sample the surface being written in
-      the same scene: cut the scene at that draw and read from a copy of the surface (one full-screen draw, ~1-2 ms of GPU). The
-      open `readBack` case of NPTEST.
-- [ ] **HD in the race, 3: `other_target`** every other pair of frames in the race (a third image or a destination wider than 512):
-      find out what it is from a dump of such a frame and support it.
+- [ ] **Ridge Racer without `force_hd`:** with NativeDraw 0.0.14.11 a whole lap is drawn in HD and dumps match the normal image (green tunnel included), but only with the `force_hd` switch, which skips what cannot be drawn. Left, in the frames with the extra effect (targets 1fc000 and 195140, then 8 T8 draws on the screen from 195540; 4 targets in a frame): points on 1fc000, more than 2 intermediate images, a texture read inside an image. Find out what that effect does before implementing it.
+- [ ] **Ridge Racer, bright strip on the right edge and bars on the left in the bloom** (`stage3_0.0.14.8/rr1` dumps 271-273, `stage3_0.0.14.9` video). Cause unknown; dumps still lack the 088000 image (no memory for `dump_rt`).
+- [ ] **Ridge Racer, opening movie no longer plays in HD versions** (user, 0.0.14.11): check it after the race. Also dump 255 and the 2 videos in the claude.ai conversation of 2026-11-03.
+- [ ] **Sync object `t_sync`:** added on a suspicion that turned out not to be the tint's cause. Check whether it can go.
 - [ ] **3D vertices in a GXM vertex shader** (matrices, lights, texgen and fog as uniforms per draw): an HD frame of the race costs
       ~100 ms of CPU today (76 ms in `trVerts`), and the selector's translator 42-48 ms. The shader compiler runs in the container
       (`nativedraw/shaders/build.sh`). The translator on its own thread does not help: ~10-15 % of CPU is free across the 3 cores.
