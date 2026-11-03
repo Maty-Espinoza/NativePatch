@@ -22,6 +22,13 @@ static uint32_t *tpal[2];    // translated palettes (8888), aligned to 64: 16 en
 #define C_RGB (SCE_GXM_COLOR_MASK_R | SCE_GXM_COLOR_MASK_G | SCE_GXM_COLOR_MASK_B)  // alpha is never written
 // last record frame seen, whether it was drawn fine, how many times it was repeated and when one was last not drawable
 static uint32_t t_frame = ~0u, t_ok, t_rep, t_bad;
+#ifdef NP_DEV
+// Switch force_hd (diagnosis): a frame with a draw it cannot do still goes in HD, skipping that draw (t_mark, a bit per draw)
+static int t_force;
+static uint32_t t_mark[RD_N / 32 + 1];
+#else
+#define t_force 0
+#endif
 static uint16_t *tib;        // 0, 1, 2... (indices for the GPU)
 // Intermediate image: a game draw to another VRAM image (not the shown one) goes to our own double-size surface
 // (1024x544); if later in the same frame a texture is at that address, it is read from that surface.
@@ -643,6 +650,7 @@ static int trCheckFrame(RFrame *f, uint32_t *disp_p, uint32_t *ord_p) {
   // disp: image being shown; ifb, iend, ipsm: intermediate images, where their memory ends, their format
   uint32_t disp = f->fb & 0x1FFFF0, ifb[2], iend[2], ipsm[2], nif = 0, n_disp = 0;
   uint32_t ord = 1, rd_mask = 0;  // (rd_mask: bit per intermediate image read by a draw)
+  DEV(if (t_force) sceClibMemset(t_mark, 0, sizeof t_mark);)
   for (uint32_t i = 0; i < f->nd; i++) n_disp += (RE(f->e[f->d[i].st], 0x9C) & 0x1FFFF0) == disp;
   // no draw to the shown image (game behind: the flip has the other one of the double buffer): use the last draw's one
   if (!n_disp && f->nd) disp = RE(f->e[f->d[f->nd - 1].st], 0x9C) & 0x1FFFF0;
@@ -682,6 +690,7 @@ static int trCheckFrame(RFrame *f, uint32_t *disp_p, uint32_t *ord_p) {
              RE(e, 0xE1) & 0xFFFFFF, RE(e, 0x22) & 1, RE(e, 0xC9) & 0xFFFFFF, RE(e, 0x9C) & 0xFFFFFF, RE(e, 0x9D) & 0x7FF, f->fb,
              f->fbw & 0xFFFF, RE(e, 0xD3) & 0xFFFF, RE(e, 0x27) & 1, RE(e, 0x28) & 1);
       }
+      DEV(if (t_force) { t_mark[i >> 5] |= 1u << (i & 31); t_cnt[r]++; ord = 0; continue; })
       return r;
     }
   }
@@ -771,7 +780,7 @@ static void trRegions(RFrame *f, uint32_t disp) {
     RDraw *d = &f->d[i];
     const uint32_t *e = f->e[d->st];
     uint32_t fb = RE(e, 0x9C) & 0x1FFFF0, vt = d->vt, x = 2 * (RE(e, 0x9D) & 0x7FF), y = 2 * ((RE(e, 0xD5) >> 10 & 0x3FF) + 1), tc = vt & 3, k;
-    if (fb == disp) continue;
+    if (fb == disp DEV(|| t_mark[i >> 5] >> (i & 31) & 1)) continue;
     RT *r = rtOf(fb, f->frame, 1);
     if (!r) continue;
     k = r - rts;
@@ -812,7 +821,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
   uint32_t *pal = tpal[s], np = 0, nv = 0, pal_prev = ~0u, pn = 0;  // np: words used; pal_prev/pn: the previous palette
   void *u;
   // SCENE: starts a scene on surface surf_tex with the vertex program and the matrix
-#define SCENE(surf_tex, reg) do { sceGxmBeginScene(c, 0, rt, reg, 0, 0, surf_tex, &ds); t_zs = t_st = t_sr = t_cl = ~0u; zsSet(c, 0, 0); sceGxmSetVertexProgram(c, nvp); \
+#define SCENE(surf_tex, reg) do { sceGxmBeginScene(c, 0, cur_rt ? rt_i : rt, reg, 0, 0, surf_tex, &ds); t_zs = t_st = t_sr = t_cl = ~0u; zsSet(c, 0, 0); sceGxmSetVertexProgram(c, nvp); \
     sceGxmReserveVertexDefaultUniformBuffer(c, &u); sceGxmSetUniformDataF(u, n_wvp, 0, 16, tr_wvp); } while (0)
   // OPEN: closes the open scene (if any) and opens one on dst (0: surface s); the first time on the surface,
   // puts the normal image (or black: trBase) underneath
@@ -835,6 +844,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
   for (uint32_t pass = 0; pass <= ord && res == T_OK; pass++)
   for (uint32_t i = 0; i < f->nd && res == T_OK; i++) {
     RDraw *d = &f->d[i];
+    DEV(if (t_force && t_mark[i >> 5] >> (i & 31) & 1) continue;)
     const uint32_t *e = f->e[d->st];
     uint32_t clr = RE(e, 0xD3), tex = hasTex(e, d), fb = RE(e, 0x9C) & 0x1FFFF0, w3d = !(d->vt >> 23 & 1);
     RT *dst = fb == disp ? 0 : rtOf(fb, f->frame, 1);
@@ -898,9 +908,13 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
       if (ry < sc[3]) sc[3] = ry;
     }
     if (w3d) t3Set(f, d, e, &t3);
-    if ((res = trVerts(f, d, o + nv, tw, th, mat, sc, &n, w3d ? &t3 : 0))) break;
+    if ((res = trVerts(f, d, o + nv, tw, th, mat, sc, &n, w3d ? &t3 : 0))) {
+      DEV(if (t_force && res != T_LIMIT) { t_cnt[res]++; res = T_OK; continue; })
+      break;
+    }
     if (nv + n > TV_N) { res = T_LIMIT; break; }
     if (dst && !(clr & 1)) for (uint32_t j = 0; j < n; j++) if (o[nv + j].w > 0 && o[nv + j].y > H * o[nv + j].w) res = T_DEST;  // (past the surface's rows)
+    DEV(if (t_force) res = T_OK;)
     if (res) break;
     uint32_t prim = d->prim;
     if (prim != 6 && (res = trTris(o + nv, &n, TV_N - nv, &prim, sc, (clr & 1) || !(RE(e, 0x50) & 1), w3d))) break;
@@ -932,7 +946,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
         sceClibMemcpy(q, qv, sizeof qv); extra = 4;
         sceGxmTextureInitLinear(&ts, dst->mem, SCE_GXM_TEXTURE_FORMAT_A8B8G8R8, LINE, H, 0);
         sceGxmEndScene(c, 0, gEnd()); cNote(C_INT, &gq_n, t_draws - d0, spx / 1000, ssw); opened = 0;
-        sceGxmBeginScene(c, 0, rt, &vr, 0, 0, &rtc.cs, &ds);
+        sceGxmBeginScene(c, 0, rt_c, &vr, 0, 0, &rtc.cs, &ds);
         t_zs = t_st = t_sr = t_cl = ~0u; zsSet(c, 0, 0); sceGxmSetCullMode(c, SCE_GXM_CULL_NONE);
         sceGxmSetVertexProgram(c, vp); sceGxmSetFragmentProgram(c, fp);
         sceGxmReserveVertexDefaultUniformBuffer(c, &u); sceGxmSetUniformDataF(u, p_wvp, 0, 16, tr_wvp);

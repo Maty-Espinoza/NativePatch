@@ -114,7 +114,7 @@ static int initProgs(void) {
 }
 
 // --- destination: two alternating surfaces (Adrenaline reads one while the other is drawn) + z ---
-static SceGxmRenderTarget *rt;
+static SceGxmRenderTarget *rt, *rt_i, *rt_c;
 static SceGxmColorSurface cs[2];
 static SceGxmDepthStencilSurface ds;
 static SceGxmTexture surf_tex[2];
@@ -168,8 +168,11 @@ static int initDest(void) {
   SceGxmRenderTargetParams rp;
   sceClibMemset(&rp, 0, sizeof rp);
   // several scenes per frame: translator intermediate images
-  rp.width = LINE; rp.height = H; rp.scenesPerFrame = 24; rp.driverMemBlock = -1;
+  rp.width = LINE; rp.height = H; rp.scenesPerFrame = 8; rp.driverMemBlock = -1;
+  // (at most 8 scenes per target: intermediate images and their copies have their own, for frames with many scenes)
   int r = sceGxmCreateRenderTarget(&rp, &rt);
+  if (r >= 0) r = sceGxmCreateRenderTarget(&rp, &rt_i);
+  if (r >= 0) r = sceGxmCreateRenderTarget(&rp, &rt_c);
   if (r < 0) return r;
   for (int i = 0; i < 2; i++) {
     if (!(surf[i] = gmem1(PHY, LINE * H * 4, RW))) return -3;
@@ -333,7 +336,7 @@ static int hookEnd(SceGxmContext *c, const SceGxmNotification *v, const SceGxmNo
     if (t_on && draw_on && drawn == fr && cur_hd && !surf_ready) g_skip++;
     if (t_on && draw_on && drawn == fr && cur_hd && surf_ready) {  // covered: normal image differs from the Vita drawing
       int k = diffBlocks(pj, surf[cur]);
-      if (k >= 32) { surf_ok = 0; if (++surf_dif >= 6 && !covered) { covered = 1; } }
+      if (k >= 32) { surf_ok = 0; if (++surf_dif >= 6 && !covered && !t_force) { covered = 1; } }
       else { surf_dif = 0; if (k <= 10 && covered && ++surf_ok >= 10) covered = 0; }
     }
     // Check (1 of every 4 frames): blocks of the Vita drawing different from the normal image (dump.c); 6 to 8 or
@@ -353,7 +356,7 @@ static int hookEnd(SceGxmContext *c, const SceGxmNotification *v, const SceGxmNo
       int cause = T_NEW;
       if (!rg) { t_cnt[T_NEW]++; DEV(if (p_on) pAdd(P_F_NOREC, 0);) }
       else if (rg->frame == t_frame) {  // same frame: the surface is repeated up to 2 times (30 fps); otherwise, normal
-        if (t_ok && t_rep < 2) { t_rep++; hd = 2; cause = 0; t_skip[0]++; DEV(if (p_on) pAdd(P_F_REPEAT, 0);) } else t_cnt[T_NEW]++;
+        if (t_ok && (t_rep < 2 || t_force)) { t_rep++; hd = 2; cause = 0; t_skip[0]++; DEV(if (p_on) pAdd(P_F_REPEAT, 0);) } else t_cnt[T_NEW]++;
       } else {
         if (t_frame != ~0u && rg->frame > t_frame) { uint32_t g = rg->frame - t_frame; t_skip[g < 5 ? g : 5]++; }
         // The Vita drawing shows one frame behind the normal image, so an HD frame among frames that are not drawable
@@ -361,7 +364,7 @@ static int hookEnd(SceGxmContext *c, const SceGxmNotification *v, const SceGxmNo
         // they are only checked (held back)
         DEV(if (p_on) trCensus(rg);)
         uint32_t t1 = now(), dp, od;
-        int chk = t1 - t_bad < 1000000 && t_frame != ~0u, r = chk ? trCheckFrame(rg, &dp, &od) : trFrame(c, rg, s, src);
+        int chk = !t_force && t1 - t_bad < 1000000 && t_frame != ~0u, r = chk ? trCheckFrame(rg, &dp, &od) : trFrame(c, rg, s, src);
         if (chk && !r) r = T_HOLD;
         if (r && r != T_HOLD) t_bad = t1;
         g_tr_us += now() - t1; t_cnt[r]++; t_frame = rg->frame; t_ok = !r; hd = !r; t_rep = 0; cause = r;
@@ -633,7 +636,7 @@ static int swOn(const char *p) {  // the file exists and does not start with "no
 // are needed and starts the presenter thread.
 void presStart(void) {
   draw_on = swOn("ux0:data/nativedraw/draw");
-  DEV(c_wanted = swOn("ux0:data/nativedraw/gpu_timer");)
+  DEV(c_wanted = swOn("ux0:data/nativedraw/gpu_timer"); t_force = swOn("ux0:data/nativedraw/force_hd");)
   repStart();
   dump_level = dumpLevel();  // dumps: off, screenshot, frame, sequence or auto
   if (dump_level == 4 && !draw_on) dump_level = 3;  // (auto needs the Vita drawing to compare)
