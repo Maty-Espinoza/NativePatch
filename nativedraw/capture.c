@@ -1492,7 +1492,7 @@ static int repThread(SceSize args, void *argp) {
         clog("  PSP impact (per game frame): frames=%u frame_us=%u CPU_idle=%u%% gate_us=%u (waits/sec=%u no_wait/sec=%u) sync_GE_us=%u hooks_us=%u mirror_us=%u pages=%u | Vita behind: syncs/sec=%u delay_us=%u each | own read: %u us (%u timed) | shared cache line: %u ns (%u) | gate: %s, waits before enqueue/sec=%u (%u us each)\n",
              g, r->pf_us / g, cal ? r->pf_spin / cal * 100 / ms : 0, r->pf_gate / g, r->pf_gate_n, r->pf_nowait, r->pf_sync / g, r->pf_post / g,
              r->pf_mir / g, r->pf_pg / g, r->pf_late, r->pf_late ? r->pf_late_us / r->pf_late : 0, r->rd_n ? r->rd_us / r->rd_n : 0, r->rd_n, r->hit_n ? r->hit_us * 1000 / r->hit_n : 0, r->hit_n,
-             gp_flags & 8 ? "at the sync (gate_sync)" : SB[0x54] == 1 ? "before enqueue" : SB[0x54] == 2 ? "at the sync (the list changed 10 times)" : "at the sync (probing)",
+             gp_flags & 8 ? "at the sync (gate_sync)" : SB[0x54] == 1 ? "before enqueue" : "at the sync (probing)",
              r->eg_n, r->eg_n ? r->eg_us / r->eg_n : 0);
       }
 #ifdef NP_DEV

@@ -81,7 +81,7 @@ occupies it, NativeLink stays off. The Vita sees it at `0x68000000 + (address & 
 | 0x4E | Vita | log level (0 minimum, 1 medium, 2 extreme) |
 | 0x50–0x53, 0x60+, 0x80+ | Vita | sample of hashes of the last list captured (list lifetime and gate self-check) |
 | 0xA0, 0x100+ | PSP | number of the GE register snapshot (every 32 frames) and its values, by command |
-| 0x54 | PSP | gate mode (0 testing, 1 before enqueuing, 2 at the sync until the game is closed) |
+| 0x54 | PSP | gate mode (0 testing, 1 before enqueuing) |
 | 0x200–0x3FF / 0x8400–0x85FF | PSP | number of the last copy of each page in each mirror |
 | 0x400 + 8·k | PSP | ring of 4096 events of 32 bytes: type \| data << 8, a, b, c, PSP time, sequence, extra |
 
@@ -138,8 +138,7 @@ unused: `SB[0x47]`, bits 4 and 8 of 0x4A and events 7, 8, 9, 10 and 12.
 ## PSP side: gate
 - The wait for the Vita goes **before enqueuing the next list** (the game does not rewrite a list until it enqueues the
   next one). To verify this in any game, NativeLink redoes the hashes the Vita left: if the list changed
-  before enqueuing the next one, the wait goes back to the sync (60 clean checks to go back; 10 changes = at the sync
-  until the game is closed).
+  before enqueuing the next one, the wait goes back to the sync (60 clean checks to go back).
 - The wait is up to 5 ms; if the Vita does not respond (heartbeat stopped for 0.5 s), it does not wait.
 
 ## Vita side: drawing

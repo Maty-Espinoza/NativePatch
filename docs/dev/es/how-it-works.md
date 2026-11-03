@@ -81,7 +81,7 @@ ocupa, NativeLink queda apagado. La Vita la ve en `0x68000000 + (dirección & 0x
 | 0x4E | Vita | nivel de registro (0 mínimo, 1 mediano, 2 extremo) |
 | 0x50–0x53, 0x60+, 0x80+ | Vita | muestra de huellas de la última lista capturada (vida de la lista y autocomprobación de la compuerta) |
 | 0xA0, 0x100+ | PSP | número de la lectura de registros del GE (cada 32 frames) y sus valores, por comando |
-| 0x54 | PSP | modo de la compuerta (0 probando, 1 antes de encolar, 2 en el sync hasta cerrar el juego) |
+| 0x54 | PSP | modo de la compuerta (0 probando, 1 antes de encolar) |
 | 0x200–0x3FF / 0x8400–0x85FF | PSP | número de la última copia de cada página en cada espejo |
 | 0x400 + 8·k | PSP | anillo de 4096 eventos de 32 bytes: tipo \| dato << 8, a, b, c, hora del PSP, orden, extra |
 
@@ -138,8 +138,7 @@ quedan sin usar: `SB[0x47]`, los bits 4 y 8 de 0x4A y los eventos 7, 8, 9, 10 y 
 ## Lado PSP: compuerta
 - La espera a la Vita va **antes de encolar la lista siguiente** (el juego no reescribe una lista hasta encolar la
   siguiente). Para comprobarlo en cualquier juego, NativeLink rehace las huellas que dejó la Vita: si la lista cambió
-  antes de encolar la siguiente, la espera vuelve al sync (60 comprobaciones limpias para volver; 10 cambios = en el sync
-  hasta cerrar el juego).
+  antes de encolar la siguiente, la espera vuelve al sync (60 comprobaciones limpias para volver).
 - La espera es de hasta 5 ms; si la Vita no responde (latido parado 0,5 s), no se espera.
 
 ## Lado Vita: dibujo

@@ -185,7 +185,7 @@ static u32 sbGate(u32 ord) {
 // already past a sync, its hashes are recomputed: if they changed, the game rewrites the list before enqueuing the
 // next one and the Vita could read something the GE did not draw -> the gate returns to the sync.
 // Mode (gate_mode, copied to SB[0x54]): 0 at the sync, testing; goes to 1 (before enqueue) after 60 clean checks in a
-// row; a change returns it to 0 and 10 changes leave it at 2 (at the sync until the game closes).
+// row; a change returns it to 0.
 // gate_sync (SB[0x4A] & 8): always at the sync, but the checks continue (for comparison).
 // Only the sample of a list enqueued after the previous sync counts (sync_lo, sync_ord]: an older list may be in
 // an area the game already reuses and would give false changes.
@@ -209,10 +209,10 @@ static u32 gateBeforeEnq(void) { // before enqueuing: wait (if due) and self-che
   if (!(sq = lifeHash(&top, &sub))) return w;
   gate_sq = sq; gts.checks++;
   if (top | sub) {
-    static u32 bad_total;
-    if (gate_mode != 2) LOG("gate: list %lu changed before enqueuing the next (%lu lines top, %lu in sublists; %lu changes) -> at the sync%s\n",
-                            SB[0x53], top, sub, bad_total + 1, bad_total + 1 >= 10 ? " until the game closes" : "");
-    gts.bad++; gate_ok = 0; gate_mode = ++bad_total >= 10 ? 2 : 0;
+    static u32 bad_total, bad_logged;
+    bad_total++;
+    if (bad_logged < 40) { bad_logged++; LOG("gate: list %lu changed before enqueuing the next (%lu lines top, %lu in sublists; %lu changes) -> at the sync\n", SB[0x53], top, sub, bad_total); }
+    gts.bad++; gate_ok = 0; gate_mode = 0;
   } else if (!gate_mode && ++gate_ok >= 60) {
     gate_mode = 1;
     LOG("gate: 60 clean checks in a row -> before enqueuing the next list\n");
@@ -630,7 +630,7 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
           sbs.syncs, sbs.late, sbs.timeouts, sbs.wait_us / s, sbs.wait_max, sbs.lsyncs, sbs.llate);
       LOG("stats shadow GE: the game waits for the GE in drawsync %lu us/sync\n", sbs.in_sync_us / s);
       LOG("stats gate: %s%s | waits before enqueue=%lu (%lu us each, max %lu) | self_checks=%lu changed=%lu\n",
-          gate_mode == 1 ? "before enqueue" : gate_mode ? "at the sync (the list changed 10 times)" : "at the sync (probing)", DEV_SW(8) ? " [gate_sync]" : "",
+          gate_mode == 1 ? "before enqueue" : "at the sync (probing)", DEV_SW(8) ? " [gate_sync]" : "",
           gts.n, gts.n ? gts.us / gts.n : 0, gts.max, gts.checks, gts.bad);
       memset(&gts, 0, sizeof(gts));
       if (frs.frames) { // impact on the game, per frame
