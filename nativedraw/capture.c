@@ -351,7 +351,12 @@ static void draw(uint32_t d) {
     uint32_t h = ((reg[0xD5] >> 10) & 0x3FF) + 1, hr = ((reg[0x16] >> 10) & 0x3FF) + 1, w = reg[0x9D] & 0x7FF;
     if (reg[0x16] & 0xFFFFF && hr < h) h = hr;
     // (an image started with points is the game sampling pixels: the Vita does not draw it, it reads the result in the mirror)
-    if (type) { markRt(fb, w * h * ((reg[0xD2] & 3) == 3 ? 4 : 2)); if (rt_nb < 8) rt_fb[rt_nb++] = fb & 0x1FFFF0; }
+    if (type) {
+      uint32_t k = 0;
+      markRt(fb, w * h * ((reg[0xD2] & 3) == 3 ? 4 : 2));
+      while (k < rt_nb && rt_fb[k] != (fb & 0x1FFFF0)) k++;
+      if (k == rt_nb && rt_nb < 8) rt_fb[rt_nb++] = fb & 0x1FFFF0;
+    }
     if (reg[0x23] & 1) markRt(reg[0x9E] & 0xFFFFF0, (reg[0x9F] & 0x7FF) * h * 2);  // z (with z test)
   }
   if (isVram(vaddr)) acc.dvert_vram++;

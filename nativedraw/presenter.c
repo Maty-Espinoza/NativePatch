@@ -211,6 +211,7 @@ static int initDest(void) {
 #define c_slot 0
 #endif
 static uint32_t fq[2];  // last scene of ours of the previous frame and the one before
+DEV(static volatile uint32_t rt_hold;)  // (rtPeek) no new frames: the images are being saved
 #include "translator.c"  // draws the frame record with the Vita GPU
 
 // --- Hooks (AdrenalineUser imports) and statistics ---
@@ -328,6 +329,7 @@ static int hookEnd(SceGxmContext *c, const SceGxmNotification *v, const SceGxmNo
       sceGxmTextureSetMagFilter(&itex[ki], sceGxmTextureGetMagFilter(psp_tex));
     }
     const uint32_t *pj = sceGxmTextureGetData(src);
+    DEV(if (rt_hold) { drawn = fr + 1; goto finish; })
     // GPU behind: two frames unfinished. With one, the next can be prepared meanwhile: trFrame holds its surface scene until it ends
     if (gBusy(fq[1]) && drawn == fr && dump_on != 1) { g_behind++; DEV(if (p_on) pAdd(P_F_BEHIND, 0);) drawn = fr + 1; goto finish; }
     if (dump_on == 1 || dump_on == 3) {  // dump: only of a surface the GPU finished

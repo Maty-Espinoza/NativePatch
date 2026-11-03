@@ -290,14 +290,22 @@ static void dumpList(SceUID fd, const uint8_t *b) {
 }
 
 #ifdef NP_DEV
-// With no memory for a dump: saves the corner of each intermediate image as it is now, in ux0:data/nativedraw/rt_<address>.bmp
+// With no memory for a dump: stops drawing, waits for the GPU and saves as they are, in ux0:data/nativedraw/, the surface, the PSP
+// image and the corner of each intermediate image (peek<n>_*.bmp)
 static void rtPeek(void) {
+  static uint8_t row[W * 16 * 4];
+  static uint32_t n;
   char p[64];
   uint8_t *w = dump_w;
-  dump_w = fl_row;
-  for (int i = 0; i < 2; i++) if (rts[i].mem && rts[i].fb != ~0u) { sceClibSnprintf(p, sizeof p, "ux0:data/nativedraw/rt_%06x.bmp", rts[i].fb); bmp(p, rts[i].mem, 480, 272, LINE); }
-  dump_w = w;
-  alog("dump: intermediate images saved\n");
+  rt_hold = 1;
+  sceKernelDelayThread(100000);
+  for (int i = 0; i < 100 && gBusy(fq[0]); i++) sceKernelDelayThread(10000);
+  dump_w = row; n++;
+  sceClibSnprintf(p, sizeof p, "ux0:data/nativedraw/peek%u_surface.bmp", n); bmp(p, surf[cur], W, H, LINE);
+  sceClibSnprintf(p, sizeof p, "ux0:data/nativedraw/peek%u_psp.bmp", n); bmp(p, sceGxmTextureGetData(&itex[ki]), 480, 272, 512);
+  for (int i = 0; i < 2; i++) if (rts[i].mem && rts[i].fb != ~0u) { sceClibSnprintf(p, sizeof p, "ux0:data/nativedraw/peek%u_rt_%06x.bmp", n, rts[i].fb); bmp(p, rts[i].mem, 480, 272, LINE); }
+  dump_w = w; rt_hold = 0;
+  alog("dump: peek %u saved\n", n);
 }
 #endif
 // Takes the dump memory by level: images (mandatory) and, from "frame", records, exact image and
