@@ -466,7 +466,15 @@ static uint32_t rgTex(uint32_t r0, uint32_t r1) {
     while (h < g1 && !(f->tm[i] >> h & 1)) h++;  // span of uncopied groups [g, h)
     uint32_t o = g * gb, m = (h * gb > n ? n : h * gb) - o;
     // From VRAM: copied later (regPend)
-    if (vr) { if (!rgSrc(ta + o, m)) { RG_READ(NR_TEX, ta + o, m); return 0; } f->dv = 1; }
+    if (vr) {
+      if (!rgSrc(ta + o, m)) {
+        DEV(static uint32_t tf; uint32_t pg = ((ta + o) & 0x1FFFFF) >> 12, bt = 1u << (pg & 31);
+            if (tf++ % 64 < 2) clog("record: texture page %03x: wanted data %u list %u, target %u, valid %u %u, copies %u %u, current %u, draws %u\n", pg, !!(want_d[pg >> 5] & bt), !!(want_l[pg >> 5] & bt),
+                                    !!(rt_pg[pg >> 5] & bt), !!(mir_ok[0][pg >> 5] & bt), !!(mir_ok[1][pg >> 5] & bt), CPY(0, pg), CPY(1, pg), mir_u, f->nd);)
+        RG_READ(NR_TEX, ta + o, m); return 0;
+      }
+      f->dv = 1;
+    }
     else {  // from RAM: now (the game may change it), by DMA
       uint32_t sa = rgSrc(ta + o, m), t0 = now();
       if (!e) rgGpu(rg_w, "from RAM");

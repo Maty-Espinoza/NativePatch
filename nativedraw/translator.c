@@ -906,11 +906,13 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     sceGxmReserveVertexDefaultUniformBuffer(c, &u); sceGxmSetUniformDataF(u, n_wvp, 0, 16, tr_wvp); } while (0)
   // OPEN: closes the open scene (if any) and opens one on dst (0: surface s); the first time on the surface,
   // puts the normal image (or black: trBase) underneath
-#define OPEN(dst_) do { RUN(); pd = 0; if (opened) { sceGxmEndScene(c, 0, gEnd()); cNote(cur_rt ? C_INT : C_TR, &gq_n, t_draws - d0, spx / 1000, ssw); } \
+#define OPEN(dst_) do { RUN(); pd = 0; if (opened) { SURF_WAIT(); sceGxmEndScene(c, 0, gEnd()); cNote(cur_rt ? C_INT : C_TR, &gq_n, t_draws - d0, spx / 1000, ssw); } \
     d0 = t_draws; spx = 0; ssw = 0; cur_rt = (dst_); opened = 1; \
     if (!cur_rt && has_base && zcut) sceGxmDepthStencilSurfaceSetForceLoadMode(&dss, SCE_GXM_DEPTH_STENCIL_FORCE_LOAD_ENABLED); \
     SCENE(cur_rt ? &cur_rt->cs : &cs[s], cur_rt ? &cur_rt->vr : 0); \
     if (!cur_rt && !has_base) { has_base = 1; nv = trBase(c, base, o, nv); spx += W * H; } } while (0)
+  // SURF_WAIT: the surface s is being sampled for the screen until the previous frame's scenes end, and its scene must not start before
+#define SURF_WAIT() do { if (!cur_rt) gWait(fq[0]); } while (0)
   // RUN: sends the pending draw, the n vertices at rv in primitive rp; draws with the state already set wait in it to be joined
 #define RUN() do { if (rn) { sceGxmSetVertexStream(c, 0, o + rv); \
     sceGxmDraw(c, rp == 3 ? SCE_GXM_PRIMITIVE_TRIANGLES : rp == 5 ? SCE_GXM_PRIMITIVE_TRIANGLE_FAN : SCE_GXM_PRIMITIVE_TRIANGLE_STRIP, SCE_GXM_INDEX_FORMAT_U16, tib, rn); rn = 0; } } while (0)
@@ -1148,12 +1150,14 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     sceGxmSetFrontDepthFunc(c, SCE_GXM_DEPTH_FUNC_ALWAYS);  // the context is Adrenaline's: its defaults back
     sceGxmSetFrontDepthWriteEnable(c, SCE_GXM_DEPTH_WRITE_ENABLED);
     sceGxmSetFrontStencilFunc(c, SCE_GXM_STENCIL_FUNC_ALWAYS, SCE_GXM_STENCIL_OP_KEEP, SCE_GXM_STENCIL_OP_KEEP, SCE_GXM_STENCIL_OP_KEEP, 0, 0);
+    SURF_WAIT();
     DEV(tb = PT();)
     sceGxmEndScene(c, 0, gEnd());
     DEV(PA(P_T_END, tb);)
     cNote(cur_rt ? C_INT : C_TR, &gq_n, t_draws - d0, spx / 1000, ssw);
   }
 #undef OPEN
+#undef SURF_WAIT
 #undef RUN
 #undef SCENE
   t_q[s] = gq;
