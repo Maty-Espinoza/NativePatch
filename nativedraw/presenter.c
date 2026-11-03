@@ -370,8 +370,11 @@ static int hookEnd(SceGxmContext *c, const SceGxmNotification *v, const SceGxmNo
         uint32_t t1 = now(), dp, od;
         int chk = !t_force && t1 - t_bad < 1000000 && t_frame != ~0u, r = chk ? trCheckFrame(rg, &dp, &od) : trFrame(c, rg, s, src);
         if (chk && !r) r = T_HOLD;
-        if (r && r != T_HOLD) t_bad = t1;
-        g_tr_us += now() - t1; t_cnt[r]++; t_frame = rg->frame; t_ok = !r; hd = !r; t_rep = 0; cause = r;
+        // One frame that cannot be drawn among drawable ones: the last surface stays (up to 8 frames), not a jump to the normal image
+        int keep = r && r != T_HOLD && t_ok && t_rep < 8;
+        if (r && r != T_HOLD && !keep) t_bad = t1;
+        g_tr_us += now() - t1; t_cnt[r]++; t_frame = rg->frame; cause = r;
+        if (keep) { t_rep++; hd = 2; } else { t_ok = !r; hd = !r; t_rep = 0; }
         DEV(trReason(rg->frame, r); if (p_on) pAdd(r ? P_F_NORMAL : P_F_DRAWN, 0);)
         if (!r) regGpu(gq, gq_done);  // the scene that reads this record's textures
       }
