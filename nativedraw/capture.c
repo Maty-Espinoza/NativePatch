@@ -1220,7 +1220,10 @@ static void event(volatile uint32_t *e) {
       static uint32_t snl[72];  // the same with the lights and materials block (0x53-0x9A)
       for (int i = 0; i < 72; i++) {
         uint32_t v = SB[0x153 + i] & 0xFFFFFF;
-        if (v == snl[i] && reg[0x53 + i] != v) { reg[0x53 + i] = v; rg_lchg = 1; }
+        if (v == snl[i] && reg[0x53 + i] != v) {
+          DEV(static uint32_t nsl; if (nsl < 60) { nsl++; clog("register %02x: capture %06x real %06x (frame %u)\n", 0x53 + i, reg[0x53 + i], v, gen); })
+          reg[0x53 + i] = v; rg_lchg = 1;
+        }
         snl[i] = v;
       }
     }

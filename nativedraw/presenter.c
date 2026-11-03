@@ -270,14 +270,16 @@ static int diffBlocks(const uint32_t *pj, const uint32_t *ps) {  // different po
   return k;
 }
 
+static uint32_t fq[2], old_shown;  // last scene of ours of the previous frame and the one before; the older surface was shown
 // Hook on sceGxmSetFragmentTexture: recognizes psp_tex by its size (512x272) and, when Adrenaline uses it, passes it the
-// surface drawn in the previous frame; without a surface, our own copy of this frame (psp_tex is no longer updated).
-// used = scene in which psp_tex was used (+1).
+// surface drawn in the previous frame, or the one before if the GPU has not finished it (its scenes are not in order with
+// Adrenaline's, which would show it half drawn); without a surface, our own copy of this frame (psp_tex is no longer
+// updated). used = scene in which psp_tex was used (+1).
 static int hookTex(SceGxmContext *c, unsigned int i, const SceGxmTexture *t) {
   if (t && !psp_tex && sceGxmTextureGetWidth(t) == 512 && sceGxmTextureGetHeight(t) == 272) { psp_tex = t; psp_data = sceGxmTextureGetData(t); }
   if (t && t == psp_tex) {
     used = fr + 1;
-    if (ready && drawn == fr && !(covered && copy_fr == fr)) { t = &surf_tex[cur]; n_swap++; }
+    if (ready && drawn == fr && !(covered && copy_fr == fr)) { old_shown = gBusy(fq[0]); t = &surf_tex[old_shown ? cur ^ 1 : cur]; n_swap++; }
     else if (copy_fr == fr) t = &itex[ki];  // (no surface: this frame's copy, psp_tex is no longer updated)
   }
   return TAI_CONTINUE(int, ref_tex, c, i, t);
@@ -312,7 +314,6 @@ static int hookEnd(SceGxmContext *c, const SceGxmNotification *v, const SceGxmNo
   int r = TAI_CONTINUE(int, ref_end, c, v, f);
   DEV(PA(P_A_END, tp);)
   n_us += used == fr + 1;
-  static uint32_t fq[2];  // last scene of ours of the previous frame and the one before
   if (ACTIVE && used == fr + 1) {  // in this scene Adrenaline drew the PSP image: we pass it through the surface
     uint32_t t0 = now();
     if (gq_done) {
@@ -326,8 +327,8 @@ static int hookEnd(SceGxmContext *c, const SceGxmNotification *v, const SceGxmNo
       sceGxmTextureSetMagFilter(&itex[ki], sceGxmTextureGetMagFilter(psp_tex));
     }
     const uint32_t *pj = sceGxmTextureGetData(src);
-    // GPU behind: if the scene from 2 frames ago is unfinished, no other is sent; the previous surface is repeated
-    if (gBusy(fq[1]) && drawn == fr && dump_on != 1) { g_behind++; DEV(if (p_on) pAdd(P_F_BEHIND, 0);) drawn = fr + 1; goto finish; }
+    // GPU behind: if the last frame's scene is unfinished, no other is sent: the surface it would overwrite is the one shown
+    if ((gBusy(fq[0]) || old_shown) && drawn == fr && dump_on != 1) { g_behind++; DEV(if (p_on) pAdd(P_F_BEHIND, 0);) drawn = fr + 1; goto finish; }
     if (dump_on == 1 || dump_on == 3) {  // dump: only of a surface the GPU finished
       for (int i = 0; i < 100 && gBusy(fq[0]); i++) sceKernelDelayThread(5000);
       dumpFrame(c, pj, drawn == fr && !(covered && copy_fr == fr));
