@@ -10,5 +10,5 @@ float4 main(float3 uv : TEXCOORD0, float4 col : COLOR, uniform float4 at, unifor
   else if (at.x < 5.5) { if (a > at.y) discard; }
   else if (at.x < 6.5) { if (a <= at.y) discard; }
   else { if (a < at.y) discard; }
-  return float4(lerp(fog.rgb, col.rgb, uv.z), col.a);
+  return float4(lerp(fog.rgb, col.rgb, uv.z), at.z > 0.5 ? min(col.a * 2.0, 1.0) : col.a);
 }

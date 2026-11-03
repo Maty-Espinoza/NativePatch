@@ -134,16 +134,16 @@ static int texCopyOk(uint32_t groups) {
 // Runs each case in a child process (the capturer's state is global; a hang ends with the alarm) and compares them.
 int main(int argc, char **argv);
 static int checkAll(void) {
-  enum { RAM, MEMO, ALL, RD1, RD2, RD3, V1REF, V1, V2REF, V2, V3REF, V3, REG0, REG1, N };
+  enum { RAM, MEMO, ALL, RD1, RD2, RD3, V1REF, V1, V2REF, V2, V3REF, V3, REG0, REG1, REG2, N };
   static const int C[N][4] = { {0,0,0,0}, {1,0,0,0}, {2,0,0,0}, {1,0,1,0}, {1,0,2,0}, {1,0,3,0}, {0,1,0,0}, {2,1,0,0}, {0,2,0,0}, {2,2,0,0},
-                               {0,3,0,0}, {2,3,0,0}, {0,0,0,1}, {1,0,0,1} };
+                               {0,3,0,0}, {2,3,0,0}, {0,0,0,1}, {1,0,0,1}, {1,0,0,2} };
   Res *r = mmap(0, N * sizeof(Res), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
   int bad = 0;
   for (int i = 0; i < N; i++) {
     if (!fork()) {
       char a[3][4]; for (int k = 0; k < 3; k++) sprintf(a[k], "%d", C[i][k]);
       char *av[] = { "capture_test", a[0], a[1], a[2], 0 };
-      if (C[i][3]) setenv("REG", "1", 1);
+      if (C[i][3]) setenv("REG", C[i][3] == 2 ? "2" : "1", 1);
       res = r + i; alarm(60); freopen("/dev/null", "w", stdout);
       _exit(main(4, av));
     }
@@ -158,7 +158,7 @@ static int checkAll(void) {
   bad += report("VRAM sublists: same as RAM from frame 1, nothing skipped", same(r + V1, r + V1REF, 0, 1) && same(r + V1, r + RAM, 1, 0) && !r[V1].skip && !r[V1].bad);
   bad += report("VRAM page without copy: cut sublists, no hang", same(r + V2, r + V2REF, 0, 1) && r[V2].skip && !r[V2].bad);
   bad += report("VRAM per frame: the change is detected, no MISMATCH", same(r + V3, r + V3REF, 0, 1) && r[V3].fail && !r[V3].bad);
-  bad += report("frame record: complete without memory, incomplete with it", same(r + REG0, r + RAM, 0, 1) && r[REG0].whole == 8 && r[REG1].whole < 8);
+  bad += report("frame record: complete without memory; memory waits for frames over the record", same(r + REG0, r + RAM, 0, 1) && r[REG0].whole == 8 && r[REG1].whole == 8 && r[REG2].whole < 8);
   bad += report("frame record: lost events leave the frame incomplete", r[REG0].lost);
   bad += report("frame record: a TRANSFER on the drawn image becomes a draw", r[REG0].xf);
   bad += report("frame record: a texture rewritten between lists gets a new copy", r[REG0].tex2);
@@ -182,7 +182,7 @@ int main(int argc, char **argv) {
   if (mmap((void *)0x72C00000, 0x200000, PROT_READ | PROT_WRITE, MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0) == MAP_FAILED) { perror("mmap3"); return 1; }
   if (mmap((void *)0x72000000, 0x400000, PROT_READ | PROT_WRITE, MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0) == MAP_FAILED) { perror("mmap2"); return 1; }
   rlo[0] = 0x08000000; rhi[0] = 0x0B000000; nr = 1; initCls();
-  if (getenv("REG")) { reg_on = 1; regInit(); }
+  if (getenv("REG")) { reg_on = 1; reg_big = atoi(getenv("REG")) == 2; regInit(); }
   if (mode) { MEMO_N = 512; POOL_N = 8192; memo_sh = 23; memo = calloc(MEMO_N, sizeof(Memo)); pool = calloc(POOL_N, 64); memo_on = 1; memo_chk = mode == 2; }
   for (int f = 0; f < 8; f++) {
     build(f);

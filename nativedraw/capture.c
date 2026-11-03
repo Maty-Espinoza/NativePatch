@@ -1152,7 +1152,7 @@ static void event(volatile uint32_t *e) {
     sceClibMemset(pfr, 0, sizeof pfr);
 #endif
     // closes the frame record (a: displayed image, b: width | format << 16)
-    if (reg_on) regFlip(a, b, f_draws);
+    if (reg_on) { regFlip(a, b, f_draws); reg_big = f_draws > RD_N; }
     acc.frames++;
     if (qh != qt) acc.flips_behind++;
     if (f_cmds > acc.cmds_max) acc.cmds_max = f_cmds;
