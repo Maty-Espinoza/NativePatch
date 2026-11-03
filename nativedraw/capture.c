@@ -1761,6 +1761,7 @@ void capStart(void) {
     void *mm = NULL;
     uint32_t sz = 0;
     SceUID mb = -1;
+    DEV(if (swOn("ux0:data/nativedraw/force_hd")) { MEMO_N /= 4; POOL_N /= 4; memo_sh += 2; })  // (room for the dumps of that diagnosis)
     for (; MEMO_N >= 512 && !mm; MEMO_N /= 2, POOL_N /= 2, memo_sh++) {  // (if memory is short: half)
       sz = (MEMO_N * sizeof(Memo) + POOL_N * 64 + 0xFFF) & ~0xFFF;
       mb = sceKernelAllocMemBlock("nativedraw_memory", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, sz, NULL);
