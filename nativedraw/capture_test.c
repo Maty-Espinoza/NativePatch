@@ -123,12 +123,12 @@ static int texCopyOk(uint32_t groups) {
   uint8_t *s = malloc(m), *d = malloc(m);
   rg_ord = malloc(OR_N);
   for (uint32_t i = 0; i < m; i++) s[i] = i * 31 + (i >> 8);
-  rgTexCopy(d, s, m, rb, 0x08800000u, -1);
+  rgTexCopy(d, s, m, rb, 0x08800000u, -1, rg_ord);
   for (uint32_t g = 0; g < groups; g++)
     for (uint32_t r = 0; r < 8; r++)
       for (uint32_t b = 0; b < rb; b += 16)
         ok &= !memcmp(d + g * 8 * rb + r * rb + b, s + g * 8 * rb + b * 8 + r * 16, 16);
-  rgTexCopy(d, s, m, 0, 0x08800000u, -1);
+  rgTexCopy(d, s, m, 0, 0x08800000u, -1, rg_ord);
   return ok && !memcmp(d, s, m);
 }
 // Runs each case in a child process (the capturer's state is global; a hang ends with the alarm) and compares them.
@@ -265,10 +265,10 @@ int main(int argc, char **argv) {
       uint32_t m = 16384, same;
       uint8_t *sr = malloc(m), *ds = rf[0]->tx;
       for (uint32_t i = 0; i < m; i++) sr[i] = i * 31;
-      rg_ordc = 1; rgTexCopy(ds, sr, m, 128, 0x08900000u, 0); same = ga.t_same;
-      rgTexCopy(ds, sr, m, 128, 0x08900000u, 0);
+      rg_ordc = 1; rgTexCopy(ds, sr, m, 128, 0x08900000u, 0, rg_ord); same = ga.t_same;
+      rgTexCopy(ds, sr, m, 128, 0x08900000u, 0, rg_ord);
       res->srt = ga.t_same - same == m;
-      sr[0] ^= 0xFF; same = ga.t_same; rgTexCopy(ds, sr, m, 128, 0x08900000u, 0);
+      sr[0] ^= 0xFF; same = ga.t_same; rgTexCopy(ds, sr, m, 128, 0x08900000u, 0, rg_ord);
       res->srt = res->srt && ga.t_same - same == m - 1024 && ds[0] == sr[0];
     }
 #undef NEXT

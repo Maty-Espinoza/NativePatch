@@ -64,7 +64,7 @@ void *sceDmacMemcpy(void *dst, const void *src, SceSize size);
 // the CPU leaves them sorted in the record, so the GPU reads them as a plain texture (filtered if the game asks and
 // without computing where each texel is)
 #define OR_N (256 << 10)
-static uint8_t *rg_ord;
+static uint8_t *rg_ord, *rg_ord2;  // (rg_ord2: the record thread's, rg_ord: the capturer's)
 static int rg_ordc;
 // Sorting only what changed: each record remembers, per 128 bytes of its tx, the PSP address and hash of the sorted group
 // that starts there. If the same group arrives at the same place with the same hash, the rows are already there. A place
@@ -92,10 +92,10 @@ static int rgCoherent(uint8_t *c, uint8_t *u) {
 // Copies m bytes from s (PSP memory; pa: its PSP address) to d (record textures), by CPU under 8 KB, where a DMA call
 // costs more than the bytes. rb: bytes per row if the texture is swizzled (0: as is); then m is whole groups of 8 rows and each group is sorted: block b (16 bytes wide) of row
 // r is at s + b * 128 + r * 16 and goes to d + r * rb + b * 16 (d is written in order: it is uncached memory).
-// kr: record whose tx holds d (-1: the texture cache), for skipping groups already sorted there; only groups read by DMA,
+// tr: transit memory of the calling thread. kr: record whose tx holds d (-1: the texture cache), for skipping groups already sorted there; only groups read by DMA,
 // which leaves them in cached memory where the hash costs little.
 // Notes the t_* measurements of the "texturas:" line.
-static void rgTexCopy(uint8_t *d, const void *s, uint32_t m, uint32_t rb, uint32_t pa, int kr) {
+static void rgTexCopy(uint8_t *d, const void *s, uint32_t m, uint32_t rb, uint32_t pa, int kr, uint8_t *tr) {
   uint32_t v = isVram(pa), t0 = now(), td = 0, k;
   ga.t_n[v]++; ga.t_kb[v] += m;
   for (k = 0; k < 4 && m >= 1024u << 2 * k; k++) {}
@@ -110,9 +110,9 @@ static void rgTexCopy(uint8_t *d, const void *s, uint32_t m, uint32_t rb, uint32
   for (uint32_t o = 0; o < m; o += max) {
     uint32_t l = m - o < max ? m - o : max, t1 = now();
     const uint8_t *src = (const uint8_t *)s + o;
-    if (l >= 8192) { sceDmacMemcpy(rg_ord, src, l); src = rg_ord; ga.t_calls++; td += now() - t1; }
+    if (l >= 8192) { sceDmacMemcpy(tr, src, l); src = tr; ga.t_calls++; td += now() - t1; }
     for (uint32_t g = 0; g < l; g += gb) {
-      if (kr >= 0 && rg_hash[kr] && !(src == rg_ord && rg_ordc)) rg_hash[kr][(d + o + g - rf[kr]->tx) >> 7].a = 0;
+      if (kr >= 0 && rg_hash[kr] && !(src == tr && rg_ordc)) rg_hash[kr][(d + o + g - rf[kr]->tx) >> 7].a = 0;
       else if (kr >= 0 && rg_hash[kr]) {
         uint32_t h = gb, a = pa + o + g, c = (d + o + g - rf[kr]->tx) >> 7;
         for (uint32_t i = 0; i < gb; i += 4) h = (h ^ *(const uint32_t *)(src + g + i)) * 16777619u;
@@ -261,6 +261,9 @@ static void regInit(void) {
     if (b < 0 || sceKernelGetMemBlockBase(b, &p) < 0) { reg_on = 0; clog("frame record: no memory to sort textures (%08x)\n", b); return; }
     rg_ord = p;
   }
+  b = sceKernelAllocMemBlock("nativedraw_order2", rg_ordc ? SCE_KERNEL_MEMBLOCK_TYPE_USER_RW : SCE_KERNEL_MEMBLOCK_TYPE_USER_RW_UNCACHE, OR_N, 0);
+  if (b < 0 || sceKernelGetMemBlockBase(b, &p) < 0) { reg_on = 0; clog("frame record: no memory to sort textures (%08x)\n", b); return; }
+  rg_ord2 = p;
   b = sceKernelAllocMemBlock("nativedraw_hashes", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, RN * 0x20000, 0);  // (RH_N x 8 bytes each)
   if (b >= 0 && sceKernelGetMemBlockBase(b, &p) >= 0) {
     sceClibMemset(p, 0, RN * 0x20000);
@@ -402,7 +405,7 @@ static uint32_t rgTex(uint32_t r0, uint32_t r1) {
       uint32_t sa = rgSrc(ta + o, m), t0 = now();
       if (!e) rgGpu(rg_w, "from RAM");
       if (!sa) { f->flags |= R_READ; return 0; }
-      rgTexCopy(f->tx + f->to[i] + o, (const void *)PSP(sa), m, swz ? rb : 0, ta + o, e ? -1 : rg_w);
+      rgTexCopy(f->tx + f->to[i] + o, (const void *)PSP(sa), m, swz ? rb : 0, ta + o, e ? -1 : rg_w, rg_ord);
       if (e) rcNote(e, g, h);
       ga.t_b += m; ga.us_l += now() - t0;
     }
@@ -415,13 +418,13 @@ static uint32_t rgTex(uint32_t r0, uint32_t r1) {
 // Pending frame: VRAM textures are copied from the mirror copy the PSP made at that frame's flip (f->tgt): the game
 // uploads a frame's sprites after the previous flip, so the copy the list was read with may be one frame old.
 // Until that copy finishes, the frame is not published.
-static volatile int rg_pend = -1;
+static volatile int rg_pend = -1, rg_work = -1;
 static uint32_t rg_pend_t;
 // (capturer) If the mirror copy of the pending frame has finished (or 100 ms passed: with whatever is there), copies by
 // DMA its VRAM textures (and its PSP image if requested for a dump) and publishes it. If the PSP already rewrote that
 // mirror, discards it. Never waits for the PSP.
 static void regPend(void) {
-  int k = rg_pend;
+  int k = rg_work >= 0 ? rg_work : rg_pend;
   if (k < 0) return;
   RFrame *f = rf[k];
   int ready = (int)(SB[0x40] - f->tgt) >= 0;
@@ -438,7 +441,7 @@ static void regPend(void) {
       while (h < 64 && (m >> h & 1)) h++;
       uint32_t o = g * gb, l = (h * gb > n ? n : h * gb) - o, a = (f->ta[i] + o) & 0x1FFFFF;
       for (uint32_t pg = a >> 12, pe = (a + l - 1) >> 12; pg <= pe; pg++) { uint32_t q = CPY(b, pg); if (q < f->tq[i]) f->tq[i] = q; }
-      rgTexCopy(f->tx + f->to[i] + o, (const void *)PSP(base + a), l, f->tn[i] >> 31 ? gb / 8 : 0, f->ta[i] + o, f->tc[i] ? -1 : k);
+      rgTexCopy(f->tx + f->to[i] + o, (const void *)PSP(base + a), l, f->tn[i] >> 31 ? gb / 8 : 0, f->ta[i] + o, f->tc[i] ? -1 : k, rg_ord2);
       ga.t_b += l;
       g = h;
     }
@@ -452,11 +455,22 @@ static void regPend(void) {
   }
   ga.us_l += now() - t0;
   // The PSP already copied to that mirror again: discarded
-  if ((int)(SB[0x44] - f->tgt) >= 2) { ga.stomped++; rg_pend = -1; return; }
+  if ((int)(SB[0x44] - f->tgt) >= 2) { ga.stomped++; if (rg_pend == k) rg_pend = -1; return; }
   if (!ready) ga.n_late++;
   f->mirf = SB[0x40];
   __sync_synchronize();
-  rg_pub = k; rg_pend = -1;
+  if (rg_pend == k) { rg_pub = k; rg_pend = -1; }  // (the capturer may have replaced it meanwhile)
+}
+// Thread that finishes the frames: copies and sorts VRAM textures outside the capturer, which must keep up with the lists.
+// rg_work: the record it is writing, kept from the capturer.
+static int rg_thr;
+static int recThread(SceSize args, void *argp) {
+  for (;;) {
+    if ((rg_work = rg_pend) >= 0) regPend();
+    rg_work = -1;
+    sceKernelDelayThread(200);
+  }
+  return 0;
 }
 // Texture rows read by the draw's vertices (only 2D through mode, coordinates in texels): computes the vertex size,
 // walks the vertices used (by index if any) and takes min and max v. 1 and [r0, r1) if known;
@@ -620,7 +634,7 @@ static void regXfer(uint32_t s, uint32_t t, uint32_t bp) {
 // copies the loaded palette into it again.
 static void regFlip(uint32_t fb, uint32_t fbw, uint32_t draws_counted) {
   RFrame *f = rf[rg_w];
-  regPend();
+  if (!rg_thr) regPend();
   // Counted draws that did not go through regDraw
   if (f->draws_seen < draws_counted) f->flags |= R_READ;
   ga.fr++; ga.us += rg_t; ga.st += f->ne; ga.kb += f->na; ga.t_tex += f->nt;
@@ -643,15 +657,15 @@ static void regFlip(uint32_t fb, uint32_t fbw, uint32_t draws_counted) {
       if (rg_pend >= 0) ga.stomped++;  // (the previous one was still waiting: replaced)
       // tgt: the mirror copy the PSP queued on this flip (NativeLink notes it before the event)
       f->tgt = SB[0x44]; rg_pend_t = now(); rg_pend = rg_w;
-      regPend();
+      if (!rg_thr) regPend();
     } else rg_pub = rg_w;
     // The next one: a free one the GPU finished reading; if none, a free one that is not the last the
     // presenter took; otherwise any free one
     int w = -1;
-    for (int i = 0; i < RN && w < 0; i++) if (i != rg_pub && i != rg_using && i != rg_pend && !rgBusy(i)) w = i;
-    for (int i = 0; i < RN && w < 0; i++) if (i != rg_pub && i != rg_using && i != rg_pend && i != rg_last) w = i;
-    if (w < 0) for (int i = 0; i < RN && w < 0; i++) if (i != rg_pub && i != rg_using && i != rg_pend) w = i;
-    if (w < 0) { w = rg_pend; rg_pend = -1; ga.stomped++; }  // (none free: the pending one is lost)
+    for (int i = 0; i < RN && w < 0; i++) if (i != rg_pub && i != rg_using && i != rg_pend && i != rg_work && !rgBusy(i)) w = i;
+    for (int i = 0; i < RN && w < 0; i++) if (i != rg_pub && i != rg_using && i != rg_pend && i != rg_work && i != rg_last) w = i;
+    if (w < 0) for (int i = 0; i < RN && w < 0; i++) if (i != rg_pub && i != rg_using && i != rg_pend && i != rg_work) w = i;
+    if (w < 0) { w = rg_pend; rg_pend = -1; ga.stomped++; while (rg_work == w) sceKernelDelayThread(100); }  // (none free: the pending one is lost)
     rg_w = w; rg_gv[w] = 0; rg_seq[w] = ++rg_s;
   }
   // Only what the GE draws from now on is held in HD; any other read of those pages comes from the mirror. A sublist

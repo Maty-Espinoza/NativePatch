@@ -1233,7 +1233,7 @@ static int capThread(SceSize args, void *argp) {
       if (reg_on) regBench();  // measures once the speed of the frame record copies
     }
     SB[4] = ++beat;
-    if (reg_on) regPend();  // VRAM textures of a frame waiting for the mirror copy of its flip
+    if (reg_on && !rg_thr) regPend();  // VRAM textures of a frame waiting for the mirror copy of its flip
     uint32_t h = SB[2], work = 0;
     if ((int)(h - tail) < 0 || h - tail > SB_N) {  // events were lost (or NativeLink reset the mailbox)
       acc.resyncs++; tail = h; resetQueue();
@@ -1675,6 +1675,10 @@ void capStart(void) {
   if (t >= 0) sceKernelStartThread(t, 0, NULL);
   cap_uid = t;
   clog("threads: capture %08x (core %s, priority 0x61, below the audio threads; ux0:data/nativedraw/capture_core) log %08x; emulator threads seen: %d\n", t, cname, r, emu_n);
+  if (reg_on) {  // record thread: any core, just below the capturer
+    SceUID rt = sceKernelCreateThread("nativedraw_record", recThread, 0x62, 0x4000, 0, 0x70000, NULL);
+    if (rt >= 0 && sceKernelStartThread(rt, 0, NULL) >= 0) rg_thr = 1;
+  }
   // mirror thread: priority 0xBE, below the readers
   SceUID et = sceKernelCreateThread("nativedraw_mirror", mirThread, 0xBE, 0x2000, 0, 0x10000 /* core 0 */, NULL);
   if (et >= 0) sceKernelStartThread(et, 0, NULL);
