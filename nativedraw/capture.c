@@ -1733,6 +1733,28 @@ static void ltFlip(void) {
 }
 static uint32_t probe_ge;  // asks NativeLink for the thread watching the GE (T6): ux0:data/nativedraw/ge_timing
 #endif
+#ifdef NP_DEV
+static int tn_on;  // switch thread_split
+// Each mirror turn, notes the core where the capturer, the record thread and Adrenaline's drawing thread last ran; every 200 turns logs,
+// per thread, the turns on each core (3: any other value) and how much it ran, how often it was preempted or interrupted and moved
+static void thrSample(void) {
+  static const char *nm[3] = { "capture", "record", "drawing" };
+  static uint32_t c[3][4], l[3][4], n;
+  SceUID u[3] = { cap_uid, rec_uid, nd_gfx_uid ? nd_gfx_uid : -1 };
+  n++;
+  for (int i = 0; i < 3; i++) {
+    SceKernelThreadInfo in; sceClibMemset(&in, 0, sizeof in); in.size = sizeof in;
+    if (u[i] < 0 || sceKernelGetThreadInfo(u[i], &in) < 0) continue;
+    c[i][(uint32_t)in.lastExecutedCpuId < 3 ? in.lastExecutedCpuId : 3]++;
+    if (n < 200) continue;
+    uint32_t v[4] = { (uint32_t)in.runClocks, in.threadPreemptCount, in.intrPreemptCount, in.changeCpuCount }, d[4];
+    for (int k = 0; k < 4; k++) { d[k] = v[k] - l[i][k]; l[i][k] = v[k]; }
+    clog("thread %s: turns on core 0 %u, 1 %u, 2 %u, other %u | run_ms %u preempted %u interrupted %u moved %u priority %x\n", nm[i], c[i][0], c[i][1], c[i][2], c[i][3], d[0] / 1000, d[1], d[2], d[3], in.currentPriority);
+    sceClibMemset(c[i], 0, sizeof c[i]);
+  }
+  if (n >= 200) n = 0;
+}
+#endif
 // Mirror thread (every 5 ms): passes ge_timing, the switches (SB[0x4A]) and the level (SB[0x4E]) to NativeLink; at
 // extreme level hashes 4 requested pages per turn and counts those that changed between copies; every
 // 0.1 s rewrites the requests in the mailbox
@@ -1744,7 +1766,8 @@ static int mirThread(SceSize args, void *argp) {
     DEV(if (SB[0] == SB_MAGIC && SB[1] >= 3 && SB[0x47] != probe_ge) SB[0x47] = probe_ge;)
     if (SB[0] == SB_MAGIC && SB[1] >= 5 && SB[0x4A] != gp_flags) SB[0x4A] = gp_flags;  // switches for NativeLink
     if (SB[0] == SB_MAGIC && SB[1] >= 5 && SB[0x4E] != level) SB[0x4E] = level;         // log level
-    DEV(if (mir_reset) { sceClibMemset(seen, 0, sizeof seen); sceClibMemset(hs, 0, sizeof hs); mir_reset = 0; })
+    DEV(if (mir_reset) { sceClibMemset(seen, 0, sizeof seen); sceClibMemset(hs, 0, sizeof hs); mir_reset = 0; }
+        if (tn_on) thrSample();)
     if (!mir_on) continue;
 #ifdef NP_DEV
     uint32_t t0 = now(), done = SB[0x40];
@@ -1848,7 +1871,7 @@ void capStart(void) {
   static const char *sw[] = { "ux0:data/nativedraw/no_gate", "ux0:data/nativedraw/no_mirror" DEV(, "ux0:data/nativedraw/no_idle", "ux0:data/nativedraw/gate_sync") };
   for (int k = 0; k < (int)(sizeof sw / sizeof *sw); k++) if (swOn(sw[k])) gp_flags |= 1u << k;
   if (swOn("ux0:data/nativedraw/mirror_wait")) gp_flags |= 32;  // the PSP flip waits for the mirror copy
-  DEV(no_capture = swOn("ux0:data/nativedraw/no_capture"); cs_on = swOn("ux0:data/nativedraw/cap_split");)
+  DEV(no_capture = swOn("ux0:data/nativedraw/no_capture"); cs_on = swOn("ux0:data/nativedraw/cap_split"); tn_on = swOn("ux0:data/nativedraw/thread_split");)
   DEV(pv_on = !swOn("ux0:data/nativedraw/no_lookahead");)
   DEV(p_on = level >= 2;)
   reg_on = swOn("ux0:data/nativedraw/draw");  // frame record

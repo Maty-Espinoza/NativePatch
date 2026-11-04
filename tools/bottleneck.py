@@ -76,6 +76,17 @@ def show_vert(s):
         v = (o['fast'] + o['slow']) / n; a = (o['again_fast'] + o['again_slow']) / n
         print(f'    trVerts {v:.0f} us, repeated at once {a:.0f} us; the clock adds ~0.5 us per part per draw')
 
+def thread_split(path):
+    # "thread" lines of the capture log: per thread, turns on each core and the average of the rest per second
+    out = {}
+    for line in open(path, errors='replace'):
+        m = re.search(r'thread (\w+): turns on core 0 (\d+), 1 (\d+), 2 (\d+), other (\d+) \| run_ms (\d+) preempted (\d+) interrupted (\d+) moved (\d+)', line)
+        if not m: continue
+        o = out.setdefault(m[1], [0] * 9)
+        for i, x in enumerate(m.groups()[1:]): o[i] += int(x)
+        o[8] += 1
+    return out
+
 def split(r):
     # ms of the drawing thread's second
     work = max(r['translator'] - r['gpu_wait'], 0)
@@ -122,6 +133,8 @@ def main():
     cp = os.path.join(d, 'nativedraw_capture.log')
     if os.path.exists(cp) and (s := cap_split(cp)):
         print('\ncapturer split, per frame:'); show_split(s)
+    for k, o in thread_split(cp).items():
+        n = o[8] or 1; print(f'  thread {k}: turns on core 0/1/2/other {o[0]}/{o[1]}/{o[2]}/{o[3]}, per second: run {o[4] / n:.0f} ms, preempted {o[5] / n:.0f}, interrupted {o[6] / n:.0f}, moved {o[7] / n:.0f}')
     cap = capture(cp)
     v = [cap[r['t']] for r in rows if r['t'] in cap] or [c for c in cap.values() if c.get('rec') is not None]
     v = [c for c in v if c.get('rec') is not None]
