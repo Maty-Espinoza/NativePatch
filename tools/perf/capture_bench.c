@@ -228,6 +228,7 @@ static void run(const Scene *s, Out *o) {
       SB[0x40] = f + 1;
       if (reg_on) regPend();
     }
+    rg_short = s->late;
     CALLGRIND_TOGGLE_COLLECT;
     uint32_t dt = cpuUs() - t0;  // (the fastest frame after the first: least disturbed by the host)
     o->qemu_us += dt; if (f && (!o->qemu_min || dt < o->qemu_min)) o->qemu_min = dt;

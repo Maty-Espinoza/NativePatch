@@ -34,6 +34,7 @@ static int rg_w;  // the one being written
 static uint32_t rg_seq[RN], rg_s;  // number of each record's turn, and the last one given
 static volatile int rg_pub = -1, rg_using = -1;  // last complete; the one the presenter is reading
 static volatile int rg_last = -1;  // last one taken by the presenter
+static int rg_short;  // the capturer was still on a list when the game reached a sync of this frame
 DEV(static uint32_t rg_tf[RN]; static volatile uint32_t rg_tp[RN];)  // time of its PSP flip; when published (0: already taken)
 #ifdef NP_DEV
 static void rgPubNote(int k) {  // k is about to be published: notes the time; the one it replaces, if nobody took it, is lost
@@ -772,7 +773,8 @@ static void regFlip(uint32_t fb, uint32_t fbw, uint32_t draws_counted) {
   DEV(PA(P_C_VFLUSH, tv); CSA(CS_VFL, tc);)
   RFrame *f = rf[rg_w];
   if (rg_hash[rg_w] && f->nvx) sceClibMemset(rg_hash[rg_w] + ((TX_N - f->nvx) >> 7), 0, ((f->nvx >> 7) + 1) * sizeof *rg_hash[rg_w]);  // (no sorted texture is there now)
-  int slow = rg_pend >= 0 || (rg_pub >= 0 && rg_pub != rg_last);
+  int slow = rg_pend >= 0 || (rg_short && rg_pub >= 0 && rg_pub != rg_last);
+  rg_short = 0;
   if (!rg_thr) regPend();
   // Counted draws that did not go through regDraw
   if (f->draws_seen < draws_counted) RG_READ(NR_COUNT, f->draws_seen, draws_counted);
@@ -817,8 +819,8 @@ static void regFlip(uint32_t fb, uint32_t fbw, uint32_t draws_counted) {
   f->nd = f->ne = f->na = f->flags = f->draws_seen = f->nt = f->ntx = f->nvx = f->dv = f->nimg = 0;
   tx_lo = 0;
   rg_t = 0;
-  // The presenter did not take the frame before this one: recording another is wasted, and a capturer that keeps up does
-  // not read lists the game is already rewriting. The next frame is only walked
+  // The capturer is short of time and the presenter did not take the frame before this one: recording another is wasted,
+  // and a capturer that keeps up does not read lists the game is already rewriting. The next frame is only walked
   if (slow) { f->flags = R_SKIP; ga.skip++; }
   // The GE keeps the palette it loaded whatever the memory holds now: its copy goes on to the new record (from memory
   // only if there is none)

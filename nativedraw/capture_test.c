@@ -330,10 +330,13 @@ int main(int argc, char **argv) {
     *W(0x08C20000) = 0; tFlip(0x04000000, 512, 0);
     res->pal = *(uint32_t *)(rf[rg_w]->a + rg_clut - 1) == 0x11223344;
     resetQueue(); res->lost = rf[rg_w]->flags != 0;  // events lost in the middle of a frame
-    // A presenter that does not take frames: with the previous one untaken the next is only walked, and taking it resumes
+    // A presenter that does not take frames: a capturer with time keeps recording; short of time the next frame is only
+    // walked, and taking it resumes
     rf[rg_w]->flags = 0; rf[rg_w]->nd = 1; rf[rg_w]->draws_seen = ~0u; tFlip(0x04000000, 512, 0); rg_last = -1;
     rf[rg_w]->nd = 1; rf[rg_w]->draws_seen = ~0u; regFlip(0x04000000, 512, 0);
-    res->late_pr = rf[rg_w]->flags == R_SKIP;
+    res->late_pr = !rf[rg_w]->flags;
+    rf[rg_w]->nd = 1; rf[rg_w]->draws_seen = ~0u; rg_short = 1; regFlip(0x04000000, 512, 0);
+    res->late_pr &= rf[rg_w]->flags == R_SKIP;
     rg_last = rg_pub; regFlip(0x04000000, 512, 0); res->late_pr &= !rf[rg_w]->flags;
     reg[0xA0] = 0x130000; reg[0xA8] = 0x040000 | 64; reg[0xB8] = 6 << 8 | 6; reg[0xC3] = 3; reg[0xC2] = 0; CPY(0, 0x130) = CPY(0, 0x131) = 1;
     uint32_t ts0 = rgTex(0, 8);

@@ -1218,7 +1218,7 @@ static void event(volatile uint32_t *e) {
     DEV(gap.t_sync = e[4];)  // c: the last queued list; e[4]: after the gate (the GE wait comes later)
     acc.syncs++;
     if (a) { acc.syncs_waited++; acc.sync_wait_us += a & ~1u; }
-    if (qh != qt) acc.behind++;
+    if (qh != qt) { acc.behind++; rg_short = 1; }
   } else if (t == EV_LSYNC) {
     for (uint32_t i = qt; i != qh; i--) if (q[(i - 1) & 63].qid == a) { sync_seen = q[(i - 1) & 63].ord; break; }
     DEV(syncSeen(lastOrdOf(a), e[4] - (b & ~1u), b & ~1u, 'l'); sync_ord_v = lastOrdOf(a);)
