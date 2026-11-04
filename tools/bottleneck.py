@@ -11,17 +11,21 @@ B = re.compile(r'\s*(\d+) bottleneck: slots (\d+) drawn (\d+) repeated (\d+) beh
                r'translator ms: check (\d+) textures (\d+) vertices (\d+) gxm (\d+) scenes (\d+) \| gpu ms: adrenaline (\d+) normal (\d+) surface (\d+) intermediate (\d+) idle (\d+)')
 N = 'slots drawn repeated behind no_record normal translator gpu_wait check textures vertices gxm scenes adrenaline normal_img surface intermediate idle'.split()
 PX = re.compile(r'\s*(\d+) bottleneck pixels .*?surface: fast (\d+) fog (\d+) textured (\d+) color (\d+) base (\d+) \| intermediate: fast (\d+) fog (\d+) textured (\d+) color (\d+)')
+WHY = re.compile(r'\s*(\d+) bottleneck why generic .*?: function (\d+) double (\d+) alpha_test (\d+) fog (\d+) blend2x (\d+)')
+WN = 'function double alpha_test fog blend2x'.split()
 PN = 's_fast s_fog s_textured s_color s_base i_fast i_fog i_textured i_color'.split()
 
 def seconds(path, t0, t1):
-    rows, px = [], []
+    rows, px, why = [], [], []
     for line in open(path, errors='replace'):
         m = B.match(line)
         if m and t0 <= int(m[1]) / 1000 <= t1:
             r = dict(zip(N, map(int, m.groups()[1:]))); r['t'] = int(m[1]) // 1000; rows.append(r); continue
+        m = WHY.match(line)
+        if m and t0 <= int(m[1]) / 1000 <= t1: why.append(dict(zip(WN, map(int, m.groups()[1:])))); continue
         m = PX.match(line)
         if m and t0 <= int(m[1]) / 1000 <= t1: px.append(dict(zip(PN, map(int, m.groups()[1:]))))
-    return rows, px
+    return rows, px, why
 
 def capture(path):
     # per second: capturer us per frame and record us per frame (and its parts)
@@ -60,7 +64,7 @@ def main():
     d = p if os.path.isdir(p) else os.path.dirname(p)
     if os.path.isdir(p): p = os.path.join(p, 'nativedraw.log')
     t0, t1 = (float(sys.argv[2]), float(sys.argv[3])) if len(sys.argv) > 3 else (0, 1e12)
-    rows, px = seconds(p, t0, t1)
+    rows, px, why = seconds(p, t0, t1)
     rows = [r for r in rows if r['drawn']]
     if not rows: sys.exit('no bottleneck lines with HD frames: is this a development build?')
     table('all', rows)
@@ -74,6 +78,7 @@ def main():
         tot = sum(sum(x.values()) for x in px)
         print(f'  total {tot / len(px):.0f} ({tot / len(px) / 522:.1f} screens); with fog and nothing else, the generic program for no reason: {sum(x["s_fog"] + x["i_fog"] for x in px) * 100 / max(tot, 1):.0f} %; '
               f'image underneath: {sum(x["s_base"] for x in px) * 100 / max(tot, 1):.0f} %')
+    if why: print('  why not the fast program: ' + ', '.join(f'{k} {sum(x[k] for x in why) / len(why):.0f}' for k in WN))
     cap = capture(os.path.join(d, 'nativedraw_capture.log'))
     v = [cap[r['t']] for r in rows if r['t'] in cap] or [c for c in cap.values() if c.get('rec') is not None]
     v = [c for c in v if c.get('rec') is not None]

@@ -18,7 +18,9 @@ DEV(enum { TC_VIN, TC_VOUT, TC_D3, TC_CUT, TC_FLAT, TC_SCIS, TC_LIT, TC_SAME, TC
 DEV(static volatile uint32_t t_c[TC_NC];)
 // thousands of pixels sent per program on the sampled frames, surface [0] and intermediate images [1] (before the z test)
 DEV(enum { BP_FAST, BP_FOG, BP_TEX, BP_COL, BP_BASE, BP_N };
-    static volatile uint32_t b_px[2][BP_N], b_pxn;)
+    static volatile uint32_t b_px[2][BP_N], b_pxn;
+    enum { BW_FUNC, BW_DOUBLE, BW_ATEST, BW_FOG, BW_BLEND2X, BW_N };  // why a textured draw is not on the fast program
+    static volatile uint32_t b_why[BW_N];)
 static uint32_t t_seen[TN];   // times each reason was seen (the first one is logged in detail)
 typedef struct { float x, y, z, w, u, v, f; uint32_t c; } TV;  // translated vertex (32 bytes, the nd_v format); f: fog (1: none)
 static TV *tv[2];            // translated vertices, one per surface
@@ -928,7 +930,7 @@ static void trRegions(RFrame *f, uint32_t disp) {
 static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base) {
   t3.ke = 0;
   DEV(uint32_t ta = now(), tb, ut[6]; sceClibMemcpy(ut, (void *)t_us, sizeof ut);
-      static uint32_t hdn; int smp = !(++hdn & 3), pb = BP_COL; float bpx[2][BP_N] = { { 0 } };)
+      static uint32_t hdn; int smp = !(++hdn & 3), pb = BP_COL, why = 0; float bpx[2][BP_N] = { { 0 } }, bwy[BW_N] = { 0 };)
   uint32_t disp, ord;
   int r = trCheckFrame(f, &disp, &ord);
   if (r) return r;
@@ -1150,7 +1152,8 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     uint32_t afn = 1, aref = 0, c9 = RE(e, 0xC9), b2 = !(clr & 1) && blend2x(e);
     if (!(clr & 1) && (RE(e, 0x22) & 1)) alphaFn(e, &afn, &aref);
     int fast = tex && !(c9 & 0x10007) && afn == 1 && !b2 && !(w3d && t3.fog);
-    DEV(pb = fast ? BP_FAST : !tex ? BP_COL : w3d && t3.fog && !(c9 & 0x10007) && afn == 1 && !b2 ? BP_FOG : BP_TEX;
+    DEV(why = !tex || fast ? 0 : !!(c9 & 7) << BW_FUNC | !!(c9 & 0x10000) << BW_DOUBLE | (afn != 1) << BW_ATEST | (w3d && t3.fog) << BW_FOG | b2 << BW_BLEND2X;
+        pb = fast ? BP_FAST : !tex ? BP_COL : w3d && t3.fog && !(c9 & 0x10007) && afn == 1 && !b2 ? BP_FOG : BP_TEX;
         t_c[fast ? TC_VFAST : tex ? TC_VTEX : TC_VCOL] += n; t_c[TC_FOG] += w3d && t3.fog; t_c[TC_ATEST] += afn != 1; t_c[TC_BLEND] += key != 0;)
     SceGxmFragmentProgram *p = fragProg(fast ? 2 : tex, key, colorMask(e));
     if (!p) { res = T_PROG; break; }
@@ -1179,7 +1182,8 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     uint32_t cl = w3d && d->prim > 2 && prim != 6 && !(clr & 1) && (RE(e, 0x1D) & 1) ? (RE(e, 0x9B) & 1 ? SCE_GXM_CULL_CCW : SCE_GXM_CULL_CW) : SCE_GXM_CULL_NONE;
     if (cl != t_cl) { t_cl = cl; sceGxmSetCullMode(c, cl); }
   ready:;
-    DEV(if (smp) bpx[dst != 0][pb] += w3d ? trPx3(w, n, prim, d->prim > 2 && prim != 6 && !(clr & 1) && (RE(e, 0x1D) & 1)) : ar;)
+    DEV(if (smp) { float a = w3d ? trPx3(w, n, prim, d->prim > 2 && prim != 6 && !(clr & 1) && (RE(e, 0x1D) & 1)) : ar;
+          bpx[dst != 0][pb] += a; for (int k = 0; k < BW_N; k++) if (why >> k & 1) bwy[k] += a; })
     // Joined to the pending draw when it can be: a triangle strip needs repeated vertices in between (which draw nothing) and to
     // start on an even vertex, so its winding does not flip
     uint32_t pad = 0;
@@ -1211,7 +1215,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
 #undef RUN
 #undef SCENE
   t_q[s] = gq;
-  DEV(if (smp) { for (int a = 0; a < 2; a++) for (int i = 0; i < BP_N; i++) b_px[a][i] += bpx[a][i] / 1000; b_pxn++; })
+  DEV(if (smp) { for (int a = 0; a < 2; a++) for (int i = 0; i < BP_N; i++) b_px[a][i] += bpx[a][i] / 1000; for (int k = 0; k < BW_N; k++) b_why[k] += bwy[k] / 1000; b_pxn++; })
   if (res == T_OK && disp != t_prevd) { t_prev2 = t_prevd; t_prevd = disp; }
   DEV(t_us[5] += now() - ta;
       for (int i = 1; p_on && i < 6; i++) if ((int)(t_us[i] - ut[i]) >= 0) pAdd(P_T_CHECK + i, t_us[i] - ut[i]);)  // (t_us is zeroed every 10 s)

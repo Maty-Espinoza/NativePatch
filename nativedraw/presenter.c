@@ -297,19 +297,21 @@ static uint32_t b_t0[6];  // t_us at the last line
 // Once per second, what limits the HD frames (tools/bottleneck.py reads it): the deltas of b_c, of the translator's parts
 // and of the GPU per scene type (needs gpu_timer), and the pixels per program of the sampled frames.
 static void bnLog(void) {
-  static uint32_t c0[B_N], g0[CN], i0, p0[2][BP_N], n0;
-  uint32_t c[B_N], g[CN], t[6], p[2][BP_N];
+  static uint32_t c0[B_N], g0[CN], i0, p0[2][BP_N], n0, w0[BW_N];
+  uint32_t c[B_N], g[CN], t[6], p[2][BP_N], w[BW_N];
   for (int i = 0; i < B_N; i++) { c[i] = b_c[i] - c0[i]; c0[i] += c[i]; }
   for (int i = 0; i < CN; i++) { g[i] = b_gus[i] - g0[i]; g0[i] += g[i]; }
   for (int i = 0; i < 6; i++) { t[i] = t_us[i] - b_t0[i]; b_t0[i] += t[i]; }
   uint32_t id = b_idle - i0, n = b_pxn - n0; i0 += id; n0 += n;
   for (int d = 0; d < 2; d++) for (int i = 0; i < BP_N; i++) { p[d][i] = b_px[d][i] - p0[d][i]; p0[d][i] += p[d][i]; }
+  for (int i = 0; i < BW_N; i++) { w[i] = b_why[i] - w0[i]; w0[i] += w[i]; }
   if (!c[B_SLOT]) return;
   alog("bottleneck: slots %u drawn %u repeated %u behind %u no_record %u normal %u | ms: translator %u gpu_wait %u | translator ms: check %u textures %u vertices %u gxm %u scenes %u | "
        "gpu ms: adrenaline %u normal %u surface %u intermediate %u idle %u\n", c[B_SLOT], c[B_DRAWN], c[B_REP], c[B_BEHIND], c[B_NOREC], c[B_NORMAL], c[B_TR] / 1000, c[B_WAIT] / 1000,
        t[0] / 1000, t[1] / 1000, t[2] / 1000, t[3] / 1000, t[4] / 1000, g[C_ADR] / 1000, g[C_NORMAL] / 1000, g[C_TR] / 1000, g[C_INT] / 1000, id / 1000);
   if (n) alog("bottleneck pixels (thousands per frame of %u): surface: fast %u fog %u textured %u color %u base %u | intermediate: fast %u fog %u textured %u color %u\n", n,
               p[0][BP_FAST] / n, p[0][BP_FOG] / n, p[0][BP_TEX] / n, p[0][BP_COL] / n, p[0][BP_BASE] / n, p[1][BP_FAST] / n, p[1][BP_FOG] / n, p[1][BP_TEX] / n, p[1][BP_COL] / n);
+  if (n) alog("bottleneck why generic (thousands of pixels per frame, a draw can have several): function %u double %u alpha_test %u fog %u blend2x %u\n", w[BW_FUNC] / n, w[BW_DOUBLE] / n, w[BW_ATEST] / n, w[BW_FOG] / n, w[BW_BLEND2X] / n);
 }
 #endif
 #include "replay.c"  // draw a dumped frame again
