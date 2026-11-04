@@ -11,12 +11,12 @@
   "ucmp_kb/f": 0.0,
   "dma/f": 0.0,
   "dma_kb/f": 0.0,
-  "clock/f": 1716.0,
+  "clock/f": 265.0,
   "complete": 39.0,
-  "mem_us/f": 6967.0,
-  "qemu_us/f": 4084.0,
-  "qemu_min_us": 3465.0,
-  "runs": 5
+  "mem_us/f": 6096.0,
+  "qemu_us/f": 2196.0,
+  "qemu_min_us": 1952.0,
+  "runs": 10
  },
  "rr_race": {
   "scene": "rr_race",
@@ -30,12 +30,12 @@
   "ucmp_kb/f": 0.0,
   "dma/f": 0.0,
   "dma_kb/f": 0.0,
-  "clock/f": 489.0,
+  "clock/f": 107.0,
   "complete": 39.0,
-  "mem_us/f": 1869.0,
-  "qemu_us/f": 1276.0,
-  "qemu_min_us": 979.0,
-  "runs": 5
+  "mem_us/f": 1640.0,
+  "qemu_us/f": 724.0,
+  "qemu_min_us": 518.0,
+  "runs": 10
  },
  "sprites2d": {
   "scene": "sprites2d",
@@ -49,12 +49,12 @@
   "ucmp_kb/f": 0.0,
   "dma/f": 14.1,
   "dma_kb/f": 151.7,
-  "clock/f": 804.0,
+  "clock/f": 528.0,
   "complete": 39.0,
-  "mem_us/f": 3603.0,
-  "qemu_us/f": 1085.0,
-  "qemu_min_us": 663.0,
-  "runs": 5
+  "mem_us/f": 3437.0,
+  "qemu_us/f": 698.0,
+  "qemu_min_us": 424.0,
+  "runs": 10
  },
  "sublists": {
   "scene": "sublists",
@@ -71,8 +71,8 @@
   "clock/f": 13.0,
   "complete": 0.0,
   "mem_us/f": 59.0,
-  "qemu_us/f": 625.0,
-  "qemu_min_us": 379.0,
-  "runs": 5
+  "qemu_us/f": 510.0,
+  "qemu_min_us": 286.0,
+  "runs": 10
  }
 }

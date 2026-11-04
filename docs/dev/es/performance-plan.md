@@ -66,6 +66,17 @@ del frame.
    no se graba): lo que se anota por comando en `walkList` (`l->n`, `acc.cmds`, `f_cmds`, `l->prev`, `TOUCH`, `cls`). Verificar: banco
    (`qemu_min_us`) y luego Vita (`capture split`).
 
+**Resultados del banco, 0.0.16.6 contra 0.0.16.5 (en el mismo momento; comparar solo con otras corridas del banco):** `rr_crowd`
+qemu -25 %, mem -13 %; `rr_race` qemu -26 %, mem -12 %; `sprites2d` qemu -13 %, mem -5 %; `sublists` sin cambio. Hecho: B.5 (1 draw de
+64); B.9 en parte (comandos simples y de matriz en un bucle corto, contadores una vez por línea); las mismas filas de VRAM se saltan
+`rgTex`; `draw()` se salta los chequeos de textura si no cambió. Probado y descartado: `VADDR`/`PRIM` dentro del bucle corto (sin
+ganancia); recordar el tamaño de vértice para `regDraw` (`sprites2d` +10 %, causa no encontrada).
+**B.1 no ayuda como está descrito:** los logs de la Vita dan a `neon256` ~2,8 us por 256 B, los mismos 91 MB/s de `memcpy`. Solo el
+DMA es más rápido, y sobre ~11 KB por llamada.
+**Fuga del espejo (arreglada en 0.0.16.6, por confirmar):** una textura en una página de imagen se pedía como página de lista y nunca
+se soltaba: `lists` creció de ~150 a 368 páginas en una sesión, la PSP gastaba 3,2 ms por frame en el espejo en vez de 1,3 y el juego
+bajó a 40-46 fps. Ahora esas páginas expiran cuando ningún frame las lee. Verificar: Vita (`mirror: pages requested lists`, `mirror_us`).
+
 ## C. Cambios grandes (preguntar primero al usuario)
 1. **Vértices 3D en un vertex shader de GXM leyendo la RAM del PSP mapeada para la GPU** (`sceGxmMapMemory` en 0x70000000
    funciona, etapa 1). Quita la copia de vértices del capturador (~5 ms) y la transformación en CPU del traductor (16-20 ms

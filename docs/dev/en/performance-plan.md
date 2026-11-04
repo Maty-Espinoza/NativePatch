@@ -60,6 +60,17 @@ was paid for nothing. The capturer's 24 ms are, roughly: vertex copy ~5-6 ms (`r
    is not recorded): per-command bookkeeping in `walkList` (`l->n`, `acc.cmds`, `f_cmds`, `l->prev`, `TOUCH`, `cls`). Verify: bench
    (`qemu_min_us`) then Vita (`capture split`).
 
+**Bench results, 0.0.16.6 against 0.0.16.5 (same moment, compare only with other bench runs):** `rr_crowd` qemu -25 %, mem -13 %;
+`rr_race` qemu -26 %, mem -12 %; `sprites2d` qemu -13 %, mem -5 %; `sublists` no change. Done: B.5 (1 draw in 64); B.9 in part
+(plain and matrix commands in a tight loop, counters once per line); same VRAM rows skip `rgTex`; `draw()` skips the texture
+checks when the texture did not change. Tried and dropped: `VADDR`/`PRIM` inside the tight loop (no gain); remembering the
+vertex size for `regDraw` (`sprites2d` +10 %, reason not found).
+**B.1 will not help as described:** the Vita logs give `neon256` ~2.8 us per 256 B, the same 91 MB/s as `memcpy`. Only DMA is
+faster, and above ~11 KB per call.
+**Mirror leak (fixed in 0.0.16.6, to confirm):** a texture in a page of an image was requested as a list page and never
+released: `lists` grew from ~150 to 368 pages in a session, the PSP spent 3.2 ms per frame on the mirror instead of 1.3 and the
+game fell to 40-46 fps. Now those pages expire when no frame reads them. Verify: Vita (`mirror: pages requested lists`, `mirror_us`).
+
 ## C. Large changes (ask the user first)
 1. **3D vertices in a GXM vertex shader reading the PSP RAM mapped for the GPU** (`sceGxmMapMemory` at 0x70000000 works,
    stage 1). Removes the vertex copy from the capturer (~5 ms) and the CPU transform from the translator (16-20 ms per HD

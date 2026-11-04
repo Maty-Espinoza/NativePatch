@@ -76,10 +76,15 @@ static uint32_t f_cmds, f_draws, f_us, f_t0;  // of the current frame; f_t0: sta
 // Exact split of the capturer's time (switch cap_split; the clock costs ~0.4 us per read), per kind of frame: cs_t adds up the
 // current frame, cs_s the second by kind, cs_r is what the log thread prints. The five extra slots: frames, commands, draws, us and
 // processor us.
-enum { CS_EV, CS_FLIP, CS_WALK, CS_HIT, CS_OWN, CS_DRAW, CS_REG, CS_RST, CS_RVT, CS_RTX, CS_VFL, CS_N };
-static uint32_t cs_on, cs_t[CS_N], cs_s[3][CS_N + 5], cs_r[3][CS_N + 5];
+enum { CS_EV, CS_FLIP, CS_WALK, CS_HIT, CS_OWN, CS_DRAW, CS_REG, CS_RST, CS_RIX, CS_RVT, CS_RBK, CS_RRW, CS_RTX, CS_VFL, CS_N };
+static uint32_t cs_on, cs_skip, cs_t[CS_N], cs_s[3][CS_N + 5], cs_r[3][CS_N + 5];  // cs_skip: what events did that has its own column
+#ifdef NP_BENCH  // (tools/perf judges the capturer, not this measurement)
+#define CST() 0
+#define CSA(k, t) do {} while (0)
+#else
 #define CST() (cs_on ? now() : 0)
 #define CSA(k, t) do { if (cs_on) cs_t[k] += now() - (t); } while (0)
+#endif
 #endif
 
 // --- PSP RAM reads ---
@@ -115,6 +120,7 @@ static inline int isVram(uint32_t a) { return (a & 0x0F000000u) == 0x04000000u; 
 // displayed image
 // (want_fb, requested by record.c for dumps)
 static uint32_t mir_on, want_l[16], want_d[16], want_now[16], rt_pg[16], want_fb[16];  // want_now: asked for as data in this frame
+static uint32_t want_i[16], want_in[16];  // pages of want_l only asked for as textures in an image; those asked for in this frame
 static volatile uint32_t mir_ok[2][16], mir_reset;           // pages with a valid copy in each mirror
 // copy the current list is read with (0: none yet)
 static volatile uint32_t mir_u;
@@ -133,14 +139,26 @@ static inline uint32_t vtr(uint32_t a) {
   uint32_t o = a & 0x1FFFFF, p = o >> 12, u = mir_u, b = u & 1;
   return mir_ok[b][p >> 5] >> (p & 31) & 1 || mirCheck(b, p, u) ? (b ? MIRROR2 : MIRROR) + o : 0;
 }
-// Requests VRAM pages [a, a + n) from the mirror as list or as data (render targets are not requested as data)
+// Requests VRAM pages [a, a + n) from the mirror as list (1), as data (0; render targets are not requested as data) or, for a
+// texture in a page of an image (2), with the lists but only while the game keeps reading it (wantExpire)
 static void want(uint32_t a, uint32_t n, int list) {
   if (!mir_on) return;
   uint32_t o = a & 0x1FFFFF, p = o >> 12, e = (o + (n ? n : 1) - 1) >> 12;
   for (; p <= e && p < 512; p++) {
     uint32_t w = p >> 5, b = 1u << (p & 31);
-    if (list) { if (!(want_l[w] & b)) { want_l[w] |= b; SB[0x20 + w] = want_l[w]; } }
+    if (list) {
+      if (list == 2) { want_in[w] |= b; if (!(want_l[w] & b)) want_i[w] |= b; } else want_i[w] &= ~b;
+      if (!(want_l[w] & b)) { want_l[w] |= b; SB[0x20 + w] = want_l[w]; }
+    }
     else if (!(rt_pg[w] & b)) { want_now[w] |= b; if (!(want_d[w] & b)) { want_d[w] |= b; SB[0x30 + w] = want_d[w] | want_fb[w]; } }
+  }
+}
+// (at the flip) Stops requesting the image pages the frame did not read
+static void wantExpire(void) {
+  for (int w = 0; w < 16; w++) {
+    uint32_t drop = want_i[w] & ~want_in[w];
+    if (drop) { want_i[w] &= ~drop; want_l[w] &= ~drop; if (mir_on) SB[0x20 + w] = want_l[w]; }
+    want_in[w] = 0;
   }
 }
 // Marks VRAM [a, a + n) as render target: not requested as data (and the request is dropped if already made, unless this
@@ -406,7 +424,7 @@ static void draw(uint32_t d) {
         static const uint8_t bpp[16] = { 16, 16, 16, 32, 4, 8, 16, 32, 4, 8, 8, 8, 8, 8, 8, 8 };
         uint32_t w = reg[0xA8] & 0x7FF, h = 1u << ((reg[0xB8] >> 8) & 0xF);
         if (!w) w = 1u << (reg[0xB8] & 0xF);
-        want(ta, w * h * bpp[reg[0xC3] & 0xF] / 8, rtPage(ta));  // (in a page of an image: goes with the lists, not refused as data)
+        want(ta, w * h * bpp[reg[0xC3] & 0xF] / 8, rtPage(ta) ? 2 : 0);  // (in a page of an image: goes with the lists, not refused as data)
       }
     }
     if (dirty & C_TEX) acc.texnew++;
@@ -919,7 +937,7 @@ static int __attribute__((noinline)) walkList(List *l) {
     case 0xC4: {  // palette load: a change only if another palette or size
       if (rec) { recRead(0xB0); recRead(0xB1); }
       uint32_t ca = CLUTADDR();
-      acc.cluts++; if (isVram(ca)) { acc.clut_vram++; want(ca, (d & 0x3F) * 32, rtPage(ca)); } else smpAdd(ca, (d & 0x3F) * 32, 3); if (rec) rec->flags |= M_CLUT;
+      acc.cluts++; if (isVram(ca)) { acc.clut_vram++; want(ca, (d & 0x3F) * 32, rtPage(ca) ? 2 : 0); } else smpAdd(ca, (d & 0x3F) * 32, 3); if (rec) rec->flags |= M_CLUT;
       if (ca != last_clut[0] || d != last_clut[1]) { last_clut[0] = ca; last_clut[1] = d; dirty |= C_TEX; }
       if (reg_on) regClut(d);
       break;
@@ -1117,7 +1135,9 @@ static void walk(void) {
     recAbort(); chk = NULL;  // the list ended inside a sublist (END, jump to VRAM...): not saved
     // at all levels (NativeLink uses it) and before SB[3]: never the captured list with the stale sample
     lifeTake(l);
+    DEV(uint32_t tv = CST();)
     if (reg_on) rgVFlush();
+    DEV(CSA(CS_VFL, tv);)
     capt = l->ord; SB[3] = capt; qh++; acc.lists++;
     DEV(listDone(l);)
     DEV(if (p_on) { uint32_t tl = now(); if ((int)(tl - (l->t_enq + off)) > 0) pAdd(P_L_LIST, tl - (l->t_enq + off)); pAdd(P_C_WORK, l->work); pAdd(P_C_STALL, tl - l->t_start - l->work); })
@@ -1231,7 +1251,7 @@ static void event(volatile uint32_t *e) {
     fin_ord = sync_seen;
     DEV(uint32_t tfw = CST();)
     walk();  // what was queued before the flip is walked before closing the frame
-    DEV(if (cs_on) cs_t[CS_EV] -= now() - tfw; uint32_t tf = CST();)
+    DEV(uint32_t tf = CST();)
     { uint32_t dt = now() - f_t0; acc.us += dt; f_us += dt; f_t0 = now(); }
 #ifdef NP_DEV
     if (level >= 2) {  // one line per frame in nativedraw_frames.log (extreme)
@@ -1295,7 +1315,7 @@ static void event(volatile uint32_t *e) {
     if (cs_on) {
       static uint32_t pc0;
       uint32_t pc = runClk(cap_uid);
-      CSA(CS_FLIP, tf);
+      CSA(CS_FLIP, tf); cs_skip += now() - tfw;
       for (int k = 0; k < CS_N; k++) { cs_s[cl][k] += cs_t[k]; cs_t[k] = 0; }
       uint32_t *x = cs_s[cl] + CS_N;
       x[0]++; x[1] += f_cmds; x[2] += f_draws; x[3] += f_us; x[4] += pc - pc0; pc0 = pc;
@@ -1375,7 +1395,7 @@ static int capThread(SceSize args, void *argp) {
       if (sessions++) { logs_new = 1; while (logs_new) sceKernelDelayThread(10000); }
       // the ring starts at 0 with the mailbox: the first lists are walked too, they may set state the game never repeats
       on = 1; tail = 0; resetQueue(); sec_t0 = now(); sceClibMemset(&acc, 0, sizeof acc);
-      for (int w = 0; w < 16; w++) want_l[w] = want_d[w] = rt_pg[w] = mir_ok[0][w] = mir_ok[1][w] = 0;
+      for (int w = 0; w < 16; w++) want_l[w] = want_d[w] = want_i[w] = want_in[w] = rt_pg[w] = mir_ok[0][w] = mir_ok[1][w] = 0;
       mir_u = 0; mir_reset = 1; mir_on = SB[1] >= 4;
       clog("NativeLink mailbox (shadow mode) found: events=%u lists=%u -> capture active%s\n", tail, SB[6],
            mir_on ? ", with VRAM mirror" : " (NativeLink without VRAM mirror)");
@@ -1391,7 +1411,7 @@ static int capThread(SceSize args, void *argp) {
     f_t0 = now();
     DEV(uint32_t te = CST();)
     while (tail != h) { event(SB + 0x400 + (tail % SB_N) * 8); tail++; work = 1; }
-    DEV(CSA(CS_EV, te);)
+    DEV(if (cs_on) { cs_t[CS_EV] += now() - te - cs_skip; cs_skip = 0; })
     SB[5] = tail;
     uint32_t c0 = acc.cmds;
     walk();
@@ -1532,8 +1552,8 @@ static int repThread(SceSize args, void *argp) {
       static const char *cn[3] = { "not_recorded", "complete", "incomplete" };
       for (int c = 0; c < 3; c++) if (cs_r[c][CS_N]) {
         const uint32_t *x = cs_r[c], n = x[CS_N];
-        clog("  capture split %s: frames=%u commands=%u draws=%u | us/f: total=%u cpu=%u events=%u flip=%u walk=%u hit=%u own=%u draw=%u record=%u state=%u vertices=%u textures=%u vflush=%u\n", cn[c], n,
-             x[CS_N + 1] / n, x[CS_N + 2] / n, x[CS_N + 3] / n, x[CS_N + 4] / n, x[CS_EV] / n, x[CS_FLIP] / n, x[CS_WALK] / n, x[CS_HIT] / n, x[CS_OWN] / n, x[CS_DRAW] / n, x[CS_REG] / n, x[CS_RST] / n, x[CS_RVT] / n, x[CS_RTX] / n, x[CS_VFL] / n);
+        clog("  capture split %s: frames=%u commands=%u draws=%u | us/f: total=%u cpu=%u events=%u flip=%u walk=%u hit=%u own=%u draw=%u record=%u state=%u index=%u vertices=%u blocks=%u rows=%u textures=%u vflush=%u\n", cn[c], n,
+             x[CS_N + 1] / n, x[CS_N + 2] / n, x[CS_N + 3] / n, x[CS_N + 4] / n, x[CS_EV] / n, x[CS_FLIP] / n, x[CS_WALK] / n, x[CS_HIT] / n, x[CS_OWN] / n, x[CS_DRAW] / n, x[CS_REG] / n, x[CS_RST] / n, x[CS_RIX] / n, x[CS_RVT] / n, x[CS_RBK] / n, x[CS_RRW] / n, x[CS_RTX] / n, x[CS_VFL] / n);
       }
 #endif
       if (!level) goto sync;  // (minimum: only this line and the vram and sync one)

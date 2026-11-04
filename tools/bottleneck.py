@@ -57,8 +57,8 @@ def show_split(s):
         n = o['frames']; g = lambda k: o[k] / n / 1000
         interp = g('walk') - g('hit') - g('own') - g('draw'); stats = g('draw') - g('record')
         print(f'  {kind}, draws {("<1500", "1500-3000", ">3000")[band]}: {n} frames, {o["commands"] / n:.0f} commands, {o["draws"] / n:.0f} draws | ms: total {g("total"):.1f}, cpu {g("cpu"):.1f} | '
-              f'interpreter {interp:.1f}, reads shared {g("hit"):.1f} own {g("own"):.1f}, draw() {stats:.1f}, record {g("record"):.1f} (state {g("state"):.1f}, vertices {g("vertices"):.1f}, textures {g("textures"):.1f}), '
-              f'events {g("events") - g("flip"):.1f}, flip {g("flip"):.1f}, vflush {g("vflush"):.1f}')
+              f'interpreter {interp:.1f}, reads shared {g("hit"):.1f} own {g("own"):.1f}, draw() {stats:.1f}, record {g("record"):.1f} (state {g("state"):.1f}, index {g("index"):.1f}, vertices {g("vertices"):.1f}, blocks {g("blocks"):.1f}, rows {g("rows"):.1f}, textures {g("textures"):.1f}), '
+              f'events {g("events"):.1f}, flip {g("flip"):.1f}, vflush {g("vflush"):.1f}')
 
 def split(r):
     # ms of the drawing thread's second

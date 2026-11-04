@@ -24,6 +24,9 @@ mirror timing, the translator and the GPU. A KEEP here is a candidate for the Vi
 - `tools/perf/baseline.json` (in the repo) is the reference: the numbers of the last confirmed state. `bench.sh` compares
   against it and `compare.py` prints the table; `sh tools/perf/iterate.sh` adds the capturer test (correctness) and prints
   **KEEP** (faster somewhere, nowhere slower, test ok), **NO CHANGE** or **REVERT**.
+- `qemu_min_us` depends on the machine and its load (the same code moved 26 % between sessions): at the start of a
+  conversation save a local reference (`RUNS=10 sh tools/perf/bench.sh`, copy `build/perf/last.json`, use it with `REF=`), and
+  to compare two versions run them alternately. `mem_us` does not change.
 - `sh tools/perf/iterate.sh --keep` (or `bench.sh --save`) rewrites the reference. Only after a KEEP that is committed.
 - A regression is any rise of `mem_us`, a rise of `qemu_min_us` over the tolerance, or fewer complete frames.
 

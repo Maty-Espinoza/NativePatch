@@ -621,6 +621,7 @@ static void regDraw(uint32_t n, uint32_t type, uint32_t vt, uint32_t idx) {
   RDraw *d = &f->d[f->nd];
   d->st = f->ne - 1; d->prim = type; d->n = n; d->vt = vt; d->ioff = 0; d->clut = rg_clut; d->clen = rg_clut ? rg_clut_b : 0;
   uint32_t vs = vsize(vt), nv = n;
+  DEV(uint32_t tc = CST();)
   if (idx) {  // with indices: copied, and the vertices up to the highest index
     uint32_t ib = idx == 1 ? 1 : idx == 2 ? 2 : 4;
     if (!(d->ioff = rgCopy(iaddr, n * ib))) return;
@@ -629,10 +630,12 @@ static void regDraw(uint32_t n, uint32_t type, uint32_t vt, uint32_t idx) {
     for (uint32_t i = 0; i < n; i++) { uint32_t x = ib == 1 ? p[i] : ib == 2 ? ((const uint16_t *)p)[i] : ((const uint32_t *)p)[i]; if (x > mx) mx = x; }
     nv = mx + 1;
   }
+  DEV(CSA(CS_RIX, tc); tc = CST();)
   d->vlen = nv * vs;
   // (3D: the texture rows do not come from the vertices, so they can wait)
   int later = !(vt >> 23 & 1) && rg_ordc && !isVram(vaddr) && ramEnd(vaddr) >= vaddr + d->vlen && d->vlen <= OR_N;
   if (!(d->voff = later ? rgVLater(vaddr, d->vlen) : rgCopy(vaddr, d->vlen))) return;
+  DEV(CSA(CS_RVT, tc); tc = CST();)
   d->woff = d->moff = d->loff = 0;
   static uint32_t lw, lm, ll;  // last matrix and light blocks of this frame
   if (!f->nd) lw = lm = ll = 0, rg_mchg = 1;
@@ -652,14 +655,17 @@ static void regDraw(uint32_t n, uint32_t type, uint32_t vt, uint32_t idx) {
   }
   d->toff = 0;
   uint32_t t2 = tm ? now() : 0; if (tm) ga.us_v += (t2 - t1) * 64;
-  DEV(if (cs_on) cs_t[CS_RVT] += t2 - t1;)
+  DEV(CSA(CS_RBK, tc);)
   if ((reg[0x1E] & 1) && !(reg[0xD3] & 1)) {  // the texture, after the vertices (they give the rows it uses)
     uint32_t r0 = 0, r1 = 0;
+    DEV(tc = CST();)
     rgRows(vt, f->a + d->voff - 1, d->vlen, d->ioff ? f->a + d->ioff - 1 : 0, n, &r0, &r1);
+    DEV(CSA(CS_RRW, tc); tc = CST();)
     d->toff = rgTex(r0, r1);
+    DEV(CSA(CS_RTX, tc);)
   }
   f->nd++;
-  if (tm) { uint32_t t3 = now(); ga.us_t += (t3 - t2) * 64; rg_t += (t3 - t0) * 64; DEV(if (cs_on) cs_t[CS_RTX] += t3 - t2;) }
+  if (tm) { uint32_t t3 = now(); ga.us_t += (t3 - t2) * 64; rg_t += (t3 - t0) * 64; }
   // what each game uses (log statistics)
   uint32_t *s = f->e[d->st];
   ga.draws++;
@@ -778,7 +784,7 @@ static void regFlip(uint32_t fb, uint32_t fbw, uint32_t draws_counted) {
   }
   // Only what the GE draws from now on is held in HD; any other read of those pages comes from the mirror. A sublist
   // the memory applied did not go through draw(): its marks stay
-  if (!(f->flags & R_MEMO)) { sceClibMemset(rt_pg, 0, sizeof rt_pg); sceClibMemset(want_now, 0, sizeof want_now); rt_nb = 0; last_fb = ~0u; }
+  if (!(f->flags & R_MEMO)) { sceClibMemset(rt_pg, 0, sizeof rt_pg); sceClibMemset(want_now, 0, sizeof want_now); wantExpire(); rt_nb = 0; last_fb = ~0u; }
   const uint8_t *pal = rg_clut ? f->a + rg_clut - 1 : 0;
   f = rf[rg_w];
   f->nd = f->ne = f->na = f->flags = f->draws_seen = f->nt = f->ntx = f->dv = f->nimg = 0;

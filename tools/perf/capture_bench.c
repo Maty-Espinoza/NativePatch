@@ -13,6 +13,7 @@
 // state changes, textures in RAM or VRAM, sublists). Each scene runs in a child process (the capturer's state is global).
 // Build and run: tools/perf/bench.sh. Usage: capture_bench [scene] (no argument: all scenes, one line each).
 #define NP_DEV
+#define NP_BENCH
 #include "../../nativedraw/capture.c"
 #include <stdio.h>
 #include <string.h>
