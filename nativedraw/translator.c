@@ -316,8 +316,7 @@ enum { WN_FMT, WN_PRIM, WN_LIGHT, WN_GEN, WN_FLAT, WN_SCIS, WN_MARK, WN_HERE, WN
 static volatile uint32_t wn[WN_N];
 static struct { uint32_t d4, d5, dst, draws, wv, wo; } wr[WR_N];
 static volatile uint32_t wr_n, wr_lost;
-static void trWhy(const RDraw *d, const uint32_t *e, const float *sc, int dst, int lit, uint32_t gen) {
-  int ps = !(sc[0] <= 0 && sc[1] <= 0 && sc[2] >= W && sc[3] >= H);
+static void trWhy(const RDraw *d, const uint32_t *e, int ps, int dst, int lit, uint32_t gen) {
   uint32_t r = d->vt != 0x19F ? WN_FMT : d->prim < 3 || d->prim > 5 ? WN_PRIM : lit ? WN_LIGHT : gen ? WN_GEN : !(RE(e, 0x50) & 1) ? WN_FLAT : ps ? WN_SCIS :
                d->voff & VX ? WN_HERE : WN_MARK, i, d4 = RE(e, 0xD4) & 0xFFFFF, d5 = RE(e, 0xD5) & 0xFFFFF;
   wn[r] += d->n;
@@ -750,12 +749,13 @@ static int trLines(TV *o, uint32_t *np, uint32_t room, int strip) {
 }
 
 // Texture of tw x th texels (0xB8) in a buffer of tbw at src, narrower than the buffer, and t made with the buffer's
-// width: repeat and clamp would act at the buffer's edge. If the n vertices at o leave tw, copies its rows without the
-// gap to dst (room words), narrows t and rescales u. Returns the words used (0: not needed), ~0u if it does not fit.
+// width: repeat and clamp would act at the buffer's edge. If the n vertices at o leave tw, or there are none (o = 0: the GPU
+// reads them), copies its rows without the gap to dst (room words), narrows t and rescales u. Returns the words used (0: not
+// needed), ~0u if it does not fit.
 static uint32_t trNarrow(SceGxmTexture *t, const uint8_t *src, uint32_t fmt, uint32_t tbw, uint32_t tw, uint32_t th, TV *o, uint32_t n, uint32_t *dst, uint32_t room) {
   static const uint8_t bp[6] = { 16, 16, 16, 32, 4, 8 };
   float k = (float)tbw / tw;
-  uint32_t out = 0, ri = tbw * bp[fmt] / 8, ro = ((tw + 7) & ~7u) * bp[fmt] / 8, w;  // (GXM stride: 8 texels)
+  uint32_t out = !o, ri = tbw * bp[fmt] / 8, ro = ((tw + 7) & ~7u) * bp[fmt] / 8, w;  // (GXM stride: 8 texels)
   for (uint32_t i = 0; i < n; i++) out |= o[i].u < 0 || o[i].u * k > 1;
   if (!out) return 0;
   if ((w = (ro * th + 63) / 4 & ~15u) > room) return ~0u;
@@ -1187,12 +1187,17 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
       if (w3d) t3Set(f, d, e, &t3);
     }
     // Vertices the GPU reads as they are: no translated vertices, and the state below uses none of them
-    int gv = d->voff & VX && gvp && w3d && !self && sc[0] <= 0 && sc[1] <= 0 && sc[2] >= W && sc[3] >= H && !t3.gen && !(t3.lit && t3.nl) && !grayFix(e) &&
-             !(tex && d->toff && (1u << (RE(e, 0xB8) & 15)) < tw);
+    int cov = sc[0] <= 0 && sc[1] <= 0 && sc[2] >= (dst ? dst->vr.xMax + 1 : W) && sc[3] >= (dst ? dst->vr.yMax + 1 : H);  // (nothing for the scissor to clip)
+    int gv = d->voff & VX && gvp && w3d && !self && cov && !t3.gen && !(t3.lit && t3.nl) && !grayFix(e);
     uint32_t prim = d->prim;
-    DEV(if (w3d && !gv && !(clr & 1)) trWhy(d, e, sc, dst != 0, t3.lit && t3.nl, t3.gen);)
+    DEV(if (w3d && !gv && !(clr & 1)) trWhy(d, e, !cov, dst != 0, t3.lit && t3.nl, t3.gen);)
     if (gv) {
       n = d->n;
+      if (tex && d->toff && (1u << (RE(e, 0xB8) & 15)) < tw) {  // (the vertices are not seen here: always narrowed; the UV follows tw)
+        uint32_t k = trNarrow(&t, f->tx + d->toff - 1, RE(e, 0xC3) & 15, tw, 1u << (RE(e, 0xB8) & 15), th, 0, 0, pal + np, TP_B / 4 - np);
+        if (k == ~0u) { res = T_LIMIT; break; }
+        np += k; tw = 1u << (RE(e, 0xB8) & 15);
+      }
       if (dst) { dst->dirty[0] = dst->dirty[1] = 0; dst->dirty[2] = LINE; dst->dirty[3] = H; }
       DEV(t_c[TC_VIN] += n; t_c[TC_VOUT] += n; t_c[TC_VGPU] += n; t_c[TC_D3]++; t_c[TC_LIT] += t3.lit ? n : 0; t_c[TC_SAME] += same;)
       goto state;

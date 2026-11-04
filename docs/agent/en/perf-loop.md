@@ -23,6 +23,7 @@ palettes, texture cache) and `sublists` (sublist memory and the readers, no reco
   builds. Run it on every change to the translator: a faster translator must draw the same. `sh tools/perf/arm_count.sh [--top]`:
   real ARM instructions per frame of the translator under qemu (slow, ~1 min). **`tr_*` in `ir_k/f` does not see NEON** (on x86
   each NEON operation is C): for NEON work the judge is `arm_count.sh`.
+- **`tools/perf/tr_gv.sh`**: on the real frames, the GPU path (`nd_v3`, `TR_GV=1` marks the draws as the record does) must send the same triangles to the surface as the CPU path. Intermediate images are left out: the CPU clips there and the GPU does it itself. `TR_GV=1 sh tools/perf/arm_count.sh` counts that path; it does not see the cost of reading uncached memory.
 - **`want`**: pages asked of the mirror after the last frame. The `images` scene moves its images every frame: a leak shows here.
 - **`qemu_min_us`**: CPU time of the fastest frame under qemu (interpretation, record bookkeeping, hashes, sorting). It is not
   Vita time and varies ~5 % between runs: it only counts for changes over 10 % (`RUNS=10` tightens it).

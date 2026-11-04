@@ -2,7 +2,9 @@
 // frame records saved by the Vita, with GXM replaced by functions that do nothing, under Callgrind (instructions per frame) on
 // an x86 build. It says how much CPU work the translator does per frame, not what the GPU does. Usage: tools/perf/instr.sh
 // runs it; alone: translate_bench <fK_record.bin> [repetitions]. With TR_DUMP=<file> it also writes every draw with its vertices and
-// state, which tools/perf/tr_check.sh compares between two versions: a faster translator must give the same result.
+// state, which tools/perf/tr_check.sh compares between two versions: a faster translator must give the same result. With TR_GV=1
+// the draws the record would mark for the GPU (rgVGpu) have their vertices moved to the end of tx, as on the Vita; with TR_TRI=<file>
+// it writes each triangle as the GPU receives it, from either path (nd_v3 done here), and tools/perf/tr_gv.sh compares both paths.
 #define NP_DEV
 #define NP_BENCH
 #include "../../nativedraw/presenter.c"
@@ -41,7 +43,13 @@ int sceGxmReserveFragmentDefaultUniformBuffer(SceGxmContext *c, void **u) { stat
 // What the context holds, for the dump: each program parameter (by program and name) with its last values, vertex stream, programs
 static struct { const SceGxmProgram *p; char name[8]; float v[16]; } par[32];
 static const void *stream; static uint32_t fprog, tex_w;
-static FILE *dmp;
+static FILE *dmp, *tri;
+static const SceGxmVertexProgram *vprog;
+static uint32_t cur_w, set_w, in_rt;  // (in_rt: an intermediate image: the CPU path clips there, nd_v3 leaves it to the GPU, so its triangles differ)
+volatile SceUID nd_gfx_uid;
+void sceGxmSetVertexProgram(SceGxmContext *c, const SceGxmVertexProgram *p) { vprog = p; }
+int sceGxmTextureSetWidth(SceGxmTexture *t, unsigned w) { cur_w = w; return 0; }
+int sceGxmSetFragmentTexture(SceGxmContext *c, unsigned i, const SceGxmTexture *t) { set_w = cur_w; return 0; }  // (width in the context: draws wait to be joined)
 const SceGxmProgramParameter *sceGxmProgramFindParameterByName(const SceGxmProgram *p, const char *n) {
   for (int i = 0; i < 32; i++) {
     if (par[i].p == p && !strcmp(par[i].name, n)) return (void *)&par[i];
@@ -60,9 +68,44 @@ int sceGxmShaderPatcherCreateFragmentProgram(SceGxmShaderPatcher *s, SceGxmShade
 }
 void sceGxmSetFragmentProgram(SceGxmContext *c, const SceGxmFragmentProgram *p) { const uint32_t *x = (const void *)p; fprog = x ? x[0] << 28 ^ x[1] : 0; }
 int sceGxmSetVertexStream(SceGxmContext *c, unsigned i, const void *d) { stream = d; return 0; }
-int sceGxmTextureInitLinear(SceGxmTexture *t, const void *d, SceGxmTextureFormat f, unsigned w, unsigned h, unsigned m) { tex_w = w << 16 ^ h ^ f; return 0; }
-int sceGxmBeginScene(SceGxmContext *context, unsigned int flags, const SceGxmRenderTarget *renderTarget, const SceGxmValidRegion *validRegion, SceGxmSyncObject *vertexSyncObject, SceGxmSyncObject *fragmentSyncObject, const SceGxmColorSurface *colorSurface, const SceGxmDepthStencilSurface *depthStencil) { if (dmp) fprintf(dmp, "S\n"); return 0; }
+int sceGxmTextureInitLinear(SceGxmTexture *t, const void *d, SceGxmTextureFormat f, unsigned w, unsigned h, unsigned m) { tex_w = w << 16 ^ h ^ f; cur_w = w; return 0; }
+int sceGxmBeginScene(SceGxmContext *context, unsigned int flags, const SceGxmRenderTarget *renderTarget, const SceGxmValidRegion *validRegion, SceGxmSyncObject *vertexSyncObject, SceGxmSyncObject *fragmentSyncObject, const SceGxmColorSurface *colorSurface, const SceGxmDepthStencilSurface *depthStencil) { in_rt = validRegion != 0; if (dmp) fprintf(dmp, "S\n"); return 0; }
+// Value of parameter p (by name) of the vertex program in the context
+static const float *uni(const SceGxmProgramParameter *p) { return ((typeof(&par[0]))p)->v; }
+// One vertex as the GPU's clip stage sees it: position, UV in texels, fog, color (thousandths, so a rounding of 1 passes).
+// k: its place in the stream
+static void triV(uint32_t k) {
+  float o[4], u, v, g, c[4];
+  if (vprog == gvp) {
+    const uint8_t *p = (const uint8_t *)stream + k * 24;
+    const float *x = (const float *)(p + 12), *uv = (const float *)p, *m = uni(g_m), *tu = uni(g_tu), *fg = uni(g_fg), *cm = uni(g_cm), *ca = uni(g_ca);
+    for (int i = 0; i < 4; i++) o[i] = x[0] * m[i] + x[1] * m[4 + i] + x[2] * m[8 + i] + m[12 + i];
+    u = uv[0] * tu[0] + tu[2]; v = uv[1] * tu[1] + tu[3]; g = x[0] * fg[0] + x[1] * fg[1] + x[2] * fg[2] + fg[3]; g = g < 0 ? 0 : g > 1 ? 1 : g;
+    for (int i = 0; i < 4; i++) { c[i] = p[8 + i] * cm[i] + ca[i] * 255; c[i] = c[i] > 255 ? 255 : c[i]; }
+  } else {
+    const TV *q = (const TV *)stream + k;
+    const float *m = uni(n_wvp), a[4] = { q->x, q->y, q->z, q->w };
+    for (int i = 0; i < 4; i++) o[i] = a[0] * m[i] + a[1] * m[4 + i] + a[2] * m[8 + i] + a[3] * m[12 + i];
+    u = q->u; v = q->v; g = q->f;
+    for (int i = 0; i < 4; i++) c[i] = q->c >> i * 8 & 255;
+  }
+  if (fprog >> 28 == ((uint32_t)ifc & 15)) u = v = 0;  // (no texture: its UV means nothing)
+  fprintf(tri, "V %.5g %.5g %.6g %.5g %.3f %.5g %.5g %.4f %.4f %.4f %.4f\n", o[0], o[1], o[2], o[3], u * set_w, v, g, c[0] / 1000, c[1] / 1000, c[2] / 1000, c[3] / 1000);
+}
+// The triangles of a draw of n vertices in order, each with the winding it has on screen; those with two equal vertices (joined
+// strips) draw nothing and are left out
+static void triDump(SceGxmPrimitiveType t, unsigned n) {
+  uint32_t sz = vprog == gvp ? 24 : sizeof(TV);
+  for (unsigned i = 0; i + 2 < n; i += t == SCE_GXM_PRIMITIVE_TRIANGLES ? 3 : 1) {
+    unsigned a = t == SCE_GXM_PRIMITIVE_TRIANGLE_FAN ? 0 : i, b = i + 1, c = i + 2;
+    if (t == SCE_GXM_PRIMITIVE_TRIANGLE_STRIP && i & 1) { unsigned s = b; b = c; c = s; }
+    const uint8_t *p = stream;
+    if (!memcmp(p + a * sz, p + b * sz, sz) || !memcmp(p + b * sz, p + c * sz, sz) || !memcmp(p + a * sz, p + c * sz, sz)) continue;
+    fprintf(tri, "D %08x\n", fprog); triV(a); triV(b); triV(c);
+  }
+}
 int sceGxmDraw(SceGxmContext *c, SceGxmPrimitiveType t, SceGxmIndexFormat f, const void *ix, unsigned n) {
+  if (tri && ix && !in_rt) triDump(t, n);
   if (!dmp || !ix) return 0;  // (no ix: the presenter's quad, not the translator's)
   fprintf(dmp, "D %d %u %08x %08x", t, n, fprog, tex_w);
   for (int i = 0; i < 32 && par[i].p; i++) if (strcmp(par[i].name, "wvp")) for (int k = 0; k < 4; k++) fprintf(dmp, " %.5g", par[i].v[k]);
@@ -74,7 +117,7 @@ int sceGxmDraw(SceGxmContext *c, SceGxmPrimitiveType t, SceGxmIndexFormat f, con
   return 0;
 }
 int sceGxmShaderPatcherCreateVertexProgram(SceGxmShaderPatcher *s, SceGxmShaderPatcherId i, const SceGxmVertexAttribute *a, unsigned na, const SceGxmVertexStream *st,
-    unsigned ns, SceGxmVertexProgram **o) { static int x; *o = (void *)&x; return 0; }
+    unsigned ns, SceGxmVertexProgram **o) { static int x[4], n; *o = (void *)&x[n++ & 3]; return 0; }
 
 // Reads a dump's record like repLoad, into plain memory
 static RFrame *load(const char *path) {
@@ -88,13 +131,29 @@ static RFrame *load(const char *path) {
 #define RD_(p, n) do { uint32_t n_ = (n); fread(p, 1, n_, fp); if (n_ & 3) fseek(fp, 4 - (n_ & 3), SEEK_CUR); } while (0)
   RD_(rs, NRS); RD_(f->ta, f->nt * 4); RD_(f->tn, f->nt * 4); RD_(f->to, f->nt * 4); RD_(f->tq, f->nt * 4); RD_(f->tm, f->nt * 8);
   RD_(f->d, f->nd * sizeof(RDraw)); RD_(f->e, f->ne * NRS * 4); RD_(f->a, f->na);
-  f->tx = calloc(1, f->ntx + 0x40000); fread(f->tx, 1, f->ntx, fp);
+  f->tx = calloc(1, TX_N + 0x40000); fread(f->tx, 1, f->ntx, fp);
   fclose(fp);
   return f;
+}
+// Moves the vertices of the draws rgVGpu would mark to the end of tx, as the record does
+static void gvMark(RFrame *f) {
+  for (uint32_t i = 0; i < f->nd; i++) {
+    RDraw *d = &f->d[i];
+    const uint32_t *e = f->e[d->st];
+    uint32_t d5 = RE(e, 0xD5), w = RE(e, 0x9D) & 0x7FF, m = (d->vlen + 15) & ~15u;
+    if (d->vt != 0x19F || d->ioff || d->prim < 3 || d->prim > 5 || RE(e, 0xD3) & 1 || !(RE(e, 0x50) & 1) || RE(e, 0xC0) & 3 ||
+        RE(e, 0x17) & (RE(e, 0x18) | RE(e, 0x19) | RE(e, 0x1A) | RE(e, 0x1B)) & 1 || RE(e, 0xD4) & 0xFFFFF || (d5 & 0x3FF) + 1 < (w < 480 ? w : 480) ||
+        (w >= 480 && (d5 >> 10 & 0x3FF) < 271)) continue;
+    f->nvx += m;
+    memcpy(f->tx + TX_N - f->nvx, f->a + d->voff - 1, d->vlen);
+    d->voff = VX | (TX_N - f->nvx);
+  }
 }
 int main(int argc, char **argv) {
   if (argc < 2) return 1;
   RFrame *f = load(argv[1]);
+  if (getenv("TR_GV")) gvMark(f);
+  if (getenv("TR_TRI")) tri = fopen(getenv("TR_TRI"), "w");
   int n = argc > 2 ? atoi(argv[2]) : 20, res = 0;
   static uint32_t fake[64];
   if (getenv("TR_DUMP")) dmp = fopen(getenv("TR_DUMP"), "w");

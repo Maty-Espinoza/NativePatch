@@ -19,12 +19,10 @@ int sceGxmMapMemory(void) { return 0; }
 int sceGxmMapVertexUsseMemory(void) { return 0; }
 int sceGxmProgramParameterGetResourceIndex(void) { return 0; }
 int sceGxmSetCullMode(void) { return 0; }
-int sceGxmSetFragmentTexture(void) { return 0; }
 int sceGxmSetFrontDepthFunc(void) { return 0; }
 int sceGxmSetFrontDepthWriteEnable(void) { return 0; }
 int sceGxmSetFrontStencilFunc(void) { return 0; }
 int sceGxmSetFrontStencilRef(void) { return 0; }
-int sceGxmSetVertexProgram(void) { return 0; }
 int sceGxmShaderPatcherCreate(void) { return 0; }
 int sceGxmSyncObjectCreate(void) { return 0; }
 int sceGxmTextureGetData(void) { return 0; }
@@ -39,7 +37,6 @@ int sceGxmTextureSetMinFilter(void) { return 0; }
 int sceGxmTextureSetPalette(void) { return 0; }
 int sceGxmTextureSetUAddrMode(void) { return 0; }
 int sceGxmTextureSetVAddrMode(void) { return 0; }
-int sceGxmTextureSetWidth(void) { return 0; }
 int sceIoClose(void) { return 0; }
 int sceIoMkdir(void) { return 0; }
 int sceIoOpen(void) { return 0; }

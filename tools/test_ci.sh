@@ -14,6 +14,8 @@ echo "== capturer"
 (cd $R/nativedraw && arm-linux-gnueabihf-gcc -static -O2 -mthumb -mfpu=neon -mfloat-abi=hard -w -I$B/inc -o $B/prueba capture_test.c)
 $(command -v qemu-arm-static || command -v qemu-arm) $B/prueba
 
+echo "== translator: GPU and CPU paths draw the same triangles"
+T=$T sh $R/tools/perf/tr_gv.sh | grep -q "lines equal" || { echo "FAIL: tr_gv"; exit 1; }
 echo "== capturer bench (builds and runs one scene)"
 arm-linux-gnueabihf-gcc -static -O2 -mthumb -mfpu=neon -mfloat-abi=hard -w -I$B/inc -o $B/bench $R/tools/perf/capture_bench.c
 $(command -v qemu-arm-static || command -v qemu-arm) $B/bench rr_race | grep -q "complete=38" || { echo "FAIL: capture_bench"; exit 1; }
