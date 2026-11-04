@@ -24,6 +24,13 @@ was paid for nothing. The capturer's 24 ms are, roughly: vertex copy ~5-6 ms (`r
 1. **`cap_split` on 0.0.16.5 in the crowd** (`ux0:data/nativedraw/cap_split`): the `capture split` line separates events,
    flip, walk, hit, own, draw, record, state, vertices, textures and `vflush`. Expected: `vflush` ~5 ms, `draw` several ms.
    Until this is measured, B.1-B.3 rest on an estimate.
+   **Result (`stage3_0.0.16.5/rr1`, without high clocks, ms per frame; each clock read adds 0.4 us, up to ~3.2 us per draw):**
+   a complete frame of ~1450 draws and 11,000 commands costs ~18-19 real ms (24 measured): record ~10 (vertices ~4.7, textures
+   ~3.8, state ~1), interpreter 5, list reads ~2, `draw()` under 0.5, end of list and events 1-2. A crowd frame of ~2800 draws
+   and 17,800 commands, already incomplete and copying nothing, costs ~13 real ms (17 measured): interpreter 7, reads ~3. So
+   a crowd frame does not fit even without recording; recording it would take ~33 ms (never measured: none was complete).
+   Against the estimate: `vflush` and the list-end flush are at most 1-2 ms in the frames that complete, and `draw()` is cheap.
+   The 21 ms read before 0.0.16.5 counted the walk at the flip twice. Bug: the `events` column overflows (ignore it).
 2. **`data life` at the extreme level in the race**: how often vertices change 1 and 2 frames after their draw. Decides
    B.2 and C.1 (whether the GPU or a later copy can read vertices the game may rewrite).
 
@@ -31,7 +38,7 @@ was paid for nothing. The capturer's 24 ms are, roughly: vertex copy ~5-6 ms (`r
 1. **Vertex copy with 256-byte NEON loads** instead of `sceClibMemcpy` in `rgVFlush` and `rgCopy` (the loads overlap the
    uncached waits, as `neon256` does for lists). Expected 2-3x on ~5 ms. Verify: bench (`ucp_kb` stays, the unit cost
    model does not see it: measure the copy routine inside the bench with a microbenchmark line) and then Vita (`vflush`).
-2. **Publish `SB[3]` before `rgVFlush`**: today the game waits at the gate for the vertex copy too. Removes up to ~6 ms of
+2. **Publish `SB[3]` before `rgVFlush`** (A.1: only 1-2 ms in frames that complete): today the game waits at the gate for the vertex copy too. Removes up to ~6 ms of
    gate per frame at no cost. Condition: A.2 shows vertices live at least one frame. Verify: Vita (`gate_us`, `vertex_out`).
 3. **Vertex and RAM-texture copies on another core** (the `record` thread already exists): the copy of frame N runs while
    the capturer walks frame N + 1. Same latency, double throughput. Verify: Vita (`capture us/f`, `complete`).
@@ -40,13 +47,18 @@ was paid for nothing. The capturer's 24 ms are, roughly: vertex copy ~5-6 ms (`r
    lists read while being rewritten (mitigated by `st_good` and the register snapshot). Verify: Vita (game fps, `late`).
 5. **Fewer clock reads**: the record samples 1 draw in 8 with 4 clock reads each: ~1700 reads per crowd frame, ~1 ms on the
    Vita (0.6 us each). Sample 1 in 64, or only at the medium level. Verify: bench (`clock/f`, `mem_us`) then Vita.
-6. **`draw()` and `regDraw()` per draw** (after A.1 says how much they cost): linear texture search in `rgTex` (up to ~90
+6. **`regDraw()` per draw** (A.1: `draw()` itself is under 0.5 ms, the statistics are not worth touching; the time is in
+   `vertices` and `textures`, to be split further): linear texture search in `rgTex` (up to ~90
    entries per frame, 3500 draws), `rtRead`/`markRt`/`want` on every draw with a VRAM texture, statistics counters that
    only feed the log (under `level`), state comparison per draw. Verify: bench (`qemu_min_us`) then Vita (`draw`).
 7. **Readers' priority**: in the crowd each reader gets 49 ms/s (0xB0 on busy cores); own reads 525 per frame against
    1415 from the readers. Try 0x80-0xA0 or the free core. Verify: Vita (`own` vs `from_readers`, audio).
 8. **Mirror size by measured GE time** (TODO: 257 data pages asked, 64 copied per flip; pages used this frame first).
    Verify: Vita (`no_fit`, texture age).
+
+9. **The interpreter's cost per command** (A.1: ~400 ns, ~130 cycles, 5-7 ms per frame, more than half of a crowd frame that
+   is not recorded): per-command bookkeeping in `walkList` (`l->n`, `acc.cmds`, `f_cmds`, `l->prev`, `TOUCH`, `cls`). Verify: bench
+   (`qemu_min_us`) then Vita (`capture split`).
 
 ## C. Large changes (ask the user first)
 1. **3D vertices in a GXM vertex shader reading the PSP RAM mapped for the GPU** (`sceGxmMapMemory` at 0x70000000 works,

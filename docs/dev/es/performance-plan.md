@@ -25,6 +25,13 @@ del frame.
 1. **`cap_split` con 0.0.16.5 en el público** (`ux0:data/nativedraw/cap_split`): la línea `capture split` separa events,
    flip, walk, hit, own, draw, record, state, vertices, textures y `vflush`. Esperado: `vflush` ~5 ms, `draw` varios ms.
    Hasta medirlo, B.1-B.3 se apoyan en una estimación.
+   **Resultado (`stage3_0.0.16.5/rr1`, sin relojes altos, ms por frame; cada lectura de reloj suma 0,4 us, hasta ~3,2 us por draw):**
+   un frame completo de ~1450 draws y 11.000 comandos cuesta ~18-19 ms reales (24 medidos): registro ~10 (vértices ~4,7, texturas
+   ~3,8, estado ~1), intérprete 5, lectura de listas ~2, `draw()` menos de 0,5, fin de lista y eventos 1-2. Un frame del público de
+   ~2800 draws y 17.800 comandos, ya incompleto y sin copiar nada, cuesta ~13 ms reales (17 medidos): intérprete 7, lecturas ~3. O
+   sea, un frame del público no cabe ni sin grabar; grabarlo tomaría ~33 ms (nunca medido: ninguno quedó completo).
+   Contra la estimación: `vflush` y el volcado de fin de lista son 1-2 ms como mucho en los frames que se completan, y `draw()` es barato.
+   Los 21 ms leídos antes de 0.0.16.5 contaban dos veces el recorrido del flip. Error: la columna `events` se desborda (ignorarla).
 2. **`data life` en nivel extremo en la carrera**: cuántas veces los vértices cambian 1 y 2 frames después de su draw.
    Decide B.2 y C.1 (si la GPU o una copia posterior pueden leer vértices que el juego podría reescribir).
 
@@ -33,7 +40,7 @@ del frame.
    las esperas de la memoria sin caché, como hace `neon256` con las listas). Esperado 2-3x sobre ~5 ms. Verificar: bench
    (`ucp_kb` no cambia, el modelo de costos no lo ve: medir la rutina de copia dentro del bench con una línea de
    microbenchmark) y luego Vita (`vflush`).
-2. **Publicar `SB[3]` antes de `rgVFlush`**: hoy el juego espera en la compuerta también la copia de vértices. Quita hasta
+2. **Publicar `SB[3]` antes de `rgVFlush`** (A.1: solo 1-2 ms en los frames que se completan): hoy el juego espera en la compuerta también la copia de vértices. Quita hasta
    ~6 ms de compuerta por frame sin costo. Condición: A.2 muestra que los vértices viven al menos un frame. Verificar: Vita
    (`gate_us`, `vertex_out`).
 3. **Copias de vértices y texturas de RAM en otro core** (el hilo `record` ya existe): la copia del frame N corre mientras el
@@ -44,7 +51,8 @@ del frame.
 5. **Menos lecturas de reloj**: el registro muestrea 1 draw de 8 con 4 lecturas de reloj cada uno: ~1700 lecturas por frame
    del público, ~1 ms en la Vita (0,6 µs cada una). Muestrear 1 de 64, o solo en nivel medio. Verificar: bench (`clock/f`,
    `mem_us`) y luego Vita.
-6. **`draw()` y `regDraw()` por draw** (después de que A.1 diga cuánto cuestan): búsqueda lineal de textura en `rgTex` (hasta
+6. **`regDraw()` por draw** (A.1: `draw()` en sí es menos de 0,5 ms, no vale tocar las estadísticas; el tiempo está en
+   `vertices` y `textures`, por separar más): búsqueda lineal de textura en `rgTex` (hasta
    ~90 entradas por frame, 3500 draws), `rtRead`/`markRt`/`want` en cada draw con textura VRAM, contadores de estadísticas
    que solo alimentan el log (bajo `level`), comparación de estado por draw. Verificar: bench (`qemu_min_us`) y luego Vita
    (`draw`).
@@ -53,6 +61,10 @@ del frame.
    audio).
 8. **Tamaño del espejo por tiempo medido del GE** (TODO: 257 páginas de datos pedidas, 64 copiadas por flip; primero las
    páginas usadas en este frame). Verificar: Vita (`no_fit`, antigüedad de las texturas).
+
+9. **Costo del intérprete por comando** (A.1: ~400 ns, ~130 ciclos, 5-7 ms por frame, más de la mitad de un frame del público que
+   no se graba): lo que se anota por comando en `walkList` (`l->n`, `acc.cmds`, `f_cmds`, `l->prev`, `TOUCH`, `cls`). Verificar: banco
+   (`qemu_min_us`) y luego Vita (`capture split`).
 
 ## C. Cambios grandes (preguntar primero al usuario)
 1. **Vértices 3D en un vertex shader de GXM leyendo la RAM del PSP mapeada para la GPU** (`sceGxmMapMemory` en 0x70000000
