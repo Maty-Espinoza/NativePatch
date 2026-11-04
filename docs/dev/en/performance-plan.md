@@ -34,6 +34,10 @@ was paid for nothing. The capturer's 24 ms are, roughly: vertex copy ~5-6 ms (`r
 2. **`data life` at the extreme level in the race**: how often vertices change 1 and 2 frames after their draw. Decides
    B.2 and C.1 (whether the GPU or a later copy can read vertices the game may rewrite).
 
+   **Result of 2 (`stage3_0.0.16.8/rr2`, 53,785 vertex samples in the race):** 0.5 % change one frame later (~13 ms) and 21.5 % two
+   frames later (~30 ms); textures and palettes 0 %. The GPU would read them 30-60 ms after the flip: **C.1 cannot read the PSP RAM
+   directly**. B.2 stays possible (the copy happens under 16 ms); C.1 must read the record's copy. Textures could live longer than now.
+
 ## B. Capturer, small changes
 1. **Vertex copy with 256-byte NEON loads** instead of `sceClibMemcpy` in `rgVFlush` and `rgCopy` (the loads overlap the
    uncached waits, as `neon256` does for lists). Expected 2-3x on ~5 ms. Verify: bench (`ucp_kb` stays, the unit cost

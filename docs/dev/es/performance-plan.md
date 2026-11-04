@@ -35,6 +35,10 @@ del frame.
 2. **`data life` en nivel extremo en la carrera**: cuántas veces los vértices cambian 1 y 2 frames después de su draw.
    Decide B.2 y C.1 (si la GPU o una copia posterior pueden leer vértices que el juego podría reescribir).
 
+   **Resultado de 2 (`stage3_0.0.16.8/rr2`, 53.785 muestras de vértices en carrera):** 0,5 % cambia un frame después (~13 ms) y 21,5 %
+   dos frames después (~30 ms); texturas y paletas 0 %. La GPU los leería 30-60 ms después del flip: **C.1 no puede leer la RAM del PSP
+   directamente**. B.2 sigue siendo posible (la copia ocurre antes de 16 ms); C.1 debe leer la copia del registro. Las texturas podrían durar más que hoy.
+
 ## B. Capturador, cambios chicos
 1. **Copia de vértices con cargas NEON de 256 bytes** en vez de `sceClibMemcpy` en `rgVFlush` y `rgCopy` (las cargas solapan
    las esperas de la memoria sin caché, como hace `neon256` con las listas). Esperado 2-3x sobre ~5 ms. Verificar: bench
