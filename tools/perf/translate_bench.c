@@ -82,12 +82,17 @@ static void triV(uint32_t k) {
     int lf = vprog == gvp[2];
     const uint8_t *p = (const uint8_t *)stream + k * (lf ? 20 : 16);
     const int16_t *x = (const int16_t *)(p + (lf ? 14 : 10)), *nr = (const int16_t *)(p + (lf ? 8 : 4));
-    const float *m = uni(g4[0]), *tu = uni(g4[1]), *fg = uni(g4[2]), *nx = uni(g4[3]), *ny = uni(g4[4]), *nz = uni(g4[5]), *ld = uni(g4[6]), *hv = uni(g4[7]), *ba = uni(g4[8]), *cd = uni(g4[9]), *cs = uni(g4cs);
+    const float *m = uni(g4[0]), *tu = uni(g4[1]), *fg = uni(g4[2]), *nx = uni(g4[3]), *ny = uni(g4[4]), *nz = uni(g4[5]), *ld = uni(g4[6]), *hv = uni(g4[7]), *ba = uni(g4[8]), *cd = uni(g4[9]), *cs = uni(g4[10]), *t0 = uni(g4[11]), *t1 = uni(g4[12]), *t2 = uni(g4[13]), *gu = uni(g4gu);
     float a = lf ? ((const float *)p)[0] : ((const uint16_t *)p)[0], b = lf ? ((const float *)p)[1] : ((const uint16_t *)p)[1];
     float X = x[0], Y = x[1], Z = x[2], n[3] = { nr[0] * nx[0] + nr[1] * nx[1] + nr[2] * nx[2], nr[0] * ny[0] + nr[1] * ny[1] + nr[2] * ny[2], nr[0] * nz[0] + nr[1] * nz[1] + nr[2] * nz[2] };
     tnorm(n);
     for (int i = 0; i < 4; i++) o[i] = X * m[i] + Y * m[4 + i] + Z * m[8 + i] + m[12 + i];
-    u = a * tu[0] + tu[2]; v = b * tu[1] + tu[3]; g = X * fg[0] + Y * fg[1] + Z * fg[2] + fg[3]; g = g < 0 ? 0 : g > 1 ? 1 : g;
+    u = a * tu[0] + tu[2]; v = b * tu[1] + tu[3];
+    if (gu[2]) {
+      float r0 = nr[0] * t0[0] + nr[1] * t0[1] + nr[2] * t0[2] + t0[3], r1 = nr[0] * t1[0] + nr[1] * t1[1] + nr[2] * t1[2] + t1[3], r2 = nr[0] * t2[0] + nr[1] * t2[1] + nr[2] * t2[2] + t2[3];
+      u = r0 / r2 * gu[0]; v = r1 / r2 * gu[1];
+    }
+    g = X * fg[0] + Y * fg[1] + Z * fg[2] + fg[3]; g = g < 0 ? 0 : g > 1 ? 1 : g;
     float nl = n[0] * ld[0] + n[1] * ld[1] + n[2] * ld[2], sd = n[0] * hv[0] + n[1] * hv[1] + n[2] * hv[2], s = nl >= 0 && sd > 0 ? pow(sd, hv[3]) : 0;
     for (int i = 0; i < 4; i++) { float q = i < 3 ? ba[i] + (nl > 0 ? nl : 0) * cd[i] + s * cs[i] : ba[3]; c[i] = (q < 0 ? 0 : q > 1 ? 1 : q) * 255; }
   } else if (vprog == gvp[0]) {
@@ -156,8 +161,9 @@ static void gvMark(RFrame *f) {
     RDraw *d = &f->d[i];
     const uint32_t *e = f->e[d->st];
     uint32_t d5 = RE(e, 0xD5), w = RE(e, 0x9D) & 0x7FF, m = (d->vlen + 15) & ~15u;
-    if ((d->vt != 0x19F && !GVL(d->vt)) || d->ioff || d->prim < 3 || d->prim > 5 || RE(e, 0xD3) & 1 || !(RE(e, 0x50) & 1) || RE(e, 0xC0) & 3 ||
-        (d->vt == 0x19F && RE(e, 0x17) & (RE(e, 0x18) | RE(e, 0x19) | RE(e, 0x1A) | RE(e, 0x1B)) & 1) || (GVL(d->vt) && !(RE(e, 0x17) & 1)) || RE(e, 0xD4) & 0xFFFFF || (d5 & 0x3FF) + 1 < (w < 480 ? w : 480) ||
+    if ((d->vt != 0x19F && !GVL(d->vt)) || d->ioff || d->prim < 3 || d->prim > 5 || RE(e, 0xD3) & 1 || !(RE(e, 0x50) & 1) ||
+        (d->vt == 0x19F && (RE(e, 0xC0) & 3 || RE(e, 0x17) & (RE(e, 0x18) | RE(e, 0x19) | RE(e, 0x1A) | RE(e, 0x1B)) & 1)) ||
+        (GVL(d->vt) && (RE(e, 0x17) & 1 ? RE(e, 0xC0) & 3 : (RE(e, 0xC0) & 0x303) != 0x301)) || RE(e, 0xD4) & 0xFFFFF || (d5 & 0x3FF) + 1 < (w < 480 ? w : 480) ||
         (w >= 480 && (d5 >> 10 & 0x3FF) < 271)) continue;
     f->nvx += m;
     memcpy(f->tx + TX_N - f->nvx, f->a + d->voff - 1, d->vlen);

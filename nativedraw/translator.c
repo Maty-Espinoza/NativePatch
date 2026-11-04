@@ -87,7 +87,7 @@ static uint32_t texAddr(const uint32_t *e) { return (RE(e, 0xA0) & 0xFFFFF0) | (
 static SceGxmVertexProgram *nvp, *gvp[3];  // gvp: the 3D vertices of the record as they are: nd_v3, nd_v4 with 16-bit UV, with float UV
 static const SceGxmProgram *pft, *pfc, *pfm, *pfd, *pfa, *pv;
 static SceGxmShaderPatcherId ift, ifc, ifm, ifd, ifa;
-static const SceGxmProgramParameter *g4cs, *g_m, *g_tu, *g_fg, *g_cm, *g_ca, *g4[10], *n_wvp, *n_tf, *n_tm, *n_td, *n_ta, *n_atx, *n_atc, *n_env, *n_fgx, *n_fgc, *n_fgd, *n_fga;
+static const SceGxmProgramParameter *g_m, *g_tu, *g_fg, *g_cm, *g_ca, *g4[14], *g4gu, *n_wvp, *n_tf, *n_tm, *n_td, *n_ta, *n_atx, *n_atc, *n_env, *n_fgx, *n_fgc, *n_fgd, *n_fga;
 typedef struct { uint64_t key; SceGxmFragmentProgram *p; } FP;
 static FP fps[128];
 static uint32_t nfps;
@@ -176,10 +176,9 @@ static int trInit(void) {
   SceGxmShaderPatcherId i4;
   if ((r = sceGxmShaderPatcherRegisterProgram(pat, (const SceGxmProgram *)nd_v4_gxp, &i4)) < 0) { alog("translator: register nd_v4 %08x\n", r); return r; }
   const SceGxmProgram *p4 = sceGxmShaderPatcherGetProgramFromId(i4);
-  static const char *const n4[10] = { "m", "tu", "fg", "nx", "ny", "nz", "ld", "hv", "ba", "cd" };
-  int ok4 = 1;
-  for (int i = 0; i < 10; i++) ok4 = (g4[i] = sceGxmProgramFindParameterByName(p4, n4[i])) && ok4;
-  g4cs = sceGxmProgramFindParameterByName(p4, "cs");
+  static const char *const n4[14] = { "m", "tu", "fg", "nx", "ny", "nz", "ld", "hv", "ba", "cd", "cs", "t0", "t1", "t2" };
+  int ok4 = !!(g4gu = sceGxmProgramFindParameterByName(p4, "gu"));
+  for (int i = 0; i < 14; i++) ok4 = (g4[i] = sceGxmProgramFindParameterByName(p4, n4[i])) && ok4;
   uint32_t rp = sceGxmProgramParameterGetResourceIndex(sceGxmProgramFindParameterByName(p4, "aPosition")), rn = sceGxmProgramParameterGetResourceIndex(sceGxmProgramFindParameterByName(p4, "aNormal")),
            ru = sceGxmProgramParameterGetResourceIndex(sceGxmProgramFindParameterByName(p4, "aTexcoord"));
   SceGxmVertexAttribute a1[3] = { { 0, 10, SCE_GXM_ATTRIBUTE_FORMAT_S16, 3, rp }, { 0, 4, SCE_GXM_ATTRIBUTE_FORMAT_S16, 3, rn }, { 0, 0, SCE_GXM_ATTRIBUTE_FORMAT_U16, 2, ru } },
@@ -187,8 +186,8 @@ static int trInit(void) {
   SceGxmVertexStream s1 = { 16, SCE_GXM_INDEX_SOURCE_INDEX_16BIT }, s2 = { 20, SCE_GXM_INDEX_SOURCE_INDEX_16BIT };
   int r1v = sceGxmShaderPatcherCreateVertexProgram(pat, i4, a1, 3, &s1, 1, &gvp[1]), r2v = sceGxmShaderPatcherCreateVertexProgram(pat, i4, a2, 3, &s2, 1, &gvp[2]);
   alog("translator: GPU lit vertex programs %08x %08x\n", r1v, r2v);
-  if (r1v < 0 || !ok4 || !g4cs) gvp[1] = 0;
-  if (r2v < 0 || !ok4 || !g4cs) gvp[2] = 0;
+  if (r1v < 0 || !ok4) gvp[1] = 0;
+  if (r2v < 0 || !ok4) gvp[2] = 0;
   if (!fragProg(0, 0, C_RGB) || !fragProg(1, 0, C_RGB)) return -3;
   for (int i = 0; i < 2; i++) rtMem(&rts[i]);
   rtMem(&rtc);
@@ -455,10 +454,10 @@ static const LT *t3One(const T3 *t) {
   for (int i = 0; i < 4; i++) if (t->l[i].on) { if (r) return 0; r = &t->l[i]; }
   return r && !r->type && r->comp != 2 ? r : 0;
 }
-// Uniforms of nd_v3 (lv 0) or nd_v4 (lv: GVL) for a draw of t with texture size tw x th, in the default buffer u; wm: the scene's matrix.
+// Uniforms of nd_v3 (lv 0) or nd_v4 (lv: GVL) for a draw of t with texture size tw x th and material color mat, in the default buffer u; wm: the scene's matrix.
 // What trVerts does per vertex, as numbers: m is wm x viewport x t->m, column by column (model -> surface clip); 16-bit values count
 // 1 / 32768, as on the GE.
-static void t3Uni(void *u, const T3 *t, float tw, float th, const float *wm, int lv) {
+static void t3Uni(void *u, const T3 *t, float tw, float th, const float *wm, int lv, uint32_t mat) {
   const float k16 = 1 / 32768.0f;
   float m[16], e[4], kz = t->sz / -131072.0f, kt = .5f - t->tz / 131072.0f, ku = t->tw / tw, kv = t->th / th, kp = lv ? k16 : 1, kx = lv == 1 ? k16 : 1;
   for (int j = 0; j < 4; j++) {
@@ -468,17 +467,23 @@ static void t3Uni(void *u, const T3 *t, float tw, float th, const float *wm, int
   }
   float tu[4] = { t->us * ku * kx, t->vs * kv * kx, t->uo * ku, t->vo * kv }, fg[4] = { 0, 0, 0, 1 }, cm[4] = { 1, 1, 1, 1 }, ca[4] = { 0, 0, 0, 0 };
   if (t->fog) { fg[0] = t->wv[2] * t->f2 * kp; fg[1] = t->wv[5] * t->f2 * kp; fg[2] = t->wv[8] * t->f2 * kp; fg[3] = (t->wv[11] + t->f1) * t->f2; }
-  if (lv) {  // (t3Light with no vertex color, and the light's direction and half vector already fixed)
-    const LT *l = t3One(t);
-    float s = t->rev ? -1 : 1, nx[4] = { t->w[0] * s, t->w[3] * s, t->w[6] * s, 0 }, ny[4] = { t->w[1] * s, t->w[4] * s, t->w[7] * s, 0 }, nz[4] = { t->w[2] * s, t->w[5] * s, t->w[8] * s, 0 };
-    float ld[4] = { l->p[0], l->p[1], l->p[2], 0 }, hv[4] = { l->p[0], l->p[1], l->p[2] + 1, (float)(int)(t->sp + .5f) }, ba[4], cd[4] = { 0, 0, 0, 0 }, cs[4] = { 0, 0, 0, 0 };
-    tnorm(hv);
-    for (int k = 0; k < 4; k++) ba[k] = t->em[k] + t->ac[k] * t->am[k] + (k < 3 ? l->ca[k] * t->am[k] : 0);
-    for (int k = 0; k < 3; k++) { cd[k] = l->cd[k] * t->ad[k]; cs[k] = l->comp == 1 ? l->cs[k] * t->as[k] : 0; }
-    const float *v[10] = { m, tu, fg, nx, ny, nz, ld, hv, ba, cd };
+  if (lv) {  // (t3Light with no vertex color and the light's direction and half vector already fixed, or t3Gen from the normal)
+    const LT *l = t->lit ? t3One(t) : 0;
+    float s = t->rev && l ? -1 : 1, nx[4] = { t->w[0] * s, t->w[3] * s, t->w[6] * s, 0 }, ny[4] = { t->w[1] * s, t->w[4] * s, t->w[7] * s, 0 }, nz[4] = { t->w[2] * s, t->w[5] * s, t->w[8] * s, 0 };
+    float ld[4] = { 0, 0, 1, 0 }, hv[4] = { 0, 0, 1, 1 }, ba[4], cd[4] = { 0, 0, 0, 0 }, cs[4] = { 0, 0, 0, 0 };
+    float gu[4] = { ku, kv, !l, 0 }, t0[4] = { t->tm[0] * k16, t->tm[3] * k16, t->tm[6] * k16, t->tm[9] }, t1[4] = { t->tm[1] * k16, t->tm[4] * k16, t->tm[7] * k16, t->tm[10] },
+          t2[4] = { t->tm[2] * k16, t->tm[5] * k16, t->tm[8] * k16, t->tm[11] };
+    rgbf(mat, ba);
+    if (l) {
+      sceClibMemcpy(ld, l->p, 12); sceClibMemcpy(hv, l->p, 12); hv[2] += 1; hv[3] = (int)(t->sp + .5f);
+      tnorm(hv);
+      for (int k = 0; k < 4; k++) ba[k] = t->em[k] + t->ac[k] * t->am[k] + (k < 3 ? l->ca[k] * t->am[k] : 0);
+      for (int k = 0; k < 3; k++) { cd[k] = l->cd[k] * t->ad[k]; cs[k] = l->comp == 1 ? l->cs[k] * t->as[k] : 0; }
+    }
+    const float *v[14] = { m, tu, fg, nx, ny, nz, ld, hv, ba, cd, cs, t0, t1, t2 };
     sceGxmSetUniformDataF(u, g4[0], 0, 16, m);
-    for (int i = 1; i < 10; i++) sceGxmSetUniformDataF(u, g4[i], 0, 4, v[i]);
-    sceGxmSetUniformDataF(u, g4cs, 0, 4, cs);
+    for (int i = 1; i < 14; i++) sceGxmSetUniformDataF(u, g4[i], 0, 4, v[i]);
+    sceGxmSetUniformDataF(u, g4gu, 0, 4, gu);
     return;
   }
   for (int k = 0; t->lit && k < 4; k++) {  // (lit with no lights: see t3Flat)
@@ -1225,8 +1230,8 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     }
     // Vertices the GPU reads as they are: no translated vertices, and the state below uses none of them
     int cov = sc[0] <= 0 && sc[1] <= 0 && sc[2] >= (dst ? dst->vr.xMax + 1 : W) && sc[3] >= (dst ? dst->vr.yMax + 1 : H);  // (nothing for the scissor to clip)
-    int gl = GVL(d->vt), lok = gl ? t3.lit && t3One(&t3) : !(t3.lit && t3.nl);  // (lok: the lights are what its program does)
-    int gv = d->voff & VX && gvp[gl] && w3d && !self && cov && !t3.gen && lok && !grayFix(e) ? gl + 1 : 0;  // (gv: its program + 1)
+    int gl = GVL(d->vt), gnr = gl && !t3.lit && t3.gen == 1 && t3.prj == 3, lok = gl ? gnr || (t3.lit && t3One(&t3)) : !(t3.lit && t3.nl);  // (lok: lights and UV are what its program does)
+    int gv = d->voff & VX && gvp[gl] && w3d && !self && cov && (!t3.gen || gnr) && lok && !grayFix(e) ? gl + 1 : 0;  // (gv: its program + 1)
     uint32_t prim = d->prim;
     TV *w = ts;
     float ar = 0;
@@ -1392,7 +1397,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     if (cl != t_cl) { t_cl = cl; sceGxmSetCullMode(c, cl); }
   ready:;
     if (gv) {
-      if (nu) { sceGxmReserveVertexDefaultUniformBuffer(c, &u); t3Uni(u, &t3, tw, th, wm, gl); }
+      if (nu) { sceGxmReserveVertexDefaultUniformBuffer(c, &u); t3Uni(u, &t3, tw, th, wm, gl, mat); }
       sceGxmSetVertexStream(c, 0, f->tx + (d->voff & ~VX));
       sceGxmDraw(c, prim == 3 ? SCE_GXM_PRIMITIVE_TRIANGLES : prim == 5 ? SCE_GXM_PRIMITIVE_TRIANGLE_FAN : SCE_GXM_PRIMITIVE_TRIANGLE_STRIP, SCE_GXM_INDEX_FORMAT_U16, tib, n);
       pd = d; t_draws++;
