@@ -606,8 +606,8 @@ static void regDraw(uint32_t n, uint32_t type, uint32_t vt, uint32_t idx) {
   f->draws_seen++;
   if (f->flags) return;  // already incomplete: nothing more is spent on this frame
   if (f->nd >= RD_N) { DEV(if (p_on) pAdd(P_X_DRAWS, 0);) f->flags |= R_LIMIT; return; }
-  // (reading the clock costs: the times are sampled, 1 draw in 8)
-  uint32_t tm = !(f->draws_seen & 7) DEV(|| cs_on), t0 = tm ? now() : 0, t1, v[NRS];
+  // (reading the clock costs: the times are sampled, 1 draw in 64)
+  uint32_t tm = !(f->draws_seen & 63) DEV(|| cs_on), t0 = tm ? now() : 0, t1, v[NRS];
   if (rg_chg || !f->ne) {
     rg_chg = 0;
     for (int i = 0; i < NRS; i++) v[i] = reg[RS[i]];
@@ -616,7 +616,7 @@ static void regDraw(uint32_t n, uint32_t type, uint32_t vt, uint32_t idx) {
       sceClibMemcpy(f->e[f->ne++], v, sizeof v);
     }
   }
-  t1 = tm ? now() : 0; if (tm) ga.us_e += (t1 - t0) * 8;
+  t1 = tm ? now() : 0; if (tm) ga.us_e += (t1 - t0) * 64;
   DEV(if (cs_on) cs_t[CS_RST] += t1 - t0;)
   RDraw *d = &f->d[f->nd];
   d->st = f->ne - 1; d->prim = type; d->n = n; d->vt = vt; d->ioff = 0; d->clut = rg_clut; d->clen = rg_clut ? rg_clut_b : 0;
@@ -651,7 +651,7 @@ static void regDraw(uint32_t n, uint32_t type, uint32_t vt, uint32_t idx) {
     }
   }
   d->toff = 0;
-  uint32_t t2 = tm ? now() : 0; if (tm) ga.us_v += (t2 - t1) * 8;
+  uint32_t t2 = tm ? now() : 0; if (tm) ga.us_v += (t2 - t1) * 64;
   DEV(if (cs_on) cs_t[CS_RVT] += t2 - t1;)
   if ((reg[0x1E] & 1) && !(reg[0xD3] & 1)) {  // the texture, after the vertices (they give the rows it uses)
     uint32_t r0 = 0, r1 = 0;
@@ -659,7 +659,7 @@ static void regDraw(uint32_t n, uint32_t type, uint32_t vt, uint32_t idx) {
     d->toff = rgTex(r0, r1);
   }
   f->nd++;
-  if (tm) { uint32_t t3 = now(); ga.us_t += (t3 - t2) * 8; rg_t += (t3 - t0) * 8; DEV(if (cs_on) cs_t[CS_RTX] += t3 - t2;) }
+  if (tm) { uint32_t t3 = now(); ga.us_t += (t3 - t2) * 64; rg_t += (t3 - t0) * 64; DEV(if (cs_on) cs_t[CS_RTX] += t3 - t2;) }
   // what each game uses (log statistics)
   uint32_t *s = f->e[d->st];
   ga.draws++;
@@ -676,10 +676,10 @@ static void regDraw(uint32_t n, uint32_t type, uint32_t vt, uint32_t idx) {
 static void regClut(uint32_t d) {
   uint32_t n = (d & 0x3F) * 32;
   rg_clut_b = n;
-  uint32_t t0 = now();
+  uint32_t t0 = ga.cl & 63 ? 0 : now();
   rg_clut = n ? rgCopy(CLUTADDR(), n) : 0;
   if (rg_clut) ga.cl++;
-  ga.us_p += now() - t0;
+  if (t0) ga.us_p += (now() - t0) * 64;
 }
 // Draws that do not go through regDraw: a curve or the draws of a sublist the sublist memory applied without
 // walking. They leave the frame incomplete.
