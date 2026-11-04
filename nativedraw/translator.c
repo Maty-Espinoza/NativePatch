@@ -462,12 +462,17 @@ static void t3Gen(const T3 *t, const float *x, float u0, float v0, const float *
 static int trVerts(RFrame *f, RDraw *d, TV *o, float tw, float th, uint32_t col0, const float *sc, uint32_t *nout, const T3 *t) {
   static const uint8_t s4[4] = { 0, 1, 2, 4 }, cs[8] = { 0, 0, 0, 0, 2, 2, 2, 4 };
   uint32_t vt = d->vt, tc = vt & 3, ct = vt >> 2 & 7, nt = vt >> 5 & 3, pt = vt >> 7 & 3, sz = 0, al = 1, s;
+  static uint32_t lvt = ~0u, lsz, lt, lc, lp, ln;  // the layout of the last vertex type
   uint32_t otc = 0, ocol = 0, opos = 0, onrm = 0;
+  if (vt == lvt) { sz = lsz; otc = lt; ocol = lc; opos = lp; onrm = ln; }
+  else {
   // FLD: n components of size bytes, aligned to size (o: offset). Order: texture, color, normal, position
 #define FLD(n, size, o) s = (size); if (s) { sz = (sz + s - 1) & ~(s - 1); o = sz; sz += (n) * s; if (s > al) al = s; }
   FLD(2, s4[tc], otc); FLD(1, cs[ct], ocol); FLD(3, s4[nt], onrm); FLD(3, s4[pt], opos);
 #undef FLD
   sz = (sz + al - 1) & ~(al - 1);
+  lvt = vt; lsz = sz; lt = otc; lc = ocol; lp = opos; ln = onrm;
+  }
   if (!sz || !pt) return T_VERT;
   const uint8_t *vb = f->a + d->voff - 1, *ib = d->ioff ? f->a + d->ioff - 1 : 0;  // (offsets + 1; 0: absent)
   uint32_t ix = d->vt >> 11 & 3, n = 0;
@@ -990,6 +995,8 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
   int res = T_OK;
   static struct { uint32_t clut, c5, ne, off; } pc[128];  // palettes translated in this frame, by loaded palette and 0xC5
   sceClibMemset(pc, 0, sizeof pc);
+  float sc[4];  // scissor of the state set (a draw sharing it keeps it, like mat)
+  uint32_t mat = 0;
   // three passes: of the first ord draws, 0 those to intermediate images and 1 those to the surface; 2 the rest, in order
   for (uint32_t pass = 0; pass < 3 && res == T_OK; pass++)
   for (uint32_t i = 0; i < f->nd && res == T_OK; i++) {
@@ -1005,7 +1012,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     DEV(t_us[4] += now() - tb; tb = now();)
     if ((clr & 1) && !(clr & 0x700)) continue;  // clear of nothing
     int self = 0;  // (the draw reads the image it draws on)
-    uint32_t extra = 0, mat = (RE(e, 0x55) & 0xFFFFFF) | (RE(e, 0x58) & 0xFF) << 24;
+    uint32_t extra = 0;
     int same = pd && !(clr & 1) && pd->st == d->st && pd->vt == d->vt && pd->prim == d->prim && pd->toff == d->toff && pd->clut == d->clut &&
                pd->clen == d->clen && pd->woff == d->woff && pd->moff == d->moff && pd->loff == d->loff;
     if (!same) key = clr & 1 ? 0 : blendKey(e);
@@ -1052,16 +1059,20 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
       sceGxmTextureSetVAddrMode(&t, twr >> 8 & 1 ? SCE_GXM_TEXTURE_ADDR_CLAMP : SCE_GXM_TEXTURE_ADDR_REPEAT);
     }
     DEV(t_us[1] += now() - tb; tb = now();)
-    uint32_t n = 0, d4 = RE(e, 0xD4), d5 = RE(e, 0xD5);
-    float sc[4] = { 2.0f * (d4 & 0x3FF), 2.0f * (d4 >> 10 & 0x3FF), 2.0f * ((d5 & 0x3FF) + 1), 2.0f * ((d5 >> 10 & 0x3FF) + 1) };
-    if (!(d5 & 0xFFFFF)) sc[0] = sc[1] = -1e9f, sc[2] = sc[3] = 1e9f;  // (no saved scissor: not clipped)
-    uint32_t rg = RE(e, 0x16);  // the region's end (never set: 0) is one more scissor edge
-    if (rg & 0xFFFFF) {
-      float rx = 2.0f * ((rg & 0x3FF) + 1), ry = 2.0f * ((rg >> 10 & 0x3FF) + 1);
-      if (rx < sc[2]) sc[2] = rx;
-      if (ry < sc[3]) sc[3] = ry;
+    uint32_t n = 0;
+    if (!same) {
+      uint32_t d4 = RE(e, 0xD4), d5 = RE(e, 0xD5);
+      mat = (RE(e, 0x55) & 0xFFFFFF) | (RE(e, 0x58) & 0xFF) << 24;
+      sc[0] = 2.0f * (d4 & 0x3FF); sc[1] = 2.0f * (d4 >> 10 & 0x3FF); sc[2] = 2.0f * ((d5 & 0x3FF) + 1); sc[3] = 2.0f * ((d5 >> 10 & 0x3FF) + 1);
+      if (!(d5 & 0xFFFFF)) sc[0] = sc[1] = -1e9f, sc[2] = sc[3] = 1e9f;  // (no saved scissor: not clipped)
+      uint32_t rg = RE(e, 0x16);  // the region's end (never set: 0) is one more scissor edge
+      if (rg & 0xFFFFF) {
+        float rx = 2.0f * ((rg & 0x3FF) + 1), ry = 2.0f * ((rg >> 10 & 0x3FF) + 1);
+        if (rx < sc[2]) sc[2] = rx;
+        if (ry < sc[3]) sc[3] = ry;
+      }
+      if (w3d) t3Set(f, d, e, &t3);
     }
-    if (w3d) t3Set(f, d, e, &t3);
     // (each vertex can become at most 22 when clipped; a draw that big goes straight to tv)
     TV *w = d->n * 22 + 8 <= sizeof ts / sizeof *ts ? ts : o + nv;
     uint32_t room = w == ts ? sizeof ts / sizeof *ts : TV_N - nv;
