@@ -12,7 +12,7 @@ every conversation. The documentation for humans is in `../../dev/`.
 3. The latest conversation summary of the claude.ai project (`claude/resumen_conversacion_*.md`) and `../../../TODO.md`:
    they say where everything stands and what comes next.
 4. Depending on the task: `environment.md` (building: container, Mac VM, WSL, CI), `relay.md` (sending files to the Vita
-   and bringing back logs), `stage3-plan.md` (plan and results of the current stage), and from `../../dev/en/`:
+   and bringing back logs), `stage3-plan.md` (plan and results of the current stage), `perf-loop.md` (performance work on the PC), and from `../../dev/en/`:
    `how-it-works.md`, `logs-and-switches.md`, `dumps.md`, `findings.md`, `versions.md`.
 
 ## Files
@@ -23,6 +23,7 @@ every conversation. The documentation for humans is in `../../dev/`.
 | `environment.md` | Build environments and tools (`tools/`), the three tests |
 | `relay.md` | The relay with the Vita (`tools/vitabridge.py`): file protocol, what to do and what not to do |
 | `stage3-plan.md` | Stage 3: plan, steps, what was learned in each test version and status |
+| `perf-loop.md` | The performance loop on the PC: what `tools/perf/` measures, the KEEP/REVERT verdict and one iteration step by step (also the prompt of `tools/perf/ai_loop.sh`) |
 
 ## Languages
 The documents in `docs/agent/` exist only in English. Those in `docs/dev/` exist in English (`en/`) and Spanish (`es/`)

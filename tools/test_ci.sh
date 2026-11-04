@@ -2,7 +2,7 @@
 # Automatic test (GitHub, .github/workflows/ci.yml): no functional regression. Runs the capturer test on ARM under qemu
 # (nativedraw/capture_test.c decides pass/fail), the log parsers against tests/run/, and builds both plugins in
 # production (PROD=1, on a copy of nativelink so a dev build in the repo does not mix with it).
-# Needs: tools/setup.sh done, and apt packages qemu-user and gcc-arm-linux-gnueabihf (the capturer test uses
+# Needs: tools/setup.sh done, and apt packages qemu-user and gcc-arm-linux-gnueabihf (the capturer test and bench use
 # the Linux libc, which vitasdk does not have).
 # Usage: sh tools/test_ci.sh
 set -e
@@ -13,6 +13,11 @@ for d in $VH/include/psp2* $VH/include/vitasdk*; do ln -s $d $B/inc/; done  # (o
 echo "== capturer"
 (cd $R/nativedraw && arm-linux-gnueabihf-gcc -static -O2 -mthumb -mfpu=neon -mfloat-abi=hard -w -I$B/inc -o $B/prueba capture_test.c)
 $(command -v qemu-arm-static || command -v qemu-arm) $B/prueba
+
+echo "== capturer bench (builds and runs one scene)"
+arm-linux-gnueabihf-gcc -static -O2 -mthumb -mfpu=neon -mfloat-abi=hard -w -I$B/inc -o $B/bench $R/tools/perf/capture_bench.c
+$(command -v qemu-arm-static || command -v qemu-arm) $B/bench rr_race | grep -q "complete=39" || { echo "FAIL: capture_bench"; exit 1; }
+echo "ok   capture_bench"
 
 echo "== log parsers"
 C=$R/tests/run; X=$B/corrida

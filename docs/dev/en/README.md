@@ -13,6 +13,7 @@ To understand NativePatch without knowing anything beforehand. Spanish version: 
 | — | `dumps.md` | Frame dumps: levels, files, how to read them with `tools/dump.py`, replay on the Vita |
 | — | `nptest.md` | The synthetic 2D battery: scenes, rare techniques, how to run it on the Vita and on a PC |
 | — | `adrenaline.md` | What you need to know about Adrenaline: plugin loading, how it draws, memory map, PSP–ARM channel |
+| — | `performance-plan.md` | The single list of performance work towards 60 fps, in order, with how each item is verified (bench on the PC or the Vita) |
 | — | `versions.md` | Version rules, commit history and equivalence with the old names (GePatch, gepresent) |
 
 How the project is worked on (flow, environments, tests): `../../agent/en/`. Version-by-version history:

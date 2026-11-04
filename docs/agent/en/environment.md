@@ -66,6 +66,7 @@ GitHub release built by `.github/workflows/toolchain.yml` on push.
 | `phase1_analysis.py <folder>...` | Summarizes `nativedraw_frames.log` and `nativedraw_late.log` (extreme log level): fps, slow frames and the cost of each part per frame |
 | `prof_summary.py <run> [from_s to_s]` | Ranks the `prof` lines of the extreme log level: where each frame goes, per piece (`../../dev/en/logs-and-switches.md`) |
 | `bottleneck.py <run> [from_s to_s]` | What limits the HD frames, second by second: translator, GPU, no new frame; translator parts, pixels per program, capturer (`../../dev/en/logs-and-switches.md`) |
+| `perf/bench.sh [--save] [scene]` | Performance bench of the capturer and the record on ARM under qemu (`perf/capture_bench.c`): per scene, a deterministic estimate of Vita microseconds from the memory counters and the CPU time under qemu, compared with `perf/baseline.json`. `perf/iterate.sh [--keep]` adds the capturer test and prints KEEP/REVERT; `perf/ai_loop.sh [n]` runs Claude Code unattended on it (`perf-loop.md`) |
 | `dump.py <dump folder> [K]` | Draws a dumped frame on the PC imitating the GE and compares it with the normal image and the Vita's (`../../dev/en/dumps.md`). Needs numpy and Pillow |
 
 ## Tests
@@ -76,6 +77,7 @@ Rules: `good-practices.md` §7. When to run them: `workflow.md` §3.
 | Automatic: no functional regression | `sh tools/test_ci.sh` | `.github/workflows/ci.yml`, or anywhere after `setup.sh` with the apt packages `qemu-user` and `gcc-arm-linux-gnueabihf` |
 | Local: performance did not regress | `sh tools/test_local.sh <run> [ref]` (`run_summary.py --check [--ref]`) | PC, on a saved run |
 | Execution: components communicate | `python3 tools/test_link.py <run> [version.txt]` | PC, on the logs after a Vita run |
+| Performance on the PC (not one of the three: a filter before the Vita) | `sh tools/perf/bench.sh`, `sh tools/perf/iterate.sh` | PC, same packages as the capturer test; `perf-loop.md` |
 
 `test_ci.sh` runs the capturer test, the parsers against the `tests/run/` fixture (and a damaged copy, which must
 fail) and the production builds.

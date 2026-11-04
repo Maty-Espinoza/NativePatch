@@ -6,6 +6,7 @@ what was done is in `CHANGELOG.md`. Updated 2026-11-03 (NativeLink 0.0.6 + Nativ
 `docs/agent/en/stage3-plan.md`.
 
 ## Next
+- [ ] **Performance work follows `docs/dev/en/performance-plan.md`** (one ordered list, 2026-11-03): first A.1 `cap_split` on 0.0.16.5 in the crowd and A.2 `data life`, then B.1-B.5. Bench on the PC: `tools/perf/` (`docs/agent/en/perf-loop.md`).
 - [ ] **Measure Ridge Racer without the high clocks** (delete or set `no` in `ux0:data/nativedraw/clocks`): 0.0.15 was only tested with CPU 444 and crossbar 166.
 - [ ] **High clocks as an option of the L+R+START menu** (user, 2026-11-03): a plan B, the goal is not to need them. Today a development switch: production builds run at Adrenaline's clocks.
 - [ ] **Other games with 0.0.15** (KOF 96, Metal Slug XX, Retro City, Street Fighter, Gran Turismo): only Ridge Racer was tested with CPU and GPU in parallel. A GPU slower than the CPU now waits inside the hook instead of skipping the frame.

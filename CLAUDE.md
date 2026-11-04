@@ -28,6 +28,8 @@ Everything else is indexed in `docs/agent/en/README.md`.
   no functional regression), local (`tools/test_local.sh`, performance), execution (`tools/test_link.py`, the components
   communicate on a Vita run). Every feature or bug fixed adds or changes a test in the cheapest kind. A failing test is
   never "fixed" by changing its expectation without knowing the cause. Test tooling does not mix with the plugins.
+- Performance work follows one list, `docs/dev/en/performance-plan.md`; changes to the capturer or the record are measured
+  on the PC first with `tools/perf/` (`docs/agent/en/perf-loop.md`) and then on the Vita.
 - Ask before anything that costs many tokens, changes the test environment or was not requested. Answer in Spanish.
 
 ## General coding behavior

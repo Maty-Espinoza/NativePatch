@@ -4,6 +4,12 @@ Versions: `docs/dev/en/versions.md`. The detail of each step is in `docs/changel
 removed from there before the first release; this file stays as the summary). Versions marked "(test)" were sent to
 the Vita but not yet confirmed as a numbered release.
 
+## Tools (2026-11-03, no plugin change)
+- `tools/perf/`: performance bench of the capturer and the record on the PC (ARM under qemu, synthetic scenes shaped like Ridge Racer, 2D
+  sprites and sublists), with a deterministic estimate of Vita time from memory counters, a committed reference (`baseline.json`), the
+  KEEP/REVERT step (`iterate.sh`) and the unattended loop with Claude Code (`ai_loop.sh`, `docs/agent/en/perf-loop.md`).
+- `docs/dev/*/performance-plan.md`: the ordered plan towards 60 fps, from the analysis of the capturer on `stage3_0.0.16.4/rr1`.
+
 ## NativeDraw 0.0.15 (2026-11-03)
 Tests 0.0.15.1–0.0.15.10, checked on the Vita with Ridge Racer; NativeLink stays at 0.0.6. The whole lap goes in HD at 20-25 HD frames per
 second (about 18-22 in the crowd) with the game at 60, with the high clocks on; nitro, crowd, reflections and bloom look right.
