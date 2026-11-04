@@ -108,6 +108,16 @@ por draw reescrito por `trTris`.
 ~2500 y lo mueven de núcleo ~1400. El capturador se mueve ~650 veces por segundo. En un frame pesado corrió 42 de 54 ms: como casi no lo desplazan, esos 12 ms no son el capturador quitándole el núcleo
 (`capture_core` no los recupera); probablemente son esperas dentro de llamadas a GXM, sin medir. Los movimientos no se probaron.
 
+**Verificaciones de recorte y unión antes de C.1 (0.0.18.1-0.0.18.5, carrera, `vert_split` encendido):** en la carrera real, 20-50 % de los dibujos 3D tienen scissor menor que la superficie (los dos frames del bench lo subestiman). `trTris` gasta ~4,8 ms en ~150 dibujos.
+| Corrida | HD/s | GPU superficie ms por frame HD | Espera GPU ms/s | Traductor ms por frame HD | `tris` ms |
+|---|---|---|---|---|---|
+| Base | 19,4 | 24,6 | 15 | 39,8 | 4,8 |
+| `clip_gpu`, planos `CLP0` (con o sin region clip) | 14,6 | 42,2 | 99 | 45,2 | 1,4 |
+| `prog_swap`, solo cambio de vertex program | 20,6 | 24,5 | 17 | 37,9 | 4,8 |
+| `clip_discard`, `discard` en `nd_ftc`/`nd_fcc` + region clip | 20,5 | 26,4 | 37 | 37,1 | 1,7 |
+Los planos son exactos pero saturan la GPU, y no por el área (region clip no ayuda) ni por el cambio de programa; causa desconocida. `discard` funciona con el programa general. Visual: un momento de artefactos en el cielo en el público con `clip_discard`, causa abierta; el fallo `color_test_or_logic` de esa zona también salió con `prog_swap`. `no_join`: +1 us de CPU por dibujo (GXM 5,43 -> 6,45 us), ~0,8 ms por frame HD, GPU igual: C.1 puede dibujar sin unir.
+**Vértices con luz (`light_split`, 0.0.18.4):** pantalla de elegir auto: ~5200 vértices, ~25 ms: tipos `0x142`/`0x143` con una luz direccional y especular ~5,5 us por vértice, UV generado ~3,3 us, contra ~1,3 us del camino rápido; la luz es ~2 us de eso. En la carrera, los autos rivales suman solo ~1-3,5 ms; los picos son más vértices `0x19f`.
+
 ## Orden desde aquí (2026-11-04)
 1. **C.1 sin tocar NativeLink:** los vértices de los draws elegibles van a una zona del registro sin caché y mapeada para la GPU, como las texturas (`tx`), con la misma espera antes de reusarla, y un vertex
    shader los transforma. Sin copia de la GE. Antes de empezar: scissor en el shader (si no, `trTris` sigue en la CPU) y el costo de no unir draws (etapa 1: ~1 us de CPU y ~1,3 us de GPU por draw). Esperado:

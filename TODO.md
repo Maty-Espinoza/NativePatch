@@ -7,6 +7,7 @@ what was done is in `CHANGELOG.md`. Updated 2026-11-04 (NativeLink 0.0.6 + Nativ
 
 ## Next
 - [ ] **Performance work follows `docs/dev/en/performance-plan.md`** (one ordered list): next, section "Order from here": C.1 reading a GPU-visible copy in the record, without touching NativeLink. Bench on the PC: `tools/perf/` (`docs/agent/en/perf-loop.md`).
+- [ ] **Before C.1 (results in `performance-plan.md`):** cause of the sky artifacts in the crowd with `clip_discard`; decide the scissor method; fast path for lit vertices (car selection, `light_split`). Remove the test switches when decided (`clip_gpu`, `prog_swap`, `no_join`, `light_split`, `clip_discard`, shaders `nd_vc`, `nd_vs`, `nd_ftc`, `nd_fcc`; `cgd` warns in PROD).
 - [ ] **High clocks as an option of the L+R+START menu** (user, 2026-11-03): a plan B, the goal is not to need them. Today a development switch: production builds run at Adrenaline's clocks.
 - [ ] **Other games with 0.0.15** (KOF 96, Metal Slug XX, Retro City, Street Fighter, Gran Turismo): only Ridge Racer was tested with CPU and GPU in parallel. A GPU slower than the CPU now waits inside the hook instead of skipping the frame.
 - [ ] **GPU, the limit away from the crowd** (95 % busy, main scene ~30 ms): almost every 3D draw uses `nd_ft`, generic, with `discard`, because of the fog. A program with fog, no alpha test and no `discard`; `shacc` must be built in the container. Skip the image underneath when the frame covers it.

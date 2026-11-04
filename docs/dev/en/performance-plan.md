@@ -102,6 +102,16 @@ instructions do not explain; the cause is open. A fit on 10 s windows gives ~27 
 ~2500 and moved between cores ~1400 times. The capturer moves ~650 times per second. In a heavy frame it ran 42 of 54 ms: since it is hardly preempted, those 12 ms are not the capturer taking its core
 (`capture_core` will not recover them); they are probably waits inside GXM calls, not measured. Moves were not tested.
 
+**Scissor and join checks before C.1 (0.0.18.1-0.0.18.5, race, `vert_split` on):** real race: 20-50 % of the 3D draws have a scissor under the surface (the two bench frames understate it). `trTris` spends ~4.8 ms on ~150 draws.
+| Run | HD/s | GPU surface ms per HD frame | GPU wait ms/s | Translator ms per HD frame | `tris` ms |
+|---|---|---|---|---|---|
+| Base | 19.4 | 24.6 | 15 | 39.8 | 4.8 |
+| `clip_gpu`, clip planes `CLP0` (with or without region clip) | 14.6 | 42.2 | 99 | 45.2 | 1.4 |
+| `prog_swap`, vertex program change alone | 20.6 | 24.5 | 17 | 37.9 | 4.8 |
+| `clip_discard`, `discard` in `nd_ftc`/`nd_fcc` + region clip | 20.5 | 26.4 | 37 | 37.1 | 1.7 |
+Clip planes are exact but saturate the GPU, not because of the area (region clip does not help) or the program change; the cause is unknown. `discard` works with the generic program. Visual: one moment of artifacts in the sky in the crowd with `clip_discard`, cause open; the failure `color_test_or_logic` of that zone also appeared with `prog_swap`. `no_join`: +1 us of CPU per draw (GXM 5.43 -> 6.45 us), ~0.8 ms per HD frame, GPU unchanged: C.1 can draw without joining.
+**Lit vertices (`light_split`, 0.0.18.4):** car selection screen: ~5200 vertices, ~25 ms: types `0x142`/`0x143` with one directional light and specular ~5.5 us per vertex, generated UV ~3.3 us, against ~1.3 us of the fast path; the light is ~2 us of it. In the race, rival cars add only ~1-3.5 ms; the peaks are more `0x19f` vertices.
+
 ## Order from here (2026-11-04)
 1. **C.1 without touching NativeLink:** the vertices of eligible draws go to an uncached record area mapped for the GPU, like the textures (`tx`), with the same wait before reuse, and a vertex
    shader transforms them. No GE copy. Before starting: scissor in the shader (`trTris` stays on the CPU otherwise) and the cost of not joining draws (stage 1: ~1 us CPU, ~1.3 us GPU per draw). Expected:
