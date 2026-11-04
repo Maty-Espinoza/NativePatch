@@ -81,6 +81,10 @@ bajó a 40-46 fps. Ahora esas páginas expiran cuando ningún frame las lee. Ver
 reales (`tr_*`), las páginas pedidas al espejo (`want`) y los frames que se recorren sin grabar (`*_late`). Con eso: `regDraw` se salta
 `vsize`, `rgRows` y `rgTex` en draws 3D con la misma textura de VRAM: `rr_crowd` -16 %, `rr_race` -15 % de instrucciones.
 
+**0.0.16.7 en la Vita (`stage3_0.0.16.7/rr1`, sin relojes altos):** juego a 60 fps en todo, carrera completa en HD con 0 frames de
+imagen normal, 21-25 frames HD por segundo, 7-12 en el segundo del público; `lists` bajo 150 páginas, espejo 1,3 ms. El traductor limita
+126 de 139 s. Probado en el banco: recordar el último color de `t3Flat` (+1,9 %: los colores cambian vértice a vértice).
+
 ## C. Cambios grandes (preguntar primero al usuario)
 1. **Vértices 3D en un vertex shader de GXM leyendo la RAM del PSP mapeada para la GPU** (`sceGxmMapMemory` en 0x70000000
    funciona, etapa 1). Quita la copia de vértices del capturador (~5 ms) y la transformación en CPU del traductor (16-20 ms

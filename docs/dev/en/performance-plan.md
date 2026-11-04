@@ -75,6 +75,10 @@ game fell to 40-46 fps. Now those pages expire when no frame reads them. Verify:
 frames (`tr_*`), the pages asked of the mirror (`want`) and frames that are walked without recording (`*_late`). With them:
 `regDraw` skips `vsize`, `rgRows` and `rgTex` for 3D draws with the same VRAM texture: `rr_crowd` -16 %, `rr_race` -15 % instructions.
 
+**0.0.16.7 on the Vita (`stage3_0.0.16.7/rr1`, without high clocks):** game 60 fps in every part, whole race in HD with 0 frames
+of normal image, 21-25 HD frames per second, 7-12 in the crowd second; `lists` stays under 150 pages, mirror 1.3 ms. The translator
+limits 126 of 139 s. Tried on the bench: remembering the last `t3Flat` color (+1.9 %: colors change vertex by vertex).
+
 ## C. Large changes (ask the user first)
 1. **3D vertices in a GXM vertex shader reading the PSP RAM mapped for the GPU** (`sceGxmMapMemory` at 0x70000000 works,
    stage 1). Removes the vertex copy from the capturer (~5 ms) and the CPU transform from the translator (16-20 ms per HD
