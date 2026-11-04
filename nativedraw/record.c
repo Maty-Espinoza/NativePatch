@@ -25,7 +25,7 @@ static const char *nr_names[NR_N] = { "vertices", "swizzle_width", "texture", "x
 // (same, changed, new); unswizzled bytes; distinct textures
 // per frame
 static struct { uint32_t fr, ok, memo, rd_fail, limit, curve, draws, st, kb, cl, us, d3, clear, blend, atest, swz, fmt[16], us_e, us_v, us_t, us_p, t_b, us_l, stomped, n_late, gpu, o_b, us_o,
-  t_n[2], t_kb[2], t_dma[2], t_ord[2], t_calls, t_size[5], t_rb[6], v_dma, v_kb, v_runs, v_list, v_all, v_busy, v_full, v_us, v_wait, t_same, t_changed, t_lines, t_tex,
+  t_n[2], t_kb[2], t_dma[2], t_ord[2], t_calls, t_size[5], t_rb[6], v_dma, v_kb, v_runs, v_list, v_all, v_busy, v_full, t_same, t_changed, t_lines, t_tex,
   c_hit, c_fill, c_chg, c_rec, c_fail, c_us, skip DEV(, nr[16]); } ga, gr;
 // RN records: with fewer, the one the GPU just read would at times be the only free one, overwriting its textures
 #define RN 4
@@ -261,7 +261,7 @@ static void regInit(void) {
     SceUID b = sceKernelAllocMemBlock("nativedraw_record", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW,
                                       (sizeof(RFrame) + 0x3FFFF) & ~0x3FFFFu, 0);
     if (b < 0 || sceKernelGetMemBlockBase(b, &p) < 0) { reg_on = 0; clog("frame record: no memory (%08x)\n", b); return; }
-    rf[i] = p; rf[i]->nd = rf[i]->ne = rf[i]->na = rf[i]->flags = rf[i]->nt = rf[i]->ntx = rf[i]->nvx = rf[i]->nvp = 0;
+    rf[i] = p; rf[i]->nd = rf[i]->ne = rf[i]->na = rf[i]->flags = rf[i]->nt = rf[i]->ntx = rf[i]->nvx = 0;
     SceUID t = sceKernelAllocMemBlock("nativedraw_record_tex", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW_UNCACHE, TX_N, 0);
     if (t < 0 || sceKernelGetMemBlockBase(t, &p) < 0) { reg_on = 0; clog("frame record: no memory for textures (%08x)\n", t); return; }
     rf[i]->tx = p;
@@ -343,17 +343,14 @@ static uint32_t rgCopy(uint32_t a, uint32_t n) {
   return o + 1;
 }
 // Vertices of 3D draws from RAM wait here: nobody needs them before the list ends, and read together by DMA they cost a
-// fraction of many small reads. The queue is the record's (vp); with the record thread running it copies them while the capturer
-// walks, and the list is not released (rgVDrain) until they are in: the game may rewrite them after that.
-// rg_vq, rg_vn: queue and entries the thread may take; rg_vdone: entries it finished.
-static RFrame *volatile rg_vq;
-static volatile uint32_t rg_vn, rg_vdone;
-// Copies entries from to end of frame f, with tr as transit memory: a run of entries close to each other in memory (gaps under 2 KB) goes by DMA once and is then
+// fraction of many small reads. vp: where to read (s), where they go (d) and how many bytes.
+#define VP_N 1024
+static struct { uint32_t s, n; uint8_t *d; } vp[VP_N];
+static uint32_t vpn;
+// Copies what waits: a run of entries close to each other in memory (gaps under 2 KB) goes by DMA once and is then
 // handed out piece by piece; a run under 4 KB is read directly, where a DMA call costs more than the bytes
-static void rgVFlush(RFrame *f, uint8_t *tr, uint32_t from, uint32_t vpn) {
-  __typeof__(f->vp[0]) *vp = f->vp;
-  DEV(uint32_t t0 = now();)
-  for (uint32_t i = from, j; i < vpn; i = j) {
+static void rgVFlush(void) {
+  for (uint32_t i = 0, j; i < vpn; i = j) {
     uint32_t lo = vp[i].s, hi = lo + vp[i].n;
     for (j = i + 1; j < vpn; j++) {
       uint32_t a = vp[j].s < lo ? vp[j].s : lo, b = vp[j].s + vp[j].n > hi ? vp[j].s + vp[j].n : hi;
@@ -361,20 +358,11 @@ static void rgVFlush(RFrame *f, uint8_t *tr, uint32_t from, uint32_t vpn) {
       lo = a; hi = b;
     }
     int dma = hi - lo >= 4096;
-    if (dma) { sceDmacMemcpy(tr, (const void *)PSP(lo), hi - lo); ga.v_dma++; ga.v_kb += hi - lo; }
-    for (uint32_t k = i; k < j; k++) sceClibMemcpy(vp[k].d, dma ? tr + vp[k].s - lo : (const uint8_t *)PSP(vp[k].s), vp[k].n);
+    if (dma) { sceDmacMemcpy(rg_ord, (const void *)PSP(lo), hi - lo); ga.v_dma++; ga.v_kb += hi - lo; }
+    for (uint32_t k = i; k < j; k++) sceClibMemcpy(vp[k].d, dma ? rg_ord + vp[k].s - lo : (const uint8_t *)PSP(vp[k].s), vp[k].n);
     ga.v_runs++;
   }
-  DEV(ga.v_us += now() - t0;)
-}
-static int rg_thr;
-// (capturer) Waits for the queue of the record being written to be copied and empties it. An incomplete frame copies nothing more.
-static void rgVDrain(void) {
-  RFrame *f = rf[rg_w];
-  rg_vn = f->nvp;
-  if (rg_thr) { DEV(uint32_t t0 = now();) while (rg_vdone != rg_vn) sceKernelDelayThread(50); DEV(ga.v_wait += now() - t0;) }
-  else if (!f->flags) rgVFlush(f, rg_ord, 0, f->nvp);
-  f->nvp = 0; rg_vn = 0; rg_vdone = 0;
+  vpn = 0;
 }
 // Reserves n bytes for the vertices at address s and queues them: with gpu, at the end of tx if they fit, otherwise in
 // area a. Value for voff; 0 if they do not fit (R_LIMIT).
@@ -382,19 +370,15 @@ static uint32_t rgVLater(uint32_t s, uint32_t n, int gpu) {
   RFrame *f = rf[rg_w];
   uint32_t o = (f->na + 15) & ~15u, m = (n + 15) & ~15u;
   if (gpu && f->ntx + f->nvx + m <= TX_N) {
-    if (f->nvp == VP_N) rgVDrain();
+    if (vpn == VP_N) rgVFlush();
     f->nvx += m;
-    f->vp[f->nvp].s = s; f->vp[f->nvp].d = f->tx + TX_N - f->nvx; f->vp[f->nvp++].n = n;
-    __sync_synchronize();
-    rg_vq = f; rg_vn = f->nvp;
+    vp[vpn].s = s; vp[vpn].d = f->tx + TX_N - f->nvx; vp[vpn++].n = n;
     return VX | (TX_N - f->nvx);
   }
   ga.v_full += gpu;
   if (o + n > RA_N) { DEV(if (p_on) pAdd(P_X_VERT, 0);) f->flags |= R_LIMIT; return 0; }
-  if (f->nvp == VP_N) rgVDrain();
-  f->vp[f->nvp].s = s; f->vp[f->nvp].d = f->a + o; f->vp[f->nvp++].n = n;
-  __sync_synchronize();
-  rg_vq = f; rg_vn = f->nvp;
+  if (vpn == VP_N) rgVFlush();
+  vp[vpn].s = s; vp[vpn].d = f->a + o; vp[vpn++].n = n;
   f->na = o + n;
   return o + 1;
 }
@@ -575,20 +559,14 @@ static void regPend(void) {
   DEV(if (rg_pend == k) rgPubNote(k);)
   if (rg_pend == k) { rg_pub = k; rg_pend = -1; }  // (the capturer may have replaced it meanwhile)
 }
-// Thread that finishes the frames: copies the waiting vertices, and copies and sorts VRAM textures, outside the capturer, which must keep up with the lists.
+// Thread that finishes the frames: copies and sorts VRAM textures outside the capturer, which must keep up with the lists.
 // rg_work: the record it is writing, kept from the capturer.
+static int rg_thr;
 static int recThread(SceSize args, void *argp) {
   for (;;) {
-    uint32_t a = rg_vdone, b = rg_vn;
-    if ((int)(b - a) > 0 && rg_vdone == a) {  // (a stale a would mean the queue was emptied in between)
-      RFrame *f = rg_vq;
-      if (!f->flags) rgVFlush(f, rg_ord2, a, b);
-      rg_vdone = b;
-      continue;
-    }
     if ((rg_work = rg_pend) >= 0) regPend();
     rg_work = -1;
-    sceKernelDelayThread(100);
+    sceKernelDelayThread(200);
   }
   return 0;
 }
@@ -787,7 +765,7 @@ static void regXfer(uint32_t s, uint32_t t, uint32_t bp) {
 // copies the loaded palette into it again.
 static void regFlip(uint32_t fb, uint32_t fbw, uint32_t draws_counted) {
   DEV(uint32_t tv = PT(), tc = CST();)
-  rgVDrain();
+  rgVFlush();
   DEV(PA(P_C_VFLUSH, tv); CSA(CS_VFL, tc);)
   RFrame *f = rf[rg_w];
   if (rg_hash[rg_w] && f->nvx) sceClibMemset(rg_hash[rg_w] + ((TX_N - f->nvx) >> 7), 0, ((f->nvx >> 7) + 1) * sizeof *rg_hash[rg_w]);  // (no sorted texture is there now)
@@ -833,7 +811,7 @@ static void regFlip(uint32_t fb, uint32_t fbw, uint32_t draws_counted) {
   if (!(f->flags & R_MEMO)) { sceClibMemset(rt_pg, 0, sizeof rt_pg); sceClibMemset(want_now, 0, sizeof want_now); wantExpire(); rt_nb = 0; last_fb = ~0u; }
   const uint8_t *pal = rg_clut ? f->a + rg_clut - 1 : 0;
   f = rf[rg_w];
-  f->nd = f->ne = f->na = f->flags = f->draws_seen = f->nt = f->ntx = f->nvx = f->nvp = f->dv = f->nimg = 0;
+  f->nd = f->ne = f->na = f->flags = f->draws_seen = f->nt = f->ntx = f->nvx = f->dv = f->nimg = 0;
   tx_lo = 0;
   rg_t = 0;
   // The presenter did not take the frame before this one: recording another is wasted, and a capturer that keeps up does

@@ -44,7 +44,7 @@ was paid for nothing. The capturer's 24 ms are, roughly: vertex copy ~5-6 ms (`r
    model does not see it: measure the copy routine inside the bench with a microbenchmark line) and then Vita (`vflush`).
 2. **Publish `SB[3]` before `rgVFlush`** (A.1: only 1-2 ms in frames that complete): today the game waits at the gate for the vertex copy too. Removes up to ~6 ms of
    gate per frame at no cost. Condition: A.2 shows vertices live at least one frame. Verify: Vita (`gate_us`, `vertex_out`).
-3. **Vertex and RAM-texture copies on another core** (the `record` thread already exists): the copy of frame N runs while
+3. **Vertex and RAM-texture copies on another core: tried for vertices, discarded (0.0.19.1-0.0.19.2).** Copying after the list is released deforms the geometry: the game rewrites the vertices. Copying during the walk and waiting at the end of the list gave no gain (complete frames 30.3 -> 29, the capturer waits 0.7-2 ms, runs too small for DMA) and left some deformed triangles, cause not found. The list cannot be released before its vertices are copied, so this wait does not go away. Original idea (the `record` thread already exists): the copy of frame N runs while
    the capturer walks frame N + 1. Same latency, double throughput. Verify: Vita (`capture us/f`, `complete`).
 4. **Adaptive gate**: when the frame is already incomplete (R_SKIP, behind, record off) NativeDraw sets a bit in
    `SB[0x4A]` and NativeLink skips the wait for that frame: the game keeps 60 fps while the Vita drops the frame. Risk:
@@ -123,7 +123,7 @@ Clip planes are exact but saturate the GPU, not because of the area (region clip
 Left on the CPU per HD frame: rear-view mirror ~1500 vertices (scissor 150,10 to 330,48) and other vertex types ~500. Marked vertices refused by the translator read uncached memory (177-207 ns per word against ~15), so a draw must not be marked and then refused. The capturer's copy to `tx` shows no clear cost in the race.
 
 ## Order from here (2026-11-04)
-1. **Capturer in the crowd (B.3):** it falls behind there: 7-10 complete frames per second, and lists read late give frames that fail in the translator (1 to 8 per run), each shown as the normal image for several game frames.
+1. **GPU (C.3), started first by the user:** the capturer in the crowd waits; B.3 failed and B.9 is the remaining idea there. It falls behind there: 7-10 complete frames per second, and lists read late give frames that fail in the translator (1 to 8 per run), each shown as the normal image for several game frames.
 2. **GPU (C.3):** fewer pixels (9.4 screens per frame). In the normal race translator and GPU take about the same, ~33 ms.
 3. **Rear-view mirror on the GPU:** not with `CLP0` or `discard`; `sceGxmSetRegionClip` granularity is untested.
 4. **C.2 only if the capturer limits after B.3.**

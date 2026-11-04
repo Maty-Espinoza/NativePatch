@@ -376,7 +376,7 @@ static int reg_on, reg_big;  // frame record (switch draw); last frame had more 
 // L+R+SELECT dump and used by record.c
 volatile uint32_t nd_exact_until;
 DEV(volatile uint32_t nd_dump_mark;)  // a GE NOP carrying 0x4E5044 asks for a dump (NPTEST); dumpTick takes it
-static void regDraw(uint32_t n, uint32_t type, uint32_t vt, uint32_t idx), regClut(uint32_t d), regMemo(uint32_t draws), rgVDrain(void);
+static void regDraw(uint32_t n, uint32_t type, uint32_t vt, uint32_t idx), regClut(uint32_t d), regMemo(uint32_t draws), rgVFlush(void);
 // PRIM (command 0x04, d: count and primitive type): records the draw, counts its class and the state changes since
 // the previous one, advances vaddr/iaddr, notes new textures, requests VRAM textures from the mirror and marks the
 // render target so it is not requested as data
@@ -1144,7 +1144,7 @@ static void walk(void) {
     // at all levels (NativeLink uses it) and before SB[3]: never the captured list with the stale sample
     lifeTake(l);
     DEV(uint32_t tv = CST();)
-    if (reg_on) rgVDrain();
+    if (reg_on) rgVFlush();
     DEV(CSA(CS_VFL, tv);)
     capt = l->ord; SB[3] = capt; qh++; acc.lists++;
     DEV(listDone(l);)
@@ -1567,7 +1567,7 @@ static int repThread(SceSize args, void *argp) {
       if (!level) goto sync;  // (minimum: only this line and the vram and sync one)
       if (reg_on) {  // frame record
         uint32_t g = gr.fr ? gr.fr : 1, dd = gr.draws ? gr.draws : 1;
-        clog("  3D vertices (per frame): runs %u, by DMA %u (%u KB read) | draws %u, near the list %u | not for the GPU: record busy %u, no room %u | copy us %u, capturer waits us %u\n", gr.v_runs / g, gr.v_dma / g, gr.v_kb / g >> 10, gr.v_all / g, gr.v_list / g, gr.v_busy / g, gr.v_full / g, gr.v_us / g, gr.v_wait / g);
+        clog("  3D vertices (per frame): runs %u, by DMA %u (%u KB read) | draws %u, near the list %u | not for the GPU: record busy %u, no room %u\n", gr.v_runs / g, gr.v_dma / g, gr.v_kb / g >> 10, gr.v_all / g, gr.v_list / g, gr.v_busy / g, gr.v_full / g);
 #ifdef NP_DEV
         char nb[300]; int nk = 0; nb[0] = 0;
         for (int i = 0; i < NR_N; i++) if (gr.nr[i]) nk += sceClibSnprintf(nb + nk, sizeof nb - nk, " %s=%u", nr_names[i], gr.nr[i]);

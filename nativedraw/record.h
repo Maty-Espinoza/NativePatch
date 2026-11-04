@@ -25,7 +25,6 @@ static const uint8_t RI[256] __attribute__((unused)) = {
 #define RE_N 1024         // states per frame
 #define RA_N (512 << 10)  // vertices, indices and palettes per frame
 #define TN_N 256          // textures per frame
-#define VP_N 2048         // vertex copies waiting per frame
 // A draw: st = index of its state in e[]; prim, n, vt = GE type, count and vertex type; voff/vlen = vertices
 // in a[], offset + 1, or with VX their offset in tx, where the GPU reads them (RV); ioff/clut/toff: offset + 1 (0: absent) of indices and palette in a[] and of the texture in tx; clen: palette
 // bytes. 3D, also offset + 1 in a[] (GE words): woff world (12), moff view, projection and texture (12 + 16 + 12), loff
@@ -35,7 +34,6 @@ typedef struct { uint16_t st, prim; uint32_t n, vt, voff, vlen, ioff, clut, clen
 typedef struct {
   uint32_t frame, fb, fbw, nd, ne, na, flags, draws_seen, nt, ntx;  // flags: reasons for being incomplete (R_*)
   uint32_t nvx;                   // bytes at the end of tx taken by vertices the GPU reads
-  uint32_t nvp;                   // copies waiting in vp
   uint32_t mir, mirf;             // mirror copy the list was read with and last finished at publish time
   uint8_t *tx;                    // copied textures (uncached LPDDR, the GPU reads them from here): ntx bytes
   uint32_t ta[TN_N], tn[TN_N], to[TN_N];  // textures of this frame: address, bytes (| swizzle << 31), offset
@@ -48,7 +46,6 @@ typedef struct {
   RDraw d[RD_N];
   uint32_t e[RE_N][NRS];
   uint8_t a[RA_N] __attribute__((aligned(16)));
-  struct { uint32_t s, n; uint8_t *d; } vp[VP_N];  // vertices still to copy: where to read (s), how many bytes, where they go
 } RFrame;
 static inline uint32_t RE(const uint32_t *e, uint32_t r) {  // value of register r in state e (0 if not saved)
   return RI[r] ? e[RI[r] - 1] : 0;

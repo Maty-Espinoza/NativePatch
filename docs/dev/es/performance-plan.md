@@ -47,7 +47,7 @@ del frame.
 2. **Publicar `SB[3]` antes de `rgVFlush`** (A.1: solo 1-2 ms en los frames que se completan): hoy el juego espera en la compuerta también la copia de vértices. Quita hasta
    ~6 ms de compuerta por frame sin costo. Condición: A.2 muestra que los vértices viven al menos un frame. Verificar: Vita
    (`gate_us`, `vertex_out`).
-3. **Copias de vértices y texturas de RAM en otro core** (el hilo `record` ya existe): la copia del frame N corre mientras el
+3. **Copias de vértices y texturas de RAM en otro core: probado con vértices y descartado (0.0.19.1-0.0.19.2).** Copiar después de soltar la lista deforma la geometría: el juego reescribe los vértices. Copiar durante el recorrido y esperar al final de la lista no dio ganancia (frames completos 30,3 -> 29, el capturador espera 0,7-2 ms, tramos muy chicos para DMA) y dejó algunos triángulos deformados, sin causa encontrada. La lista no se puede soltar antes de copiar sus vértices, así que esa espera no desaparece. Idea original (el hilo `record` ya existe): la copia del frame N corre mientras el
    capturador recorre el frame N + 1. Misma latencia, el doble de capacidad. Verificar: Vita (`capture us/f`, `complete`).
 4. **Compuerta adaptativa**: cuando el frame ya está incompleto (R_SKIP, behind, registro apagado) NativeDraw pone un bit en
    `SB[0x4A]` y NativeLink no espera ese frame: el juego sigue a 60 fps mientras la Vita descarta el frame. Riesgo: listas
@@ -129,7 +129,7 @@ Los planos son exactos pero saturan la GPU, y no por el área (region clip no ay
 Quedan en CPU por frame HD: retrovisor ~1500 vértices (scissor 150,10 a 330,48) y otros tipos ~500. Los vértices marcados que el traductor rechaza leen memoria sin caché (177-207 ns por palabra contra ~15), así que un dibujo no debe marcarse y luego rechazarse. La copia del capturador a `tx` no muestra un costo claro en carrera.
 
 ## Orden desde aquí (2026-11-04)
-1. **Capturador en el público (B.3):** ahí se atrasa: 7-10 frames completos por segundo, y las listas leídas tarde dan frames que fallan en el traductor (1 a 8 por corrida), cada uno visible como imagen normal durante varios frames del juego.
+1. **GPU (C.3), primero por decisión del usuario:** el capturador en el público queda en espera; B.3 falló y queda B.9 como idea. Ahí se atrasa: 7-10 frames completos por segundo, y las listas leídas tarde dan frames que fallan en el traductor (1 a 8 por corrida), cada uno visible como imagen normal durante varios frames del juego.
 2. **GPU (C.3):** menos píxeles (9,4 pantallas por frame). En carrera normal traductor y GPU tardan casi lo mismo, ~33 ms.
 3. **Retrovisor en la GPU:** sin `CLP0` ni `discard`; falta probar la granularidad de `sceGxmSetRegionClip`.
 4. **C.2 solo si el capturador limita después de B.3.**
