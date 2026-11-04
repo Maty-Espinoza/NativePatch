@@ -29,6 +29,10 @@ void alog(const char *fmt, ...);  // nativedraw.c
 #define LINE 1024  // surface width: twice the 512 of psp_tex (columns 960-1023 stay black)
 // process time in us
 static inline uint32_t now(void) { return sceKernelGetProcessTimeLow(); }
+#ifdef NP_DEV
+// us this thread has really run: what now() counts minus the time other threads held the core
+static uint32_t thrRun(void) { SceKernelThreadInfo i; i.size = sizeof i; return sceKernelGetThreadInfo(sceKernelGetThreadId(), &i) < 0 ? 0 : (uint32_t)i.runClocks; }
+#endif
 #include "prof.h"
 DEV(extern volatile SceUID nd_gfx_uid;)
 
@@ -294,6 +298,7 @@ static int hookTex(SceGxmContext *c, unsigned int i, const SceGxmTexture *t) {
 #include "dump.c"  // dumps (L+R+SELECT and automatic)
 #ifdef NP_DEV
 static uint32_t b_t0[6];  // t_us at the last line
+static uint32_t v0[2][VS_N];  // v_us at the last line
 // Once per second, what limits the HD frames (tools/bottleneck.py reads it): the deltas of b_c, of the translator's parts
 // and of the GPU per scene type (needs gpu_timer), and the pixels per program of the sampled frames.
 static void bnLog(void) {
@@ -305,6 +310,14 @@ static void bnLog(void) {
   uint32_t id = b_idle - i0, n = b_pxn - n0; i0 += id; n0 += n;
   for (int d = 0; d < 2; d++) for (int i = 0; i < BP_N; i++) { p[d][i] = b_px[d][i] - p0[d][i]; p0[d][i] += p[d][i]; }
   for (int i = 0; i < BW_N; i++) { w[i] = b_why[i] - w0[i]; w0[i] += w[i]; }
+  for (int m = 0; m < 2; m++) {
+    uint32_t x[VS_N];
+    for (int i = 0; i < VS_N; i++) { x[i] = v_us[m][i] - v0[m][i]; v0[m][i] += x[i]; }
+    uint32_t k = x[VS_FR];
+    if (k) alog("vertex split %s (us per frame of %u): state %u fast %u slow %u big %u touch %u again_fast %u again_slow %u tris %u rest %u copy %u | vertices n_fast %u n_slow %u n_big %u | "
+                "touched_kb %u draws %u | all %u run %u\n", m ? "warm" : "plain", k, x[VS_STATE] / k, x[VS_FAST] / k, x[VS_SLOW] / k, x[VS_BIG] / k, x[VS_TOUCH] / k, x[VS_AGAIN_F] / k, x[VS_AGAIN_S] / k,
+                x[VS_TRIS] / k, x[VS_REST] / k, x[VS_COPY] / k, x[VS_NF] / k, x[VS_NS] / k, x[VS_NB] / k, x[VS_TKB] / k, x[VS_DRAWS] / k, x[VS_ALL] / k, x[VS_RUN] / k);
+  }
   if (!c[B_SLOT]) return;
   alog("bottleneck: slots %u drawn %u repeated %u behind %u no_record %u normal %u | ms: translator %u gpu_wait %u | translator ms: check %u textures %u vertices %u gxm %u scenes %u | "
        "gpu ms: adrenaline %u normal %u surface %u intermediate %u idle %u\n", c[B_SLOT], c[B_DRAWN], c[B_REP], c[B_BEHIND], c[B_NOREC], c[B_NORMAL], c[B_TR] / 1000, c[B_WAIT] / 1000,
@@ -683,7 +696,7 @@ static int swOn(const char *p) {  // the file exists and does not start with "no
 // are needed and starts the presenter thread.
 void presStart(void) {
   draw_on = swOn("ux0:data/nativedraw/draw");
-  DEV(c_wanted = swOn("ux0:data/nativedraw/gpu_timer"); clk_on = swOn("ux0:data/nativedraw/clocks");)
+  DEV(c_wanted = swOn("ux0:data/nativedraw/gpu_timer"); clk_on = swOn("ux0:data/nativedraw/clocks"); v_on = swOn("ux0:data/nativedraw/vert_split");)
   repStart();
   dump_level = dumpLevel();  // dumps: off, screenshot, frame, sequence or auto
   if (dump_level == 4 && !draw_on) dump_level = 3;  // (auto needs the Vita drawing to compare)

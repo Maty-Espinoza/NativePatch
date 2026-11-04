@@ -60,6 +60,22 @@ def show_split(s):
               f'interpreter {interp:.1f}, reads shared {g("hit"):.1f} own {g("own"):.1f}, draw() {stats:.1f}, record {g("record"):.1f} (state {g("state"):.1f}, index {g("index"):.1f}, vertices {g("vertices"):.1f}, blocks {g("blocks"):.1f}, rows {g("rows"):.1f}, textures {g("textures"):.1f}), '
               f'events {g("events"):.1f}, flip {g("flip"):.1f}, vflush {g("vflush"):.1f}')
 
+def vert_split(path, t0, t1):
+    # "vertex split" lines: us per frame, weighted by frames, for plain and warm frames
+    out = {}
+    for line in open(path, errors='replace'):
+        m = re.match(r'\s*(\d+) vertex split (\w+) \(us per frame of (\d+)\): (.*)', line)
+        if not m or not t0 <= int(m[1]) / 1000 <= t1: continue
+        o = out.setdefault(m[2], {'frames': 0}); n = int(m[3]); o['frames'] += n
+        for k, x in re.findall(r'(\w+) (\d+)', m[4]): o[k] = o.get(k, 0) + n * int(x)
+    return out
+
+def show_vert(s):
+    for kind, o in sorted(s.items()):
+        n = o['frames']; print(f'  {kind}, {n} frames: ' + ', '.join(f'{k} {x / n:.0f}' for k, x in o.items() if k != 'frames'))
+        v = (o['fast'] + o['slow']) / n; a = (o['again_fast'] + o['again_slow']) / n
+        print(f'    trVerts {v:.0f} us, repeated at once {a:.0f} us; the clock adds ~0.5 us per part per draw')
+
 def split(r):
     # ms of the drawing thread's second
     work = max(r['translator'] - r['gpu_wait'], 0)
@@ -101,6 +117,8 @@ def main():
         print(f'  total {tot / len(px):.0f} ({tot / len(px) / 522:.1f} screens); on the middle program: {sum(x["s_mid"] + x["i_mid"] for x in px) * 100 / max(tot, 1):.0f} %; '
               f'image underneath: {sum(x["s_base"] for x in px) * 100 / max(tot, 1):.0f} %')
     if why: print('  why not the fast program: ' + ', '.join(f'{k} {sum(x[k] for x in why) / len(why):.0f}' for k in WN))
+    if s := vert_split(p, t0, t1):
+        print('\nvertex split, us per frame:'); show_vert(s)
     cp = os.path.join(d, 'nativedraw_capture.log')
     if os.path.exists(cp) and (s := cap_split(cp)):
         print('\ncapturer split, per frame:'); show_split(s)

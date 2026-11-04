@@ -17,6 +17,12 @@ DEV(static volatile uint32_t t_us[6];)  // us in trFrame: check, textures and pa
 // Vertices and draws in detail: see the translator detail lines of the log
 DEV(enum { TC_VIN, TC_VOUT, TC_D3, TC_CUT, TC_FLAT, TC_SCIS, TC_LIT, TC_SAME, TC_VFAST, TC_VTEX, TC_VCOL, TC_FOG, TC_ATEST, TC_BLEND, TC_L0, TC_LPT, TC_LSP, TC_ENV, TC_NC };)
 DEV(static volatile uint32_t t_c[TC_NC];)
+// Split of the vertex work (switch vert_split), on 1 HD frame in 8, in two kinds of frame that alternate: [0] as it is, [1] reading each
+// draw's data first (VS_TOUCH), so trVerts finds it in the cache. Clock reads add to each part; AGAIN repeats trVerts at once, with
+// data and code in the cache. VS_FR frames, VS_ALL us in trFrame, VS_RUN us the thread really ran.
+DEV(enum { VS_STATE, VS_FAST, VS_SLOW, VS_BIG, VS_TOUCH, VS_AGAIN_F, VS_AGAIN_S, VS_TRIS, VS_REST, VS_COPY, VS_NF, VS_NS, VS_NB, VS_TKB, VS_DRAWS, VS_FR, VS_ALL, VS_RUN, VS_N };
+    static int v_on, v_fast;
+    static volatile uint32_t v_us[2][VS_N];)
 // thousands of pixels sent per program on the sampled frames, surface [0] and intermediate images [1] (before the z test)
 DEV(enum { BP_FAST, BP_MID, BP_TEX, BP_COL, BP_BASE, BP_N };
     static volatile uint32_t b_px[2][BP_N], b_pxn;
@@ -486,6 +492,7 @@ static int trVerts(RFrame *f, RDraw *d, TV *o, float tw, float th, uint32_t col0
     float32x4_t c0 = vld1q_f32(m), c1 = vld1q_f32(m + 4), c2 = vld1q_f32(m + 8), c3 = vld1q_f32(m + 12);
     const float vs[4] = { t->sx * 2, t->sy * 2, t->sz / -131072.0f, 0 }, vt4[4] = { t->tx * 2, t->ty * 2, .5f - t->tz / 131072.0f, 1 };
     float32x4_t sv = vld1q_f32(vs), tv4 = vld1q_f32(vt4);
+    DEV(v_fast = 1;)
     float us = t->us, uo = t->uo, vsc = t->vs, vo = t->vo, ku = t->tw * itw, kv = t->th * ith;
     int flat = t->lit && (t->upd & 1), fog = t->fog, lit = t->lit;
     for (uint32_t i = 0; i < d->n; i++) {
@@ -594,6 +601,22 @@ static int trVerts(RFrame *f, RDraw *d, TV *o, float tw, float th, uint32_t col0
   *nout = n;
   return T_OK;
 }
+
+#ifdef NP_DEV
+// Reads one word per cache line of draw d's vertices and indices (vert_split). Returns the KB read
+static uint32_t trTouch(RFrame *f, const RDraw *d) {
+  static const uint8_t is[4] = { 0, 1, 2, 4 };
+  const volatile uint32_t *p = (const uint32_t *)((uint32_t)(f->a + d->voff - 1) & ~31u), *e = (const uint32_t *)(f->a + d->voff - 1 + d->vlen);
+  uint32_t b = (e - p) * 4;
+  for (; p < e; p += 8) (void)*p;
+  if (d->ioff) {
+    p = (const uint32_t *)((uint32_t)(f->a + d->ioff - 1) & ~31u); e = (const uint32_t *)(f->a + d->ioff - 1 + d->n * is[d->vt >> 11 & 3]);
+    b += (e - p) * 4;
+    for (; p < e; p += 8) (void)*p;
+  }
+  return b;
+}
+#endif
 
 // Clips triangle p to scissor sc edge by edge (Sutherland-Hodgman) in clip space (x, y are x * w, y * w), interpolating
 // the new vertices, and writes the polygon left to o as triangles. Edge 4 first cuts what is behind the camera, where
@@ -1023,6 +1046,11 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     SCE_GXM_TEXTURE_FORMAT_U4U4U4U4_ABGR, SCE_GXM_TEXTURE_FORMAT_U8U8U8U8_ABGR, SCE_GXM_TEXTURE_FORMAT_P4_ABGR,
     SCE_GXM_TEXTURE_FORMAT_P8_ABGR };
   int res = T_OK;
+  // VT(k): adds the time since the last mark to part k of the vertex split
+#define VT(k) do { if (vm) { uint32_t x_ = now(); vu[k] += x_ - vc; vc = x_; } } while (0)
+  DEV(static uint32_t vsn; uint32_t vc = 0, vu[VS_N] = { 0 }, tkb = 0, vr0 = 0;
+      int vm = v_on && !(++vsn & 7) ? 1 + (vsn >> 3 & 1) : 0;
+      if (vm) vr0 = thrRun();)
   static struct { uint32_t clut, c5, ne, off; } pc[128];  // palettes translated in this frame, by loaded palette and 0xC5
   sceClibMemset(pc, 0, sizeof pc);
   float sc[4];  // scissor of the state set (a draw sharing it keeps it, like mat)
@@ -1088,7 +1116,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
       sceGxmTextureSetUAddrMode(&t, twr & 1 ? SCE_GXM_TEXTURE_ADDR_CLAMP : SCE_GXM_TEXTURE_ADDR_REPEAT);
       sceGxmTextureSetVAddrMode(&t, twr >> 8 & 1 ? SCE_GXM_TEXTURE_ADDR_CLAMP : SCE_GXM_TEXTURE_ADDR_REPEAT);
     }
-    DEV(t_us[1] += now() - tb; tb = now();)
+    DEV(t_us[1] += now() - tb; tb = now(); vc = tb;)
     uint32_t n = 0;
     if (!same) {
       uint32_t d4 = RE(e, 0xD4), d5 = RE(e, 0xD5);
@@ -1106,10 +1134,13 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     // (each vertex can become at most 22 when clipped; a draw that big goes straight to tv)
     TV *w = d->n * 22 + 8 <= sizeof ts / sizeof *ts ? ts : o + nv;
     uint32_t room = w == ts ? sizeof ts / sizeof *ts : TV_N - nv;
+    DEV(VT(VS_STATE); if (vm == 2) { tkb += trTouch(f, d); VT(VS_TOUCH); } v_fast = 0;)
     if ((res = trVerts(f, d, w, tw, th, mat, sc, &n, w3d ? &t3 : 0))) {
       DEV(failNote(f, i, res);)
       break;
     }
+    DEV(if (vm) { VT(w != ts ? VS_BIG : v_fast ? VS_FAST : VS_SLOW); vu[w != ts ? VS_NB : v_fast ? VS_NF : VS_NS] += d->n; vu[VS_DRAWS]++;
+          if (w == ts) { uint32_t z; trVerts(f, d, w, tw, th, mat, sc, &z, w3d ? &t3 : 0); VT(v_fast ? VS_AGAIN_F : VS_AGAIN_S); } })
     DEV(if (w3d && t3.lit) for (int i = 0; i < 4; i++) if (t3.l[i].on) { t_c[TC_L0] += d->n; t_c[TC_LPT] += t3.l[i].type ? d->n : 0; t_c[TC_LSP] += t3.l[i].comp == 1 ? d->n : 0; }
         t_c[TC_ENV] += w3d && t3.gen == 2 ? d->n : 0;
         t_c[TC_VIN] += d->n; t_c[TC_D3] += w3d; t_c[TC_LIT] += w3d && t3.lit ? d->n : 0;
@@ -1122,7 +1153,9 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     uint32_t prim = d->prim;
     if (prim < 3 && (res = trLines(w, &n, room, prim == 2))) break;
     if (prim < 3) prim = 3;
+    DEV(VT(VS_REST);)
     if (prim != 6 && (res = trTris(w, &n, room, &prim, sc, (clr & 1) || !(RE(e, 0x50) & 1), w3d))) break;
+    DEV(VT(VS_TRIS);)
     DEV(t_c[TC_VOUT] += n; t_c[TC_CUT] += n != nb; t_c[TC_SAME] += same;)
     if (!n) { pd = 0; continue; }  // (t, tw and th are this draw's now, not those of the state in the context)
     int keep = 1;  // (0: the next draw cannot share t)
@@ -1177,7 +1210,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
         dy[1] = q->y < dy[1] ? q->y : dy[1]; dy[3] = q->y > dy[3] ? q->y : dy[3];
       }
     }
-    DEV(t_us[2] += now() - tb; tb = now();)
+    DEV(VT(VS_REST); t_us[2] += now() - tb; tb = now();)
     float ar = w3d ? 0 : trArea(w, n, prim);
     if (c_on) { spx += ar; ssw += tex && d->toff && (RE(e, 0xC2) & 1); }
     static uint32_t giant;  // giant draws (over 2 screens at double size): the first 40, in detail
@@ -1246,7 +1279,9 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     if (same && rn && rp == prim && prim != 5 && w == ts) {
       if (prim == 4) { pad = 2 + (rn & 1); o[nv] = tl; o[nv + 1] = w[0]; o[nv + 2] = w[0]; }
     } else { RUN(); rv = nv; rp = prim; }
+    DEV(if (vm) vc = now();)
     if (w == ts) sceClibMemcpy(o + nv + pad, ts, n * sizeof(TV));
+    DEV(VT(VS_COPY);)
     tl = w[n - 1];
     rn += pad + n; nv += pad; pd = keep && !(clr & 1) ? d : 0;
     nv += n + extra; t_draws++;
@@ -1265,6 +1300,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     DEV(PA(P_T_END, tb);)
     cNote(cur_rt ? C_INT : C_TR, &gq_n, t_draws - d0, spx / 1000, ssw);
   }
+#undef VT
 #undef OPEN
 #undef SURF_WAIT
 #undef RUN
@@ -1272,6 +1308,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
   t_q[s] = gq;
   DEV(if (smp) { for (int a = 0; a < 2; a++) for (int i = 0; i < BP_N; i++) b_px[a][i] += bpx[a][i] / 1000; for (int k = 0; k < BW_N; k++) b_why[k] += bwy[k] / 1000; b_pxn++; })
   if (res == T_OK && disp != t_prevd) { t_prev2 = t_prevd; t_prevd = disp; }
+  DEV(if (vm) { vu[VS_TKB] = tkb >> 10; vu[VS_FR] = 1; vu[VS_ALL] = now() - ta; vu[VS_RUN] = thrRun() - vr0; for (int i = 0; i < VS_N; i++) v_us[vm - 1][i] += vu[i]; })
   DEV(t_us[5] += now() - ta;
       for (int i = 1; p_on && i < 6; i++) if ((int)(t_us[i] - ut[i]) >= 0) pAdd(P_T_CHECK + i, t_us[i] - ut[i]);)  // (t_us is zeroed every 10 s)
   if (res && !t_seen[res]++) alog("translator: first frame with '%s' on drawing\n", tnames[res]);

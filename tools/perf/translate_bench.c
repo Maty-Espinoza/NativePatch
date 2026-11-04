@@ -19,6 +19,8 @@
 // --- Vita functions replaced ---
 SceUInt32 sceKernelGetProcessTimeLow(void) { return 0; }
 SceUInt64 sceKernelGetProcessTimeWide(void) { return 0; }
+int sceKernelGetThreadInfo(SceUID t, SceKernelThreadInfo *i) { return -1; }
+SceUID sceKernelGetThreadId(void) { return 0; }
 void *sceClibMemset(void *d, int c, SceSize n) { return memset(d, c, n); }
 void *sceClibMemcpy(void *d, const void *s, SceSize n) { return memcpy(d, s, n); }
 void *sceClibMemmove(void *d, const void *s, SceSize n) { return memmove(d, s, n); }
