@@ -157,6 +157,10 @@ directa.
 - **Grabar la pantalla** (Vitastream + OBS a 60 fps) encontró los cuadros rotos de un frame que ningún volcado capturaba.
   Se usa solo cuando los volcados y logs no alcanzan.
 
+- **La GPU puede hacer el trabajo de vértices del GE:** en Ridge Racer `nd_v3` dibuja los mismos triángulos que el camino CPU (`tools/perf/tr_gv.sh`), sin errores de imagen en carrera. Límites por ahora: el retrovisor y otros tipos de vértice siguen en la CPU.
+- **Los frames guardados no son la carrera:** dieron 6-12 % de vértices con scissor y 71-87 % elegibles; la carrera dio hasta ~50 % con scissor y 54 % en la GPU.
+- **Público en Ridge Racer:** con el capturador atrasado, una lista leída tarde puede pasar como frame completo con estado basura (0x27=ade1f9). El traductor la rechaza y la imagen normal queda hasta el siguiente frame HD, 4-16 frames del juego ahí. 1 a 8 por corrida, sin relación demostrada con C.1.
+
 ## Gran Turismo y el 3D (lo que viene)
 - GT tiene ~9000–15 000 draws por frame, ~5300 con textura nueva. En GXM un draw cuesta ~1 µs sin cambios, ~2 µs con
   textura o programa nuevo, ~1,3 µs de GPU aunque no pinte [medido, etapa 1]. **Grabar GT draw por draw no entra** ni

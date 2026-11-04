@@ -118,12 +118,21 @@ por draw reescrito por `trTris`.
 Los planos son exactos pero saturan la GPU, y no por el área (region clip no ayuda) ni por el cambio de programa; causa desconocida. `discard` funciona con el programa general. Visual: un momento de artefactos en el cielo en el público con `clip_discard`, causa abierta; el fallo `color_test_or_logic` de esa zona también salió con `prog_swap`. `no_join`: +1 us de CPU por dibujo (GXM 5,43 -> 6,45 us), ~0,8 ms por frame HD, GPU igual: C.1 puede dibujar sin unir.
 **Vértices con luz (`light_split`, 0.0.18.4):** pantalla de elegir auto: ~5200 vértices, ~25 ms: tipos `0x142`/`0x143` con una luz direccional y especular ~5,5 us por vértice, UV generado ~3,3 us, contra ~1,3 us del camino rápido; la luz es ~2 us de eso. En la carrera, los autos rivales suman solo ~1-3,5 ms; los picos son más vértices `0x19f`.
 
+**C.1, primera etapa (0.0.18.6-0.0.18.8, confirmada como 0.0.19):** `nd_v3` lee la copia del registro al final de `tx`. Elegibles: tipo `0x19F`, sin índices, triángulos, tira o abanico, sombreado suave, sin luces, sin UV generada, scissor que abarca toda la imagen.
+| Carrera, por frame HD | 0.0.18.5 | 0.0.19 |
+|---|---|---|
+| Frames HD por segundo | 20,5 | 21,7 |
+| vértices, ms | ~19,5 | 13,1 |
+| traductor, ms | ~37 | 32,1 |
+| GPU, ms | ~35 | 33,2 |
+| vértices movidos por la GPU | 0 % | 54 % |
+Quedan en CPU por frame HD: retrovisor ~1500 vértices (scissor 150,10 a 330,48) y otros tipos ~500. Los vértices marcados que el traductor rechaza leen memoria sin caché (177-207 ns por palabra contra ~15), así que un dibujo no debe marcarse y luego rechazarse. La copia del capturador a `tx` no muestra un costo claro en carrera.
+
 ## Orden desde aquí (2026-11-04)
-1. **C.1 sin tocar NativeLink:** los vértices de los draws elegibles van a una zona del registro sin caché y mapeada para la GPU, como las texturas (`tx`), con la misma espera antes de reusarla, y un vertex
-   shader los transforma. Sin copia de la GE. Antes de empezar: scissor en el shader (si no, `trTris` sigue en la CPU) y el costo de no unir draws (etapa 1: ~1 us de CPU y ~1,3 us de GPU por draw). Esperado:
-   ~10-13 ms menos de traductor, hasta ~28 frames HD por segundo, donde vuelve a limitar la GPU.
-2. **GPU (C.3):** menos píxeles (9,4 pantallas por frame).
-3. **C.2 solo si el capturador pasa a ser el límite:** no limita la carrera normal, y para el público B.3 es más barato.
+1. **Capturador en el público (B.3):** ahí se atrasa: 7-10 frames completos por segundo, y las listas leídas tarde dan frames que fallan en el traductor (1 a 8 por corrida), cada uno visible como imagen normal durante varios frames del juego.
+2. **GPU (C.3):** menos píxeles (9,4 pantallas por frame). En carrera normal traductor y GPU tardan casi lo mismo, ~33 ms.
+3. **Retrovisor en la GPU:** sin `CLP0` ni `discard`; falta probar la granularidad de `sceGxmSetRegionClip`.
+4. **C.2 solo si el capturador limita después de B.3.**
 
 ## C. Cambios grandes (preguntar primero al usuario)
 1. **Vértices 3D en un vertex shader de GXM leyendo la RAM del PSP mapeada para la GPU** (`sceGxmMapMemory` en 0x70000000

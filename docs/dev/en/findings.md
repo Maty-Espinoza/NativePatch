@@ -157,6 +157,10 @@ proof.
 - **Recording the screen** (Vitastream + OBS at 60 fps) found the one-frame broken frames that no dump captured. It is
   used only when dumps and logs are not enough.
 
+- **The GPU can run the GE's vertex work:** on Ridge Racer `nd_v3` draws the same triangles as the CPU path (`tools/perf/tr_gv.sh`), with no image error in the race. Limits so far: rear-view mirror and other vertex types stay on the CPU.
+- **Frames saved from a frame or two are not the race:** they gave 6-12 % of the vertices under a scissor and 71-87 % eligible; the race gave up to ~50 % scissored and 54 % on the GPU.
+- **Crowd in Ridge Racer:** when the capturer falls behind, a late list can pass as a complete frame with garbage state (0x27=ade1f9). The translator refuses it and the normal image shows until the next HD frame, 4-16 game frames there. 1 to 8 per run, no proven link with C.1.
+
 ## Gran Turismo and 3D (what comes next)
 - GT has ~9000–15,000 draws per frame, ~5300 with a new texture. In GXM a draw costs ~1 µs without changes, ~2 µs with
   a new texture or program, ~1.3 µs of GPU even if it paints nothing [measured, stage 1]. **Recording GT draw by draw

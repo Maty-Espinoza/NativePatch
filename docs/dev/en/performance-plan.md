@@ -122,11 +122,11 @@ Clip planes are exact but saturate the GPU, not because of the area (region clip
 | vertices moved by the GPU | 0 % | 54 % |
 Left on the CPU per HD frame: rear-view mirror ~1500 vertices (scissor 150,10 to 330,48) and other vertex types ~500. Marked vertices refused by the translator read uncached memory (177-207 ns per word against ~15), so a draw must not be marked and then refused. The capturer's copy to `tx` shows no clear cost in the race.
 
-1. **C.1 without touching NativeLink:** the vertices of eligible draws go to an uncached record area mapped for the GPU, like the textures (`tx`), with the same wait before reuse, and a vertex
-   shader transforms them. No GE copy. Before starting: scissor in the shader (`trTris` stays on the CPU otherwise) and the cost of not joining draws (stage 1: ~1 us CPU, ~1.3 us GPU per draw). Expected:
-   ~10-13 ms less translator, up to ~28 HD frames per second, where the GPU limits again.
-2. **GPU (C.3):** fewer pixels (9.4 screens per frame).
-3. **C.2 only if the capturer becomes the limit:** it does not limit the normal race, and for the crowd B.3 is cheaper.
+## Order from here (2026-11-04)
+1. **Capturer in the crowd (B.3):** it falls behind there: 7-10 complete frames per second, and lists read late give frames that fail in the translator (1 to 8 per run), each shown as the normal image for several game frames.
+2. **GPU (C.3):** fewer pixels (9.4 screens per frame). In the normal race translator and GPU take about the same, ~33 ms.
+3. **Rear-view mirror on the GPU:** not with `CLP0` or `discard`; `sceGxmSetRegionClip` granularity is untested.
+4. **C.2 only if the capturer limits after B.3.**
 
 ## C. Large changes (ask the user first)
 1. **3D vertices in a GXM vertex shader reading the PSP RAM mapped for the GPU** (`sceGxmMapMemory` at 0x70000000 works,

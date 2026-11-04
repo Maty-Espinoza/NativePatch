@@ -2,16 +2,16 @@
 
 The only list of pending work. Ordered from what comes next to what can wait. Each item says where it came from
 (a document in `docs/dev/en/`, `docs/agent/en/`, `docs/changelog/en/` or the claude.ai project). Done items are removed;
-what was done is in `CHANGELOG.md`. Updated 2026-11-04 (NativeLink 0.0.6 + NativeDraw 0.0.18 confirmed). How the work is done: `docs/agent/en/workflow.md`; stage 3 plan and results:
+what was done is in `CHANGELOG.md`. Updated 2026-11-04 (NativeLink 0.0.6 + NativeDraw 0.0.19 confirmed). How the work is done: `docs/agent/en/workflow.md`; stage 3 plan and results:
 `docs/agent/en/stage3-plan.md`.
 
 ## Next
-- [ ] **Performance work follows `docs/dev/en/performance-plan.md`** (one ordered list): next, section "Order from here": C.1 reading a GPU-visible copy in the record, without touching NativeLink. Bench on the PC: `tools/perf/` (`docs/agent/en/perf-loop.md`).
-- [ ] **Before C.1 (results in `performance-plan.md`):** cause of the sky artifacts in the crowd with `clip_discard`; decide the scissor method; fast path for lit vertices (car selection, `light_split`). Remove the test switches when decided (`clip_gpu`, `prog_swap`, `no_join`, `light_split`, `clip_discard`, shaders `nd_vc`, `nd_vs`, `nd_ftc`, `nd_fcc`; `cgd` warns in PROD).
+- [ ] **Performance work follows `docs/dev/en/performance-plan.md`** (one ordered list): next, section "Order from here": the capturer in the crowd (B.3). Bench on the PC: `tools/perf/` (`docs/agent/en/perf-loop.md`).
+- [ ] **Ridge Racer crowd, late lists as complete frames:** garbage state reaches the translator (`color_test_or_logic`, `vertex_out`, `mask`), 1 to 8 frames per run. Look at why they pass as complete. The user also saw something odd in the change to the normal image there: not explained.
+- [ ] **C.1, what is left:** rear-view mirror (~1500 vertices per HD frame), lit and other vertex types, indices. Remove the `trWhy` logs when closed.
 - [ ] **High clocks as an option of the L+R+START menu** (user, 2026-11-03): a plan B, the goal is not to need them. Today a development switch: production builds run at Adrenaline's clocks.
 - [ ] **Other games with 0.0.15** (KOF 96, Metal Slug XX, Retro City, Street Fighter, Gran Turismo): only Ridge Racer was tested with CPU and GPU in parallel. A GPU slower than the CPU now waits inside the hook instead of skipping the frame.
 - [ ] **GPU, the limit away from the crowd** (95 % busy, main scene ~30 ms): almost every 3D draw uses `nd_ft`, generic, with `discard`, because of the fog. A program with fog, no alpha test and no `discard`; `shacc` must be built in the container. Skip the image underneath when the frame covers it.
-- [ ] **3D vertices in a GXM vertex shader** (matrices, lights, texgen and fog as uniforms): the rest of the CPU cost, ~15-25 ms per frame and more in the crowd (17,000 vertices). Scissor with clip planes in the shader. A large change: ask first. Joined draws already leave ~250 state changes per frame.
 - [ ] **Ridge Racer, capturer in the crowd:** ~16 ms per frame at 444 MHz (~3500 draws), `behind` 6-12 per second. Without the high clocks it does not fit.
 - [ ] **Memory:** under 1 MB free in one go after start, dumps fail (`peek` replaces them for now). Look at what can go (4 x 1.5 MB of textures, `fails`).
 - [ ] **Differential test of the translator:** this conversation ran old and new `trFrame` on the PC with GXM stubs over a real `f0_record.bin`, comparing all triangles and states. Worth keeping as a test tool in `tools/`.
