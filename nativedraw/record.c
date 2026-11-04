@@ -514,6 +514,8 @@ static uint32_t rgTex(uint32_t r0, uint32_t r1) {
 // Until that copy finishes, the frame is not published.
 static volatile int rg_pend = -1, rg_work = -1;
 static uint32_t rg_pend_t;
+// Records in one word, each +1 in 4 bits: published, written, read by the presenter, last taken, pending, in the record thread
+DEV(uint32_t regState(void) { return (rg_pub + 1) | (rg_w + 1) << 4 | (rg_using + 1) << 8 | (rg_last + 1) << 12 | (rg_pend + 1) << 16 | (rg_work + 1) << 20; })
 // (capturer) If the mirror copy of the pending frame has finished (or 100 ms passed: with whatever is there), copies by
 // DMA its VRAM textures (and its PSP image if requested for a dump) and publishes it. If the PSP already rewrote that
 // mirror, discards it. Never waits for the PSP.

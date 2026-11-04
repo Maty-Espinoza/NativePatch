@@ -1112,11 +1112,11 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
   uint32_t *pal = tpal[s], np = 0, nv = 0, pal_prev = ~0u, pn = 0;  // np: words used; pal_prev/pn: the previous palette
   void *u;
   // SCENE: starts a scene on surface surf_tex with the vertex program and the matrix
-#define SCENE(surf_tex, reg) do { sceGxmBeginScene(c, 0, cur_rt ? rt_i : rt, reg, 0, t_sync, surf_tex, cur_rt ? &ds : &dss); t_zs = t_st = t_sr = t_cl = ~0u; zsSet(c, 0, 0); sceGxmSetVertexProgram(c, nvp); gv_cur = 0; \
+#define SCENE(surf_tex, reg) do { DEV(h_at = 5;) sceGxmBeginScene(c, 0, cur_rt ? rt_i : rt, reg, 0, t_sync, surf_tex, cur_rt ? &ds : &dss); DEV(h_at = 4;) t_zs = t_st = t_sr = t_cl = ~0u; zsSet(c, 0, 0); sceGxmSetVertexProgram(c, nvp); gv_cur = 0; \
     trWvp(wm, reg); sceGxmReserveVertexDefaultUniformBuffer(c, &u); sceGxmSetUniformDataF(u, n_wvp, 0, 16, wm); } while (0)
   // OPEN: closes the open scene (if any) and opens one on dst (0: surface s); the first time on the surface,
   // puts the normal image (or black: trBase) underneath
-#define OPEN(dst_) do { RUN(); pd = 0; if (opened) { SURF_WAIT(); sceGxmEndScene(c, 0, gEnd()); cNote(cur_rt ? C_INT : C_TR, &gq_n, t_draws - d0, spx / 1000, ssw); } \
+#define OPEN(dst_) do { RUN(); pd = 0; if (opened) { SURF_WAIT(); DEV(h_at = 6;) sceGxmEndScene(c, 0, gEnd()); DEV(h_at = 4;) cNote(cur_rt ? C_INT : C_TR, &gq_n, t_draws - d0, spx / 1000, ssw); } \
     d0 = t_draws; spx = 0; ssw = 0; cur_rt = (dst_); opened = 1; \
     if (!cur_rt && has_base && zcut) sceGxmDepthStencilSurfaceSetForceLoadMode(&dss, SCE_GXM_DEPTH_STENCIL_FORCE_LOAD_ENABLED); \
     SCENE(cur_rt ? &cur_rt->cs : &cs[s], cur_rt ? &cur_rt->vr : 0); \
@@ -1155,6 +1155,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
   // three passes: of the first ord draws, 0 those to intermediate images and 1 those to the surface; 2 the rest, in order
   for (uint32_t pass = 0; pass < 3 && res == T_OK; pass++)
   for (uint32_t i = 0; i < f->nd && res == T_OK; i++) {
+    DEV(h_at = 4; h_i = i;)
     RDraw *d = &f->d[i];
     if (t_mark[i >> 5] >> (i & 31) & 1) continue;
     const uint32_t *e = f->e[d->st];
@@ -1430,6 +1431,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     sceGxmSetFrontStencilFunc(c, SCE_GXM_STENCIL_FUNC_ALWAYS, SCE_GXM_STENCIL_OP_KEEP, SCE_GXM_STENCIL_OP_KEEP, SCE_GXM_STENCIL_OP_KEEP, 0, 0);
     SURF_WAIT();
     DEV(tb = PT();)
+    DEV(h_at = 6;)
     sceGxmEndScene(c, 0, gEnd());
     DEV(PA(P_T_END, tb);)
     cNote(cur_rt ? C_INT : C_TR, &gq_n, t_draws - d0, spx / 1000, ssw);

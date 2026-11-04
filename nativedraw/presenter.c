@@ -34,7 +34,10 @@ static inline uint32_t now(void) { return sceKernelGetProcessTimeLow(); }
 static uint32_t thrRun(void) { SceKernelThreadInfo i; i.size = sizeof i; return sceKernelGetThreadInfo(sceKernelGetThreadId(), &i) < 0 ? 0 : (uint32_t)i.runClocks; }
 #endif
 #include "prof.h"
-DEV(extern volatile SceUID nd_gfx_uid;)
+DEV(extern volatile SceUID nd_gfx_uid; uint32_t regState(void);
+    // where Adrenaline's drawing thread is: 0 outside hookEnd, 1 its sceGxmEndScene, 2 checks, 3 the record, 4 translating
+    // draw h_i, 5 sceGxmBeginScene, 6 sceGxmEndScene, 7 normal image
+    static volatile uint32_t h_at, h_i;)
 
 // --- GPU memory ---
 // Nothing in CDRAM: the Adrenaline process has only 4 MB and the Vita videos use it. Surfaces go in physically
@@ -352,7 +355,9 @@ static int hookEnd(SceGxmContext *c, const SceGxmNotification *v, const SceGxmNo
   if (!nd_gfx_uid) nd_gfx_uid = sceKernelGetThreadId();
   if (tp && used == fr + 1) { if (tper) pAdd(P_A_PERIOD, tp - tper); tper = tp; }
 #endif
+  DEV(h_at = 1;)
   int r = TAI_CONTINUE(int, ref_end, c, v, f);
+  DEV(h_at = 2;)
   DEV(PA(P_A_END, tp);)
   n_us += used == fr + 1;
   if (ACTIVE && used == fr + 1) {  // in this scene Adrenaline drew the PSP image: we pass it through the surface
@@ -399,6 +404,7 @@ static int hookEnd(SceGxmContext *c, const SceGxmNotification *v, const SceGxmNo
     int s = cur ^ 1, hd = 0;
     if (draw_on && t_on && !menu && rep_on == 2 && repDraw(c, s, src)) { hd = 1; t_frame = ~0u; }  // playback
     else if (draw_on && t_on && !menu) {  // the last complete frame of the record, drawn by the Vita
+      DEV(h_at = 3;)
       RFrame *rg = regTake();
       int cause = T_NEW;
       if (!rg) { t_cnt[T_NEW]++; DEV(b_c[B_NOREC]++; if (p_on) pAdd(P_F_NOREC, 0);) }
@@ -430,6 +436,7 @@ static int hookEnd(SceGxmContext *c, const SceGxmNotification *v, const SceGxmNo
     if (hd == 2) { drawn = fr + 1; t_hd++; goto finish; }
     if (hd) { t_hd++; cur_hd = 1; goto ready_hd; }
     t_nat++; cur_hd = 0;
+    DEV(h_at = 7;)
     gWait(fq[0]);
     sceGxmBeginScene(c, 0, rt, 0, 0, 0, &cs[s], &ds);
     sceGxmSetVertexProgram(c, vp);
@@ -461,6 +468,7 @@ static int hookEnd(SceGxmContext *c, const SceGxmNotification *v, const SceGxmNo
     if (d > us_max) us_max = d;
   }
 finish:
+  DEV(h_at = 0;)
   fr++;
   return r;
 }
@@ -478,6 +486,21 @@ static int hookPend(SceGxmContext *c, const SceGxmNotification *v, const SceGxmN
 static int hookPq(void *a, void *b, const void *d) { n_pq++; return TAI_CONTINUE(int, ref_pq, a, b, d); }
 static int hookPfb(const void *p, int s) { n_pfb++; return TAI_CONTINUE(int, ref_pfb, p, s); }
 static int (*dlgRunning)(void);  // sceCommonDialogIsRunning (with this, Adrenaline stops drawing)
+#ifdef NP_DEV
+// every 1 s (called by presThread): if Adrenaline finished no scene in that time, logs where its drawing thread is, what the
+// system says about it, the GPU's progress and the records (first 30 times)
+static void stuckLog(void) {
+  static uint32_t fr0, run0, n;
+  uint32_t a = fr - fr0; fr0 = fr;
+  if (a || !nd_gfx_uid || n >= 30) return;
+  SceKernelThreadInfo in; sceClibMemset(&in, 0, sizeof in); in.size = sizeof in;
+  int e = sceKernelGetThreadInfo(nd_gfx_uid, &in);
+  uint32_t run = (uint32_t)in.runClocks; n++;
+  alog("stuck: stage %u draw %u | scene %u done %u (last frame %u, before %u) | thread info %08x status %x wait %x on %08x priority %x ran %u us | records %06x\n",
+       h_at, h_i, gq, gq_done ? *gq_done : 0, fq[0], fq[1], e, in.status, in.waitType, in.waitId, in.currentPriority, run - run0, regState());
+  run0 = run;
+}
+#endif
 // every 1 s (called by presThread): logs the state if it changed and for the next 3 s (300 lines at most)
 static void screenLog(void) {
   static uint32_t a0, u0, aq0, afb0, p0, pq0, pfb0, sig0 = ~0u, extra, nlines;
@@ -615,7 +638,7 @@ static int presThread(SceSize args, void *argp) {
   for (uint32_t t = now(), seen = 0, k = 0, warned = 0, m0 = 0;;) {  // every 10 s: how many frames and what they cost
     sceKernelDelayThread(50000);
     if (menu && !painted) { paintMenu(); __sync_synchronize(); painted = 1; }
-    if (!(k % 20)) screenLog();
+    if (!(k % 20)) { screenLog(); DEV(stuckLog();) }
     notifs(nr);
 #ifdef NP_DEV
     static uint32_t ln0;  // slow scenes already logged
