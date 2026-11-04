@@ -110,7 +110,7 @@ static void build(int frame) {
 static uint32_t stateSum(void) { uint32_t h = 0; for (int i = 0; i < 256; i++) h = h * 31 + reg[i]; for (int m = 0; m < 5; m++) for (int i = 0; i < 96; i++) h = h * 31 + mtx[m][i]; return h * 31 + vaddr * 7 + iaddr; }
 // Result of one case, in memory shared with the process that compares them. col: columns before "|" per frame, without
 // and with state; the rest are totals of what each case must exercise.
-typedef struct { char col[8][64]; uint32_t st[8], hit, chk, bad, fail, pre, late, lines, pv, skip, whole, lost, rt1, rtr, wk, pal, tex2, tc, srt, xf, late_pr, ok; } Res;
+typedef struct { char col[8][64]; uint32_t st[8], hit, chk, bad, fail, pre, late, lines, pv, skip, whole, lost, rt1, rtr, wk, pal, tex2, tc, srt, xf, late_pr, cut, ok; } Res;
 static Res *res;
 // An image drawn on many times counts once: with the list full, anything in target pages would pass for an image
 static int rtRepeatOk(void) {
@@ -191,6 +191,7 @@ static int checkAll(void) {
   bad += report("frame record: the loaded palette survives changes in memory", r[REG0].pal);
   bad += report("frame record: an image only counts as drawn in its frame", r[REG0].rt1);
   bad += report("frame record: not recorded while the presenter does not take frames", r[REG0].late_pr);
+  bad += report("flip with the capturer behind: what is left of its list is dropped, the next list stays", r[REG0].cut);
   bad += report("texture copy: right by CPU and by DMA", texCopyOk(1) && texCopyOk(32));
   bad += report("an image repeated among the targets does not hide textures in its pages", r[REG0].rtr);
   bad += report("a texture page used this frame stays requested under a target; another mirror's copy counts", r[REG0].wk);
@@ -329,6 +330,9 @@ int main(int argc, char **argv) {
     rf[rg_w]->nd = 1; rf[rg_w]->draws_seen = ~0u; regFlip(0x04000000, 512, 0);
     res->late_pr = rf[rg_w]->flags == R_SKIP;
     rg_last = rg_pub; regFlip(0x04000000, 512, 0); res->late_pr &= !rf[rg_w]->flags;
+    qh = qt = 0; q[0] = (List){ .pc = MAIN, .stall = MAIN + 16, .ord = 5, .n = 1 }; q[1] = (List){ .pc = MAIN, .stall = MAIN, .ord = 6 }; qt = 2;  // (a list half walked, the next not started)
+    fin_ord = 5; cut_old = 1; walk(); cut_old = 0;
+    res->cut = qh == 1 && capt == 5 && !q[1].n;
   }
   printf("list life: flip of its frame %u (top %u, sublists %u) | next flip %u (%u, %u) (expected 8 (0, 0) | 7 (7, 0))\n", lf_n[0], lf_top[0], lf_sub[0], lf_n[1], lf_top[1], lf_sub[1]);
   // A sync arriving 100 us after queuing: the Vita is behind (line in nativedraw_late)

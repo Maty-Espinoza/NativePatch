@@ -916,6 +916,7 @@ static int __attribute__((noinline)) walkList(List *l) {
 
 static uint32_t capt;  // sequence number of the last captured list
 static uint32_t sync_seen, fin_ord;  // last list a sync waited on; the same as of the last flip (the GE finished it)
+static int cut_old;  // walk only drops what is left of the lists up to fin_ord
 
 #ifdef NP_DEV
 // --- Delays (extreme level) ---
@@ -1075,6 +1076,7 @@ static void walk(void) {
   if (no_capture) { while (qh != qt) { capt = q[qh & 63].ord; qh++; acc.lists++; } SB[3] = capt; return; }
   while (qh != qt) {
     List *l = &q[qh & 63];
+    if (cut_old && (int)(fin_ord - l->ord) < 0) return;
     R0.n = 0;  // what was read past the previous stall may have changed
     // the readers start this list (and what was left half done of the previous one)
     if (l->ord != pub_ord) { pubList(l); recAbort(); chk = NULL; }
@@ -1082,7 +1084,7 @@ static void walk(void) {
     DEV(uint32_t tw = now();)
     // The game went past the sync of this list: at 2 frames behind its memory is being reused, so the rest is dropped; at
     // its stall with no END, the GE did find one, later overwritten. Either way nothing more will come from it.
-    int past = fin_ord - l->ord, late = past >= 2, finish = late || walkList(l);
+    int past = fin_ord - l->ord, late = past >= 2 || cut_old, finish = late || walkList(l);
     int no_end = !finish && past >= 0 && l->stall && l->pc == l->stall;
     if (late || no_end) { finish = 1; acc.aborted++; regLost(late ? NR_LATE : NR_NO_END, l->pc); DEV(if (p_on) pAdd(late ? P_X_LATE : P_X_NOEND, 0);) }
     DEV(l->work += now() - tw;)
@@ -1248,17 +1250,18 @@ static void event(volatile uint32_t *e) {
     }
     // closes the frame record (a: displayed image, b: width | format << 16)
     DEV(uint32_t tp = PT();)
-    // Lists still queued: this frame misses their draws and the next starts with what is left of them, so neither is
-    // drawn. A record marked incomplete stops copying, which is what lets the capturer catch up.
+    // Lists still queued: this frame misses their draws. What is left of them is dropped, so the next frame starts on time
+    // and can be complete instead of inheriting the delay. The clean state below replaces what they would have set.
     int behind = qh != qt;
     if (behind) regLost(NR_BEHIND, qt - qh);
+    if (behind && reg_on) { cut_old = 1; walk(); cut_old = 0; }
     // A frame walked late may have read a list the game was already rewriting, and that garbage would stay in the state
     // (for as long as the game does not set that register again): the next frame starts from the last clean one
     static GeState st_good;
     static int st_ok;
     int clean = !behind && !(reg_on && rf[rg_w]->flags & R_READ);
     if (reg_on) { regFlip(a, b, f_draws); reg_big = f_draws > RD_N; }
-    if (behind) regLost(NR_BEHIND_NEXT, qt - qh);
+    if (qh != qt && q[qh & 63].n) regLost(NR_BEHIND_NEXT, qt - qh);  // (a list already started: the new frame missed its beginning)
     if (clean) { stSave(&st_good); st_ok = 1; }
     else if (st_ok) { uint32_t kv = vaddr, ki = iaddr; stLoad(&st_good); vaddr = kv; iaddr = ki; }
     DEV(if (tp) { PA(P_C_FLIP, tp); if ((int)(now() - p_flip) > 0) pAdd(P_L_CLOSE, now() - p_flip); pAdd(P_C_TOTAL, f_us); pAdd(P_C_DRAW, p_draw); p_draw = 0; })
