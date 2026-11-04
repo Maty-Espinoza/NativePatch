@@ -110,7 +110,7 @@ static void build(int frame) {
 static uint32_t stateSum(void) { uint32_t h = 0; for (int i = 0; i < 256; i++) h = h * 31 + reg[i]; for (int m = 0; m < 5; m++) for (int i = 0; i < 96; i++) h = h * 31 + mtx[m][i]; return h * 31 + vaddr * 7 + iaddr; }
 // Result of one case, in memory shared with the process that compares them. col: columns before "|" per frame, without
 // and with state; the rest are totals of what each case must exercise.
-typedef struct { char col[8][64]; uint32_t st[8], hit, chk, bad, fail, pre, late, lines, pv, skip, whole, lost, rt1, rtr, wk, pal, tex2, tc, srt, xf, late_pr, want, ok; } Res;
+typedef struct { char col[8][64]; uint32_t st[8], hit, chk, bad, fail, pre, late, lines, pv, skip, whole, lost, rt1, rtr, wk, pal, tex2, tc, srt, xf, late_pr, want, sametex, ok; } Res;
 static Res *res;
 // An image drawn on many times counts once: with the list full, anything in target pages would pass for an image
 static int rtRepeatOk(void) {
@@ -191,6 +191,7 @@ static int checkAll(void) {
   bad += report("frame record: the loaded palette survives changes in memory", r[REG0].pal);
   bad += report("frame record: an image only counts as drawn in its frame", r[REG0].rt1);
   bad += report("frame record: not recorded while the presenter does not take frames", r[REG0].late_pr);
+  bad += report("repeated texture: a new record notes it again, and a new texture after an untextured draw is requested", r[REG0].sametex);
   bad += report("mirror: a texture page of an image stops being requested when no frame reads it, a list page stays", r[REG0].want);
   bad += report("texture copy: right by CPU and by DMA", texCopyOk(1) && texCopyOk(32));
   bad += report("an image repeated among the targets does not hide textures in its pages", r[REG0].rtr);
@@ -330,6 +331,15 @@ int main(int argc, char **argv) {
     rf[rg_w]->nd = 1; rf[rg_w]->draws_seen = ~0u; regFlip(0x04000000, 512, 0);
     res->late_pr = rf[rg_w]->flags == R_SKIP;
     rg_last = rg_pub; regFlip(0x04000000, 512, 0); res->late_pr &= !rf[rg_w]->flags;
+    reg[0xA0] = 0x130000; reg[0xA8] = 0x040000 | 64; reg[0xB8] = 6 << 8 | 6; reg[0xC3] = 3; reg[0xC2] = 0; CPY(0, 0x130) = CPY(0, 0x131) = 1;
+    uint32_t ts0 = rgTex(0, 8);
+    rf[rg_w]->flags = 1; regFlip(0x04000000, 512, 0);  // (incomplete: the same record is used again)
+    res->sametex = ts0 && !rf[rg_w]->nt && rgTex(0, 8) && rf[rg_w]->nt == 1;
+    int ro = reg_on; reg_on = 0; mir_on = 1; sceClibMemset(want_d, 0, sizeof want_d); sceClibMemset(rt_pg, 0, sizeof rt_pg);
+    reg[0x1E] = 1; reg[0xD3] = 0; dirty = C_TEX; draw(3 << 16 | 1);  // textured, untextured, then textured with another texture and nothing dirty
+    reg[0x1E] = 0; draw(3 << 16 | 1);
+    reg[0x1E] = 1; reg[0xA0] = 0x150000; draw(3 << 16 | 1);
+    res->sametex = res->sametex && want_d[0x150 >> 5] >> (0x150 & 31) & 1; reg_on = ro;
     mir_on = 1; want(0x04100000, 4096, 2); want(0x04120000, 4, 1); regFlip(0x04000000, 512, 0);
     res->want = want_l[8] & 1;  // (page 0x100, read in this frame)
     regFlip(0x04000000, 512, 0);

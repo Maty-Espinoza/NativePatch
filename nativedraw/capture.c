@@ -403,11 +403,11 @@ static void draw(uint32_t d) {
   if (rec && !idx) recVert(vstart, n * vs);
   if (idx) { acc.ibytes += n * (idx == 1 ? 1 : idx == 2 ? 2 : 4); iaddr += n * (idx == 1 ? 1 : idx == 2 ? 2 : 4); }
   else { acc.vbytes += n * vs; vaddr += n * vs; }
-  static uint32_t tex_gen, tex_vram;  // frame of the last texture checked; 1 if it is in VRAM
-  if (tex && !(dirty & C_TEX) && tex_gen == gen) acc.dtex_vram += tex_vram;  // (the same texture as the draw before: already noted and requested)
+  static uint32_t tex_gen, tex_ta, tex_vram;  // frame and address of the last texture checked; 1 if it is in VRAM
+  if (tex && !(dirty & C_TEX) && tex_gen == gen && TEXADDR() == tex_ta) acc.dtex_vram += tex_vram;  // (already noted and requested)
   else if (tex) {
     uint32_t ta = TEXADDR();
-    tex_gen = gen; tex_vram = isVram(ta);
+    tex_gen = gen; tex_ta = ta; tex_vram = isVram(ta);
     if (texAdd(ta)) {
       acc.textures++; if (isVram(ta)) acc.tex_vram++;
       static const uint8_t bp[16] = { 16, 16, 16, 32, 4, 8, 16, 32, 4, 8, 8, 8, 8, 8, 8, 8 };
