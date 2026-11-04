@@ -385,8 +385,11 @@ static void draw(uint32_t d) {
   if (rec && !idx) recVert(vstart, n * vs);
   if (idx) { acc.ibytes += n * (idx == 1 ? 1 : idx == 2 ? 2 : 4); iaddr += n * (idx == 1 ? 1 : idx == 2 ? 2 : 4); }
   else { acc.vbytes += n * vs; vaddr += n * vs; }
-  if (tex) {
+  static uint32_t tex_gen, tex_vram;  // frame of the last texture checked; 1 if it is in VRAM
+  if (tex && !(dirty & C_TEX) && tex_gen == gen) acc.dtex_vram += tex_vram;  // (the same texture as the draw before: already noted and requested)
+  else if (tex) {
     uint32_t ta = TEXADDR();
+    tex_gen = gen; tex_vram = isVram(ta);
     if (texAdd(ta)) {
       acc.textures++; if (isVram(ta)) acc.tex_vram++;
       static const uint8_t bp[16] = { 16, 16, 16, 32, 4, 8, 16, 32, 4, 8, 8, 8, 8, 8, 8, 8 };
@@ -865,10 +868,10 @@ static int __attribute__((noinline)) walkList(List *l) {
     uint32_t prev = run > 1 ? R0.buf[i - 1] : l->prev;
     SYNC();
     switch (c) {
-    case 0x00: DEV(if (d == 0x4E5044) nd_dump_mark = 1;) break;
     case 0x01: vaddr = rel(l, d); vset = 1; if (rec) rec->flags |= M_VABS; break;
     case 0x02: iaddr = rel(l, d); if (rec) rec->flags |= M_IABS; break;
     case 0x04: draw(d); break;
+    case 0x00: DEV(if (d == 0x4E5044) nd_dump_mark = 1;) break;
     case 0x05: case 0x06: acc.curves++; acc.draws++; f_draws++; dirty = 0; last_prim = 99; if (rec) recDraw(0, 0); if (reg_on) regCurve(); break;
     case 0x08: case 0x0A: {
       uint32_t t = rel(l, d & 0xFFFFFC);
