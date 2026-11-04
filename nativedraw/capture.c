@@ -259,7 +259,7 @@ typedef struct Memo Memo;
 static Memo *rec;  // sublist being recorded (sublist memory)
 static void recDraw(int idx, int tex), recTex(uint32_t ta), recRead(uint32_t c), recVert(uint32_t a, uint32_t n);
 static uint32_t reg[256], mtx[5][96], mi[5];
-static uint8_t cls[256];  // state class of each command (C_*; 0: not state)
+static uint8_t cls[256], plain[256];  // state class of each command (C_*; 0: not state); plain: walkList only stores it (1 in reg, 2 in a matrix)
 enum { C_TEX = 1, C_MTX = 2, C_RT = 4, C_OTHER = 8, C_TL = 16 };  // C_TL: TEXLEVEL (0xC8), a separate "other"
 static uint32_t dirty, vaddr, iaddr, vset, last_prim = 99, last_vend, last_fb;
 // Textures seen in the frame (hash table: tgen == gen marks a slot used in this frame); gen: frame number
@@ -271,6 +271,10 @@ static void initCls(void) {
   for (int c = 0xB8; c <= 0xBF; c++) cls[c] = C_TEX;
   cls[0xC2] = cls[0xC3] = cls[0xC5] = C_TEX;
   cls[0x9C] = cls[0x9D] = cls[0x9E] = cls[0x9F] = cls[0xD2] = C_RT;
+  static const uint8_t own[] = { 0, 1, 2, 4, 5, 6, 8, 9, 0xA, 0xB, 0xC, 0xE, 0xF, 0x13, 0x14, 0x2A, 0x3A, 0x3C, 0x3E, 0x40, 0xC4, 0xEA };
+  sceClibMemset(plain, 1, sizeof plain);
+  for (uint32_t i = 0; i < sizeof own; i++) plain[own[i]] = 0;
+  plain[0x2B] = plain[0x3B] = plain[0x3D] = plain[0x3F] = plain[0x41] = 2;
   cls[0x12] = C_OTHER;  // vertex type
   static const uint8_t no[] = { 0x2A, 0x2B, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F, 0x40, 0x41, 0xB2, 0xB3, 0xB4, 0xB5, 0xC4,
                                 0xCB, 0xCC, 0xEA, 0xEB, 0xEC, 0xEE };
@@ -839,11 +843,27 @@ static int __attribute__((noinline)) walkList(List *l) {
     if (rec && (pc & ~63u) != rec_last) recLine(pc & ~63u, ra & ~63u);
     uint32_t sp0 = l->sp, top = !sp0 && !isVram(pc);  // top level in RAM: lo/hi range for the list lifetime
     if (top && pc < l->lo) l->lo = pc;
-    for (;;) {
-    uint32_t c = op >> 24, d = op & 0xFFFFFF, prev = l->prev;
-    if (top && pc > l->hi) l->hi = pc;
-    l->n++; l->pc = pc + 4; l->prev = op; acc.cmds++; f_cmds++; budget--;
 #define TOUCH(c) if (rec) rec_touch[(c) >> 5] |= 1u << ((c) & 31)
+    uint32_t run = 0;  // commands walked and not yet counted: the list's position and counters are written once, at SYNC
+#define SYNC() do { if (top && pc > l->hi) l->hi = pc; l->n += run; l->pc = pc + 4; l->prev = op; acc.cmds += run; f_cmds += run; budget -= run; run = 0; } while (0)
+    for (;;) {
+    uint32_t c = op >> 24, d = op & 0xFFFFFF;
+    run++;
+    if (plain[c]) {
+      if (plain[c] == 2) {
+        int m = c == 0x2B ? 4 : (c - 0x3B) / 2, max = m == 4 ? 96 : m == 2 ? 16 : 12;
+        if (rec) rec->mmask |= 1 << m;
+        if (mi[m] < (uint32_t)max) { if (mtx[m][mi[m]] != d) { mtx[m][mi[m]] = d; dirty |= C_MTX; rg_mchg = 1; } mi[m]++; }
+      } else {
+        if (cls[c] && reg[c] != d) { rg_chg = rg_lchg = 1; dirty |= cls[c]; if (cls[c] & (C_OTHER | C_TL)) acc.chg[c]++; }
+        reg[c] = d; TOUCH(c);
+      }
+      if (--k) { pc += 4; op = R0.buf[++i]; continue; }
+      SYNC();
+      break;
+    }
+    uint32_t prev = run > 1 ? R0.buf[i - 1] : l->prev;
+    SYNC();
     switch (c) {
     case 0x00: DEV(if (d == 0x4E5044) nd_dump_mark = 1;) break;
     case 0x01: vaddr = rel(l, d); vset = 1; if (rec) rec->flags |= M_VABS; break;
@@ -886,18 +906,11 @@ static int __attribute__((noinline)) walkList(List *l) {
       if ((prev >> 24) == 0x0E) { acc.signals++; break; }
       return 1;
     case 0x0E: case 0x0F: break;
-    case 0x10: reg[0x10] = d; TOUCH(0x10); break;
     case 0x13: l->off = d << 8; break;
     case 0x14: l->off = pc; break;
     case 0x2A: case 0x3A: case 0x3C: case 0x3E: case 0x40: {
       int m = c == 0x2A ? 4 : (c - 0x3A) / 2;
       mi[m] = d & 0x7F; if (rec) rec->mmask |= 1 << m;
-      break;
-    }
-    case 0x2B: case 0x3B: case 0x3D: case 0x3F: case 0x41: {
-      int m = c == 0x2B ? 4 : (c - 0x3B) / 2, max = m == 4 ? 96 : m == 2 ? 16 : 12;
-      if (rec) rec->mmask |= 1 << m;
-      if (mi[m] < (uint32_t)max) { if (mtx[m][mi[m]] != d) { mtx[m][mi[m]] = d; dirty |= C_MTX; rg_mchg = 1; } mi[m]++; }
       break;
     }
     case 0xC4: {  // palette load: a change only if another palette or size
@@ -916,9 +929,6 @@ static int __attribute__((noinline)) walkList(List *l) {
       if (reg_on) regXfer(s, t, d & 1 ? 4 : 2);
       break;
     }
-    default:
-      if (cls[c] && reg[c] != d) { rg_chg = rg_lchg = 1; dirty |= cls[c]; if (cls[c] & (C_OTHER | C_TL)) acc.chg[c]++; }
-      reg[c] = d; TOUCH(c);
     }
     if (--k == 0 || l->pc != pc + 4 || l->sp != sp0 || R0.a != ba || R0.n != bn) break;  // end of line or jump
     pc += 4; op = R0.buf[++i];

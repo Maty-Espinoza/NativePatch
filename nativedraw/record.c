@@ -439,6 +439,11 @@ static uint32_t rgTex(uint32_t r0, uint32_t r1) {
   uint32_t key = n | swz << 31;
   if (swz && (rb & 15)) { RG_READ(NR_SWZ, ta, rb); return 0; }
   if (r1 > th || r0 >= r1) r0 = 0, r1 = th;
+  // The same rows of the same VRAM texture as the draw before: nothing to do (VRAM goes by the flip's mirror, it cannot go stale)
+  static uint32_t lt, lk, lr, ls, lo;
+  uint32_t rr = r0 << 16 | r1;
+  if (vr && lo && ta == lt && key == lk && rr == lr && rg_seq[rg_w] == ls) return lo;
+  lo = 0;
   for (i = f->nt; i > 0 && !(f->ta[i - 1] == ta && f->tn[i - 1] == key); i--) {}  // (the latest entry of this address)
   i = i ? i - 1 : f->nt;
   int stale = i < f->nt && !vr && rgStale(f, i, r0 / 8, (r1 + 7) / 8);
@@ -492,6 +497,7 @@ static uint32_t rgTex(uint32_t r0, uint32_t r1) {
     if (!vr) rg_tc[i] |= ((h - g < 64 ? (1ull << (h - g)) : 0) - 1) << g;
     g = h;
   }
+  if (vr) { lt = ta; lk = key; lr = rr; ls = rg_seq[rg_w]; lo = f->to[i] + 1; }
   return f->to[i] + 1;
 }
 // Pending frame: VRAM textures are copied from the mirror copy the PSP made at that frame's flip (f->tgt): the game
