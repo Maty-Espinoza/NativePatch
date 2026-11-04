@@ -1,0 +1,8 @@
+// nd_fd with the alpha tests that keep values from a minimum up (GE greater and greater or equal): tf.x is that minimum, in 0-1.
+float4 main(float3 uv : TEXCOORD0, float4 col : COLOR, uniform sampler2D tex, uniform float4 tf, uniform float4 fog) : COLOR
+{
+  float4 t = tex2D(tex, uv.xy);
+  float a = lerp(1.0, t.a, tf.y) * col.a;
+  if (a < tf.x) discard;
+  return float4(lerp(fog.rgb, min(t.rgb * col.rgb * tf.z, 1.0), uv.z), a);
+}
