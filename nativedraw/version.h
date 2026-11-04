@@ -1,9 +1,5 @@
 // version.h: NativeDraw version. Used by nativedraw.c and capture.c (logs) and presenter.c (menu).
-<<<<<<< Updated upstream
 #define NATIVEDRAW_VERSION "0.0.17.1"
-=======
-#define NATIVEDRAW_VERSION "0.0.17.1"
->>>>>>> Stashed changes
 // Development builds (-DNP_DEV, the default; PROD=1 in build.sh leaves it out) carry the measurements: DEV(x) is x
 // there and nothing in production.
 #ifdef NP_DEV
