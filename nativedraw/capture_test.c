@@ -191,7 +191,7 @@ static int checkAll(void) {
   bad += report("frame record: the loaded palette survives changes in memory", r[REG0].pal);
   bad += report("frame record: an image only counts as drawn in its frame", r[REG0].rt1);
   bad += report("frame record: not recorded while the presenter does not take frames", r[REG0].late_pr);
-  bad += report("flip with the capturer behind: what is left of its list is dropped, the next list stays", r[REG0].cut);
+  bad += report("skipped frame: its lists are not walked, a list of the closed frame still is", r[REG0].cut);
   bad += report("texture copy: right by CPU and by DMA", texCopyOk(1) && texCopyOk(32));
   bad += report("an image repeated among the targets does not hide textures in its pages", r[REG0].rtr);
   bad += report("a texture page used this frame stays requested under a target; another mirror's copy counts", r[REG0].wk);
@@ -330,9 +330,9 @@ int main(int argc, char **argv) {
     rf[rg_w]->nd = 1; rf[rg_w]->draws_seen = ~0u; regFlip(0x04000000, 512, 0);
     res->late_pr = rf[rg_w]->flags == R_SKIP;
     rg_last = rg_pub; regFlip(0x04000000, 512, 0); res->late_pr &= !rf[rg_w]->flags;
-    qh = qt = 0; q[0] = (List){ .pc = MAIN, .stall = MAIN + 16, .ord = 5, .n = 1 }; q[1] = (List){ .pc = MAIN, .stall = MAIN, .ord = 6 }; qt = 2;  // (a list half walked, the next not started)
-    fin_ord = 5; cut_old = 1; walk(); cut_old = 0;
-    res->cut = qh == 1 && capt == 5 && !q[1].n;
+    qh = qt = 0; q[0] = (List){ .pc = MAIN, .stall = MAIN + 16, .ord = 5 }; q[1] = (List){ .pc = MAIN, .stall = MAIN + 16, .ord = 6 }; qt = 2;
+    fin_ord = 5; rf[rg_w]->flags = R_SKIP; walk();
+    res->cut = qh == 2 && capt == 6 && q[0].n && !q[1].n; rf[rg_w]->flags = 0;
   }
   printf("list life: flip of its frame %u (top %u, sublists %u) | next flip %u (%u, %u) (expected 8 (0, 0) | 7 (7, 0))\n", lf_n[0], lf_top[0], lf_sub[0], lf_n[1], lf_top[1], lf_sub[1]);
   // A sync arriving 100 us after queuing: the Vita is behind (line in nativedraw_late)

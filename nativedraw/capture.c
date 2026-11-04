@@ -916,7 +916,6 @@ static int __attribute__((noinline)) walkList(List *l) {
 
 static uint32_t capt;  // sequence number of the last captured list
 static uint32_t sync_seen, fin_ord;  // last list a sync waited on; the same as of the last flip (the GE finished it)
-static int cut_old;  // walk only drops what is left of the lists up to fin_ord
 
 #ifdef NP_DEV
 // --- Delays (extreme level) ---
@@ -1076,7 +1075,9 @@ static void walk(void) {
   if (no_capture) { while (qh != qt) { capt = q[qh & 63].ord; qh++; acc.lists++; } SB[3] = capt; return; }
   while (qh != qt) {
     List *l = &q[qh & 63];
-    if (cut_old && (int)(fin_ord - l->ord) < 0) return;
+    // A frame that will not be recorded is not walked: the list counts as captured, so the capturer has this frame free
+    // and the state comes from the next lists and the GE snapshot at the flip. Lists of a closed frame are still finished.
+    if (reg_on && rf[rg_w]->flags & R_SKIP && !l->n && (int)(fin_ord - l->ord) < 0) { capt = l->ord; SB[3] = capt; qh++; acc.lists++; continue; }
     R0.n = 0;  // what was read past the previous stall may have changed
     // the readers start this list (and what was left half done of the previous one)
     if (l->ord != pub_ord) { pubList(l); recAbort(); chk = NULL; }
@@ -1084,7 +1085,7 @@ static void walk(void) {
     DEV(uint32_t tw = now();)
     // The game went past the sync of this list: at 2 frames behind its memory is being reused, so the rest is dropped; at
     // its stall with no END, the GE did find one, later overwritten. Either way nothing more will come from it.
-    int past = fin_ord - l->ord, late = past >= 2 || cut_old, finish = late || walkList(l);
+    int past = fin_ord - l->ord, late = past >= 2, finish = late || walkList(l);
     int no_end = !finish && past >= 0 && l->stall && l->pc == l->stall;
     if (late || no_end) { finish = 1; acc.aborted++; regLost(late ? NR_LATE : NR_NO_END, l->pc); DEV(if (p_on) pAdd(late ? P_X_LATE : P_X_NOEND, 0);) }
     DEV(l->work += now() - tw;)
@@ -1250,18 +1251,17 @@ static void event(volatile uint32_t *e) {
     }
     // closes the frame record (a: displayed image, b: width | format << 16)
     DEV(uint32_t tp = PT();)
-    // Lists still queued: this frame misses their draws. What is left of them is dropped, so the next frame starts on time
-    // and can be complete instead of inheriting the delay. The clean state below replaces what they would have set.
+    // Lists still queued: this frame misses their draws. The next one is skipped, which lets the capturer finish them and
+    // catch up, so the delay does not pass from frame to frame.
     int behind = qh != qt;
     if (behind) regLost(NR_BEHIND, qt - qh);
-    if (behind && reg_on) { cut_old = 1; walk(); cut_old = 0; }
     // A frame walked late may have read a list the game was already rewriting, and that garbage would stay in the state
     // (for as long as the game does not set that register again): the next frame starts from the last clean one
     static GeState st_good;
     static int st_ok;
     int clean = !behind && !(reg_on && rf[rg_w]->flags & R_READ);
     if (reg_on) { regFlip(a, b, f_draws); reg_big = f_draws > RD_N; }
-    if (qh != qt && q[qh & 63].n) regLost(NR_BEHIND_NEXT, qt - qh);  // (a list already started: the new frame missed its beginning)
+    if (behind && reg_on) rf[rg_w]->flags |= R_SKIP;
     if (clean) { stSave(&st_good); st_ok = 1; }
     else if (st_ok) { uint32_t kv = vaddr, ki = iaddr; stLoad(&st_good); vaddr = kv; iaddr = ki; }
     DEV(if (tp) { PA(P_C_FLIP, tp); if ((int)(now() - p_flip) > 0) pAdd(P_L_CLOSE, now() - p_flip); pAdd(P_C_TOTAL, f_us); pAdd(P_C_DRAW, p_draw); p_draw = 0; })
@@ -1498,7 +1498,7 @@ static int repThread(SceSize args, void *argp) {
 #ifdef NP_DEV
         char nb[300]; int nk = 0; nb[0] = 0;
         for (int i = 0; i < NR_N; i++) if (gr.nr[i]) nk += sceClibSnprintf(nb + nk, sizeof nb - nk, " %s=%u", nr_names[i], gr.nr[i]);
-        if (nk || gr.skip) clog("  record not_read:%s | frames only walked: %u\n", nb, gr.skip);
+        if (nk || gr.skip) clog("  record not_read:%s | frames skipped: %u\n", nb, gr.skip);
 #endif
         clog("  record: frames=%u complete=%u incomplete: memory=%u not_read=%u limit=%u curves=%u | per frame: draws=%u states=%u KB=%u palettes=%u us=%u (states %u vertices %u textures %u [copied %u KB by DMA in %u us, of them swizzled %u KB sorted in %u us; pending lost %u, without the copy of their flip %u, with the GPU unfinished (measured) %u] palettes %u) | of the draws: 3d=%u%% clear=%u%% blend=%u%% alpha_test=%u%% swizzle=%u%% | draws per sec with texture 5650/5551/4444/8888/T4/T8/T16/T32/DXT1/3/5: %u %u %u %u %u %u %u %u %u %u %u\n",
              gr.fr, gr.ok, gr.memo, gr.rd_fail, gr.limit, gr.curve, gr.draws / g, gr.st / g, gr.kb / g >> 10, gr.cl / g, gr.us / g,

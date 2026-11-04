@@ -13,9 +13,9 @@ static void clog(const char *fmt, ...);
 enum { R_MEMO = 1, R_READ = 2, R_LIMIT = 4, R_CURVE = 8, R_SKIP = 16 };
 #ifdef NP_DEV
 // Why a frame stayed not_read (the first cause of each frame): names for the "record not_read:" log line
-enum { NR_VERT, NR_SWZ, NR_TEX, NR_X_USED, NR_X_FORM, NR_X_TEX, NR_COUNT, NR_LIST_PC, NR_LIST_MAX, NR_CALL, NR_DEPTH, NR_LATE, NR_NO_END, NR_RESET, NR_BEHIND, NR_BEHIND_NEXT, NR_N };
+enum { NR_VERT, NR_SWZ, NR_TEX, NR_X_USED, NR_X_FORM, NR_X_TEX, NR_COUNT, NR_LIST_PC, NR_LIST_MAX, NR_CALL, NR_DEPTH, NR_LATE, NR_NO_END, NR_RESET, NR_BEHIND, NR_N };
 static const char *nr_names[NR_N] = { "vertices", "swizzle_width", "texture", "xfer_over_texture", "xfer_form", "xfer_source", "draws_missed", "list_unreadable",
-  "list_too_long", "call_no_copy", "call_too_deep", "list_late", "list_no_end", "queue_reset", "behind", "after_behind" };
+  "list_too_long", "call_no_copy", "call_too_deep", "list_late", "list_no_end", "queue_reset", "behind" };
 #endif
 // Per-second statistics for the "record:" log line (ga accumulates, gr is the copy being written; us_*: time for
 // states, vertices, textures, palettes and DMA copies; gpu: textures written to a record the GPU could be reading;
@@ -776,7 +776,7 @@ static void regFlip(uint32_t fb, uint32_t fbw, uint32_t draws_counted) {
   f->nd = f->ne = f->na = f->flags = f->draws_seen = f->nt = f->ntx = f->dv = f->nimg = 0;
   rg_t = 0;
   // The presenter did not take the frame before this one: recording another is wasted, and a capturer that keeps up does
-  // not read lists the game is already rewriting. The next frame is only walked
+  // not read lists the game is already rewriting. The next frame is skipped (walk)
   if (slow) { f->flags = R_SKIP; ga.skip++; }
   // The GE keeps the palette it loaded whatever the memory holds now: its copy goes on to the new record (from memory
   // only if there is none)
