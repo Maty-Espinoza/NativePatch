@@ -99,6 +99,22 @@ frame HD en carrera, 22,4 de ellos vértices. 1,36 M de píxeles siguen en `nd_f
 (-12 %), trabajo del traductor 41,5 -> 38,1 ms, 18,7 -> 19,6 frames HD por segundo. **Menos instrucciones dieron mucho menos tiempo: la parte de vértices no son
 sobre todo instrucciones.** Sospecha, sin medir: lecturas del registro y escrituras a `tv`. Log de la Vita: lectura con caché 24 ns por palabra, sin caché 199.
 
+**De qué está hecho el tiempo de vértices (`vert_split`, 0.0.17.3, ~1140 draws y 6900 vértices, sin el costo del reloj):** `trVerts` ~9,7 ms, `trTris` ~5,3, el resto de la
+parte ~4,4 (incluye contadores de desarrollo), estado ~1,3, copia a `tv` ~0,6. Repetir `trVerts` de inmediato, con datos y código en caché, cuesta 1,26 us por vértice contra 1,39 la primera vez, y leer
+los datos antes no cambia nada: **no es la memoria, un prefetch no ayudaría.** 1,26 us son ~420 ciclos, que las instrucciones no explican; la causa sigue abierta. Un ajuste sobre ventanas de 10 s da ~27 us
+por draw reescrito por `trTris`.
+**`nd_fa` (0.0.18):** GPU 38,1 -> 32,5 ms por frame HD, libre 24 -> 36 %; los frames HD no se mueven: limita solo el traductor.
+**Hilos (`thread_split`, 0.0.17.6, carrera):** el hilo de dibujo de Adrenaline (prioridad 0xA0, sin núcleo fijo) corre 749 ms por segundo en los núcleos 1 y 2, lo desplazan 8 veces por segundo, lo interrumpen
+~2500 y lo mueven de núcleo ~1400. El capturador se mueve ~650 veces por segundo. En un frame pesado corrió 42 de 54 ms: como casi no lo desplazan, esos 12 ms no son el capturador quitándole el núcleo
+(`capture_core` no los recupera); probablemente son esperas dentro de llamadas a GXM, sin medir. Los movimientos no se probaron.
+
+## Orden desde aquí (2026-11-04)
+1. **C.1 sin tocar NativeLink:** los vértices de los draws elegibles van a una zona del registro sin caché y mapeada para la GPU, como las texturas (`tx`), con la misma espera antes de reusarla, y un vertex
+   shader los transforma. Sin copia de la GE. Antes de empezar: scissor en el shader (si no, `trTris` sigue en la CPU) y el costo de no unir draws (etapa 1: ~1 us de CPU y ~1,3 us de GPU por draw). Esperado:
+   ~10-13 ms menos de traductor, hasta ~28 frames HD por segundo, donde vuelve a limitar la GPU.
+2. **GPU (C.3):** menos píxeles (9,4 pantallas por frame).
+3. **C.2 solo si el capturador pasa a ser el límite:** no limita la carrera normal, y para el público B.3 es más barato.
+
 ## C. Cambios grandes (preguntar primero al usuario)
 1. **Vértices 3D en un vertex shader de GXM leyendo la RAM del PSP mapeada para la GPU** (`sceGxmMapMemory` en 0x70000000
    funciona, etapa 1). Quita la copia de vértices del capturador (~5 ms) y la transformación en CPU del traductor (16-20 ms

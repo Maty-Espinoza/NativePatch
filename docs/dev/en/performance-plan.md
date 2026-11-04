@@ -93,6 +93,22 @@ per frame 8.14 M -> 5.78 M (-29 %)**, same draws and vertices in `tr_check.sh`. 
 (-12 %), translator work 41.5 -> 38.1 ms, 18.7 -> 19.6 HD frames per second. **Fewer instructions gave much less time: the vertices bucket is not mostly
 instructions.** Suspected, not measured: reads of the record and writes to `tv`. Log of the Vita: cached read 24 ns per word, uncached 199.
 
+**What the vertex time is made of (`vert_split`, 0.0.17.3, ~1140 draws and 6900 vertices, clock cost removed):** `trVerts` ~9.7 ms, `trTris` ~5.3, the rest
+of the part ~4.4 (development counters included), state ~1.3, copy to `tv` ~0.6. Repeating `trVerts` at once, with data and code in the cache, costs 1.26 us per
+vertex against 1.39 the first time, and reading the data first changes nothing: **it is not memory, a prefetch would not help.** 1.26 us is ~420 cycles, which the
+instructions do not explain; the cause is open. A fit on 10 s windows gives ~27 us per draw rewritten by `trTris`.
+**`nd_fa` (0.0.18):** GPU 38.1 -> 32.5 ms per HD frame, idle 24 -> 36 %; the HD rate does not move: the translator limits alone.
+**Threads (`thread_split`, 0.0.17.6, race):** Adrenaline's drawing thread (priority 0xA0, not pinned) runs 749 ms per second on cores 1 and 2, is preempted 8 times per second, interrupted
+~2500 and moved between cores ~1400 times. The capturer moves ~650 times per second. In a heavy frame it ran 42 of 54 ms: since it is hardly preempted, those 12 ms are not the capturer taking its core
+(`capture_core` will not recover them); they are probably waits inside GXM calls, not measured. Moves were not tested.
+
+## Order from here (2026-11-04)
+1. **C.1 without touching NativeLink:** the vertices of eligible draws go to an uncached record area mapped for the GPU, like the textures (`tx`), with the same wait before reuse, and a vertex
+   shader transforms them. No GE copy. Before starting: scissor in the shader (`trTris` stays on the CPU otherwise) and the cost of not joining draws (stage 1: ~1 us CPU, ~1.3 us GPU per draw). Expected:
+   ~10-13 ms less translator, up to ~28 HD frames per second, where the GPU limits again.
+2. **GPU (C.3):** fewer pixels (9.4 screens per frame).
+3. **C.2 only if the capturer becomes the limit:** it does not limit the normal race, and for the crowd B.3 is cheaper.
+
 ## C. Large changes (ask the user first)
 1. **3D vertices in a GXM vertex shader reading the PSP RAM mapped for the GPU** (`sceGxmMapMemory` at 0x70000000 works,
    stage 1). Removes the vertex copy from the capturer (~5 ms) and the CPU transform from the translator (16-20 ms per HD

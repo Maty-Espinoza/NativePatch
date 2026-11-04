@@ -79,6 +79,7 @@ def show_vert(s):
 def thread_split(path):
     # "thread" lines of the capture log: per thread, turns on each core and the average of the rest per second
     out = {}
+    if not os.path.exists(path): return out
     for line in open(path, errors='replace'):
         m = re.search(r'thread (\w+): turns on core 0 (\d+), 1 (\d+), 2 (\d+), other (\d+) \| run_ms (\d+) preempted (\d+) interrupted (\d+) moved (\d+)', line)
         if not m: continue

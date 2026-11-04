@@ -10,6 +10,12 @@ the Vita but not yet confirmed as a numbered release.
   KEEP/REVERT step (`iterate.sh`) and the unattended loop with Claude Code (`ai_loop.sh`, `docs/agent/en/perf-loop.md`).
 - `docs/dev/*/performance-plan.md`: the ordered plan towards 60 fps, from the analysis of the capturer on `stage3_0.0.16.4/rr1`.
 
+## NativeDraw 0.0.18 (2026-11-04)
+Tests 0.0.17.3–0.0.17.6, checked on the Vita with Ridge Racer; NativeLink stays at 0.0.6. Race seconds against 0.0.17: GPU 38.1 -> 32.5 ms per
+HD frame, idle 24 -> 36 %, pixels on `nd_ft` 1392 -> 90 thousand; the HD rate does not change (~19.5 per second): the translator now limits alone.
+- **`nd_fa`:** a branchless fragment program for modulate with the alpha tests greater and greater or equal, as one minimum on the alpha.
+- **Measurements:** `vert_split` (what the vertex time is made of) and `thread_split` (cores, preemptions and moves of the main threads).
+
 ## NativeDraw 0.0.17 (2026-11-04)
 Tests 0.0.17.1–0.0.17.2, checked on the Vita with Ridge Racer; NativeLink stays at 0.0.6. Race seconds against 0.0.16: GPU 45.0 -> 38.3 ms per
 HD frame, translator 42.0 -> 38.1 ms, 18.1 -> 19.6 HD frames per second; game at 60 fps.

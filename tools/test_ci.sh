@@ -47,6 +47,18 @@ printf ' 1000   capture split complete: frames=20 commands=8000 draws=900 | us/f
 python3 $R/tools/bottleneck.py $B/bn | grep -q 'interpreter 3.7' || { echo "FAIL: bottleneck.py capture split"; exit 1; }
 echo "ok   bottleneck.py"
 
+echo "== nd_fa alpha threshold"
+python3 - <<'PY' || { echo "FAIL: nd_fa threshold"; exit 1; }
+# translator.c turns GE greater and greater or equal into a minimum on the 0-1 alpha: it must agree with the 8-bit comparison
+import struct, sys
+f = lambda x: struct.unpack('f', struct.pack('f', x))[0]
+for r in range(256):
+    for a in range(256):
+        x = f(f(a) / f(255))
+        if (x >= f(f(r + .5) / f(255))) != (a > r) or (x >= f(f(r - .5) / f(255))) != (a >= r): sys.exit(f'alpha {a} ref {r}')
+PY
+echo "ok   nd_fa threshold"
+
 echo "== production build"
 cp -r $R/nativelink $B/nativelink
 make -s -C $B/nativelink clean ADRENALINE=$ADRENALINE

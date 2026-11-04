@@ -105,3 +105,4 @@ Milestones of the old numbering (details in `../../changelog/`):
 | 0.0.6 | 0.0.15 | (commit "NativeDraw 0.0.15") | Ridge Racer lap at 20-25 HD frames per second: CPU and GPU in parallel, draws joined, cached vertices, nitro, mirror fixes, intermediate images no longer shrunken. Tests 0.0.15.1–0.0.15.10 |
 | 0.0.6 | 0.0.16 | (commit "NativeDraw 0.0.16") | Ridge Racer without high clocks: game at 60 fps, the whole race in HD at 21-25 HD frames per second; mirror leak fixed, capturer lighter. Tests 0.0.16.1–0.0.16.8 |
 | 0.0.6 | 0.0.17 | (commit "NativeDraw 0.0.17") | `nd_fd` (GPU 45 -> 38 ms per HD frame in the race), NEON loop for the common 3D vertex (translator 42 -> 38 ms). Tests 0.0.17.1–0.0.17.2 |
+| 0.0.6 | 0.0.18 | (commit "NativeDraw 0.0.18") | `nd_fa` (GPU 38 -> 32.5 ms per HD frame in the race), `vert_split` and `thread_split`. Tests 0.0.17.3–0.0.17.6 |
