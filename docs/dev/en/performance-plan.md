@@ -83,6 +83,10 @@ frames (`tr_*`), the pages asked of the mirror (`want`) and frames that are walk
 of normal image, 21-25 HD frames per second, 7-12 in the crowd second; `lists` stays under 150 pages, mirror 1.3 ms. The translator
 limits 126 of 139 s. Tried on the bench: remembering the last `t3Flat` color (+1.9 %: colors change vertex by vertex).
 
+**`nd_fd` on the Vita (0.0.17.1, race seconds against 0.0.16.8, per HD frame):** 27 % of the pixels moved to it; surface 36.6 -> 30.0 ms,
+GPU 45.0 -> 38.2 ms, idle 17 -> 27 %. The HD rate does not change (18.7 per second): the translator limits 128 of 140 s, 42.8 ms per HD
+frame in the race, 22.4 of them vertices. 1.36 M pixels stay on `nd_ft` because of the alpha test.
+
 ## C. Large changes (ask the user first)
 1. **3D vertices in a GXM vertex shader reading the PSP RAM mapped for the GPU** (`sceGxmMapMemory` at 0x70000000 works,
    stage 1). Removes the vertex copy from the capturer (~5 ms) and the CPU transform from the translator (16-20 ms per HD

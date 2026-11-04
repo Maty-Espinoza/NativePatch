@@ -89,6 +89,10 @@ reales (`tr_*`), las páginas pedidas al espejo (`want`) y los frames que se rec
 imagen normal, 21-25 frames HD por segundo, 7-12 en el segundo del público; `lists` bajo 150 páginas, espejo 1,3 ms. El traductor limita
 126 de 139 s. Probado en el banco: recordar el último color de `t3Flat` (+1,9 %: los colores cambian vértice a vértice).
 
+**`nd_fd` en la Vita (0.0.17.1, segundos de carrera contra 0.0.16.8, por frame HD):** 27 % de los píxeles pasó a él; superficie 36,6 ->
+30,0 ms, GPU 45,0 -> 38,2 ms, inactiva 17 -> 27 %. El ritmo HD no cambia (18,7 por segundo): el traductor limita 128 de 140 s, 42,8 ms por
+frame HD en carrera, 22,4 de ellos vértices. 1,36 M de píxeles siguen en `nd_ft` por el alpha test.
+
 ## C. Cambios grandes (preguntar primero al usuario)
 1. **Vértices 3D en un vertex shader de GXM leyendo la RAM del PSP mapeada para la GPU** (`sceGxmMapMemory` en 0x70000000
    funciona, etapa 1). Quita la copia de vértices del capturador (~5 ms) y la transformación en CPU del traductor (16-20 ms
