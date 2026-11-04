@@ -664,7 +664,7 @@ static int presThread(SceSize args, void *argp) {
             for (uint32_t i = 0; i < lk_n; i++)
               alog("light split kind vt %03x lights %u gen %u lit %u fast %u specular %u: per frame draws %u vertices %u us %u\n", lk[i].key & 0x1FF, lk[i].key >> 9 & 7, lk[i].key >> 12 & 1, lk[i].key >> 13 & 1,
                    lk[i].key >> 14 & 1, lk[i].key >> 15 & 1, lk[i].draws / ls_fr, lk[i].verts / ls_fr, lk[i].us / ls_fr);
-            sceClibMemset(ls, 0, sizeof ls); lk_n = 0; ls_fr = 0;
+            sceClibMemset(ls, 0, sizeof ls); sceClibMemset(lk, 0, sizeof lk); lk_n = 0; ls_fr = 0;
           })
       // Pacing: for each Adrenaline frame drawn by the Vita, how many PSP frames advanced since the previous one
       // (1 = none skipped; 0 = repeated the previous one). With skips or repeats, what a game draws every other
@@ -706,7 +706,7 @@ static int swOn(const char *p) {  // the file exists and does not start with "no
 void presStart(void) {
   draw_on = swOn("ux0:data/nativedraw/draw");
   DEV(c_wanted = swOn("ux0:data/nativedraw/gpu_timer"); clk_on = swOn("ux0:data/nativedraw/clocks"); v_on = swOn("ux0:data/nativedraw/vert_split");
-      cg_on = swOn("ux0:data/nativedraw/clip_gpu"); nj_on = swOn("ux0:data/nativedraw/no_join"); ps_on = swOn("ux0:data/nativedraw/prog_swap"); lt_on = swOn("ux0:data/nativedraw/light_split");)
+      cg_on = swOn("ux0:data/nativedraw/clip_gpu"); nj_on = swOn("ux0:data/nativedraw/no_join"); ps_on = swOn("ux0:data/nativedraw/prog_swap"); lt_on = swOn("ux0:data/nativedraw/light_split"); dc_on = swOn("ux0:data/nativedraw/clip_discard");)
   repStart();
   dump_level = dumpLevel();  // dumps: off, screenshot, frame, sequence or auto
   if (dump_level == 4 && !draw_on) dump_level = 3;  // (auto needs the Vita drawing to compare)

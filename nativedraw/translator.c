@@ -87,12 +87,14 @@ static uint32_t texAddr(const uint32_t *e) { return (RE(e, 0xA0) & 0xFFFFF0) | (
 static SceGxmVertexProgram *nvp;
 DEV(static SceGxmVertexProgram *cvp;  // nvp with the scissor as hardware clip planes (switch clip_gpu)
     static const SceGxmProgramParameter *c_wvp, *c_sc;
-    static int cg_on, nj_on, ps_on;)
+    static int cg_on, nj_on, ps_on, dc_on;  // (dc_on: switch clip_discard, the scissor as a discard in nd_ftc and nd_fcc)
+    static SceGxmShaderPatcherId iftc, ifcc;
+    static const SceGxmProgramParameter *x_sc, *x_at, *x_fg, *x_tf, *x_env, *y_sc, *y_at, *y_fg;)
 static const SceGxmProgram *pft, *pfc, *pfm, *pfd, *pfa, *pv;
 static SceGxmShaderPatcherId ift, ifc, ifm, ifd, ifa;
 static const SceGxmProgramParameter *n_wvp, *n_tf, *n_tm, *n_td, *n_ta, *n_atx, *n_atc, *n_env, *n_fgx, *n_fgc, *n_fgd, *n_fga;
 typedef struct { uint64_t key; SceGxmFragmentProgram *p; } FP;
-static FP fps[64];
+static FP fps[128];
 static uint32_t nfps;
 // Fragment program for tex (0 no texture, 1 textured, 2 fast textured, 3 nd_fd, 4 nd_fa), key (0 no blending; otherwise the 4 bytes of SceGxmBlendInfo + 1,
 // see blendKey) and mask (SCE_GXM_COLOR_MASK_*, see colorMask). Finds it in fps or creates it with the patcher; 0 on
@@ -100,12 +102,15 @@ static uint32_t nfps;
 static SceGxmFragmentProgram *fragProg(int tex, uint32_t key, uint32_t mask) {
   uint64_t k = (uint64_t)key << 8 | mask << 3 | tex;
   for (uint32_t i = 0; i < nfps; i++) if (fps[i].key == k) return fps[i].p;
-  if (nfps >= 64) return 0;
+  if (nfps >= 128) return 0;
   SceGxmBlendInfo b;
   if (key) sceClibMemcpy(&b, &(uint32_t){ key - 1 }, 4);
   else { sceClibMemset(&b, 0, sizeof b); b.colorFunc = b.alphaFunc = SCE_GXM_BLEND_FUNC_NONE; }
   b.colorMask = mask;
   SceGxmFragmentProgram *p = 0;
+  DEV(if (tex >= 5) { int r5 = sceGxmShaderPatcherCreateFragmentProgram(pat, tex == 5 ? iftc : ifcc, SCE_GXM_OUTPUT_REGISTER_FORMAT_UCHAR4, SCE_GXM_MULTISAMPLE_NONE, &b, pv, &p);
+        if (r5 < 0) { alog("translator: clip discard program %u: %08x\n", tex, r5); return 0; }
+        fps[nfps].key = k; fps[nfps++].p = p; return p; })
   int r = sceGxmShaderPatcherCreateFragmentProgram(pat, tex == 4 ? ifa : tex == 3 ? ifd : tex == 2 ? ifm : tex ? ift : ifc, SCE_GXM_OUTPUT_REGISTER_FORMAT_UCHAR4,
                                                    SCE_GXM_MULTISAMPLE_NONE, &b, pv, &p);
   if (r < 0) { alog("translator: fragment program %u %08x: %08x\n", tex, key, r); return 0; }
@@ -164,6 +169,16 @@ static int trInit(void) {
                                   { 0, 28, SCE_GXM_ATTRIBUTE_FORMAT_U8N, 4, sceGxmProgramParameterGetResourceIndex(pc) } };
   SceGxmVertexStream st = { sizeof(TV), SCE_GXM_INDEX_SOURCE_INDEX_16BIT };
   if ((r = sceGxmShaderPatcherCreateVertexProgram(pat, iv, at, 3, &st, 1, &nvp)) < 0) { alog("translator: vertex program %08x\n", r); return r; }
+  DEV(if (dc_on) {
+        int rd = sceGxmShaderPatcherRegisterProgram(pat, (const SceGxmProgram *)nd_ftc_gxp, &iftc);
+        if (rd >= 0) rd = sceGxmShaderPatcherRegisterProgram(pat, (const SceGxmProgram *)nd_fcc_gxp, &ifcc);
+        const SceGxmProgram *px = sceGxmShaderPatcherGetProgramFromId(iftc), *py = sceGxmShaderPatcherGetProgramFromId(ifcc);
+        x_sc = sceGxmProgramFindParameterByName(px, "sc"); x_at = sceGxmProgramFindParameterByName(px, "at"); x_fg = sceGxmProgramFindParameterByName(px, "fog");
+        x_tf = sceGxmProgramFindParameterByName(px, "tf"); x_env = sceGxmProgramFindParameterByName(px, "env");
+        y_sc = sceGxmProgramFindParameterByName(py, "sc"); y_at = sceGxmProgramFindParameterByName(py, "at"); y_fg = sceGxmProgramFindParameterByName(py, "fog");
+        alog("translator: clip discard programs %08x\n", rd);
+        if (rd < 0 || !x_sc || !x_at || !x_fg || !x_tf || !x_env || !y_sc || !y_at || !y_fg) dc_on = 0;
+      })
   DEV(SceGxmShaderPatcherId ic;
       if (sceGxmShaderPatcherRegisterProgram(pat, (const SceGxmProgram *)(ps_on ? nd_vs_gxp : nd_vc_gxp), &ic) >= 0) {
         const SceGxmProgram *pc2 = sceGxmShaderPatcherGetProgramFromId(ic);
@@ -1056,11 +1071,11 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
   TV *o = tv[s];
   uint32_t *pal = tpal[s], np = 0, nv = 0, pal_prev = ~0u, pn = 0;  // np: words used; pal_prev/pn: the previous palette
   void *u;
-  DEV(int cg_cur = 0;)  // the program in the context is cvp
+  DEV(int cg_cur = 0, dg_cur = 0;)  // the program in the context is cvp; the region clip is narrowed
   // RG_ALL: the GPU keeps drawing the whole surface (switch clip_gpu narrows it by tiles to the scissor)
-#define RG_ALL() DEV(if (cg_on) sceGxmSetRegionClip(c, SCE_GXM_REGION_CLIP_OUTSIDE, 0, 0, LINE - 1, H - 1))
+#define RG_ALL() DEV(if (cg_on || dc_on) sceGxmSetRegionClip(c, SCE_GXM_REGION_CLIP_OUTSIDE, 0, 0, LINE - 1, H - 1))
   // SCENE: starts a scene on surface surf_tex with the vertex program and the matrix
-#define SCENE(surf_tex, reg) do { sceGxmBeginScene(c, 0, cur_rt ? rt_i : rt, reg, 0, t_sync, surf_tex, cur_rt ? &ds : &dss); t_zs = t_st = t_sr = t_cl = ~0u; zsSet(c, 0, 0); sceGxmSetVertexProgram(c, nvp); DEV(cg_cur = 0;) RG_ALL(); \
+#define SCENE(surf_tex, reg) do { sceGxmBeginScene(c, 0, cur_rt ? rt_i : rt, reg, 0, t_sync, surf_tex, cur_rt ? &ds : &dss); t_zs = t_st = t_sr = t_cl = ~0u; zsSet(c, 0, 0); sceGxmSetVertexProgram(c, nvp); DEV(cg_cur = 0; dg_cur = 0;) RG_ALL(); \
     float wm[16]; trWvp(wm, reg); sceGxmReserveVertexDefaultUniformBuffer(c, &u); sceGxmSetUniformDataF(u, n_wvp, 0, 16, wm); } while (0)
   // OPEN: closes the open scene (if any) and opens one on dst (0: surface s); the first time on the surface,
   // puts the normal image (or black: trBase) underneath
@@ -1201,7 +1216,8 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     DEV(VT(VS_REST);)
     int cgd = 0;  // (the scissor goes to the GPU's clip planes)
     DEV(cgd = cg_on && cvp && w3d && !self && prim != 6 && !(clr & 1) && (RE(e, 0x50) & 1) && (sc[0] > 0 || sc[1] > 0 || sc[2] < W || sc[3] < H);)
-    DEV(int ctr = cgd && !ps_on;)  // (with prog_swap the CPU still clips: only the program changes)
+    DEV(int dgd = dc_on && w3d && !self && prim != 6 && !(clr & 1) && (RE(e, 0x50) & 1) && (sc[0] > 0 || sc[1] > 0 || sc[2] < W || sc[3] < H);)
+    DEV(int ctr = (cgd && !ps_on) || dgd;)  // (with prog_swap the CPU still clips: only the program changes)
     if (prim != 6 && DEV(!ctr &&) (res = trTris(w, &n, room, &prim, sc, (clr & 1) || !(RE(e, 0x50) & 1), w3d))) break;
     DEV(VT(VS_TRIS);)
     DEV(t_c[TC_VOUT] += n; t_c[TC_CUT] += n != nb; t_c[TC_SAME] += same;)
@@ -1296,10 +1312,17 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     int fast = tex && !(c9 & 0x10007) && afn == 1 && !b2 && !(w3d && t3.fog);
     int mid = tex && !fast && !(c9 & 7) && afn == 1 && !b2;
     int mina = tex && !(c9 & 7) && (afn == 6 || afn == 7) && !b2;  // (afn 6 greater, 7 greater or equal: the rounded alpha passes from aref +- half a step up)
+    DEV(if (dgd) fast = mid = mina = 0;)
     DEV(why = !tex || fast || mid || mina ? 0 : !!(c9 & 7) << BW_FUNC | !!(c9 & 0x10000) << BW_DOUBLE | (afn != 1) << BW_ATEST | (w3d && t3.fog) << BW_FOG | b2 << BW_BLEND2X;
         pb = fast ? BP_FAST : !tex ? BP_COL : mid || mina ? BP_MID : BP_TEX;
         t_c[fast ? TC_VFAST : tex ? TC_VTEX : TC_VCOL] += n; t_c[TC_FOG] += w3d && t3.fog; t_c[TC_ATEST] += afn != 1; t_c[TC_BLEND] += key != 0;)
-    SceGxmFragmentProgram *p = fragProg(fast ? 2 : mid ? 3 : mina ? 4 : tex, key, colorMask(e));
+    int kind = fast ? 2 : mid ? 3 : mina ? 4 : tex;
+    DEV(if (dgd) {
+          kind = tex ? 5 : 6;
+          sceGxmSetRegionClip(c, SCE_GXM_REGION_CLIP_OUTSIDE, sc[0] > 0 ? sc[0] : 0, sc[1] > 0 ? sc[1] : 0, (sc[2] < LINE ? sc[2] : LINE) - 1, (sc[3] < H ? sc[3] : H) - 1);
+          dg_cur = 1;
+        } else if (dg_cur) { RG_ALL(); dg_cur = 0; })
+    SceGxmFragmentProgram *p = fragProg(kind, key, colorMask(e));
     if (!p) { res = T_PROG; break; }
     sceGxmSetFragmentProgram(c, p);
     sceGxmReserveFragmentDefaultUniformBuffer(c, &u);
@@ -1316,13 +1339,15 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
       sceGxmSetUniformDataF(u, mid ? n_fgd : n_fga, 0, 4, fg);
     } else {
       float at[4] = { (float)afn, (float)aref, b2 ? 1.0f : 0.0f, 0 }, fg[4], env[4];
-      sceGxmSetUniformDataF(u, tex ? n_atx : n_atc, 0, 4, at);
+      const SceGxmProgramParameter *qat = tex ? n_atx : n_atc, *qfg = tex ? n_fgx : n_fgc, *qtf = n_tf, *qenv = n_env;
+      DEV(if (dgd) { qat = tex ? x_at : y_at; qfg = tex ? x_fg : y_fg; qtf = x_tf; qenv = x_env; sceGxmSetUniformDataF(u, tex ? x_sc : y_sc, 0, 4, sc); })
+      sceGxmSetUniformDataF(u, qat, 0, 4, at);
       rgbf(RE(e, 0xCF) & 0xFFFFFF, fg);
-      sceGxmSetUniformDataF(u, tex ? n_fgx : n_fgc, 0, 4, fg);
+      sceGxmSetUniformDataF(u, qfg, 0, 4, fg);
       if (tex) {
-        sceGxmSetUniformDataF(u, n_tf, 0, 4, tf);
+        sceGxmSetUniformDataF(u, qtf, 0, 4, tf);
         rgbf(RE(e, 0xCA) & 0xFFFFFF, env);
-        sceGxmSetUniformDataF(u, n_env, 0, 4, env);
+        sceGxmSetUniformDataF(u, qenv, 0, 4, env);
       }
     }
     if (tex) {

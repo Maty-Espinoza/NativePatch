@@ -1,0 +1,29 @@
+// nd_ft with the scissor sc (doubled, x0, y0, x1, y1): what falls outside is discarded. Textured translator fragments (linear): GE texture function (tf.x 0 modulate, 1 decal, 2 blend with env, 3 replace,
+// 4 add; tf.y 1 = texture alpha (TCC); tf.z 1 = doubled color), fog (uv.z: 1 none, 0 all of color fog) and alpha test
+// (at.x GE function 0-7, at.y reference 0-255; at.z 1 = doubled alpha in the blend).
+float4 main(float3 uv : TEXCOORD0, float4 col : COLOR, float2 p : WPOS, uniform float4 sc, uniform sampler2D tex, uniform float4 tf, uniform float4 at,
+            uniform float4 env, uniform float4 fog) : COLOR
+{
+  if (p.x < sc.x || p.y < sc.y || p.x >= sc.z || p.y >= sc.w) discard;
+  float4 t = tex2D(tex, uv.xy);
+  float a0 = tf.y > 0.5 ? t.a : 1.0;
+  float4 c;
+  if (tf.x < 0.5) c = float4(t.rgb * col.rgb, a0 * col.a);
+  else if (tf.x < 1.5) c = float4(tf.y > 0.5 ? lerp(col.rgb, t.rgb, t.a) : t.rgb, col.a);
+  else if (tf.x < 2.5) c = float4(lerp(col.rgb, env.rgb, t.rgb), a0 * col.a);
+  else if (tf.x < 3.5) c = float4(t.rgb, tf.y > 0.5 ? t.a : col.a);
+  else c = float4(min(col.rgb + t.rgb, 1.0), a0 * col.a);
+  if (tf.z > 0.5) c.rgb = min(c.rgb * 2.0, 1.0);
+  c.rgb = lerp(fog.rgb, c.rgb, uv.z);
+  float a = floor(c.a * 255.0 + 0.5);
+  if (at.x < 0.5) discard;
+  else if (at.x < 1.5) {}
+  else if (at.x < 2.5) { if (a != at.y) discard; }
+  else if (at.x < 3.5) { if (a == at.y) discard; }
+  else if (at.x < 4.5) { if (a >= at.y) discard; }
+  else if (at.x < 5.5) { if (a > at.y) discard; }
+  else if (at.x < 6.5) { if (a <= at.y) discard; }
+  else { if (a < at.y) discard; }
+  if (at.z > 0.5) c.a = min(c.a * 2.0, 1.0);
+  return c;
+}
