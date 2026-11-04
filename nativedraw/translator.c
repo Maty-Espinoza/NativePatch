@@ -351,6 +351,14 @@ typedef struct {
   LT l[4];
 } T3;
 static T3 t3;
+// Split of the 3D vertex work (switch light_split), on 1 HD frame in 4. ls: us of each part of the general path on 1 vertex in 8, with one clock
+// read in each part (LS_CLOCK measures it); lk: draws, vertices and us per kind of draw (vertex type, lights on, generated UV, lit, fast path, specular).
+DEV(enum { LS_DECODE, LS_NORMAL, LS_LIGHT, LS_REST, LS_CLOCK, LS_N, LS_NV };
+    enum { LK_N = 12 };
+    static int lt_on, lt_m;
+    static uint32_t ls[LS_NV], ls_fr, lk_n;
+    static struct { uint32_t key, draws, verts, us; } lk[LK_N];)
+#define LM(k) DEV(if (lv) { uint32_t l1 = now(); ls[k] += l1 - l0; l0 = now(); })
 static float f24(uint32_t v) { union { uint32_t u; float f; } x = { v << 8 }; return x.f; }
 #ifdef __arm__
 static inline float tsqrt(float x) { __asm__("vsqrt.f32 %0, %1" : "=t"(x) : "t"(x)); return x; }
@@ -531,7 +539,10 @@ static int trVerts(RFrame *f, RDraw *d, TV *o, float tw, float th, uint32_t col0
     return T_OK;
   }
   TV r[2];
+  DEV(uint32_t lv = 0, l0 = 0;)
   for (uint32_t i = 0; i < d->n; i++) {
+    DEV(lv = lt_m && t && !(i & 7);
+        if (lv) { l0 = now(); ls[LS_CLOCK] += now() - l0; ls[LS_N]++; l0 = now(); })
     uint32_t k = !ib ? i : ix == 1 ? ib[i] : ix == 2 ? ((const uint16_t *)ib)[i] : ((const uint32_t *)ib)[i];
     if ((k + 1) * sz > d->vlen) return T_VERT;
     const uint8_t *p = vb + k * sz;
@@ -549,6 +560,7 @@ static int trVerts(RFrame *f, RDraw *d, TV *o, float tw, float th, uint32_t col0
         u = tc == 3 ? ((const float *)b)[0] : tc == 2 ? ((const uint16_t *)b)[0] * ks[2] : b[0] * ks[1];
         v = tc == 3 ? ((const float *)b)[1] : tc == 2 ? ((const uint16_t *)b)[1] * ks[2] : b[1] * ks[1];
       }
+      LM(LS_DECODE);
       if (t->lit || t->gen == 2) {
         if (t->rev) n[0] = -n[0], n[1] = -n[1], n[2] = -n[2];
         if (t->nl || t->gen == 2) {
@@ -556,10 +568,12 @@ static int trVerts(RFrame *f, RDraw *d, TV *o, float tw, float th, uint32_t col0
           tnorm(nw);
         }
       }
+      LM(LS_NORMAL);
       if (t->lit && t->nl) { t3World(t, x, wp); q.c = t3Light(t, wp, nw, q.c, ct != 0); }
       else if (t->lit) q.c = ct && t->upd & 1 ? t3Flat(t, q.c) : t->lc;
       if (t->gen) t3Gen(t, x, u, v, n, nw, &u, &v);
       else { u = u * t->us + t->uo; v = v * t->vs + t->vo; }
+      LM(LS_LIGHT);
       q.u = u * t->tw; q.v = v * t->th;
       const float *m = t->m;
       float cx = x[0] * m[0] + x[1] * m[4] + x[2] * m[8] + m[12], cy = x[0] * m[1] + x[1] * m[5] + x[2] * m[9] + m[13],
@@ -573,6 +587,7 @@ static int trVerts(RFrame *f, RDraw *d, TV *o, float tw, float th, uint32_t col0
       if (d->prim == 6) { if (w <= 0) continue; wd = 1 / w; }
       q.x = (t->sx * cx + t->tx * w) * wd; q.y = (t->sy * cy + t->ty * w) * wd;
       q.z = (.5f * w - (t->sz * cz + t->tz * w) / 131072.0f) * wd; q.w = w * wd;
+      LM(LS_REST);
     }
     else if (pt == 1) { q.x = (int8_t)p[opos]; q.y = (int8_t)p[opos + 1]; }
     else if (pt == 2) { q.x = ((const int16_t *)(p + opos))[0]; q.y = ((const int16_t *)(p + opos))[1]; q.z = .5f - ((const uint16_t *)(p + opos))[2] / 131072.0f; }
@@ -619,6 +634,15 @@ static int trVerts(RFrame *f, RDraw *d, TV *o, float tw, float th, uint32_t col0
 }
 
 #ifdef NP_DEV
+// Adds a 3D draw of n vertices that took us to its kind in lk
+static void ltNote(uint32_t vt, const T3 *t, uint32_t n, uint32_t us) {
+  uint32_t sp = 0, i;
+  for (int l = 0; l < 4; l++) sp |= t->l[l].on && t->l[l].comp == 1;
+  uint32_t key = (vt & 0x1FF) | t->nl << 9 | (t->gen != 0) << 12 | (t->lit != 0) << 13 | (uint32_t)v_fast << 14 | sp << 15;
+  for (i = 0; i < lk_n && lk[i].key != key; i++);
+  if (i == lk_n) { if (i == LK_N) return; lk[lk_n++].key = key; }
+  lk[i].draws++; lk[i].verts += n; lk[i].us += us;
+}
 // Reads one word per cache line of draw d's vertices and indices (vert_split). Returns the KB read
 static uint32_t trTouch(RFrame *f, const RDraw *d) {
   static const uint8_t is[4] = { 0, 1, 2, 4 };
@@ -1067,6 +1091,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
   int res = T_OK;
   // VT(k): adds the time since the last mark to part k of the vertex split
 #define VT(k) do { if (vm) { uint32_t x_ = now(); vu[k] += x_ - vc; vc = x_; } } while (0)
+  DEV(static uint32_t lsn; lt_m = lt_on && !(++lsn & 3); ls_fr += lt_m;)
   DEV(static uint32_t vsn; uint32_t vc = 0, vu[VS_N] = { 0 }, tkb = 0, vr0 = 0;
       int vm = v_on && !(++vsn & 7) ? 1 + (vsn >> 3 & 1) : 0;
       if (vm) vr0 = thrRun();)
@@ -1153,11 +1178,12 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     // (each vertex can become at most 22 when clipped; a draw that big goes straight to tv)
     TV *w = d->n * 22 + 8 <= sizeof ts / sizeof *ts ? ts : o + nv;
     uint32_t room = w == ts ? sizeof ts / sizeof *ts : TV_N - nv;
-    DEV(VT(VS_STATE); if (vm == 2) { tkb += trTouch(f, d); VT(VS_TOUCH); } v_fast = 0;)
+    DEV(VT(VS_STATE); if (vm == 2) { tkb += trTouch(f, d); VT(VS_TOUCH); } v_fast = 0; uint32_t lt0 = lt_m ? now() : 0;)
     if ((res = trVerts(f, d, w, tw, th, mat, sc, &n, w3d ? &t3 : 0))) {
       DEV(failNote(f, i, res);)
       break;
     }
+    DEV(if (lt_m && w3d) ltNote(d->vt, &t3, d->n, now() - lt0);)
     DEV(if (vm) { VT(w != ts ? VS_BIG : v_fast ? VS_FAST : VS_SLOW); vu[w != ts ? VS_NB : v_fast ? VS_NF : VS_NS] += d->n; vu[VS_DRAWS]++;
           if (w == ts) { uint32_t z; trVerts(f, d, w, tw, th, mat, sc, &z, w3d ? &t3 : 0); VT(v_fast ? VS_AGAIN_F : VS_AGAIN_S); } })
     DEV(if (w3d && t3.lit) for (int i = 0; i < 4; i++) if (t3.l[i].on) { t_c[TC_L0] += d->n; t_c[TC_LPT] += t3.l[i].type ? d->n : 0; t_c[TC_LSP] += t3.l[i].comp == 1 ? d->n : 0; }
