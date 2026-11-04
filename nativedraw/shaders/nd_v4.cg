@@ -1,0 +1,14 @@
+// 3D vertices of the record with a normal and no color, as the game wrote them (16-bit position and normal), lit by one directional
+// light. What the GE does to them. m: model -> surface clip space; tu: UV scale (xy) and offset (zw); fg: fog factor, dot(position, xyz)
+// + w, 0 to 1; nx, ny, nz: rows of model -> world for the normal; ld: direction to the light; hv: half vector (xyz) and specular power;
+// ba: constant part of the color; cd, cs: diffuse and specular colors.
+void main(float3 aPosition, float3 aNormal, float2 aTexcoord, uniform float4x4 m, uniform float4 tu, uniform float4 fg, uniform float4 nx,
+          uniform float4 ny, uniform float4 nz, uniform float4 ld, uniform float4 hv, uniform float4 ba, uniform float4 cd, uniform float4 cs,
+          float4 out vPosition : POSITION, float3 out vTexcoord : TEXCOORD0, float4 out vColor : COLOR)
+{
+  float3 n = normalize(float3(dot(aNormal, nx.xyz), dot(aNormal, ny.xyz), dot(aNormal, nz.xyz)));
+  float nl = dot(n, ld.xyz), s = nl >= 0 ? pow(max(dot(n, hv.xyz), 0), hv.w) : 0;
+  vPosition = mul(float4(aPosition, 1), m);
+  vTexcoord = float3(aTexcoord * tu.xy + tu.zw, saturate(dot(aPosition, fg.xyz) + fg.w));
+  vColor = saturate(float4(ba.rgb + max(nl, 0) * cd.rgb + s * cs.rgb, ba.a));
+}

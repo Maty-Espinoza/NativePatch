@@ -50,6 +50,7 @@ typedef struct {
 static inline uint32_t RE(const uint32_t *e, uint32_t r) {  // value of register r in state e (0 if not saved)
   return RI[r] ? e[RI[r] - 1] : 0;
 }
+#define GVL(vt) ((vt) == 0x142 ? 1 : (vt) == 0x143 ? 2 : 0)  // lit vertices nd_v4 reads: 1 16-bit UV, 2 float UV
 #define VX 0x80000000u  // (RDraw.voff) the vertices are in tx
 static inline const uint8_t *RV(const RFrame *f, const RDraw *d) {  // vertices of draw d
   return d->voff & VX ? f->tx + (d->voff & ~VX) : f->a + d->voff - 1;

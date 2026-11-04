@@ -607,12 +607,15 @@ static uint32_t rgBlock(const uint32_t *src, uint32_t n, uint32_t *last) {
   return *last = o + 1;
 }
 DEV(static int cpu_verts;)  // (switch cpu_verts: no vertices for the GPU, to compare)
-// 1 if the GPU can take the vertices of a draw as they are (nd_v3): float position and UV, 8888 color, no indices, triangles
-// in a scissor that takes in the whole image (what is seen of one 480 wide or more, all of a narrower one), no lights and no generated UV. The record must be free of the GPU: it reads these bytes while drawing.
+// 1 if the GPU can take the vertices of a draw as they are: no indices, triangles in a scissor that takes in the whole image (what is seen
+// of one 480 wide or more, all of a narrower one), no generated UV; for nd_v3 float position and UV, 8888 color and no lights, for
+// nd_v4 16-bit position and normal, no color and one directional light. The record must be free of the GPU: it reads these bytes while drawing.
 static int rgVGpu(uint32_t type, uint32_t vt, uint32_t idx) {
-  uint32_t w = reg[0x9D] & 0x7FF;
-  if (!(DEV(!cpu_verts &&) vt == 0x19F && !idx && type >= 3 && type <= 5 && !(reg[0xD3] & 1) && (reg[0x50] & 1) && !(reg[0xC0] & 3) &&
-        !(reg[0x17] & (reg[0x18] | reg[0x19] | reg[0x1A] | reg[0x1B]) & 1) && !(reg[0xD4] & 0xFFFFF) && (reg[0xD5] & 0x3FF) + 1 >= (w < 480 ? w : 480) &&
+  uint32_t w = reg[0x9D] & 0x7FF, on = (reg[0x18] & 1) | (reg[0x19] & 1) << 1 | (reg[0x1A] & 1) << 2 | (reg[0x1B] & 1) << 3, l = 0;
+  while (on >> l > 1) l++;  // (the last light on)
+  uint32_t lt = reg[0x5F + l], lit = reg[0x17] & 1 && on;
+  if (!(DEV(!cpu_verts &&) (vt == 0x19F ? !lit : GVL(vt) && lit && !(on & (on - 1)) && !(lt >> 8 & 3) && (lt & 3) != 2) && !idx && type >= 3 && type <= 5 && !(reg[0xD3] & 1) && (reg[0x50] & 1) && !(reg[0xC0] & 3) &&
+        !(reg[0xD4] & 0xFFFFF) && (reg[0xD5] & 0x3FF) + 1 >= (w < 480 ? w : 480) &&
         (w < 480 || (reg[0xD5] >> 10 & 0x3FF) >= 271))) return 0;
   ga.v_busy += rgBusy(rg_w);
   return !rgBusy(rg_w);

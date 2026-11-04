@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <math.h>
 #ifdef __arm__
 #define CALLGRIND_TOGGLE_COLLECT
 #else
@@ -41,17 +42,18 @@ int sceKernelGetMemBlockBase(SceUID u, void **b) { if (u < 0 || (uint32_t)u >= n
 int sceGxmReserveVertexDefaultUniformBuffer(SceGxmContext *c, void **u) { static float b[256]; *u = b; return 0; }
 int sceGxmReserveFragmentDefaultUniformBuffer(SceGxmContext *c, void **u) { static float b[256]; *u = b; return 0; }
 // What the context holds, for the dump: each program parameter (by program and name) with its last values, vertex stream, programs
-static struct { const SceGxmProgram *p; char name[8]; float v[16]; } par[32];
+static struct { const SceGxmProgram *p; char name[8]; float v[16]; } par[64];
 static const void *stream; static uint32_t fprog, tex_w;
 static FILE *dmp, *tri;
 static const SceGxmVertexProgram *vprog;
+static uint32_t gn[3];  // vertices drawn by each GPU vertex program
 static uint32_t cur_w, set_w, in_rt;  // (in_rt: an intermediate image: the CPU path clips there, nd_v3 leaves it to the GPU, so its triangles differ)
 volatile SceUID nd_gfx_uid;
 void sceGxmSetVertexProgram(SceGxmContext *c, const SceGxmVertexProgram *p) { vprog = p; }
 int sceGxmTextureSetWidth(SceGxmTexture *t, unsigned w) { cur_w = w; return 0; }
 int sceGxmSetFragmentTexture(SceGxmContext *c, unsigned i, const SceGxmTexture *t) { set_w = cur_w; return 0; }  // (width in the context: draws wait to be joined)
 const SceGxmProgramParameter *sceGxmProgramFindParameterByName(const SceGxmProgram *p, const char *n) {
-  for (int i = 0; i < 32; i++) {
+  for (int i = 0; i < 64; i++) {
     if (par[i].p == p && !strcmp(par[i].name, n)) return (void *)&par[i];
     if (!par[i].p) { par[i].p = p; strncpy(par[i].name, n, 7); return (void *)&par[i]; }
   }
@@ -76,7 +78,19 @@ static const float *uni(const SceGxmProgramParameter *p) { return ((typeof(&par[
 // k: its place in the stream
 static void triV(uint32_t k) {
   float o[4], u, v, g, c[4];
-  if (vprog == gvp) {
+  if (vprog == gvp[1] || vprog == gvp[2]) {
+    int lf = vprog == gvp[2];
+    const uint8_t *p = (const uint8_t *)stream + k * (lf ? 20 : 16);
+    const int16_t *x = (const int16_t *)(p + (lf ? 14 : 10)), *nr = (const int16_t *)(p + (lf ? 8 : 4));
+    const float *m = uni(g4[0]), *tu = uni(g4[1]), *fg = uni(g4[2]), *nx = uni(g4[3]), *ny = uni(g4[4]), *nz = uni(g4[5]), *ld = uni(g4[6]), *hv = uni(g4[7]), *ba = uni(g4[8]), *cd = uni(g4[9]), *cs = uni(g4cs);
+    float a = lf ? ((const float *)p)[0] : ((const uint16_t *)p)[0], b = lf ? ((const float *)p)[1] : ((const uint16_t *)p)[1];
+    float X = x[0], Y = x[1], Z = x[2], n[3] = { nr[0] * nx[0] + nr[1] * nx[1] + nr[2] * nx[2], nr[0] * ny[0] + nr[1] * ny[1] + nr[2] * ny[2], nr[0] * nz[0] + nr[1] * nz[1] + nr[2] * nz[2] };
+    tnorm(n);
+    for (int i = 0; i < 4; i++) o[i] = X * m[i] + Y * m[4 + i] + Z * m[8 + i] + m[12 + i];
+    u = a * tu[0] + tu[2]; v = b * tu[1] + tu[3]; g = X * fg[0] + Y * fg[1] + Z * fg[2] + fg[3]; g = g < 0 ? 0 : g > 1 ? 1 : g;
+    float nl = n[0] * ld[0] + n[1] * ld[1] + n[2] * ld[2], sd = n[0] * hv[0] + n[1] * hv[1] + n[2] * hv[2], s = nl >= 0 && sd > 0 ? pow(sd, hv[3]) : 0;
+    for (int i = 0; i < 4; i++) { float q = i < 3 ? ba[i] + (nl > 0 ? nl : 0) * cd[i] + s * cs[i] : ba[3]; c[i] = (q < 0 ? 0 : q > 1 ? 1 : q) * 255; }
+  } else if (vprog == gvp[0]) {
     const uint8_t *p = (const uint8_t *)stream + k * 24;
     const float *x = (const float *)(p + 12), *uv = (const float *)p, *m = uni(g_m), *tu = uni(g_tu), *fg = uni(g_fg), *cm = uni(g_cm), *ca = uni(g_ca);
     for (int i = 0; i < 4; i++) o[i] = x[0] * m[i] + x[1] * m[4 + i] + x[2] * m[8 + i] + m[12 + i];
@@ -95,7 +109,7 @@ static void triV(uint32_t k) {
 // The triangles of a draw of n vertices in order, each with the winding it has on screen; those with two equal vertices (joined
 // strips) draw nothing and are left out
 static void triDump(SceGxmPrimitiveType t, unsigned n) {
-  uint32_t sz = vprog == gvp ? 24 : sizeof(TV);
+  uint32_t sz = vprog == gvp[0] ? 24 : vprog == gvp[1] ? 16 : vprog == gvp[2] ? 20 : sizeof(TV);
   for (unsigned i = 0; i + 2 < n; i += t == SCE_GXM_PRIMITIVE_TRIANGLES ? 3 : 1) {
     unsigned a = t == SCE_GXM_PRIMITIVE_TRIANGLE_FAN ? 0 : i, b = i + 1, c = i + 2;
     if (t == SCE_GXM_PRIMITIVE_TRIANGLE_STRIP && i & 1) { unsigned s = b; b = c; c = s; }
@@ -106,9 +120,10 @@ static void triDump(SceGxmPrimitiveType t, unsigned n) {
 }
 int sceGxmDraw(SceGxmContext *c, SceGxmPrimitiveType t, SceGxmIndexFormat f, const void *ix, unsigned n) {
   if (tri && ix && !in_rt) triDump(t, n);
+  for (int i = 0; i < 3; i++) if (vprog == gvp[i]) gn[i] += n;
   if (!dmp || !ix) return 0;  // (no ix: the presenter's quad, not the translator's)
   fprintf(dmp, "D %d %u %08x %08x", t, n, fprog, tex_w);
-  for (int i = 0; i < 32 && par[i].p; i++) if (strcmp(par[i].name, "wvp")) for (int k = 0; k < 4; k++) fprintf(dmp, " %.5g", par[i].v[k]);
+  for (int i = 0; i < 64 && par[i].p; i++) if (strcmp(par[i].name, "wvp")) for (int k = 0; k < 4; k++) fprintf(dmp, " %.5g", par[i].v[k]);
   fputc('\n', dmp);
   for (unsigned i = 0; i < n; i++) {
     const TV *q = (const TV *)stream + ((const uint16_t *)ix)[i];
@@ -141,8 +156,8 @@ static void gvMark(RFrame *f) {
     RDraw *d = &f->d[i];
     const uint32_t *e = f->e[d->st];
     uint32_t d5 = RE(e, 0xD5), w = RE(e, 0x9D) & 0x7FF, m = (d->vlen + 15) & ~15u;
-    if (d->vt != 0x19F || d->ioff || d->prim < 3 || d->prim > 5 || RE(e, 0xD3) & 1 || !(RE(e, 0x50) & 1) || RE(e, 0xC0) & 3 ||
-        RE(e, 0x17) & (RE(e, 0x18) | RE(e, 0x19) | RE(e, 0x1A) | RE(e, 0x1B)) & 1 || RE(e, 0xD4) & 0xFFFFF || (d5 & 0x3FF) + 1 < (w < 480 ? w : 480) ||
+    if ((d->vt != 0x19F && !GVL(d->vt)) || d->ioff || d->prim < 3 || d->prim > 5 || RE(e, 0xD3) & 1 || !(RE(e, 0x50) & 1) || RE(e, 0xC0) & 3 ||
+        (d->vt == 0x19F && RE(e, 0x17) & (RE(e, 0x18) | RE(e, 0x19) | RE(e, 0x1A) | RE(e, 0x1B)) & 1) || (GVL(d->vt) && !(RE(e, 0x17) & 1)) || RE(e, 0xD4) & 0xFFFFF || (d5 & 0x3FF) + 1 < (w < 480 ? w : 480) ||
         (w >= 480 && (d5 >> 10 & 0x3FF) < 271)) continue;
     f->nvx += m;
     memcpy(f->tx + TX_N - f->nvx, f->a + d->voff - 1, d->vlen);
@@ -165,6 +180,6 @@ int main(int argc, char **argv) {
     CALLGRIND_TOGGLE_COLLECT;
     if (dmp) fprintf(dmp, "F %s\n", tnames[res]);
   }
-  printf("frames=%d draws=%u result=%s\n", n, f->nd, tnames[res]);
+  printf("frames=%d draws=%u result=%s gpu_vertices=%u,%u,%u\n", n, f->nd, tnames[res], gn[0] / n, gn[1] / n, gn[2] / n);
   return 0;
 }
