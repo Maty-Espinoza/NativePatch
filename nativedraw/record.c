@@ -822,8 +822,9 @@ static void regFlip(uint32_t fb, uint32_t fbw, uint32_t draws_counted) {
   tx_lo = 0;
   rg_t = 0;
   // The capturer is short of time and the presenter did not take the frame before this one: recording another is wasted,
-  // and a capturer that keeps up does not read lists the game is already rewriting. The next frame is only walked
-  if (slow) { f->flags = R_SKIP; ga.skip++; }
+  // and a capturer that keeps up does not read lists the game is already rewriting. A record the GPU is still reading is
+  // not written either. The next frame is only walked
+  if (slow || rgBusy(rg_w)) { f->flags = R_SKIP; ga.skip++; }
   // The GE keeps the palette it loaded whatever the memory holds now: its copy goes on to the new record (from memory
   // only if there is none)
   if (pal) { sceClibMemmove(f->a, pal, rg_clut_b); f->na = rg_clut_b; rg_clut = 1; }

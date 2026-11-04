@@ -338,6 +338,11 @@ int main(int argc, char **argv) {
     rf[rg_w]->nd = 1; rf[rg_w]->draws_seen = ~0u; rg_short = 1; regFlip(0x04000000, 512, 0);
     res->late_pr &= rf[rg_w]->flags == R_SKIP;
     rg_last = rg_pub; regFlip(0x04000000, 512, 0); res->late_pr &= !rf[rg_w]->flags;
+    // All the records in use by the GPU: the next frame is only walked, so none is written
+    volatile uint32_t gdone = 0; rg_gdone = &gdone; for (int i = 0; i < RN; i++) rg_gq[i] = 1;
+    rf[rg_w]->nd = 1; rf[rg_w]->draws_seen = ~0u; regFlip(0x04000000, 512, 0);
+    res->late_pr &= rf[rg_w]->flags == R_SKIP;
+    rg_gdone = 0; rf[rg_w]->flags = 0;
     reg[0xA0] = 0x130000; reg[0xA8] = 0x040000 | 64; reg[0xB8] = 6 << 8 | 6; reg[0xC3] = 3; reg[0xC2] = 0; CPY(0, 0x130) = CPY(0, 0x131) = 1;
     uint32_t ts0 = rgTex(0, 8);
     rf[rg_w]->flags = 1; regFlip(0x04000000, 512, 0);  // (incomplete: the same record is used again)
