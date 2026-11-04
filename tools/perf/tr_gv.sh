@@ -6,7 +6,7 @@ T=${T:-$HOME/tc}; . $T/env.sh
 R=$(cd "$(dirname "$0")/../.." && pwd); B=$R/build/perf; P=$R/tools/perf; mkdir -p $B/inc
 [ -e $B/inc/taihen.h ] || ln -s $T/taipkg/include/taihen.h $B/inc/
 for d in $VH/include/psp2* $VH/include/vitasdk*; do [ -e $B/inc/$(basename $d) ] || ln -s $d $B/inc/; done
-arm-linux-gnueabihf-gcc -static -O2 -mthumb -mfpu=neon -mfloat-abi=hard -w -I$B/inc -I$R/nativedraw -o $B/tr_gv $P/translate_bench.c $P/host/vita_stubs.c -lm
+arm-linux-gnueabihf-gcc -std=gnu17 -static -O2 -mthumb -mfpu=neon -mfloat-abi=hard -w -I$B/inc -I$R/nativedraw -o $B/tr_gv $P/translate_bench.c $P/host/vita_stubs.c -lm
 Q=$(command -v qemu-arm-static || command -v qemu-arm)
 for g in $P/data/*.bin.gz; do
   s=$(basename $g .bin.gz); gzip -dc $g > $B/$s.bin
