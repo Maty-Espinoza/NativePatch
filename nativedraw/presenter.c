@@ -654,18 +654,10 @@ static int presThread(SceSize args, void *argp) {
           if (h) { alog("translator: per HD frame: vertices in %u out %u lit %u | 3D draws %u (scissor under the surface %u), rewritten by trTris %u, flat %u, same state as the previous draw %u\n",
                  t_c[TC_VIN] / h, t_c[TC_VOUT] / h, t_c[TC_LIT] / h, t_c[TC_D3] / h, t_c[TC_SCIS] / h, t_c[TC_CUT] / h, t_c[TC_FLAT] / h, t_c[TC_SAME] / h);
             alog("translator: per HD frame: light on a vertex %u, of them point or spot %u, with specular %u | vertices with environment map %u\n", t_c[TC_L0] / h, t_c[TC_LPT] / h, t_c[TC_LSP] / h, t_c[TC_ENV] / h);
-            alog("translator: per HD frame: vertices by program: fast %u, textured %u, color %u | draws with fog %u, alpha test %u, blend %u\n",
-                 t_c[TC_VFAST] / h, t_c[TC_VTEX] / h, t_c[TC_VCOL] / h, t_c[TC_FOG] / h, t_c[TC_ATEST] / h, t_c[TC_BLEND] / h); }
+            alog("translator: per HD frame: vertices by program: fast %u, textured %u, color %u | draws with fog %u, alpha test %u, blend %u | vertices moved by the GPU %u\n",
+                 t_c[TC_VFAST] / h, t_c[TC_VTEX] / h, t_c[TC_VCOL] / h, t_c[TC_FOG] / h, t_c[TC_ATEST] / h, t_c[TC_BLEND] / h, t_c[TC_VGPU] / h); }
           for (int i = 0; i < TC_NC; i++) t_c[i] = 0;
-          if (ls_fr) {
-            uint32_t n = ls[LS_N] ? ls[LS_N] : 1;
-            alog("light split (frames %u): ns per vertex of the general path, clock read included: decode %u normal %u light %u rest %u | clock read %u | vertices %u\n", ls_fr,
-                 ls[LS_DECODE] * 1000 / n, ls[LS_NORMAL] * 1000 / n, ls[LS_LIGHT] * 1000 / n, ls[LS_REST] * 1000 / n, ls[LS_CLOCK] * 1000 / n, ls[LS_N]);
-            for (uint32_t i = 0; i < lk_n; i++)
-              alog("light split kind vt %03x lights %u gen %u lit %u fast %u specular %u: per frame draws %u vertices %u us %u\n", lk[i].key & 0x1FF, lk[i].key >> 9 & 7, lk[i].key >> 12 & 1, lk[i].key >> 13 & 1,
-                   lk[i].key >> 14 & 1, lk[i].key >> 15 & 1, lk[i].draws / ls_fr, lk[i].verts / ls_fr, lk[i].us / ls_fr);
-            sceClibMemset(ls, 0, sizeof ls); sceClibMemset(lk, 0, sizeof lk); lk_n = 0; ls_fr = 0;
-          })
+          )
       // Pacing: for each Adrenaline frame drawn by the Vita, how many PSP frames advanced since the previous one
       // (1 = none skipped; 0 = repeated the previous one). With skips or repeats, what a game draws every other
       // frame flashes.
@@ -705,8 +697,7 @@ static int swOn(const char *p) {  // the file exists and does not start with "no
 // are needed and starts the presenter thread.
 void presStart(void) {
   draw_on = swOn("ux0:data/nativedraw/draw");
-  DEV(c_wanted = swOn("ux0:data/nativedraw/gpu_timer"); clk_on = swOn("ux0:data/nativedraw/clocks"); v_on = swOn("ux0:data/nativedraw/vert_split");
-      cg_on = swOn("ux0:data/nativedraw/clip_gpu"); nj_on = swOn("ux0:data/nativedraw/no_join"); ps_on = swOn("ux0:data/nativedraw/prog_swap"); lt_on = swOn("ux0:data/nativedraw/light_split"); dc_on = swOn("ux0:data/nativedraw/clip_discard");)
+  DEV(c_wanted = swOn("ux0:data/nativedraw/gpu_timer"); clk_on = swOn("ux0:data/nativedraw/clocks"); v_on = swOn("ux0:data/nativedraw/vert_split");)
   repStart();
   dump_level = dumpLevel();  // dumps: off, screenshot, frame, sequence or auto
   if (dump_level == 4 && !draw_on) dump_level = 3;  // (auto needs the Vita drawing to compare)

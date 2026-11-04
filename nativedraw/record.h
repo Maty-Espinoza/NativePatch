@@ -26,13 +26,14 @@ static const uint8_t RI[256] __attribute__((unused)) = {
 #define RA_N (512 << 10)  // vertices, indices and palettes per frame
 #define TN_N 256          // textures per frame
 // A draw: st = index of its state in e[]; prim, n, vt = GE type, count and vertex type; voff/vlen = vertices
-// in a[]; ioff/clut/toff: offset + 1 (0: absent) of indices and palette in a[] and of the texture in tx; clen: palette
+// in a[], offset + 1, or with VX their offset in tx, where the GPU reads them (RV); ioff/clut/toff: offset + 1 (0: absent) of indices and palette in a[] and of the texture in tx; clen: palette
 // bytes. 3D, also offset + 1 in a[] (GE words): woff world (12), moff view, projection and texture (12 + 16 + 12), loff
 // registers 0x53-0x9A (72; 0: no lighting or environment map).
 typedef struct { uint16_t st, prim; uint32_t n, vt, voff, vlen, ioff, clut, clen, toff, woff, moff, loff; } RDraw;
 // A recorded frame: draws d[nd], states e[ne], area a[na] (vertices, indices, palettes) and textures in tx (ntx bytes)
 typedef struct {
   uint32_t frame, fb, fbw, nd, ne, na, flags, draws_seen, nt, ntx;  // flags: reasons for being incomplete (R_*)
+  uint32_t nvx;                   // bytes at the end of tx taken by vertices the GPU reads
   uint32_t mir, mirf;             // mirror copy the list was read with and last finished at publish time
   uint8_t *tx;                    // copied textures (uncached LPDDR, the GPU reads them from here): ntx bytes
   uint32_t ta[TN_N], tn[TN_N], to[TN_N];  // textures of this frame: address, bytes (| swizzle << 31), offset
@@ -48,6 +49,10 @@ typedef struct {
 } RFrame;
 static inline uint32_t RE(const uint32_t *e, uint32_t r) {  // value of register r in state e (0 if not saved)
   return RI[r] ? e[RI[r] - 1] : 0;
+}
+#define VX 0x80000000u  // (RDraw.voff) the vertices are in tx
+static inline const uint8_t *RV(const RFrame *f, const RDraw *d) {  // vertices of draw d
+  return d->voff & VX ? f->tx + (d->voff & ~VX) : f->a + d->voff - 1;
 }
 #define TX_N (3 << 19)  // texture bytes per frame (1.5 MB)
 // record.c functions used by the presenter

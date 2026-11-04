@@ -1,8 +1,0 @@
-// nd_v as another program, to measure a change of vertex program. sc.x: factor of the color, always 1.
-void main(float4 aPosition, float3 aTexcoord, float4 aColor, uniform float4x4 wvp, uniform float4 sc,
-          float4 out vPosition : POSITION, float3 out vTexcoord : TEXCOORD0, float4 out vColor : COLOR)
-{
-  vPosition = mul(aPosition, wvp);
-  vTexcoord = aTexcoord;
-  vColor = aColor * sc.x;
-}

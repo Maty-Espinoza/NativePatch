@@ -6,7 +6,7 @@
 set -e
 D=$(cd "$(dirname "$0")" && pwd); O=$D/../shaders_nd.h
 echo "// Translator shaders (nativedraw/shaders/*.cg), compiled with shaders/build.sh. Do not edit." > $O
-for s in nd_v nd_vc nd_vs nd_ft nd_fc nd_fm nd_fd nd_fa nd_ftc nd_fcc; do
+for s in nd_v nd_v3 nd_ft nd_fc nd_fm nd_fd nd_fa; do
   k=--fragment; case $s in nd_v*) k=--vertex;; esac
   (cd $SHACC && qemu-arm-static -B 0x100000000 -L /usr/arm-linux-gnueabihf ./shacc $k $D/$s.cg /tmp/$s.gxp)
   echo "static const unsigned char ${s}_gxp[] __attribute__((aligned(16), unused)) = {" >> $O

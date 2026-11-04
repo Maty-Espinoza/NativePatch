@@ -261,7 +261,7 @@ static void regInit(void) {
     SceUID b = sceKernelAllocMemBlock("nativedraw_record", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW,
                                       (sizeof(RFrame) + 0x3FFFF) & ~0x3FFFFu, 0);
     if (b < 0 || sceKernelGetMemBlockBase(b, &p) < 0) { reg_on = 0; clog("frame record: no memory (%08x)\n", b); return; }
-    rf[i] = p; rf[i]->nd = rf[i]->ne = rf[i]->na = rf[i]->flags = rf[i]->nt = rf[i]->ntx = 0;
+    rf[i] = p; rf[i]->nd = rf[i]->ne = rf[i]->na = rf[i]->flags = rf[i]->nt = rf[i]->ntx = rf[i]->nvx = 0;
     SceUID t = sceKernelAllocMemBlock("nativedraw_record_tex", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW_UNCACHE, TX_N, 0);
     if (t < 0 || sceKernelGetMemBlockBase(t, &p) < 0) { reg_on = 0; clog("frame record: no memory for textures (%08x)\n", t); return; }
     rf[i]->tx = p;
@@ -343,14 +343,13 @@ static uint32_t rgCopy(uint32_t a, uint32_t n) {
   return o + 1;
 }
 // Vertices of 3D draws from RAM wait here: nobody needs them before the list ends, and read together by DMA they cost a
-// fraction of many small reads. vp: where to read (s), where they go in area a (d) and how many bytes.
+// fraction of many small reads. vp: where to read (s), where they go (d) and how many bytes.
 #define VP_N 1024
-static struct { uint32_t s, d, n; } vp[VP_N];
+static struct { uint32_t s, n; uint8_t *d; } vp[VP_N];
 static uint32_t vpn;
 // Copies what waits: a run of entries close to each other in memory (gaps under 2 KB) goes by DMA once and is then
 // handed out piece by piece; a run under 4 KB is read directly, where a DMA call costs more than the bytes
 static void rgVFlush(void) {
-  RFrame *f = rf[rg_w];
   for (uint32_t i = 0, j; i < vpn; i = j) {
     uint32_t lo = vp[i].s, hi = lo + vp[i].n;
     for (j = i + 1; j < vpn; j++) {
@@ -360,18 +359,25 @@ static void rgVFlush(void) {
     }
     int dma = hi - lo >= 4096;
     if (dma) { sceDmacMemcpy(rg_ord, (const void *)PSP(lo), hi - lo); ga.v_dma++; ga.v_kb += hi - lo; }
-    for (uint32_t k = i; k < j; k++) sceClibMemcpy(f->a + vp[k].d, dma ? rg_ord + vp[k].s - lo : (const uint8_t *)PSP(vp[k].s), vp[k].n);
+    for (uint32_t k = i; k < j; k++) sceClibMemcpy(vp[k].d, dma ? rg_ord + vp[k].s - lo : (const uint8_t *)PSP(vp[k].s), vp[k].n);
     ga.v_runs++;
   }
   vpn = 0;
 }
-// Reserves n bytes of area a for the vertices at address s and queues them. Offset + 1; 0 if they do not fit (R_LIMIT).
-static uint32_t rgVLater(uint32_t s, uint32_t n) {
+// Reserves n bytes for the vertices at address s and queues them: with gpu, at the end of tx if they fit, otherwise in
+// area a. Value for voff; 0 if they do not fit (R_LIMIT).
+static uint32_t rgVLater(uint32_t s, uint32_t n, int gpu) {
   RFrame *f = rf[rg_w];
-  uint32_t o = (f->na + 15) & ~15u;
+  uint32_t o = (f->na + 15) & ~15u, m = (n + 15) & ~15u;
+  if (gpu && f->ntx + f->nvx + m <= TX_N) {
+    if (vpn == VP_N) rgVFlush();
+    f->nvx += m;
+    vp[vpn].s = s; vp[vpn].d = f->tx + TX_N - f->nvx; vp[vpn++].n = n;
+    return VX | (TX_N - f->nvx);
+  }
   if (o + n > RA_N) { DEV(if (p_on) pAdd(P_X_VERT, 0);) f->flags |= R_LIMIT; return 0; }
   if (vpn == VP_N) rgVFlush();
-  vp[vpn].s = s; vp[vpn].d = o; vp[vpn++].n = n;
+  vp[vpn].s = s; vp[vpn].d = f->a + o; vp[vpn++].n = n;
   f->na = o + n;
   return o + 1;
 }
@@ -456,7 +462,7 @@ static uint32_t rgTex(uint32_t r0, uint32_t r1) {
     if (vr && (rtRead(ta) || (ta & 0x1FFFF0) == rg_img[0] || (ta & 0x1FFFF0) == rg_img[1])) return 0;
     if (!vr && !stale && (e = rcGet(ta, key, 8 * rb)) && rcCheck(e, r0 / 8, (r1 + 7) / 8)) e = 0;
     if (!vr && !e) ga.c_rec++;
-    if (f->nt >= TN_N || (!e && f->ntx + n > TX_N)) {
+    if (f->nt >= TN_N || (!e && f->ntx + f->nvx + n > TX_N)) {
       DEV(static uint32_t lim_n; if (lim_n < 20) { lim_n++; clog("record: texture limit at frame %u: %u textures, %u of %u bytes, %u more wanted\n", gen, f->nt, f->ntx, TX_N, n); })
       DEV(if (p_on) pAdd(P_X_TEX, 0);) f->flags |= R_LIMIT; return 0;
     }
@@ -538,7 +544,7 @@ static void regPend(void) {
   // Dumps: the PSP image of this same frame, if all its pages come from its flip's copy
   if (f->nimg == ~0u) {
     f->nimg = 0;
-    uint32_t a = f->fb & 0x1FFFFF, n = (f->fbw & 0xFFFF) * 272 * ((f->fbw >> 16 & 3) == 3 ? 4 : 2), ok = isVram(f->fb) && f->ntx + n <= TX_N;
+    uint32_t a = f->fb & 0x1FFFFF, n = (f->fbw & 0xFFFF) * 272 * ((f->fbw >> 16 & 3) == 3 ? 4 : 2), ok = isVram(f->fb) && f->ntx + f->nvx + n <= TX_N;
     for (uint32_t pg = a >> 12; ok && pg <= (a + n - 1) >> 12; pg++) ok = CPY(b, pg) == (ready ? f->tgt : SB[0x40]);
     if (ok) { sceDmacMemcpy(f->tx + f->ntx, (const void *)PSP(base + a), n); f->nimg = f->ntx + 1; f->ntx += (n + 63) & ~63u; }
   }
@@ -599,6 +605,14 @@ static uint32_t rgBlock(const uint32_t *src, uint32_t n, uint32_t *last) {
   f->na = o + n * 4;
   return *last = o + 1;
 }
+DEV(static int cpu_verts;)  // (switch cpu_verts: no vertices for the GPU, to compare)
+// 1 if the GPU can take the vertices of a draw as they are (nd_v3): float position and UV, 8888 color, no indices, triangles
+// in the whole image, no lights and no generated UV. The record must be free of the GPU: it reads these bytes while drawing.
+static int rgVGpu(uint32_t type, uint32_t vt, uint32_t idx) {
+  return DEV(!cpu_verts &&) vt == 0x19F && !idx && type >= 3 && type <= 5 && !(reg[0xD3] & 1) && (reg[0x50] & 1) && !(reg[0xC0] & 3) &&
+         !(reg[0x17] & (reg[0x18] | reg[0x19] | reg[0x1A] | reg[0x1B]) & 1) && !(reg[0xD4] & 0xFFFFF) && (reg[0xD5] & 0x3FF) >= 479 &&
+         (reg[0xD5] >> 10 & 0x3FF) >= 271 && !rgBusy(rg_w);
+}
 // (capturer, on each draw, before vaddr/iaddr advance) Adds the draw to the frame: the state (RS) if changed, the
 // indices and vertices up to the highest index, and the texture (only the rows the vertices use). If something does
 // not fit or cannot be read the frame stays incomplete and stops copying. Finally adds the per-game usage statistics.
@@ -635,7 +649,7 @@ static void regDraw(uint32_t n, uint32_t type, uint32_t vt, uint32_t idx) {
   d->vlen = nv * vs;
   // (3D: the texture rows do not come from the vertices, so they can wait)
   int later = !(vt >> 23 & 1) && rg_ordc && !isVram(vaddr) && ramEnd(vaddr) >= vaddr + d->vlen && d->vlen <= OR_N;
-  if (!(d->voff = later ? rgVLater(vaddr, d->vlen) : rgCopy(vaddr, d->vlen))) return;
+  if (!(d->voff = later ? rgVLater(vaddr, d->vlen, rgVGpu(type, vt, idx)) : rgCopy(vaddr, d->vlen))) return;
   DEV(CSA(CS_RVT, tc); tc = CST();)
   d->woff = d->moff = d->loff = 0;
   static uint32_t lw, lm, ll;  // last matrix and light blocks of this frame
@@ -750,6 +764,7 @@ static void regFlip(uint32_t fb, uint32_t fbw, uint32_t draws_counted) {
   rgVFlush();
   DEV(PA(P_C_VFLUSH, tv); CSA(CS_VFL, tc);)
   RFrame *f = rf[rg_w];
+  if (rg_hash[rg_w] && f->nvx) sceClibMemset(rg_hash[rg_w] + ((TX_N - f->nvx) >> 7), 0, ((f->nvx >> 7) + 1) * sizeof *rg_hash[rg_w]);  // (no sorted texture is there now)
   int slow = rg_pend >= 0 || (rg_pub >= 0 && rg_pub != rg_last);
   if (!rg_thr) regPend();
   // Counted draws that did not go through regDraw
@@ -792,7 +807,7 @@ static void regFlip(uint32_t fb, uint32_t fbw, uint32_t draws_counted) {
   if (!(f->flags & R_MEMO)) { sceClibMemset(rt_pg, 0, sizeof rt_pg); sceClibMemset(want_now, 0, sizeof want_now); wantExpire(); rt_nb = 0; last_fb = ~0u; }
   const uint8_t *pal = rg_clut ? f->a + rg_clut - 1 : 0;
   f = rf[rg_w];
-  f->nd = f->ne = f->na = f->flags = f->draws_seen = f->nt = f->ntx = f->dv = f->nimg = 0;
+  f->nd = f->ne = f->na = f->flags = f->draws_seen = f->nt = f->ntx = f->nvx = f->dv = f->nimg = 0;
   tx_lo = 0;
   rg_t = 0;
   // The presenter did not take the frame before this one: recording another is wasted, and a capturer that keeps up does

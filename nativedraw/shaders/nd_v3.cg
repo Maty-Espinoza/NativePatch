@@ -1,0 +1,11 @@
+// 3D vertices of the record as the game wrote them: float position and UV, 8888 color. What the GE does to them, for a draw
+// with no lights and no generated UV. m: model -> surface clip space; tu: UV scale (xy) and offset (zw); fg: fog factor,
+// dot(position, xyz) + w, 0 to 1; cm, ca: color factor and addition (lit with no lights).
+void main(float3 aPosition, float2 aTexcoord, float4 aColor, uniform float4x4 m, uniform float4 tu, uniform float4 fg,
+          uniform float4 cm, uniform float4 ca, float4 out vPosition : POSITION, float3 out vTexcoord : TEXCOORD0,
+          float4 out vColor : COLOR)
+{
+  vPosition = mul(float4(aPosition, 1), m);
+  vTexcoord = float3(aTexcoord * tu.xy + tu.zw, saturate(dot(aPosition, fg.xyz) + fg.w));
+  vColor = saturate(aColor * cm + ca);
+}

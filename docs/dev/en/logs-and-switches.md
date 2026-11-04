@@ -71,11 +71,7 @@ or `auto` (3 letters are compared; `no` also turns it off). What each one saves,
 | `mirror_wait` | (NativeLink 0.0.3) the PSP flip waits for the mirror copy to finish (mailbox switch 32): in KOF 96 the frame's sprites are copied by the time the Vita asks for them. On the user's Vita it is set to `yes` |
 | `thread_split` | (development) every second in the capture log: on which core the capturer, the record thread and Adrenaline's drawing thread ran, how long, and how often they were preempted, interrupted and moved |
 | `vert_split` | (development) splits the vertex work of 1 HD frame in 8: `vertex split plain` and `vertex split warm` lines, summed up by `tools/bottleneck.py` |
-| `clip_gpu` | (development) 3D draws with a scissor under the surface are clipped by the GPU (`nd_vc`, hardware clip planes, with `sceGxmSetRegionClip` narrowing the work by tiles) and not by `trTris`. Read when Adrenaline opens |
-| `prog_swap` | (development) with `clip_gpu`, the same draws change vertex program (`nd_vs`, no clip planes) and the CPU keeps clipping: measures the program change alone |
-| `light_split` | (development) on 1 HD frame in 4, `light split` lines every 10 s: time of each part of the general vertex path and draws, vertices and time per kind of 3D draw |
-| `clip_discard` | (development) 3D draws with a scissor under the surface are clipped by a `discard` in the fragment program (`nd_ftc`, `nd_fcc`), with region clip, and not by `trTris` |
-| `no_join` | (development) every draw goes in its own `sceGxmDraw`, to measure what joining saves. Read when Adrenaline opens |
+| `cpu_verts` | (development) no vertices go to the GPU's vertex program (`nd_v3`): every 3D draw takes the CPU path, to compare. Read when Adrenaline opens. |
 | `cap_split` | (development) times every part of the capturer on every frame (it costs ~0.4 us per clock read): `capture split` lines by kind of frame, summed up by `tools/bottleneck.py` |
 | `capture_core` | (v13.13) `0`, `1` or `2` pins the capturer to that core (before v13.13 always core 1); no file or anything else: any of the 3. The `threads: capture` line of the log says which one was used; see `etapa2_ridge_racer.md` |
 

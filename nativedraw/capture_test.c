@@ -305,12 +305,16 @@ int main(int argc, char **argv) {
       sr[0] ^= 0xFF; same = ga.t_same; rgTexCopy(ds, sr, m, 128, 0x08900000u, 0, rg_ord);
       res->srt = res->srt && ga.t_same - same == m - 1024 && ds[0] == sr[0];
     }
-    {  // vertices that wait: two pieces out of order come out right in area a
+    {  // vertices that wait: two pieces out of order come out right in area a, and those for the GPU at the end of tx
       RFrame *g = rf[rg_w];
       *W(0x08C34000) = 0x11; *W(0x08C33000) = 0x22; rg_ordc = 1;
-      uint32_t v1 = rgVLater(0x08C34000, 4), v2 = rgVLater(0x08C33000, 4);
+      *W(0x08C32000) = 0x33;
+      uint32_t v1 = rgVLater(0x08C34000, 4, 0), v2 = rgVLater(0x08C33000, 4, 0), v3 = rgVLater(0x08C32000, 4, 1);
       rgVFlush();
+      RDraw dv = { .voff = v3 };
       res->srt = res->srt && v1 && v2 && *(uint32_t *)(g->a + v1 - 1) == 0x11 && *(uint32_t *)(g->a + v2 - 1) == 0x22 && !vpn;
+      res->srt = res->srt && v3 & VX && g->nvx == 16 && (v3 & ~VX) == TX_N - 16 && *(uint32_t *)RV(g, &dv) == 0x33;  // (for the GPU: end of tx)
+      g->nvx = 0;
     }
 #undef NEXT
     rf[rg_w]->flags = 1; tFlip(0x04000000, 512, 0);

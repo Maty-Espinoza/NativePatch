@@ -1871,7 +1871,7 @@ void capStart(void) {
   static const char *sw[] = { "ux0:data/nativedraw/no_gate", "ux0:data/nativedraw/no_mirror" DEV(, "ux0:data/nativedraw/no_idle", "ux0:data/nativedraw/gate_sync") };
   for (int k = 0; k < (int)(sizeof sw / sizeof *sw); k++) if (swOn(sw[k])) gp_flags |= 1u << k;
   if (swOn("ux0:data/nativedraw/mirror_wait")) gp_flags |= 32;  // the PSP flip waits for the mirror copy
-  DEV(no_capture = swOn("ux0:data/nativedraw/no_capture"); cs_on = swOn("ux0:data/nativedraw/cap_split"); tn_on = swOn("ux0:data/nativedraw/thread_split");)
+  DEV(no_capture = swOn("ux0:data/nativedraw/no_capture"); cpu_verts = swOn("ux0:data/nativedraw/cpu_verts"); cs_on = swOn("ux0:data/nativedraw/cap_split"); tn_on = swOn("ux0:data/nativedraw/thread_split");)
   DEV(pv_on = !swOn("ux0:data/nativedraw/no_lookahead");)
   DEV(p_on = level >= 2;)
   reg_on = swOn("ux0:data/nativedraw/draw");  // frame record

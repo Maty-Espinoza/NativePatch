@@ -50,12 +50,15 @@ static uint32_t recBin(RFrame *f, uint8_t *b) {
     to[i] = f->to[i];
     if (f->tc[i]) { to[i] = ntx; ntx += ((f->tn[i] & 0x7FFFFFFF) + 63) & ~63u; }
   }
-  uint32_t h[16] = { 0x47524E44, 4, f->frame, f->fb, f->fbw, f->nd, f->ne, f->na, f->flags, f->nt, ntx, f->mir, f->mirf, NRS, sizeof(RDraw), f->nimg }, o = 0;
+  uint32_t na = (f->na + 15) & ~15u, vx = TX_N - f->nvx;  // (vertices in tx go after area a)
+  if (na + f->nvx > RA_N) return 0;
+  uint32_t h[16] = { 0x47524E44, 4, f->frame, f->fb, f->fbw, f->nd, f->ne, na + f->nvx, f->flags, f->nt, ntx, f->mir, f->mirf, NRS, sizeof(RDraw), f->nimg }, o = 0;
 #define PUT(p, n) do { uint32_t n_ = (n); if (o + n_ > VB_N) return 0; sceClibMemcpy(b + o, p, n_); o += (n_ + 3) & ~3u; } while (0)
   PUT(h, sizeof h); PUT(RS, NRS);
   PUT(f->ta, f->nt * 4); PUT(f->tn, f->nt * 4); PUT(to, f->nt * 4); PUT(f->tq, f->nt * 4); PUT(f->tm, f->nt * 8);
   RDraw *dd = (RDraw *)(b + o);
-  PUT(f->d, f->nd * sizeof(RDraw)); PUT(f->e, f->ne * NRS * 4); PUT(f->a, f->na);
+  PUT(f->d, f->nd * sizeof(RDraw)); PUT(f->e, f->ne * NRS * 4); PUT(f->a, na); PUT(f->tx + vx, f->nvx);
+  for (uint32_t j = 0; j < f->nd; j++) if (dd[j].voff & VX) dd[j].voff = na + (dd[j].voff & ~VX) - vx + 1;
 #undef PUT
   if (o + ntx > VB_N) return 0;
   sceDmacMemcpy(b + o, f->tx, f->ntx);
