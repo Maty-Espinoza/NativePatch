@@ -349,7 +349,7 @@ static int hookEnd(SceGxmContext *c, const SceGxmNotification *v, const SceGxmNo
 #ifdef NP_DEV
   static uint32_t tper;
   uint32_t tp = PT();
-  if (tp) nd_gfx_uid = sceKernelGetThreadId();
+  if (!nd_gfx_uid) nd_gfx_uid = sceKernelGetThreadId();
   if (tp && used == fr + 1) { if (tper) pAdd(P_A_PERIOD, tp - tper); tper = tp; }
 #endif
   int r = TAI_CONTINUE(int, ref_end, c, v, f);
