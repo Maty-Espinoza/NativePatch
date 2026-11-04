@@ -697,7 +697,7 @@ static int swOn(const char *p) {  // the file exists and does not start with "no
 void presStart(void) {
   draw_on = swOn("ux0:data/nativedraw/draw");
   DEV(c_wanted = swOn("ux0:data/nativedraw/gpu_timer"); clk_on = swOn("ux0:data/nativedraw/clocks"); v_on = swOn("ux0:data/nativedraw/vert_split");
-      cg_on = swOn("ux0:data/nativedraw/clip_gpu"); nj_on = swOn("ux0:data/nativedraw/no_join");)
+      cg_on = swOn("ux0:data/nativedraw/clip_gpu"); nj_on = swOn("ux0:data/nativedraw/no_join"); ps_on = swOn("ux0:data/nativedraw/prog_swap");)
   repStart();
   dump_level = dumpLevel();  // dumps: off, screenshot, frame, sequence or auto
   if (dump_level == 4 && !draw_on) dump_level = 3;  // (auto needs the Vita drawing to compare)

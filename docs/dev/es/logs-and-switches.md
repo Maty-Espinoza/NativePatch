@@ -71,6 +71,7 @@ o `auto` (se comparan 3 letras; `no` también lo apaga). Qué guarda cada uno, c
 | `thread_split` | (desarrollo) cada segundo en el log de captura: en qué núcleo corrieron el capturador, el hilo del registro y el hilo de dibujo de Adrenaline, cuánto, y cuántas veces los desplazaron, interrumpieron y movieron |
 | `vert_split` | (desarrollo) separa el trabajo de vértices de 1 frame HD de cada 8: líneas `vertex split plain` y `vertex split warm`, resumidas por `tools/bottleneck.py` |
 | `clip_gpu` | (desarrollo) los dibujos 3D con scissor menor que la superficie los recorta la GPU (`nd_vc`, planos de recorte por hardware, con `sceGxmSetRegionClip` limitando el trabajo por tiles) y no `trTris`. Se lee al abrir Adrenaline |
+| `prog_swap` | (desarrollo) con `clip_gpu`, los mismos dibujos cambian de vertex program (`nd_vs`, sin planos) y la CPU sigue recortando: mide solo el cambio de programa |
 | `no_join` | (desarrollo) cada dibujo va en su propio `sceGxmDraw`, para medir cuánto ahorra unirlos. Se lee al abrir Adrenaline |
 | `cap_split` | (desarrollo) mide cada parte del capturador en todos los frames (cuesta ~0,4 us por lectura del reloj): líneas `capture split` por tipo de frame, resumidas por `tools/bottleneck.py` |
 | `capture_core` | (v13.13) `0`, `1` o `2` fija el capturador a ese núcleo (antes de v13.13 siempre el 1); sin archivo o cualquier otra cosa: cualquiera de los 3. La línea `threads: capture` del log dice cuál se usó; ver `etapa2_ridge_racer.md` |

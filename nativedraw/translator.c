@@ -87,7 +87,7 @@ static uint32_t texAddr(const uint32_t *e) { return (RE(e, 0xA0) & 0xFFFFF0) | (
 static SceGxmVertexProgram *nvp;
 DEV(static SceGxmVertexProgram *cvp;  // nvp with the scissor as hardware clip planes (switch clip_gpu)
     static const SceGxmProgramParameter *c_wvp, *c_sc;
-    static int cg_on, nj_on;)
+    static int cg_on, nj_on, ps_on;)
 static const SceGxmProgram *pft, *pfc, *pfm, *pfd, *pfa, *pv;
 static SceGxmShaderPatcherId ift, ifc, ifm, ifd, ifa;
 static const SceGxmProgramParameter *n_wvp, *n_tf, *n_tm, *n_td, *n_ta, *n_atx, *n_atc, *n_env, *n_fgx, *n_fgc, *n_fgd, *n_fga;
@@ -165,14 +165,14 @@ static int trInit(void) {
   SceGxmVertexStream st = { sizeof(TV), SCE_GXM_INDEX_SOURCE_INDEX_16BIT };
   if ((r = sceGxmShaderPatcherCreateVertexProgram(pat, iv, at, 3, &st, 1, &nvp)) < 0) { alog("translator: vertex program %08x\n", r); return r; }
   DEV(SceGxmShaderPatcherId ic;
-      if (sceGxmShaderPatcherRegisterProgram(pat, (const SceGxmProgram *)nd_vc_gxp, &ic) >= 0) {
+      if (sceGxmShaderPatcherRegisterProgram(pat, (const SceGxmProgram *)(ps_on ? nd_vs_gxp : nd_vc_gxp), &ic) >= 0) {
         const SceGxmProgram *pc2 = sceGxmShaderPatcherGetProgramFromId(ic);
         const SceGxmProgramParameter *qa = sceGxmProgramFindParameterByName(pc2, "aPosition"), *qt = sceGxmProgramFindParameterByName(pc2, "aTexcoord"), *qc = sceGxmProgramFindParameterByName(pc2, "aColor");
         c_wvp = sceGxmProgramFindParameterByName(pc2, "wvp"); c_sc = sceGxmProgramFindParameterByName(pc2, "sc");
         SceGxmVertexAttribute ac[3] = { at[0], at[1], at[2] };
         ac[0].regIndex = sceGxmProgramParameterGetResourceIndex(qa); ac[1].regIndex = sceGxmProgramParameterGetResourceIndex(qt); ac[2].regIndex = sceGxmProgramParameterGetResourceIndex(qc);
         int rc = sceGxmShaderPatcherCreateVertexProgram(pat, ic, ac, 3, &st, 1, &cvp);
-        alog("translator: clip plane program %08x\n", rc);
+        alog("translator: clip plane program %08x (prog_swap %d)\n", rc, ps_on);
         if (rc < 0 || !c_wvp || !c_sc) cvp = 0;
       })
   if (!fragProg(0, 0, C_RGB) || !fragProg(1, 0, C_RGB)) return -3;
@@ -1175,7 +1175,8 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     DEV(VT(VS_REST);)
     int cgd = 0;  // (the scissor goes to the GPU's clip planes)
     DEV(cgd = cg_on && cvp && w3d && !self && prim != 6 && !(clr & 1) && (RE(e, 0x50) & 1) && (sc[0] > 0 || sc[1] > 0 || sc[2] < W || sc[3] < H);)
-    if (prim != 6 && !cgd && (res = trTris(w, &n, room, &prim, sc, (clr & 1) || !(RE(e, 0x50) & 1), w3d))) break;
+    DEV(int ctr = cgd && !ps_on;)  // (with prog_swap the CPU still clips: only the program changes)
+    if (prim != 6 && DEV(!ctr &&) (res = trTris(w, &n, room, &prim, sc, (clr & 1) || !(RE(e, 0x50) & 1), w3d))) break;
     DEV(VT(VS_TRIS);)
     DEV(t_c[TC_VOUT] += n; t_c[TC_CUT] += n != nb; t_c[TC_SAME] += same;)
     if (!n) { pd = 0; continue; }  // (t, tw and th are this draw's now, not those of the state in the context)
@@ -1258,8 +1259,9 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
           sceGxmSetVertexProgram(c, cgd ? cvp : nvp);
           sceGxmReserveVertexDefaultUniformBuffer(c, &u); sceGxmSetUniformDataF(u, cgd ? c_wvp : n_wvp, 0, 16, wm);
           if (cgd) {
-            sceGxmSetUniformDataF(u, c_sc, 0, 4, sc);
-            sceGxmSetRegionClip(c, SCE_GXM_REGION_CLIP_OUTSIDE, sc[0] > 0 ? sc[0] : 0, sc[1] > 0 ? sc[1] : 0, (sc[2] < LINE ? sc[2] : LINE) - 1, (sc[3] < H ? sc[3] : H) - 1);
+            static const float one[4] = { 1, 1, 1, 1 };
+            sceGxmSetUniformDataF(u, c_sc, 0, 4, ps_on ? one : sc);
+            if (!ps_on) sceGxmSetRegionClip(c, SCE_GXM_REGION_CLIP_OUTSIDE, sc[0] > 0 ? sc[0] : 0, sc[1] > 0 ? sc[1] : 0, (sc[2] < LINE ? sc[2] : LINE) - 1, (sc[3] < H ? sc[3] : H) - 1);
           } else RG_ALL();
           cg_cur = cgd;
         })
