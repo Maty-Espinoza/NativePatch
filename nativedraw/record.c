@@ -429,7 +429,7 @@ static int rgStale(RFrame *f, uint32_t i, uint32_t g0, uint32_t g1) {
 // rows is one contiguous block and sorted takes the same place (rgTexCopy sorts it). RAM ones are copied right away by
 // DMA (the game may change them); VRAM ones are marked and regPend copies them from the flip's mirror.
 // Returns offset + 1 in tx; 0 if not copied (unsupported format, image drawn in this frame, limit or unreadable).
-static uint32_t tx_lo;  // what rgTex returned for the last VRAM texture of this record; 0: none
+static uint32_t tx_lo, tx_all;  // what rgTex returned for the last VRAM texture of this record (0: none); 1 if it asked for all its rows
 static uint32_t rgTex(uint32_t r0, uint32_t r1) {
   RFrame *f = rf[rg_w];
   static const uint8_t bp[6] = { 16, 16, 16, 32, 4, 8 };
@@ -498,7 +498,7 @@ static uint32_t rgTex(uint32_t r0, uint32_t r1) {
     if (!vr) rg_tc[i] |= ((h - g < 64 ? (1ull << (h - g)) : 0) - 1) << g;
     g = h;
   }
-  if (vr) { lt = ta; lk = key; lr = rr; tx_lo = f->to[i] + 1; }
+  if (vr) { lt = ta; lk = key; lr = rr; tx_lo = f->to[i] + 1; tx_all = !r0 && r1 == th; }
   return f->to[i] + 1;
 }
 // Pending frame: VRAM textures are copied from the mirror copy the PSP made at that frame's flip (f->tgt): the game
@@ -621,7 +621,7 @@ static void regDraw(uint32_t n, uint32_t type, uint32_t vt, uint32_t idx) {
   DEV(if (cs_on) cs_t[CS_RST] += t1 - t0;)
   RDraw *d = &f->d[f->nd];
   d->st = f->ne - 1; d->prim = type; d->n = n; d->vt = vt; d->ioff = 0; d->clut = rg_clut; d->clen = rg_clut ? rg_clut_b : 0;
-  uint32_t vs = vsize(vt), nv = n;
+  uint32_t vs = vs_sz, nv = n;
   DEV(uint32_t tc = CST();)
   if (idx) {  // with indices: copied, and the vertices up to the highest index
     uint32_t ib = idx == 1 ? 1 : idx == 2 ? 2 : 4;
@@ -660,9 +660,13 @@ static void regDraw(uint32_t n, uint32_t type, uint32_t vt, uint32_t idx) {
   if ((reg[0x1E] & 1) && !(reg[0xD3] & 1)) {  // the texture, after the vertices (they give the rows it uses)
     uint32_t r0 = 0, r1 = 0;
     DEV(tc = CST();)
-    rgRows(vt, f->a + d->voff - 1, d->vlen, d->ioff ? f->a + d->ioff - 1 : 0, n, &r0, &r1);
-    DEV(CSA(CS_RRW, tc); tc = CST();)
-    d->toff = rgTex(r0, r1);
+    if (!(vt >> 23 & 1) && !rg_tchg && tx_lo && tx_all) d->toff = tx_lo;  // (3D, the same VRAM texture, whole: nothing to look up)
+    else {
+      if (vt >> 23 & 1) rgRows(vt, f->a + d->voff - 1, d->vlen, d->ioff ? f->a + d->ioff - 1 : 0, n, &r0, &r1);
+      DEV(CSA(CS_RRW, tc); tc = CST();)
+      d->toff = rgTex(r0, r1);
+      rg_tchg = 0;
+    }
     DEV(CSA(CS_RTX, tc);)
   }
   f->nd++;
@@ -723,7 +727,7 @@ static void regXfer(uint32_t s, uint32_t t, uint32_t bp) {
   }
   reg[0x1E] = 1; reg[0xA0] = sa & 0xFFFFFF; reg[0xA8] = (sa >> 8 & 0xFF0000) | sw; reg[0xB8] = lh << 8 | lw;
   reg[0xC3] = bp == 4 ? 3 : reg[0xD2] & 3; reg[0xC7] = 0x101; reg[0xC9] = 0x103; reg[0xD5] = 0x7FDFF;
-  toff = rgTex(0, h);
+  toff = rgTex(0, h); tx_lo = 0;
   uint32_t e[NRS];
   for (int i = 0; i < NRS; i++) { e[i] = reg[RS[i]]; reg[RS[i]] = v[i]; }
   if (!toff) { RG_READ(NR_X_TEX, sa, da); return; }

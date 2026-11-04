@@ -369,7 +369,8 @@ static struct { volatile uint32_t n[4], ch1[4], ch2[4], warn[4], wall[4], ms1, m
 #define smpAdd(a, n, kind) ((void)sizeof(n))
 #endif
 
-static int rg_chg = 1, rg_lchg = 1, rg_mchg = 1;  // since the last recorded draw: state, light or matrix values changed
+static uint32_t vs_vt = ~0u, vs_sz;  // last vertex type and its size
+static int rg_chg = 1, rg_lchg = 1, rg_mchg = 1, rg_tchg = 1;  // since the last recorded draw: state, light or matrix values changed
 static int reg_on, reg_big;  // frame record (switch draw); last frame had more draws than a record holds
 // Until when (Vita time) each frame carries the exact PSP image: set by dump.c for an
 // L+R+SELECT dump and used by record.c
@@ -383,6 +384,7 @@ static void draw(uint32_t d) {
   DEV(uint32_t tp = p_on && !(acc.draws & 7) ? now() : 0, tc = CST();)  // (1 in 8 draws, timed)
   uint32_t n = d & 0xFFFF, type = (d >> 16) & 7, vt = reg[0x12], idx = (vt >> 11) & 3;
   if (!n) { acc.dempty++; return; }
+  if (vt != vs_vt) { vs_vt = vt; vs_sz = vsize(vt); }  // (vertex size rarely changes: it is remembered)
   DEV(uint32_t tr = CST();)
   if (reg_on) regDraw(n, type, vt, idx);  // frame record
   DEV(CSA(CS_REG, tr);)
@@ -404,8 +406,6 @@ static void draw(uint32_t d) {
     if (reg[0x23] & 1) markRt(reg[0x9E] & 0xFFFFF0, (reg[0x9F] & 0x7FF) * h * 2);  // z (with z test)
   }
   if (isVram(vaddr)) acc.dvert_vram++;
-  static uint32_t vs_vt = ~0u, vs_sz;  // vertex size rarely changes: it is remembered
-  if (vt != vs_vt) { vs_vt = vt; vs_sz = vsize(vt); }
   uint32_t vs = vs_sz, vstart = vaddr;
   if (EXTREME) { if (idx) smpAdd(iaddr, n * (idx == 1 ? 1 : idx == 2 ? 2 : 4), 1); else smpAdd(vaddr, n * vs, 0); }
   if (rec && !idx) recVert(vstart, n * vs);
@@ -884,7 +884,7 @@ static int __attribute__((noinline)) walkList(List *l) {
         if (rec) rec->mmask |= 1 << m;
         if (mi[m] < (uint32_t)max) { if (mtx[m][mi[m]] != d) { mtx[m][mi[m]] = d; dirty |= C_MTX; rg_mchg = 1; } mi[m]++; }
       } else {
-        if (cls[c] && reg[c] != d) { rg_chg = rg_lchg = 1; dirty |= cls[c]; if (cls[c] & (C_OTHER | C_TL)) acc.chg[c]++; }
+        if (cls[c] && reg[c] != d) { rg_chg = rg_lchg = 1; rg_tchg |= cls[c] & C_TEX; dirty |= cls[c]; if (cls[c] & (C_OTHER | C_TL)) acc.chg[c]++; }
         reg[c] = d; TOUCH(c);
       }
       if (--k) { pc += 4; op = R0.buf[++i]; continue; }
