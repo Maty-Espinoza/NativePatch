@@ -1033,8 +1033,10 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
   uint32_t *pal = tpal[s], np = 0, nv = 0, pal_prev = ~0u, pn = 0;  // np: words used; pal_prev/pn: the previous palette
   void *u;
   DEV(int cg_cur = 0;)  // the program in the context is cvp
+  // RG_ALL: the GPU keeps drawing the whole surface (switch clip_gpu narrows it by tiles to the scissor)
+#define RG_ALL() DEV(if (cg_on) sceGxmSetRegionClip(c, SCE_GXM_REGION_CLIP_OUTSIDE, 0, 0, LINE - 1, H - 1))
   // SCENE: starts a scene on surface surf_tex with the vertex program and the matrix
-#define SCENE(surf_tex, reg) do { sceGxmBeginScene(c, 0, cur_rt ? rt_i : rt, reg, 0, t_sync, surf_tex, cur_rt ? &ds : &dss); t_zs = t_st = t_sr = t_cl = ~0u; zsSet(c, 0, 0); sceGxmSetVertexProgram(c, nvp); DEV(cg_cur = 0;) \
+#define SCENE(surf_tex, reg) do { sceGxmBeginScene(c, 0, cur_rt ? rt_i : rt, reg, 0, t_sync, surf_tex, cur_rt ? &ds : &dss); t_zs = t_st = t_sr = t_cl = ~0u; zsSet(c, 0, 0); sceGxmSetVertexProgram(c, nvp); DEV(cg_cur = 0;) RG_ALL(); \
     float wm[16]; trWvp(wm, reg); sceGxmReserveVertexDefaultUniformBuffer(c, &u); sceGxmSetUniformDataF(u, n_wvp, 0, 16, wm); } while (0)
   // OPEN: closes the open scene (if any) and opens one on dst (0: surface s); the first time on the surface,
   // puts the normal image (or black: trBase) underneath
@@ -1207,6 +1209,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
         sceGxmTextureInitLinear(&ts, dst->mem, SCE_GXM_TEXTURE_FORMAT_A8B8G8R8, LINE, H, 0);
         sceGxmEndScene(c, 0, gEnd()); cNote(C_INT, &gq_n, t_draws - d0, spx / 1000, ssw); opened = 0;
         sceGxmBeginScene(c, 0, rt_c, &vr, 0, t_sync, &rtc.cs, &ds);
+        RG_ALL();
         t_zs = t_st = t_sr = t_cl = ~0u; zsSet(c, 0, 0); sceGxmSetCullMode(c, SCE_GXM_CULL_NONE);
         sceGxmSetVertexProgram(c, vp); sceGxmSetFragmentProgram(c, fp);
         float wm[16]; trWvp(wm, &vr);
@@ -1254,7 +1257,10 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
           trWvp(wm, cur_rt ? &cur_rt->vr : 0);
           sceGxmSetVertexProgram(c, cgd ? cvp : nvp);
           sceGxmReserveVertexDefaultUniformBuffer(c, &u); sceGxmSetUniformDataF(u, cgd ? c_wvp : n_wvp, 0, 16, wm);
-          if (cgd) sceGxmSetUniformDataF(u, c_sc, 0, 4, sc);
+          if (cgd) {
+            sceGxmSetUniformDataF(u, c_sc, 0, 4, sc);
+            sceGxmSetRegionClip(c, SCE_GXM_REGION_CLIP_OUTSIDE, sc[0] > 0 ? sc[0] : 0, sc[1] > 0 ? sc[1] : 0, (sc[2] < LINE ? sc[2] : LINE) - 1, (sc[3] < H ? sc[3] : H) - 1);
+          } else RG_ALL();
           cg_cur = cgd;
         })
     uint32_t afn = 1, aref = 0, c9 = RE(e, 0xC9), b2 = !(clr & 1) && blend2x(e);
@@ -1319,6 +1325,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
   if (!has_base && res == T_OK) OPEN(0);  // (frame with no draws to the surface: it still gets the image underneath)
   RUN();
   if (opened) {  // (if something failed midway, the surface keeps what was drawn: not used)
+    RG_ALL();
     sceGxmSetCullMode(c, SCE_GXM_CULL_NONE);
     sceGxmSetFrontDepthFunc(c, SCE_GXM_DEPTH_FUNC_ALWAYS);  // the context is Adrenaline's: its defaults back
     sceGxmSetFrontDepthWriteEnable(c, SCE_GXM_DEPTH_WRITE_ENABLED);
@@ -1330,6 +1337,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     cNote(cur_rt ? C_INT : C_TR, &gq_n, t_draws - d0, spx / 1000, ssw);
   }
 #undef VT
+#undef RG_ALL
 #undef OPEN
 #undef SURF_WAIT
 #undef RUN
