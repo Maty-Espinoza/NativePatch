@@ -16,6 +16,9 @@ DEV(static volatile uint32_t t_us[6];)  // us in trFrame: check, textures and pa
 // Vertices and draws in detail: see the translator detail lines of the log
 DEV(enum { TC_VIN, TC_VOUT, TC_D3, TC_CUT, TC_FLAT, TC_SCIS, TC_LIT, TC_SAME, TC_VFAST, TC_VTEX, TC_VCOL, TC_FOG, TC_ATEST, TC_BLEND, TC_L0, TC_LPT, TC_LSP, TC_ENV, TC_NC };)
 DEV(static volatile uint32_t t_c[TC_NC];)
+// thousands of pixels sent per program on the sampled frames, surface [0] and intermediate images [1] (before the z test)
+DEV(enum { BP_FAST, BP_FOG, BP_TEX, BP_COL, BP_BASE, BP_N };
+    static volatile uint32_t b_px[2][BP_N], b_pxn;)
 static uint32_t t_seen[TN];   // times each reason was seen (the first one is logged in detail)
 typedef struct { float x, y, z, w, u, v, f; uint32_t c; } TV;  // translated vertex (32 bytes, the nd_v format); f: fog (1: none)
 static TV *tv[2];            // translated vertices, one per surface
@@ -644,6 +647,28 @@ static uint32_t trNarrow(SceGxmTexture *t, const uint8_t *src, uint32_t fmt, uin
 
 // Pixels covered by the n translated vertices of a draw (rectangles: each one; the rest: their bounding
 // rectangle). For the timer.
+#ifdef NP_DEV
+// Pixels of the 3D triangles at o (x and y carry their w), clamped to the screen: one side only if the draw culls, since half
+// of them would not be drawn. Triangles behind the camera are left out.
+static float trPx3(const TV *o, uint32_t n, uint32_t prim, int cull) {
+  float s[2] = { 0, 0 };
+  for (uint32_t i = 0; i + 2 < n; i += prim == 3 ? 3 : 1) {
+    const TV *t[3] = { o + (prim == 5 ? 0 : i), o + i + 1, o + i + 2 };
+    float x[3], y[3];
+    int ok = 1;
+    for (int j = 0; j < 3; j++) {
+      if (t[j]->w <= 0) { ok = 0; break; }
+      float a = t[j]->x / t[j]->w, b = t[j]->y / t[j]->w;
+      x[j] = a < 0 ? 0 : a > LINE ? LINE : a; y[j] = b < 0 ? 0 : b > H ? H : b;
+    }
+    if (!ok) continue;
+    float a = ((x[1] - x[0]) * (y[2] - y[0]) - (x[2] - x[0]) * (y[1] - y[0])) * .5f;
+    if (prim == 4 && (i & 1)) a = -a;
+    s[a < 0] += a < 0 ? -a : a;
+  }
+  return cull ? (s[0] > s[1] ? s[0] : s[1]) : s[0] + s[1];
+}
+#endif
 static float trArea(const TV *o, uint32_t n, uint32_t prim) {
   float a = 0;
   if (prim == 6) {
@@ -902,7 +927,8 @@ static void trRegions(RFrame *f, uint32_t disp) {
 // returns the reason and the surface is not used.
 static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base) {
   t3.ke = 0;
-  DEV(uint32_t ta = now(), tb, ut[6]; sceClibMemcpy(ut, (void *)t_us, sizeof ut);)
+  DEV(uint32_t ta = now(), tb, ut[6]; sceClibMemcpy(ut, (void *)t_us, sizeof ut);
+      static uint32_t hdn; int smp = !(++hdn & 3), pb = BP_COL; float bpx[2][BP_N] = { { 0 } };)
   uint32_t disp, ord;
   int r = trCheckFrame(f, &disp, &ord);
   if (r) return r;
@@ -932,7 +958,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     d0 = t_draws; spx = 0; ssw = 0; cur_rt = (dst_); opened = 1; \
     if (!cur_rt && has_base && zcut) sceGxmDepthStencilSurfaceSetForceLoadMode(&dss, SCE_GXM_DEPTH_STENCIL_FORCE_LOAD_ENABLED); \
     SCENE(cur_rt ? &cur_rt->cs : &cs[s], cur_rt ? &cur_rt->vr : 0); \
-    if (!cur_rt && !has_base) { has_base = 1; nv = trBase(c, base, o, nv); spx += W * H; } } while (0)
+    if (!cur_rt && !has_base) { has_base = 1; nv = trBase(c, base, o, nv); spx += W * H; DEV(bpx[0][BP_BASE] += W * H;) } } while (0)
   // SURF_WAIT: the surface s is being sampled for the screen until the previous frame's scenes end, and its scene must not start before
 #define SURF_WAIT() do { if (!cur_rt) gWait(fq[0]); } while (0)
   // RUN: sends the pending draw, the n vertices at rv in primitive rp; draws with the state already set wait in it to be joined
@@ -1124,7 +1150,8 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     uint32_t afn = 1, aref = 0, c9 = RE(e, 0xC9), b2 = !(clr & 1) && blend2x(e);
     if (!(clr & 1) && (RE(e, 0x22) & 1)) alphaFn(e, &afn, &aref);
     int fast = tex && !(c9 & 0x10007) && afn == 1 && !b2 && !(w3d && t3.fog);
-    DEV(t_c[fast ? TC_VFAST : tex ? TC_VTEX : TC_VCOL] += n; t_c[TC_FOG] += w3d && t3.fog; t_c[TC_ATEST] += afn != 1; t_c[TC_BLEND] += key != 0;)
+    DEV(pb = fast ? BP_FAST : !tex ? BP_COL : w3d && t3.fog && !(c9 & 0x10007) && afn == 1 && !b2 ? BP_FOG : BP_TEX;
+        t_c[fast ? TC_VFAST : tex ? TC_VTEX : TC_VCOL] += n; t_c[TC_FOG] += w3d && t3.fog; t_c[TC_ATEST] += afn != 1; t_c[TC_BLEND] += key != 0;)
     SceGxmFragmentProgram *p = fragProg(fast ? 2 : tex, key, colorMask(e));
     if (!p) { res = T_PROG; break; }
     sceGxmSetFragmentProgram(c, p);
@@ -1152,6 +1179,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     uint32_t cl = w3d && d->prim > 2 && prim != 6 && !(clr & 1) && (RE(e, 0x1D) & 1) ? (RE(e, 0x9B) & 1 ? SCE_GXM_CULL_CCW : SCE_GXM_CULL_CW) : SCE_GXM_CULL_NONE;
     if (cl != t_cl) { t_cl = cl; sceGxmSetCullMode(c, cl); }
   ready:;
+    DEV(if (smp) bpx[dst != 0][pb] += w3d ? trPx3(w, n, prim, d->prim > 2 && prim != 6 && !(clr & 1) && (RE(e, 0x1D) & 1)) : ar;)
     // Joined to the pending draw when it can be: a triangle strip needs repeated vertices in between (which draw nothing) and to
     // start on an even vertex, so its winding does not flip
     uint32_t pad = 0;
@@ -1183,6 +1211,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
 #undef RUN
 #undef SCENE
   t_q[s] = gq;
+  DEV(if (smp) { for (int a = 0; a < 2; a++) for (int i = 0; i < BP_N; i++) b_px[a][i] += bpx[a][i] / 1000; b_pxn++; })
   if (res == T_OK && disp != t_prevd) { t_prev2 = t_prevd; t_prevd = disp; }
   DEV(t_us[5] += now() - ta;
       for (int i = 1; p_on && i < 6; i++) if ((int)(t_us[i] - ut[i]) >= 0) pAdd(P_T_CHECK + i, t_us[i] - ut[i]);)  // (t_us is zeroed every 10 s)

@@ -82,6 +82,7 @@ or `auto` (3 letters are compared; `no` also turns it off). What each one saves,
   but not drawn because less than a second passed since a frame that was not).
 - Development builds only: `clocks: GPU N MHz (crossbar N), CPU N, bus N`, the Vita clocks, every 10 s. The `clocks` switch (development) sets CPU 444 and crossbar 166 at each of those lines.
 - Development builds only: `translator: speed:` (clock and memory, once), `translator: per HD frame:` (vertices, draws, same state as the one before, lights, programs).
+- Development builds only, every second: `bottleneck:` what happened to each Adrenaline frame (`drawn`, `repeated`, `behind`, `no_record`, `normal`), ms in the translator and waiting for the GPU, the translator's parts and the GPU per scene type (with `gpu_timer`). `bottleneck pixels`: thousands of pixels sent per program, before the z test, on 1 HD frame in 4 (`fog`: textured, fog and nothing else; `base`: the image underneath). `python3 tools/bottleneck.py <run> [from_s to_s]` says what limits each second.
 - `translator: pace (PSP frames advanced per drawn frame): 0 (repeated) N, 1 N, 2 N...`: with many repeated frames
   or jumps, Neo Geo games flicker (they do transparencies by drawing something one frame yes and the next no).
 - `gpu: at each frame start, our unfinished scenes: average, max | unfinished: previous frame N, 2 frames ago N |

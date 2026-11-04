@@ -144,6 +144,10 @@ static volatile uint32_t g_an, g_asum, g_amax, g_f1, g_f2, g_psurf, g_pimg, g_ev
 // different frames) skipped because the GPU had not finished it; g_chk_us: the different-frames check; g_tr_us: the
 // translator (trFrame)
 static volatile uint32_t g_behind, g_wait_us, g_skip, g_chk_us, g_tr_us;
+// where the drawing thread's time goes, for the "bottleneck:" line: Adrenaline frames that used the PSP image, what happened
+// to each one, us in the translator and us waiting for the GPU. Never cleared
+DEV(enum { B_SLOT, B_DRAWN, B_REP, B_BEHIND, B_NOREC, B_NORMAL, B_TR, B_WAIT, B_N };
+    static volatile uint32_t b_c[B_N];)
 static uint32_t img_q[4];
 // 1 if the GPU has not finished scene q yet
 static inline int gBusy(uint32_t q) { return gq_done && (int)(*gq_done - q) < 0; }
@@ -158,7 +162,7 @@ static void gWait(uint32_t q) {
   uint32_t t0 = now();
   while (gBusy(q) && now() - t0 < 30000) sceKernelDelayThread(100);
   g_wait_us += now() - t0;
-  DEV(if (p_on) pAdd(P_A_WAIT, now() - t0);)
+  DEV(b_c[B_WAIT] += now() - t0; if (p_on) pAdd(P_A_WAIT, now() - t0);)
 }
 
 // Creates the destination: 1024x544 render target, the two surfaces with their textures, the z, the PSP image copies
@@ -288,6 +292,26 @@ static int hookTex(SceGxmContext *c, unsigned int i, const SceGxmTexture *t) {
 }
 
 #include "dump.c"  // dumps (L+R+SELECT and automatic)
+#ifdef NP_DEV
+static uint32_t b_t0[6];  // t_us at the last line
+// Once per second, what limits the HD frames (tools/bottleneck.py reads it): the deltas of b_c, of the translator's parts
+// and of the GPU per scene type (needs gpu_timer), and the pixels per program of the sampled frames.
+static void bnLog(void) {
+  static uint32_t c0[B_N], g0[CN], i0, p0[2][BP_N], n0;
+  uint32_t c[B_N], g[CN], t[6], p[2][BP_N];
+  for (int i = 0; i < B_N; i++) { c[i] = b_c[i] - c0[i]; c0[i] += c[i]; }
+  for (int i = 0; i < CN; i++) { g[i] = b_gus[i] - g0[i]; g0[i] += g[i]; }
+  for (int i = 0; i < 6; i++) { t[i] = t_us[i] - b_t0[i]; b_t0[i] += t[i]; }
+  uint32_t id = b_idle - i0, n = b_pxn - n0; i0 += id; n0 += n;
+  for (int d = 0; d < 2; d++) for (int i = 0; i < BP_N; i++) { p[d][i] = b_px[d][i] - p0[d][i]; p0[d][i] += p[d][i]; }
+  if (!c[B_SLOT]) return;
+  alog("bottleneck: slots %u drawn %u repeated %u behind %u no_record %u normal %u | ms: translator %u gpu_wait %u | translator ms: check %u textures %u vertices %u gxm %u scenes %u | "
+       "gpu ms: adrenaline %u normal %u surface %u intermediate %u idle %u\n", c[B_SLOT], c[B_DRAWN], c[B_REP], c[B_BEHIND], c[B_NOREC], c[B_NORMAL], c[B_TR] / 1000, c[B_WAIT] / 1000,
+       t[0] / 1000, t[1] / 1000, t[2] / 1000, t[3] / 1000, t[4] / 1000, g[C_ADR] / 1000, g[C_NORMAL] / 1000, g[C_TR] / 1000, g[C_INT] / 1000, id / 1000);
+  if (n) alog("bottleneck pixels (thousands per frame of %u): surface: fast %u fog %u textured %u color %u base %u | intermediate: fast %u fog %u textured %u color %u\n", n,
+              p[0][BP_FAST] / n, p[0][BP_FOG] / n, p[0][BP_TEX] / n, p[0][BP_COL] / n, p[0][BP_BASE] / n, p[1][BP_FAST] / n, p[1][BP_FOG] / n, p[1][BP_TEX] / n, p[1][BP_COL] / n);
+}
+#endif
 #include "replay.c"  // draw a dumped frame again
 
 static uint32_t g_adr[16];  // bits: words of the notification region used by Adrenaline (to avoid using the same one)
@@ -318,6 +342,7 @@ static int hookEnd(SceGxmContext *c, const SceGxmNotification *v, const SceGxmNo
   n_us += used == fr + 1;
   if (ACTIVE && used == fr + 1) {  // in this scene Adrenaline drew the PSP image: we pass it through the surface
     uint32_t t0 = now();
+    DEV(b_c[B_SLOT]++;)
     if (gq_done) {
       uint32_t a = gq - *gq_done; g_an++; g_asum += a; if (a > g_amax) g_amax = a;
       g_f1 += gBusy(fq[0]); g_f2 += gBusy(fq[1]);
@@ -331,7 +356,7 @@ static int hookEnd(SceGxmContext *c, const SceGxmNotification *v, const SceGxmNo
     const uint32_t *pj = sceGxmTextureGetData(src);
     DEV(if (rt_hold) { drawn = fr + 1; goto finish; })
     // GPU behind: two frames unfinished. With one, the next can be prepared meanwhile: trFrame holds its surface scene until it ends
-    if (gBusy(fq[1]) && drawn == fr && dump_on != 1) { g_behind++; DEV(if (p_on) pAdd(P_F_BEHIND, 0);) drawn = fr + 1; goto finish; }
+    if (gBusy(fq[1]) && drawn == fr && dump_on != 1) { g_behind++; DEV(b_c[B_BEHIND]++; if (p_on) pAdd(P_F_BEHIND, 0);) drawn = fr + 1; goto finish; }
     if (dump_on == 1 || dump_on == 3) {  // dump: only of a surface the GPU finished
       for (int i = 0; i < 100 && gBusy(fq[0]); i++) sceKernelDelayThread(5000);
       dumpFrame(c, pj, drawn == fr && !(covered && copy_fr == fr));
@@ -361,8 +386,9 @@ static int hookEnd(SceGxmContext *c, const SceGxmNotification *v, const SceGxmNo
     else if (draw_on && t_on && !menu) {  // the last complete frame of the record, drawn by the Vita
       RFrame *rg = regTake();
       int cause = T_NEW;
-      if (!rg) { t_cnt[T_NEW]++; DEV(if (p_on) pAdd(P_F_NOREC, 0);) }
+      if (!rg) { t_cnt[T_NEW]++; DEV(b_c[B_NOREC]++; if (p_on) pAdd(P_F_NOREC, 0);) }
       else if (rg->frame == t_frame) {  // same frame: the surface is repeated up to 20 times (the capturer may not record every frame); otherwise, normal
+        DEV(b_c[B_REP]++;)
         if (t_ok && t_rep < 20) { t_rep++; hd = 2; cause = 0; t_skip[0]++; DEV(if (p_on) pAdd(P_F_REPEAT, 0);) } else t_cnt[T_NEW]++;
       } else {
         if (t_frame != ~0u && rg->frame > t_frame) { uint32_t g = rg->frame - t_frame; t_skip[g < 5 ? g : 5]++; }
@@ -378,7 +404,7 @@ static int hookEnd(SceGxmContext *c, const SceGxmNotification *v, const SceGxmNo
         if (r && r != T_HOLD && !keep) t_bad = t1;
         g_tr_us += now() - t1; t_cnt[r]++; t_frame = rg->frame; cause = r;
         if (keep) { t_rep++; hd = 2; } else { t_ok = !r; hd = !r; t_rep = 0; }
-        DEV(trReason(rg->frame, r); if (p_on) pAdd(r ? P_F_NORMAL : P_F_DRAWN, 0);)
+        DEV(b_c[r ? B_NORMAL : B_DRAWN]++; b_c[B_TR] += now() - t1; trReason(rg->frame, r); if (p_on) pAdd(r ? P_F_NORMAL : P_F_DRAWN, 0);)
         if (!r) regGpu(gq, gq_done);  // the scene that reads this record's textures
       }
       if (dump_on == 1 || dump_on == 3) dumpText(rg, hd == 2 ? "repeats the Vita drawing of the previous frame" : hd ? "Vita drawing" :
@@ -590,6 +616,7 @@ static int presThread(SceSize args, void *argp) {
     static uint32_t tp0;
     if (covered != tp0) { tp0 = covered; alog("translator: %s\n", tp0 ? "something covers the image (not in the record): normal image" : "the Vita drawing is back"); }
     if (warned < 2 && n_pres >= (warned ? 60 : 1)) alog("presenter: %s\n", warned++ ? "60 frames drawn" : "first frame drawn");
+    DEV(if (!((k + 1) % 20)) bnLog();)
     if (++k < 200) continue;
     k = 0;
     DEV(if (clk_on) { scePowerSetArmClockFrequency(444); scePowerSetGpuXbarClockFrequency(166); })
@@ -608,7 +635,7 @@ static int presThread(SceSize args, void *argp) {
       b[k] = 0;
       alog("translator: HD frames %u, normal image %u%s%s | draws drawn %u\n", h, nn, k ? " | reasons:" : "", b, dr);
       DEV(if (h) alog("translator: us per HD frame: all %u | check %u, textures %u, vertices %u, GXM %u, scene changes %u\n", t_us[5] / h, t_us[0] / h, t_us[1] / h, t_us[2] / h, t_us[3] / h, t_us[4] / h);
-          for (int i = 0; i < 6; i++) t_us[i] = 0;
+          for (int i = 0; i < 6; i++) t_us[i] = b_t0[i] = 0;
           if (h) { alog("translator: per HD frame: vertices in %u out %u lit %u | 3D draws %u (scissor under the surface %u), rewritten by trTris %u, flat %u, same state as the previous draw %u\n",
                  t_c[TC_VIN] / h, t_c[TC_VOUT] / h, t_c[TC_LIT] / h, t_c[TC_D3] / h, t_c[TC_SCIS] / h, t_c[TC_CUT] / h, t_c[TC_FLAT] / h, t_c[TC_SAME] / h);
             alog("translator: per HD frame: light on a vertex %u, of them point or spot %u, with specular %u | vertices with environment map %u\n", t_c[TC_L0] / h, t_c[TC_LPT] / h, t_c[TC_LSP] / h, t_c[TC_ENV] / h);

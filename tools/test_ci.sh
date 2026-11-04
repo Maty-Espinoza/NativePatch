@@ -35,6 +35,10 @@ printf '  1000 prof psp: frame=60/16000/20000 game=60/9000/12000\n  2000 prof ps
 python3 $R/tools/prof_summary.py $B/prof.log | grep -q 'game: 60.0 fps, frame 18.0 ms' || { echo "FAIL: prof_summary.py"; exit 1; }
 echo "ok   prof_summary.py"
 
+printf ' 1000 bottleneck: slots 40 drawn 20 repeated 5 behind 10 no_record 0 normal 0 | ms: translator 600 gpu_wait 100 | translator ms: check 5 textures 50 vertices 300 gxm 100 scenes 45 | gpu ms: adrenaline 40 normal 0 surface 500 intermediate 300 idle 100\n' > $B/bn.log
+python3 $R/tools/bottleneck.py $B/bn.log | grep -q 'translator limits' || { echo "FAIL: bottleneck.py"; exit 1; }
+echo "ok   bottleneck.py"
+
 echo "== production build"
 cp -r $R/nativelink $B/nativelink
 make -s -C $B/nativelink clean ADRENALINE=$ADRENALINE

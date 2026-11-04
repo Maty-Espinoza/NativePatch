@@ -24,6 +24,7 @@ static volatile uint32_t c_dn = CD;  // scenes already noted in c_det (CD: full,
 #define CL 8
 static struct { uint8_t ty; uint16_t dr; uint32_t px, us, queue; } c_slow[CL];
 static volatile uint32_t c_ln;
+static volatile uint32_t b_gus[CN], b_idle;  // GPU us per type and idle us, never cleared ("bottleneck:" line)
 
 // notes in the queue a scene just sent (n: its end notification; dr: draws; px: thousands of pixels drawn,
 // adding up each draw; sw: draws with textures that had swizzle on the PSP)
@@ -52,9 +53,9 @@ static int cThread(SceSize args, void *argp) {
       CScene *e = &cq[c_out % CQ];
       if ((int)(*e->a - e->v) < 0) break;
       uint32_t t = now(), begin = prev;
-      if ((int)(e->t - prev) > 0) { c_idle += e->t - prev; begin = e->t; }  // the GPU had nothing: idle gap
+      if ((int)(e->t - prev) > 0) { c_idle += e->t - prev; b_idle += e->t - prev; begin = e->t; }  // the GPU had nothing: idle gap
       uint32_t us = t - begin, k = e->ty, ms = us / 1000;
-      pAdd(P_G_ADR + k, us);
+      pAdd(P_G_ADR + k, us); b_gus[k] += us;
       c_n[k]++; c_us[k] += us; c_dr[k] += e->dr; c_queue[k] += begin - e->t; c_px[k] += e->px; c_sw[k] += e->sw;
       if (us > c_max[k]) c_max[k] = us;
       c_h[k][ms < 20 ? ms / 5 : ms < 30 ? 4 : 5]++;

@@ -65,6 +65,7 @@ GitHub release built by `.github/workflows/toolchain.yml` on push.
 | `test_ci.sh`, `test_local.sh`, `test_link.py` | The three tests (below) |
 | `phase1_analysis.py <folder>...` | Summarizes `nativedraw_frames.log` and `nativedraw_late.log` (extreme log level): fps, slow frames and the cost of each part per frame |
 | `prof_summary.py <run> [from_s to_s]` | Ranks the `prof` lines of the extreme log level: where each frame goes, per piece (`../../dev/en/logs-and-switches.md`) |
+| `bottleneck.py <run> [from_s to_s]` | What limits the HD frames, second by second: translator, GPU, no new frame; translator parts, pixels per program, capturer (`../../dev/en/logs-and-switches.md`) |
 | `dump.py <dump folder> [K]` | Draws a dumped frame on the PC imitating the GE and compares it with the normal image and the Vita's (`../../dev/en/dumps.md`). Needs numpy and Pillow |
 
 ## Tests
