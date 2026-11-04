@@ -89,7 +89,9 @@ frame in the race, 22.4 of them vertices. 1.36 M pixels stay on `nd_ft` because 
 
 **Translator (bench, 0.0.17.2):** real frames are uniform: ~15,000 vertices in ~2,700 draws, 5.5 per draw, 77-99 % in format `0x19f`, 87-99 %
 lit with no light on, 87 % with fog. A NEON loop for that vertex and a shorter path for draws that share the state: **ARM instructions
-per frame 8.14 M -> 5.78 M (-29 %)**, same draws and vertices in `tr_check.sh`. To confirm on the Vita (`bottleneck`: translator, vertices).
+per frame 8.14 M -> 5.78 M (-29 %)**, same draws and vertices in `tr_check.sh`. On the Vita (race seconds against 0.0.17.1): vertices only 22.4 -> 19.8 ms
+(-12 %), translator work 41.5 -> 38.1 ms, 18.7 -> 19.6 HD frames per second. **Fewer instructions gave much less time: the vertices bucket is not mostly
+instructions.** Suspected, not measured: reads of the record and writes to `tv`. Log of the Vita: cached read 24 ns per word, uncached 199.
 
 ## C. Large changes (ask the user first)
 1. **3D vertices in a GXM vertex shader reading the PSP RAM mapped for the GPU** (`sceGxmMapMemory` at 0x70000000 works,
