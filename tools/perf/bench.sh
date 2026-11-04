@@ -16,6 +16,7 @@ arm-linux-gnueabihf-gcc -static -O2 -mthumb -mfpu=neon -mfloat-abi=hard -w -I$B/
 Q=$(command -v qemu-arm-static || command -v qemu-arm)
 : > $B/runs.txt
 i=0; while [ $i -lt $RUNS ]; do $Q $B/capture_bench $SCENE >> $B/runs.txt; i=$((i + 1)); done
+command -v valgrind >/dev/null && [ -z "$SCENE" ] && sh $P/instr.sh $R $B/instr.txt && cat $B/instr.txt >> $B/runs.txt
 python3 $P/compare.py --collect $B/runs.txt $B/last.json
 if [ -f $REF ]; then python3 $P/compare.py $B/last.json $REF; else echo "no reference ($REF): nothing to compare"; fi
 [ $SAVE = 1 ] && cp $B/last.json $REF && echo "saved as reference: $REF"

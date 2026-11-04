@@ -235,12 +235,17 @@ static void clPut(uint32_t b, uint32_t ord, const uint32_t *src) {
 // Copies 64 bytes of PSP RAM (PSP address b) to dst with two NEON loads
 static void neon64(uint32_t *dst, uint32_t b) {
   const void *src = (const void *)PSP(b);
+#ifdef __arm__
   asm volatile("vld1.32 {d16-d19}, [%1]!\n\tvld1.32 {d20-d23}, [%1]\n\tvst1.32 {d16-d19}, [%0]!\n\tvst1.32 {d20-d23}, [%0]"
                : "+r"(dst), "+r"(src) : : "d16", "d17", "d18", "d19", "d20", "d21", "d22", "d23", "memory");
+#else  // (the bench on the PC)
+  __builtin_memcpy(dst, src, 64);
+#endif
 }
 // Copies 256 bytes of PSP RAM to dst: the 8 NEON loads go before any store so the waits overlap
 static void neon256(uint32_t *dst, uint32_t b) {
   const void *src = (const void *)PSP(b);
+#ifdef __arm__
   asm volatile("vld1.32 {d0-d3}, [%1]!\n\tvld1.32 {d4-d7}, [%1]!\n\tvld1.32 {d8-d11}, [%1]!\n\tvld1.32 {d12-d15}, [%1]!\n\t"
                "vld1.32 {d16-d19}, [%1]!\n\tvld1.32 {d20-d23}, [%1]!\n\tvld1.32 {d24-d27}, [%1]!\n\tvld1.32 {d28-d31}, [%1]\n\t"
                "vst1.32 {d0-d3}, [%0]!\n\tvst1.32 {d4-d7}, [%0]!\n\tvst1.32 {d8-d11}, [%0]!\n\tvst1.32 {d12-d15}, [%0]!\n\t"
@@ -248,6 +253,9 @@ static void neon256(uint32_t *dst, uint32_t b) {
                : "+r"(dst), "+r"(src) : : "d0", "d1", "d2", "d3", "d4", "d5", "d6", "d7", "d8", "d9", "d10", "d11", "d12",
                  "d13", "d14", "d15", "d16", "d17", "d18", "d19", "d20", "d21", "d22", "d23", "d24", "d25", "d26", "d27",
                  "d28", "d29", "d30", "d31", "memory");
+#else  // (the bench on the PC)
+  __builtin_memcpy(dst, src, 256);
+#endif
 }
 // Reads word a of list ord with buffer r: from the buffer if present; otherwise fetches its line from the shared cache
 // or reads 256 bytes of PSP RAM (64 at the end of a range) and shares them. Leaves the line in r->buf

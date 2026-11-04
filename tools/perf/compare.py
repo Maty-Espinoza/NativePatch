@@ -14,8 +14,9 @@ def parse(path):
             if k != 'scene': d[k] = float(v)
         runs.setdefault(d['scene'], []).append(d)
     out = {}
-    for s, rs in runs.items():
-        o = dict(rs[0]); o['qemu_us/f'] = min(r['qemu_us/f'] for r in rs); o['qemu_min_us'] = min(r['qemu_min_us'] for r in rs); o['runs'] = len(rs)
+    for s, all_ in runs.items():
+        rs = [r for r in all_ if 'frames' in r]  # (instr.sh adds a line with only the instructions)
+        o = dict(rs[0]); o.update(next((r for r in all_ if 'ir_k/f' in r), {})); o['qemu_us/f'] = min(r['qemu_us/f'] for r in rs); o['qemu_min_us'] = min(r['qemu_min_us'] for r in rs); o['runs'] = len(rs)
         for r in rs:
             for k in r:
                 if k not in ('qemu_us/f', 'qemu_min_us', 'scene') and r[k] != rs[0][k]: print(f'WARN {s}: {k} differs between runs ({r[k]} vs {rs[0][k]})')
@@ -24,7 +25,7 @@ def parse(path):
 
 def compare(last, ref, tol):
     bad = 0
-    cols = ['mem_us/f', 'qemu_min_us', 'qemu_us/f', 'own256/f', 'hits/f', 'ucp_kb/f', 'ucmp_kb/f', 'dma/f', 'dma_kb/f', 'clock/f', 'complete']
+    cols = ['mem_us/f', 'ir_k/f', 'want', 'qemu_min_us', 'qemu_us/f', 'own256/f', 'hits/f', 'ucp_kb/f', 'ucmp_kb/f', 'dma/f', 'dma_kb/f', 'clock/f', 'complete']
     print(f'{"scene":<10}' + ''.join(f'{c:>22}' for c in cols))
     for s, o in last.items():
         r = ref.get(s)
@@ -37,13 +38,15 @@ def compare(last, ref, tol):
         if r:
             if o['mem_us/f'] > r['mem_us/f'] + 0.5: print(f'REGRESSION {s}: mem_us/f {r["mem_us/f"]:g} -> {o["mem_us/f"]:g}'); bad += 1
             if o['qemu_min_us'] > r['qemu_min_us'] * (1 + tol / 100): print(f'REGRESSION {s}: qemu_min_us {r["qemu_min_us"]:g} -> {o["qemu_min_us"]:g} (over {tol}%)'); bad += 1
+            if o.get('ir_k/f', 0) > r.get('ir_k/f', 1e12) * 1.01: print(f'REGRESSION {s}: ir_k/f {r["ir_k/f"]:g} -> {o["ir_k/f"]:g}'); bad += 1
+            if o.get('want', 0) > r.get('want', 1e12): print(f'REGRESSION {s}: want {r["want"]:g} -> {o["want"]:g}'); bad += 1
             if o['complete'] < r['complete']: print(f'REGRESSION {s}: complete frames {r["complete"]:g} -> {o["complete"]:g}'); bad += 1
     print('verdict: ' + ('REGRESSION' if bad else 'ok (no regression)'))
     return bad
 
 if '--better' in sys.argv:  # names the scenes that improved (mem_us down, or qemu_min down more than the tolerance)
     last, ref = json.load(open(sys.argv[1])), json.load(open(sys.argv[2]))
-    b = [s for s, o in last.items() if s in ref and (o['mem_us/f'] < ref[s]['mem_us/f'] - 0.5 or o['qemu_min_us'] < ref[s]['qemu_min_us'] * 0.90)]
+    b = [s for s, o in last.items() if s in ref and (o['mem_us/f'] < ref[s]['mem_us/f'] - 0.5 or o.get('ir_k/f', 1e12) < ref[s].get('ir_k/f', 0) * 0.99 or o['qemu_min_us'] < ref[s]['qemu_min_us'] * 0.90)]
     print(' '.join(b)); sys.exit(0)
 if sys.argv[1] == '--collect':
     json.dump(parse(sys.argv[2]), open(sys.argv[3], 'w'), indent=1); sys.exit(0)

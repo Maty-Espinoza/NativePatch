@@ -22,6 +22,11 @@
 #include <sys/mman.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#ifdef __arm__
+#define CALLGRIND_TOGGLE_COLLECT
+#else
+#include <valgrind/callgrind.h>  // (tools/perf/instr.sh counts only the capturer's part of each frame)
+#endif
 
 // --- Counters of what the Vita pays for (filled by the stubs below) ---
 static struct { uint64_t ucp, ucmp, dma_b; uint32_t dma_n, clock; } M;
@@ -57,7 +62,7 @@ int sceKernelGetMemBlockInfoByAddr(void *a, SceKernelMemBlockInfo *i) { return -
 SceUID emu_th[EMU_N]; int emu_aff[EMU_N], emu_n;
 
 // --- Unit costs measured on the Vita, in ns (findings.md: "memory bench" line of the capture log, stage 2 reads) ---
-enum { C_READ256 = 2800, C_HIT = 300, C_UCP_B = 11, C_DMA_CALL = 100000, C_DMA_B = 2, C_CLOCK = 600 };
+enum { C_READ256 = 2800, C_HIT = 300, C_UCP_B = 11, C_DMA_CALL = 100000, C_DMA_B = 2, C_CLOCK = 405 };
 
 // --- List generator ---
 static uint32_t *W(uint32_t a) { return (uint32_t *)PSP(isVram(a) ? MIRROR + (a & 0x1FFFFF) : a); }
@@ -108,6 +113,8 @@ static void crowd(int f, int draws) {
     E(0x01, a & 0xFFFFFF); E(0x10, a >> 8 & 0x0F0000);
     if (d % 28 == 0) texState(0x04100000 + (d / 28 % 12) * 0x1000, 6, 6, 5, 1);  // 12 VRAM textures of 4 KB
     if (d % 15 == 0) { E(0xD5, (479 - d % 7) | 271 << 10); E(0xD4, d % 5); E(0xDB, d % 3); }  // "other" changes
+    if (d % 34 == 0) { E(0xB0, 0x130000 + (d / 34 % 4) * 0x400); E(0xB1, 0x040000); E(0xC4, 8); }  // palette in VRAM, ~100 per frame
+    if (d % 45 == 0) { E(0x12, 0x80011E); E(0x01, (a + 4096) & 0xFFFFFF); E(0x04, 6 << 16 | 2); }  // a 2D rectangle, ~75 per frame
     if (d % 50 == 0) { E(0xC7, 0x101); E(0x47, d % 2); E(0x21, 0); }
     if (d % 100 == 0) { E(0x3A, 0); for (int i = 0; i < 12; i++) E(0x3B, 0x3F8000 + i + f); }  // a moving object
     E(0x12, 0x15E); E(0x1E, 1);  // repeated (same value: the cheap path, as the game does)
@@ -159,16 +166,34 @@ static void sublists(int f, int n) {
   E(0x0F, 0); E(0x0C, 0);
 }
 
-typedef struct { const char *name; void (*build)(int, int); int n, record, memo, readers, vram; } Scene;
+// Scene 4: each frame draws to another image and reads a page of it as a texture, as a game with moving images would: the pages
+// asked for must not pile up over the frames (want= in the output).
+static void images(int f, int n) {
+  uint32_t fb = 0x100000 + (f % n) * 0x4000, a = VB;
+  rnd_s = 1; pc_ = MAIN; head(0x15E);
+  E(0x9C, fb & 0xFFFFFF); E(0x9D, (fb >> 8 & 0xFF0000) | 64); E(0xD5, 63 | 63 << 10);
+  if (!f) verts(a, 7, 20, 0, 0);
+  E(0x01, a & 0xFFFFFF); E(0x10, a >> 8 & 0x0F0000); E(0x1E, 0); E(0x04, 4 << 16 | 7);
+  E(0x9C, 0); E(0x9D, 0x040000 | 512); E(0xD5, 479 | 271 << 10); E(0x1E, 1);
+  texState(0x04000000 + fb + 0x1000, 6, 6, 3, 0);
+  E(0x04, 4 << 16 | 7);
+  E(0x0F, 0); E(0x0C, 0);
+}
+
+// late: the presenter takes one frame in three, as on the Vita, so the others are walked without recording
+typedef struct { const char *name; void (*build)(int, int); int n, record, memo, readers, vram, late; } Scene;
 static const Scene S[] = {
-  { "rr_crowd", crowd, 3400, 1, 0, 0, 1 },
-  { "rr_race", crowd, 900, 1, 0, 0, 1 },
-  { "sprites2d", sprites, 300, 1, 0, 0, 0 },
-  { "sublists", sublists, 40, 0, 1, 1, 0 },
+  { "rr_crowd", crowd, 3400, 1, 0, 0, 1, 0 },
+  { "rr_crowd_late", crowd, 3400, 1, 0, 0, 1, 1 },
+  { "rr_race", crowd, 900, 1, 0, 0, 1, 0 },
+  { "rr_race_late", crowd, 900, 1, 0, 0, 1, 1 },
+  { "sprites2d", sprites, 300, 1, 0, 0, 0, 0 },
+  { "sublists", sublists, 40, 0, 1, 1, 0, 0 },
+  { "images", images, 30, 1, 0, 0, 1, 0 },
 };
 #define SN (int)(sizeof S / sizeof *S)
 #define FRAMES 40
-typedef struct { uint32_t cmds, draws, verts, own, hits, complete; uint64_t ucp, ucmp, dma_b; uint32_t dma_n, clock, qemu_us, qemu_min, ok; } Out;
+typedef struct { uint32_t cmds, draws, verts, own, hits, complete; uint64_t ucp, ucmp, dma_b; uint32_t dma_n, clock, qemu_us, qemu_min, ok, want; } Out;
 
 static uint32_t cpuUs(void) { struct timespec t; clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &t); return t.tv_sec * 1000000 + t.tv_nsec / 1000; }
 // Runs scene s for FRAMES frames through the real event path (enqueue, drawsync, flip) and adds up the counters of all
@@ -189,6 +214,7 @@ static void run(const Scene *s, Out *o) {
     sec_t0 = now();  // (the per-second statistics reset never lands inside the frame)
     M.clock = 0; M.ucp = M.ucmp = M.dma_b = 0; M.dma_n = 0;
     uint32_t own0 = R0.own, hit0 = R0.hits, t0 = cpuUs(), ts = now();
+    CALLGRIND_TOGGLE_COLLECT;
     uint32_t enq[8] = { EV_ENQ, MAIN, 0, 1, ts, f + 1, 0, 0 };
     event(enq);
     if (s->readers) { pubList(&q[qh & 63]); for (int id = 0; id < 2; id++) { Rdr r; rdrStart(&r, &RR[id]); pvRun(id, &RR[id], r.ord); while (!r.done) rdrWalk(id, &r, 4000); } }
@@ -202,11 +228,13 @@ static void run(const Scene *s, Out *o) {
       SB[0x40] = f + 1;
       if (reg_on) regPend();
     }
+    CALLGRIND_TOGGLE_COLLECT;
     uint32_t dt = cpuUs() - t0;  // (the fastest frame after the first: least disturbed by the host)
     o->qemu_us += dt; if (f && (!o->qemu_min || dt < o->qemu_min)) o->qemu_min = dt;
     o->own += R0.own - own0; o->hits += R0.hits - hit0; o->ucp += M.ucp; o->ucmp += M.ucmp; o->dma_b += M.dma_b; o->dma_n += M.dma_n; o->clock += M.clock;
     o->cmds += acc.cmds; o->draws += acc.draws; o->verts += acc.verts;
-    if (reg_on) { o->complete += rg_pub >= 0 && rf[rg_pub]->frame == gen - 1 && !rf[rg_pub]->flags; rg_last = rg_pub; }
+    if (reg_on) { o->complete += rg_pub >= 0 && rf[rg_pub]->frame == gen - 1 && !rf[rg_pub]->flags; if (!s->late || !(f % 3)) rg_last = rg_pub; }
+    o->want = 0; for (int w = 0; w < 16; w++) o->want += __builtin_popcount(want_l[w] | want_d[w]);
     sceClibMemset(&acc, 0, sizeof acc);
   }
   o->ok = !acc.memo_bad;
@@ -222,9 +250,9 @@ int main(int argc, char **argv) {
     double f = FRAMES;
     double mem = (o->own * (double)C_READ256 + o->hits * (double)C_HIT + (o->ucp + o->ucmp) * (double)C_UCP_B +
                   o->dma_n * (double)C_DMA_CALL + o->dma_b * (double)C_DMA_B + o->clock * (double)C_CLOCK) / 1000 / f;
-    printf("scene=%s frames=%d cmds/f=%u draws/f=%u verts/f=%u own256/f=%u hits/f=%u ucp_kb/f=%.1f ucmp_kb/f=%.1f dma/f=%.1f dma_kb/f=%.1f clock/f=%u complete=%u mem_us/f=%.0f qemu_us/f=%.0f qemu_min_us=%u\n",
+    printf("scene=%s frames=%d cmds/f=%u draws/f=%u verts/f=%u own256/f=%u hits/f=%u ucp_kb/f=%.1f ucmp_kb/f=%.1f dma/f=%.1f dma_kb/f=%.1f clock/f=%u complete=%u want=%u mem_us/f=%.0f qemu_us/f=%.0f qemu_min_us=%u\n",
            S[i].name, FRAMES, (unsigned)(o->cmds / f), (unsigned)(o->draws / f), (unsigned)(o->verts / f), (unsigned)(o->own / f), (unsigned)(o->hits / f),
-           o->ucp / 1024 / f, o->ucmp / 1024 / f, o->dma_n / f, o->dma_b / 1024 / f, (unsigned)(o->clock / f), o->complete, mem, o->qemu_us / f, o->qemu_min);
+           o->ucp / 1024 / f, o->ucmp / 1024 / f, o->dma_n / f, o->dma_b / 1024 / f, (unsigned)(o->clock / f), o->complete, o->want, mem, o->qemu_us / f, o->qemu_min);
   }
   return 0;
 }
