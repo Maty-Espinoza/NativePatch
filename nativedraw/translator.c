@@ -309,6 +309,27 @@ static uint32_t col8888(const uint8_t *p, uint32_t ct) {
 }
 
 #ifdef NP_DEV
+// Why the vertices of a 3D draw do not go through nd_v3: other vertex type, primitive, lights on, generated UV, flat color,
+// scissor, not marked by the record, refused here. The first that applies. wr: draws with a partial scissor, by rectangle
+// and target (surface or intermediate image); wv: their vertices, wo: those that only the scissor keeps out of nd_v3.
+enum { WN_FMT, WN_PRIM, WN_LIGHT, WN_GEN, WN_FLAT, WN_SCIS, WN_MARK, WN_HERE, WN_N, WR_N = 16 };
+static volatile uint32_t wn[WN_N];
+static struct { uint32_t d4, d5, dst, draws, wv, wo; } wr[WR_N];
+static volatile uint32_t wr_n, wr_lost;
+static void trWhy(const RDraw *d, const uint32_t *e, const float *sc, int dst, int lit, uint32_t gen) {
+  int ps = !(sc[0] <= 0 && sc[1] <= 0 && sc[2] >= W && sc[3] >= H);
+  uint32_t r = d->vt != 0x19F ? WN_FMT : d->prim < 3 || d->prim > 5 ? WN_PRIM : lit ? WN_LIGHT : gen ? WN_GEN : !(RE(e, 0x50) & 1) ? WN_FLAT : ps ? WN_SCIS :
+               d->voff & VX ? WN_HERE : WN_MARK, i, d4 = RE(e, 0xD4) & 0xFFFFF, d5 = RE(e, 0xD5) & 0xFFFFF;
+  wn[r] += d->n;
+  if (!ps) return;
+  for (i = 0; i < wr_n && !(wr[i].d4 == d4 && wr[i].d5 == d5 && wr[i].dst == (uint32_t)dst); i++);
+  if (i == WR_N) { wr_lost += d->n; return; }
+  if (i == wr_n) { wr[i].d4 = d4; wr[i].d5 = d5; wr[i].dst = dst; wr_n++; }
+  wr[i].draws++; wr[i].wv += d->n; wr[i].wo += r == WN_SCIS ? d->n : 0;
+}
+#endif
+
+#ifdef NP_DEV
 // Logs in hex up to 24 words of the n bytes at p, after the text what
 static void trRaw(const char *what, const uint8_t *p, uint32_t n) {
   char b[220];
@@ -1169,6 +1190,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     int gv = d->voff & VX && gvp && w3d && !self && sc[0] <= 0 && sc[1] <= 0 && sc[2] >= W && sc[3] >= H && !t3.gen && !(t3.lit && t3.nl) && !grayFix(e) &&
              !(tex && d->toff && (1u << (RE(e, 0xB8) & 15)) < tw);
     uint32_t prim = d->prim;
+    DEV(if (w3d && !gv && !(clr & 1)) trWhy(d, e, sc, dst != 0, t3.lit && t3.nl, t3.gen);)
     if (gv) {
       n = d->n;
       if (dst) { dst->dirty[0] = dst->dirty[1] = 0; dst->dirty[2] = LINE; dst->dirty[3] = H; }

@@ -656,6 +656,15 @@ static int presThread(SceSize args, void *argp) {
             alog("translator: per HD frame: light on a vertex %u, of them point or spot %u, with specular %u | vertices with environment map %u\n", t_c[TC_L0] / h, t_c[TC_LPT] / h, t_c[TC_LSP] / h, t_c[TC_ENV] / h);
             alog("translator: per HD frame: vertices by program: fast %u, textured %u, color %u | draws with fog %u, alpha test %u, blend %u | vertices moved by the GPU %u\n",
                  t_c[TC_VFAST] / h, t_c[TC_VTEX] / h, t_c[TC_VCOL] / h, t_c[TC_FOG] / h, t_c[TC_ATEST] / h, t_c[TC_BLEND] / h, t_c[TC_VGPU] / h); }
+          if (h) { alog("translator: per HD frame: 3D vertices not moved by the GPU, why: type %u, primitive %u, lights %u, generated UV %u, flat %u, scissor %u, not marked %u, refused here %u\n",
+                 wn[WN_FMT] / h, wn[WN_PRIM] / h, wn[WN_LIGHT] / h, wn[WN_GEN] / h, wn[WN_FLAT] / h, wn[WN_SCIS] / h, wn[WN_MARK] / h, wn[WN_HERE] / h);
+            for (uint32_t i = 0; i < wr_n; i++)
+              alog("translator: per HD frame: scissor %u,%u to %u,%u on %s: draws %u, vertices %u, only the scissor keeps out %u\n", wr[i].d4 & 0x3FF, wr[i].d4 >> 10, wr[i].d5 & 0x3FF, wr[i].d5 >> 10,
+                   wr[i].dst ? "intermediate" : "surface", wr[i].draws / h, wr[i].wv / h, wr[i].wo / h);
+            if (wr_lost) alog("translator: per HD frame: scissor, other rectangles: vertices %u\n", wr_lost / h); }
+          for (int i = 0; i < WN_N; i++) wn[i] = 0;
+          wr_n = 0; wr_lost = 0;
+          for (int i = 0; i < WR_N; i++) wr[i].draws = wr[i].wv = wr[i].wo = 0;
           for (int i = 0; i < TC_NC; i++) t_c[i] = 0;
           )
       // Pacing: for each Adrenaline frame drawn by the Vita, how many PSP frames advanced since the previous one

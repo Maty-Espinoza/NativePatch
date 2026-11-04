@@ -25,7 +25,7 @@ static const char *nr_names[NR_N] = { "vertices", "swizzle_width", "texture", "x
 // (same, changed, new); unswizzled bytes; distinct textures
 // per frame
 static struct { uint32_t fr, ok, memo, rd_fail, limit, curve, draws, st, kb, cl, us, d3, clear, blend, atest, swz, fmt[16], us_e, us_v, us_t, us_p, t_b, us_l, stomped, n_late, gpu, o_b, us_o,
-  t_n[2], t_kb[2], t_dma[2], t_ord[2], t_calls, t_size[5], t_rb[6], v_dma, v_kb, v_runs, v_list, v_all, t_same, t_changed, t_lines, t_tex,
+  t_n[2], t_kb[2], t_dma[2], t_ord[2], t_calls, t_size[5], t_rb[6], v_dma, v_kb, v_runs, v_list, v_all, v_busy, v_full, t_same, t_changed, t_lines, t_tex,
   c_hit, c_fill, c_chg, c_rec, c_fail, c_us, skip DEV(, nr[16]); } ga, gr;
 // RN records: with fewer, the one the GPU just read would at times be the only free one, overwriting its textures
 #define RN 4
@@ -375,6 +375,7 @@ static uint32_t rgVLater(uint32_t s, uint32_t n, int gpu) {
     vp[vpn].s = s; vp[vpn].d = f->tx + TX_N - f->nvx; vp[vpn++].n = n;
     return VX | (TX_N - f->nvx);
   }
+  ga.v_full += gpu;
   if (o + n > RA_N) { DEV(if (p_on) pAdd(P_X_VERT, 0);) f->flags |= R_LIMIT; return 0; }
   if (vpn == VP_N) rgVFlush();
   vp[vpn].s = s; vp[vpn].d = f->a + o; vp[vpn++].n = n;
@@ -609,9 +610,11 @@ DEV(static int cpu_verts;)  // (switch cpu_verts: no vertices for the GPU, to co
 // 1 if the GPU can take the vertices of a draw as they are (nd_v3): float position and UV, 8888 color, no indices, triangles
 // in the whole image, no lights and no generated UV. The record must be free of the GPU: it reads these bytes while drawing.
 static int rgVGpu(uint32_t type, uint32_t vt, uint32_t idx) {
-  return DEV(!cpu_verts &&) vt == 0x19F && !idx && type >= 3 && type <= 5 && !(reg[0xD3] & 1) && (reg[0x50] & 1) && !(reg[0xC0] & 3) &&
-         !(reg[0x17] & (reg[0x18] | reg[0x19] | reg[0x1A] | reg[0x1B]) & 1) && !(reg[0xD4] & 0xFFFFF) && (reg[0xD5] & 0x3FF) >= 479 &&
-         (reg[0xD5] >> 10 & 0x3FF) >= 271 && !rgBusy(rg_w);
+  if (!(DEV(!cpu_verts &&) vt == 0x19F && !idx && type >= 3 && type <= 5 && !(reg[0xD3] & 1) && (reg[0x50] & 1) && !(reg[0xC0] & 3) &&
+        !(reg[0x17] & (reg[0x18] | reg[0x19] | reg[0x1A] | reg[0x1B]) & 1) && !(reg[0xD4] & 0xFFFFF) && (reg[0xD5] & 0x3FF) >= 479 &&
+        (reg[0xD5] >> 10 & 0x3FF) >= 271)) return 0;
+  ga.v_busy += rgBusy(rg_w);
+  return !rgBusy(rg_w);
 }
 // (capturer, on each draw, before vaddr/iaddr advance) Adds the draw to the frame: the state (RS) if changed, the
 // indices and vertices up to the highest index, and the texture (only the rows the vertices use). If something does

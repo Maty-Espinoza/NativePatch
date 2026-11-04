@@ -1567,7 +1567,7 @@ static int repThread(SceSize args, void *argp) {
       if (!level) goto sync;  // (minimum: only this line and the vram and sync one)
       if (reg_on) {  // frame record
         uint32_t g = gr.fr ? gr.fr : 1, dd = gr.draws ? gr.draws : 1;
-        clog("  3D vertices (per frame): runs %u, by DMA %u (%u KB read) | draws %u, near the list %u\n", gr.v_runs / g, gr.v_dma / g, gr.v_kb / g >> 10, gr.v_all / g, gr.v_list / g);
+        clog("  3D vertices (per frame): runs %u, by DMA %u (%u KB read) | draws %u, near the list %u | not for the GPU: record busy %u, no room %u\n", gr.v_runs / g, gr.v_dma / g, gr.v_kb / g >> 10, gr.v_all / g, gr.v_list / g, gr.v_busy / g, gr.v_full / g);
 #ifdef NP_DEV
         char nb[300]; int nk = 0; nb[0] = 0;
         for (int i = 0; i < NR_N; i++) if (gr.nr[i]) nk += sceClibSnprintf(nb + nk, sizeof nb - nk, " %s=%u", nr_names[i], gr.nr[i]);
