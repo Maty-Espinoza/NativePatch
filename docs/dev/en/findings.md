@@ -161,6 +161,10 @@ proof.
 - **Frames saved from a frame or two are not the race:** they gave 6-12 % of the vertices under a scissor and 71-87 % eligible; the race gave up to ~50 % scissored and 54 % on the GPU.
 - **Crowd in Ridge Racer:** when the capturer falls behind, a late list can pass as a complete frame with garbage state (0x27=ade1f9). The translator refuses it and the normal image shows until the next HD frame, 4-16 game frames there. 1 to 8 per run, no proven link with C.1.
 
+- **Coplanar passes need the same path:** Ridge Racer draws a car twice with a GEQUAL depth test. CPU and GPU round depth differently, so mixing them makes the second pass flicker in saw teeth; one program for both fixes it.
+- **Vertices cannot be copied after the list is released:** the game rewrites them at once. The 0.5 % measured one frame later did not predict this: copying a few ms late deformed the geometry massively.
+- **`cap_split` ruins a race:** ~0.7 us per clock read slows the capturer so much that the whole track behaves like the crowd, with graphic errors and the normal image. Warn the user before using it.
+
 ## Gran Turismo and 3D (what comes next)
 - GT has ~9000–15,000 draws per frame, ~5300 with a new texture. In GXM a draw costs ~1 µs without changes, ~2 µs with
   a new texture or program, ~1.3 µs of GPU even if it paints nothing [measured, stage 1]. **Recording GT draw by draw

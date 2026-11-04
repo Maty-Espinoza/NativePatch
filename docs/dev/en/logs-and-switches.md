@@ -72,7 +72,7 @@ or `auto` (3 letters are compared; `no` also turns it off). What each one saves,
 | `thread_split` | (development) every second in the capture log: on which core the capturer, the record thread and Adrenaline's drawing thread ran, how long, and how often they were preempted, interrupted and moved |
 | `vert_split` | (development) splits the vertex work of 1 HD frame in 8: `vertex split plain` and `vertex split warm` lines, summed up by `tools/bottleneck.py` |
 | `cpu_verts` | (development) no vertices go to the GPU's vertex program (`nd_v3`): every 3D draw takes the CPU path, to compare. Read when Adrenaline opens. |
-| `cap_split` | (development) times every part of the capturer on every frame (it costs ~0.4 us per clock read): `capture split` lines by kind of frame, summed up by `tools/bottleneck.py` |
+| `cap_split` | (development) times every part of the capturer on every frame (it costs ~0.7 us per clock read and in a heavy game the capturer falls behind: graphic errors and the normal image; warn before using it): `capture split` lines by kind of frame, summed up by `tools/bottleneck.py` |
 | `capture_core` | (v13.13) `0`, `1` or `2` pins the capturer to that core (before v13.13 always core 1); no file or anything else: any of the 3. The `threads: capture` line of the log says which one was used; see `etapa2_ridge_racer.md` |
 
 ## Drawing on the Vita (stage 3, with `draw`; `nativedraw.log`, every 10 s)

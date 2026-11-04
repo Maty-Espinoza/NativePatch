@@ -122,7 +122,19 @@ Clip planes are exact but saturate the GPU, not because of the area (region clip
 | vertices moved by the GPU | 0 % | 54 % |
 Left on the CPU per HD frame: rear-view mirror ~1500 vertices (scissor 150,10 to 330,48) and other vertex types ~500. Marked vertices refused by the translator read uncached memory (177-207 ns per word against ~15), so a draw must not be marked and then refused. The capturer's copy to `tx` shows no clear cost in the race.
 
+**Lit vertices on the GPU (0.0.19.3-0.0.19.4, confirmed as 0.0.20):** car selection was limited by the CPU, not the GPU (translator ~33 ms, vertices ~21 ms, GPU ~20 ms and idle 54 %). `nd_v4` takes types `0x142`/`0x143`: one directional light with specular, or UV generated from the normal.
+| Car selection, per HD frame | 0.0.19 | 0.0.20 |
+|---|---|---|
+| translator, ms | ~33 | 16.5 |
+| vertices, ms | ~21 | 2.3 |
+| GPU, ms | ~20 | ~21 |
+| Adrenaline's frames per second | ~27 | ~44 |
+| HD frames per second | ~21 | ~27 |
+Coplanar passes of a model must take the same path and program: with only the lit pass on the GPU, the GEQUAL depth test of the reflection pass failed by rounding and the reflections flickered in saw teeth.
+**What limits car selection now:** `regFlip` skips recording a frame (`R_SKIP`) when the one before was not taken yet. The GPU takes ~21 ms, longer than a game frame, so every second frame is skipped: ~30 recorded and ~30 only walked per second, a cap of ~30 HD frames although the chain could give ~45. The capturer has time to spare there.
+
 ## Order from here (2026-11-04)
+0. **Skip a frame (`slow` in `regFlip`) only when the capturer is short of time:** expected ~45 HD frames per second in car selection; the race and the crowd must stay the same. Verify: Vita (`frames only walked`, `gate_us`, game fps).
 1. **GPU (C.3), started first by the user:** the capturer in the crowd waits; B.3 failed and B.9 is the remaining idea there. It falls behind there: 7-10 complete frames per second, and lists read late give frames that fail in the translator (1 to 8 per run), each shown as the normal image for several game frames.
 2. **GPU (C.3):** fewer pixels (9.4 screens per frame). In the normal race translator and GPU take about the same, ~33 ms.
 3. **Rear-view mirror on the GPU:** not with `CLP0` or `discard`; `sceGxmSetRegionClip` granularity is untested.

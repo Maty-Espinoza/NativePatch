@@ -151,7 +151,7 @@ unused: `SB[0x47]`, bits 4 and 8 of 0x4A and events 7, 8, 9, 10 and 12.
   Textures from RAM stay between frames in a cache the GPU reads (`RC` in `record.c`): each frame a sample of every group of
   8 rows is compared with the game's memory, and only what changed is copied again.
   Vertices the GPU can take as they are (`rgVGpu`) go to the end of `tx`, which the GPU reads, instead of area `a`.
-- **Translator** (`translator.c`): 2D in "through" mode and 3D (the GE's vertex work on the CPU, or on the GPU with `nd_v3` for the common vertices): lines, rectangles, triangles, strips and fans;
+- **Translator** (`translator.c`): 2D in "through" mode and 3D (the GE's vertex work on the CPU, or on the GPU with `nd_v3` for the common vertices and `nd_v4` for 16-bit vertices with one directional light or UV from the normal): lines, rectangles, triangles, strips and fans;
   5650/5551/4444/8888 textures and 4- and 8-bit palettes; clears; color per vertex or from the material; modulate and replace
   texture functions; alpha test; blending (the combinations GXM has); scissor on the rectangles; **intermediate
   images** (a game draws into a hidden VRAM image and then stretches it: each one goes to its own surface at double size,

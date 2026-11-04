@@ -10,7 +10,12 @@ the Vita but not yet confirmed as a numbered release.
   KEEP/REVERT step (`iterate.sh`) and the unattended loop with Claude Code (`ai_loop.sh`, `docs/agent/en/perf-loop.md`).
 - `docs/dev/*/performance-plan.md`: the ordered plan towards 60 fps, from the analysis of the capturer on `stage3_0.0.16.4/rr1`.
 
-## NativeDraw 0.0.19 (2026-11-04)
+## NativeDraw 0.0.20 (2026-11-04)
+Tests 0.0.19.1–0.0.19.4, checked on the Vita with Ridge Racer; NativeLink stays at 0.0.6. Car selection against 0.0.19: vertices ~21 -> 2.3 ms per HD frame,
+translator ~33 -> 16.5 ms, GPU ~20 -> ~21 ms, Adrenaline's frames ~27 -> ~44 per second, HD frames ~21 -> ~27 per second. Race: no clear change; game at 60 fps.
+- **`nd_v4`:** a vertex program for types `0x142` and `0x143` (16-bit position and normal, no color): one directional light with specular, or UV generated from the normal. Both passes of a car use it, so they get the same depth.
+- **Discarded:** vertex copies on the record thread (0.0.19.1-0.0.19.2): no gain and deformed triangles; reverted.
+
 Tests 0.0.18.1–0.0.18.8, checked on the Vita with Ridge Racer; NativeLink stays at 0.0.6. Race against 0.0.18: vertices ~19.5 -> 13.1 ms per HD frame,
 translator ~37 -> 32.1 ms, GPU ~35 -> 33.2 ms; 54 % of the vertices moved by the GPU; the HD rate has no clear gain (20.5 -> 21.7, noise 19.4-21.0); game at 60 fps.
 - **`nd_v3` (first stage of C.1):** a vertex program reads the 3D vertices as the game wrote them (type `0x19F`, no lights, no generated UV, smooth) when the scissor takes in the whole image. They stay at the end of `tx`, so no new memory. Narrow textures are always copied without their gap.
