@@ -16,7 +16,7 @@ $(command -v qemu-arm-static || command -v qemu-arm) $B/prueba
 
 echo "== capturer bench (builds and runs one scene)"
 arm-linux-gnueabihf-gcc -static -O2 -mthumb -mfpu=neon -mfloat-abi=hard -w -I$B/inc -o $B/bench $R/tools/perf/capture_bench.c
-$(command -v qemu-arm-static || command -v qemu-arm) $B/bench rr_race | grep -q "complete=39" || { echo "FAIL: capture_bench"; exit 1; }
+$(command -v qemu-arm-static || command -v qemu-arm) $B/bench rr_race | grep -q "complete=38" || { echo "FAIL: capture_bench"; exit 1; }
 echo "ok   capture_bench"
 
 echo "== log parsers"

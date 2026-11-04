@@ -326,7 +326,11 @@ typedef struct {
 } T3;
 static T3 t3;
 static float f24(uint32_t v) { union { uint32_t u; float f; } x = { v << 8 }; return x.f; }
+#ifdef __arm__
 static inline float tsqrt(float x) { __asm__("vsqrt.f32 %0, %1" : "=t"(x) : "t"(x)); return x; }
+#else  // (the bench on the PC)
+static inline float tsqrt(float x) { return __builtin_sqrtf(x); }
+#endif
 static float tpow(float b, int e) { float r = 1; for (; e > 0; e >>= 1, b *= b) if (e & 1) r *= b; return r; }
 static void tnorm(float *v) { float d = v[0] * v[0] + v[1] * v[1] + v[2] * v[2]; if (d > 0) { d = 1 / tsqrt(d); v[0] *= d; v[1] *= d; v[2] *= d; } }
 static void rgbf(uint32_t c, float *o) { const float k = 1 / 255.0f; o[0] = (c & 255) * k; o[1] = (c >> 8 & 255) * k; o[2] = (c >> 16 & 255) * k; o[3] = (c >> 24 & 255) * k; }

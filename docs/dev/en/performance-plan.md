@@ -71,6 +71,10 @@ faster, and above ~11 KB per call.
 released: `lists` grew from ~150 to 368 pages in a session, the PSP spent 3.2 ms per frame on the mirror instead of 1.3 and the
 game fell to 40-46 fps. Now those pages expire when no frame reads them. Verify: Vita (`mirror: pages requested lists`, `mirror_us`).
 
+**Bench improved (0.0.16.7):** exact instructions per frame (`ir_k/f`) with a profile by function and line, the translator on real
+frames (`tr_*`), the pages asked of the mirror (`want`) and frames that are walked without recording (`*_late`). With them:
+`regDraw` skips `vsize`, `rgRows` and `rgTex` for 3D draws with the same VRAM texture: `rr_crowd` -16 %, `rr_race` -15 % instructions.
+
 ## C. Large changes (ask the user first)
 1. **3D vertices in a GXM vertex shader reading the PSP RAM mapped for the GPU** (`sceGxmMapMemory` at 0x70000000 works,
    stage 1). Removes the vertex copy from the capturer (~5 ms) and the CPU transform from the translator (16-20 ms per HD

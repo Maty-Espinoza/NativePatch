@@ -77,6 +77,10 @@ DMA es más rápido, y sobre ~11 KB por llamada.
 se soltaba: `lists` creció de ~150 a 368 páginas en una sesión, la PSP gastaba 3,2 ms por frame en el espejo en vez de 1,3 y el juego
 bajó a 40-46 fps. Ahora esas páginas expiran cuando ningún frame las lee. Verificar: Vita (`mirror: pages requested lists`, `mirror_us`).
 
+**Banco mejorado (0.0.16.7):** instrucciones exactas por frame (`ir_k/f`) con perfil por función y línea, el traductor sobre frames
+reales (`tr_*`), las páginas pedidas al espejo (`want`) y los frames que se recorren sin grabar (`*_late`). Con eso: `regDraw` se salta
+`vsize`, `rgRows` y `rgTex` en draws 3D con la misma textura de VRAM: `rr_crowd` -16 %, `rr_race` -15 % de instrucciones.
+
 ## C. Cambios grandes (preguntar primero al usuario)
 1. **Vértices 3D en un vertex shader de GXM leyendo la RAM del PSP mapeada para la GPU** (`sceGxmMapMemory` en 0x70000000
    funciona, etapa 1). Quita la copia de vértices del capturador (~5 ms) y la transformación en CPU del traductor (16-20 ms

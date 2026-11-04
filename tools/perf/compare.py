@@ -15,7 +15,8 @@ def parse(path):
         runs.setdefault(d['scene'], []).append(d)
     out = {}
     for s, all_ in runs.items():
-        rs = [r for r in all_ if 'frames' in r]  # (instr.sh adds a line with only the instructions)
+        rs = [r for r in all_ if 'frames' in r] or all_[:1]  # (instr.sh adds a line with only the instructions; the translator has nothing else)
+        for k in ('cmds/f', 'draws/f', 'verts/f', 'own256/f', 'hits/f', 'ucp_kb/f', 'ucmp_kb/f', 'dma/f', 'dma_kb/f', 'clock/f', 'complete', 'want', 'mem_us/f', 'qemu_us/f', 'qemu_min_us'): rs[0].setdefault(k, 0)
         o = dict(rs[0]); o.update(next((r for r in all_ if 'ir_k/f' in r), {})); o['qemu_us/f'] = min(r['qemu_us/f'] for r in rs); o['qemu_min_us'] = min(r['qemu_min_us'] for r in rs); o['runs'] = len(rs)
         for r in rs:
             for k in r:
@@ -37,7 +38,7 @@ def compare(last, ref, tol):
         print(row)
         if r:
             if o['mem_us/f'] > r['mem_us/f'] + 0.5: print(f'REGRESSION {s}: mem_us/f {r["mem_us/f"]:g} -> {o["mem_us/f"]:g}'); bad += 1
-            if o['qemu_min_us'] > r['qemu_min_us'] * (1 + tol / 100): print(f'REGRESSION {s}: qemu_min_us {r["qemu_min_us"]:g} -> {o["qemu_min_us"]:g} (over {tol}%)'); bad += 1
+            if 'ir_k/f' not in o and o['qemu_min_us'] > r['qemu_min_us'] * (1 + tol / 100): print(f'REGRESSION {s}: qemu_min_us {r["qemu_min_us"]:g} -> {o["qemu_min_us"]:g} (over {tol}%)'); bad += 1
             if o.get('ir_k/f', 0) > r.get('ir_k/f', 1e12) * 1.01: print(f'REGRESSION {s}: ir_k/f {r["ir_k/f"]:g} -> {o["ir_k/f"]:g}'); bad += 1
             if o.get('want', 0) > r.get('want', 1e12): print(f'REGRESSION {s}: want {r["want"]:g} -> {o["want"]:g}'); bad += 1
             if o['complete'] < r['complete']: print(f'REGRESSION {s}: complete frames {r["complete"]:g} -> {o["complete"]:g}'); bad += 1

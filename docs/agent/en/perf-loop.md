@@ -7,13 +7,19 @@ conversation follows it by hand. The rules of `good-practices.md` and `CLAUDE.md
 
 ## 1. What the bench measures and what it does not
 `sh tools/perf/bench.sh` builds `tools/perf/capture_bench.c` (the real `capture.c` with the Vita functions replaced, on ARM
-under qemu) and runs four synthetic scenes shaped like the games measured on the Vita: `rr_crowd` (3400 3D strip draws,
+under qemu) and runs synthetic scenes shaped like the games measured on the Vita: `rr_crowd` (3400 3D strip draws,
 23.8k vertices in RAM, VRAM textures), `rr_race` (900 of the same), `sprites2d` (300 rects with swizzled RAM textures and
 palettes, texture cache) and `sublists` (sublist memory and the readers, no record). Each scene gives, per frame:
 - **`mem_us`**: an estimate of Vita microseconds from counters that do not depend on the PC (256-byte reads of PSP RAM,
   shared-cache hits, bytes the CPU copies or compares from PSP RAM, DMA calls and bytes, clock reads) and the unit costs
   measured on the Vita (`capture_bench.c`, `C_*`). Deterministic: two runs of the same code give the same number. **This
   is the judge for anything that moves memory.**
+- **`ir_k/f`**: thousands of instructions per frame counted by Callgrind on an x86 build (`tools/perf/instr.sh`; apt packages
+  `valgrind`, `libc6-dev-i386` and `lib32gcc-13-dev`, not `gcc-multilib`, which removes the ARM compiler). Exact: the same code
+  gives the same number on any PC, so 1 % counts. **This is the judge for CPU work**, and `instr.sh --top` shows where it goes,
+  function by function; `callgrind_annotate --auto=yes` on `build/perf/instr/cg.*`, line by line. The `tr_*` scenes are the
+  translator on real frames (`tools/perf/translate_bench.c`, `tools/perf/data/`: dumps of the Vita).
+- **`want`**: pages asked of the mirror after the last frame. The `images` scene moves its images every frame: a leak shows here.
 - **`qemu_min_us`**: CPU time of the fastest frame under qemu (interpretation, record bookkeeping, hashes, sorting). It is not
   Vita time and varies ~5 % between runs: it only counts for changes over 10 % (`RUNS=10` tightens it).
 - `complete`: frames the record published complete. It must not drop.
@@ -27,8 +33,10 @@ mirror timing, the translator and the GPU. A KEEP here is a candidate for the Vi
 - `qemu_min_us` depends on the machine and its load (the same code moved 26 % between sessions): at the start of a
   conversation save a local reference (`RUNS=10 sh tools/perf/bench.sh`, copy `build/perf/last.json`, use it with `REF=`), and
   to compare two versions run them alternately. `mem_us` does not change.
+- `sh tools/perf/ab.sh <commit>` compares the working tree with a commit, instructions only, with today's scenes.
 - `sh tools/perf/iterate.sh --keep` (or `bench.sh --save`) rewrites the reference. Only after a KEEP that is committed.
-- A regression is any rise of `mem_us`, a rise of `qemu_min_us` over the tolerance, or fewer complete frames.
+- A regression is any rise of `mem_us` or `want`, a rise of `ir_k/f` over 1 %, or fewer complete frames. `qemu_min_us` only
+  counts where there is no `ir_k/f`. The numbers mean nothing against the Vita: compare them only with earlier runs of the bench.
 
 ## 3. One iteration
 1. Start: `T=$HOME/tc sh tools/setup.sh` if `$HOME/tc` is missing; apt packages `qemu-user-static` and

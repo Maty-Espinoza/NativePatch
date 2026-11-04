@@ -9,6 +9,7 @@ TOP=0; [ "$1" = --top ] && { TOP=1; shift; }
 T=${T:-$HOME/tc}; . $T/env.sh
 R=$(cd "$(dirname "$0")/../.." && pwd); S=${1:-$R}; O=${2:-/dev/stdout}; B=$R/build/perf; P=$R/tools/perf; W=$B/instr; mkdir -p $B/inc; rm -rf $W; mkdir -p $W
 for d in $VH/include/psp2* $VH/include/vitasdk*; do [ -e $B/inc/$(basename $d) ] || ln -s $d $B/inc/; done
+[ -e $B/inc/taihen.h ] || ln -s $T/taipkg/include/taihen.h $B/inc/
 gcc -m32 -g -O2 -w -I$P/host -I$B/inc -o $W/bench $S/tools/perf/capture_bench.c
 : > $W/out
 for s in rr_crowd rr_crowd_late rr_race rr_race_late sprites2d sublists images; do
@@ -17,5 +18,14 @@ for s in rr_crowd rr_crowd_late rr_race rr_race_late sprites2d sublists images; 
   n=$(sed -n 's/^summary: *//p; s/^totals: *//p' $f | head -1)
   echo "scene=$s ir_k/f=$((n / 40000))" >> $W/out
   [ $TOP = 1 ] && callgrind_annotate $f | grep -E '^ *[0-9,]+ \(' | sed -n 2,13p | sed 's/\[.*//' | cut -c1-80
+done
+# The translator on real frames of Ridge Racer (tools/perf/data, dumps of the Vita)
+gcc -m32 -g -O2 -w -I$P/host -I$B/inc -I$S/nativedraw -o $W/trb $S/tools/perf/translate_bench.c $P/host/vita_stubs.c -lm
+for g in $P/data/*.bin.gz; do
+  s=$(basename $g .bin.gz); gzip -dc $g > $W/$s.bin
+  (cd $W && valgrind --tool=callgrind --collect-atstart=no --callgrind-out-file=cg.$s.out ./trb $s.bin 20 >/dev/null 2>&1)
+  n=$(sed -n 's/^summary: *//p; s/^totals: *//p' $W/cg.$s.out | head -1)
+  echo "scene=tr_$s ir_k/f=$((n / 20000))" >> $W/out
+  [ $TOP = 1 ] && callgrind_annotate $W/cg.$s.out | grep -E '^ *[0-9,]+ \(' | sed -n 2,13p | sed 's/\[.*//' | cut -c1-80
 done
 cat $W/out > $O
