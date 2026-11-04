@@ -309,8 +309,8 @@ static void bnLog(void) {
   alog("bottleneck: slots %u drawn %u repeated %u behind %u no_record %u normal %u | ms: translator %u gpu_wait %u | translator ms: check %u textures %u vertices %u gxm %u scenes %u | "
        "gpu ms: adrenaline %u normal %u surface %u intermediate %u idle %u\n", c[B_SLOT], c[B_DRAWN], c[B_REP], c[B_BEHIND], c[B_NOREC], c[B_NORMAL], c[B_TR] / 1000, c[B_WAIT] / 1000,
        t[0] / 1000, t[1] / 1000, t[2] / 1000, t[3] / 1000, t[4] / 1000, g[C_ADR] / 1000, g[C_NORMAL] / 1000, g[C_TR] / 1000, g[C_INT] / 1000, id / 1000);
-  if (n) alog("bottleneck pixels (thousands per frame of %u): surface: fast %u fog %u textured %u color %u base %u | intermediate: fast %u fog %u textured %u color %u\n", n,
-              p[0][BP_FAST] / n, p[0][BP_FOG] / n, p[0][BP_TEX] / n, p[0][BP_COL] / n, p[0][BP_BASE] / n, p[1][BP_FAST] / n, p[1][BP_FOG] / n, p[1][BP_TEX] / n, p[1][BP_COL] / n);
+  if (n) alog("bottleneck pixels (thousands per frame of %u): surface: fast %u mid %u textured %u color %u base %u | intermediate: fast %u mid %u textured %u color %u\n", n,
+              p[0][BP_FAST] / n, p[0][BP_MID] / n, p[0][BP_TEX] / n, p[0][BP_COL] / n, p[0][BP_BASE] / n, p[1][BP_FAST] / n, p[1][BP_MID] / n, p[1][BP_TEX] / n, p[1][BP_COL] / n);
   if (n) alog("bottleneck why generic (thousands of pixels per frame, a draw can have several): function %u double %u alpha_test %u fog %u blend2x %u\n", w[BW_FUNC] / n, w[BW_DOUBLE] / n, w[BW_ATEST] / n, w[BW_FOG] / n, w[BW_BLEND2X] / n);
 }
 #endif

@@ -10,10 +10,10 @@ SLOT = 1000 / 60
 B = re.compile(r'\s*(\d+) bottleneck: slots (\d+) drawn (\d+) repeated (\d+) behind (\d+) no_record (\d+) normal (\d+) \| ms: translator (\d+) gpu_wait (\d+) \| '
                r'translator ms: check (\d+) textures (\d+) vertices (\d+) gxm (\d+) scenes (\d+) \| gpu ms: adrenaline (\d+) normal (\d+) surface (\d+) intermediate (\d+) idle (\d+)')
 N = 'slots drawn repeated behind no_record normal translator gpu_wait check textures vertices gxm scenes adrenaline normal_img surface intermediate idle'.split()
-PX = re.compile(r'\s*(\d+) bottleneck pixels .*?surface: fast (\d+) fog (\d+) textured (\d+) color (\d+) base (\d+) \| intermediate: fast (\d+) fog (\d+) textured (\d+) color (\d+)')
+PX = re.compile(r'\s*(\d+) bottleneck pixels .*?surface: fast (\d+) mid (\d+) textured (\d+) color (\d+) base (\d+) \| intermediate: fast (\d+) mid (\d+) textured (\d+) color (\d+)')
 WHY = re.compile(r'\s*(\d+) bottleneck why generic .*?: function (\d+) double (\d+) alpha_test (\d+) fog (\d+) blend2x (\d+)')
 WN = 'function double alpha_test fog blend2x'.split()
-PN = 's_fast s_fog s_textured s_color s_base i_fast i_fog i_textured i_color'.split()
+PN = 's_fast s_mid s_textured s_color s_base i_fast i_mid i_textured i_color'.split()
 
 def seconds(path, t0, t1):
     rows, px, why = [], [], []
@@ -98,7 +98,7 @@ def main():
         print('\nthousands of pixels per frame:')
         print('  ' + ', '.join(f'{k} {sum(x[k] for x in px) / len(px):.0f}' for k in PN))
         tot = sum(sum(x.values()) for x in px)
-        print(f'  total {tot / len(px):.0f} ({tot / len(px) / 522:.1f} screens); with fog and nothing else, the generic program for no reason: {sum(x["s_fog"] + x["i_fog"] for x in px) * 100 / max(tot, 1):.0f} %; '
+        print(f'  total {tot / len(px):.0f} ({tot / len(px) / 522:.1f} screens); on the middle program: {sum(x["s_mid"] + x["i_mid"] for x in px) * 100 / max(tot, 1):.0f} %; '
               f'image underneath: {sum(x["s_base"] for x in px) * 100 / max(tot, 1):.0f} %')
     if why: print('  why not the fast program: ' + ', '.join(f'{k} {sum(x[k] for x in why) / len(why):.0f}' for k in WN))
     cp = os.path.join(d, 'nativedraw_capture.log')
