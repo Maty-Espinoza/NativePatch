@@ -85,6 +85,9 @@ static uint32_t texAddr(const uint32_t *e) { return (RE(e, 0xA0) & 0xFFFFF0) | (
 // (swizzled ones arrive already sorted from the record). Each fragment program is built once per blend that appears
 // (fps, up to 64) ---
 static SceGxmVertexProgram *nvp;
+DEV(static SceGxmVertexProgram *cvp;  // nvp with the scissor as hardware clip planes (switch clip_gpu)
+    static const SceGxmProgramParameter *c_wvp, *c_sc;
+    static int cg_on, nj_on;)
 static const SceGxmProgram *pft, *pfc, *pfm, *pfd, *pfa, *pv;
 static SceGxmShaderPatcherId ift, ifc, ifm, ifd, ifa;
 static const SceGxmProgramParameter *n_wvp, *n_tf, *n_tm, *n_td, *n_ta, *n_atx, *n_atc, *n_env, *n_fgx, *n_fgc, *n_fgd, *n_fga;
@@ -161,6 +164,17 @@ static int trInit(void) {
                                   { 0, 28, SCE_GXM_ATTRIBUTE_FORMAT_U8N, 4, sceGxmProgramParameterGetResourceIndex(pc) } };
   SceGxmVertexStream st = { sizeof(TV), SCE_GXM_INDEX_SOURCE_INDEX_16BIT };
   if ((r = sceGxmShaderPatcherCreateVertexProgram(pat, iv, at, 3, &st, 1, &nvp)) < 0) { alog("translator: vertex program %08x\n", r); return r; }
+  DEV(SceGxmShaderPatcherId ic;
+      if (sceGxmShaderPatcherRegisterProgram(pat, (const SceGxmProgram *)nd_vc_gxp, &ic) >= 0) {
+        const SceGxmProgram *pc2 = sceGxmShaderPatcherGetProgramFromId(ic);
+        const SceGxmProgramParameter *qa = sceGxmProgramFindParameterByName(pc2, "aPosition"), *qt = sceGxmProgramFindParameterByName(pc2, "aTexcoord"), *qc = sceGxmProgramFindParameterByName(pc2, "aColor");
+        c_wvp = sceGxmProgramFindParameterByName(pc2, "wvp"); c_sc = sceGxmProgramFindParameterByName(pc2, "sc");
+        SceGxmVertexAttribute ac[3] = { at[0], at[1], at[2] };
+        ac[0].regIndex = sceGxmProgramParameterGetResourceIndex(qa); ac[1].regIndex = sceGxmProgramParameterGetResourceIndex(qt); ac[2].regIndex = sceGxmProgramParameterGetResourceIndex(qc);
+        int rc = sceGxmShaderPatcherCreateVertexProgram(pat, ic, ac, 3, &st, 1, &cvp);
+        alog("translator: clip plane program %08x\n", rc);
+        if (rc < 0 || !c_wvp || !c_sc) cvp = 0;
+      })
   if (!fragProg(0, 0, C_RGB) || !fragProg(1, 0, C_RGB)) return -3;
   for (int i = 0; i < 2; i++) rtMem(&rts[i]);
   rtMem(&rtc);
@@ -1018,8 +1032,9 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
   TV *o = tv[s];
   uint32_t *pal = tpal[s], np = 0, nv = 0, pal_prev = ~0u, pn = 0;  // np: words used; pal_prev/pn: the previous palette
   void *u;
+  DEV(int cg_cur = 0;)  // the program in the context is cvp
   // SCENE: starts a scene on surface surf_tex with the vertex program and the matrix
-#define SCENE(surf_tex, reg) do { sceGxmBeginScene(c, 0, cur_rt ? rt_i : rt, reg, 0, t_sync, surf_tex, cur_rt ? &ds : &dss); t_zs = t_st = t_sr = t_cl = ~0u; zsSet(c, 0, 0); sceGxmSetVertexProgram(c, nvp); \
+#define SCENE(surf_tex, reg) do { sceGxmBeginScene(c, 0, cur_rt ? rt_i : rt, reg, 0, t_sync, surf_tex, cur_rt ? &ds : &dss); t_zs = t_st = t_sr = t_cl = ~0u; zsSet(c, 0, 0); sceGxmSetVertexProgram(c, nvp); DEV(cg_cur = 0;) \
     float wm[16]; trWvp(wm, reg); sceGxmReserveVertexDefaultUniformBuffer(c, &u); sceGxmSetUniformDataF(u, n_wvp, 0, 16, wm); } while (0)
   // OPEN: closes the open scene (if any) and opens one on dst (0: surface s); the first time on the surface,
   // puts the normal image (or black: trBase) underneath
@@ -1156,7 +1171,9 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     if (prim < 3 && (res = trLines(w, &n, room, prim == 2))) break;
     if (prim < 3) prim = 3;
     DEV(VT(VS_REST);)
-    if (prim != 6 && (res = trTris(w, &n, room, &prim, sc, (clr & 1) || !(RE(e, 0x50) & 1), w3d))) break;
+    int cgd = 0;  // (the scissor goes to the GPU's clip planes)
+    DEV(cgd = cg_on && cvp && w3d && !self && prim != 6 && !(clr & 1) && (RE(e, 0x50) & 1) && (sc[0] > 0 || sc[1] > 0 || sc[2] < W || sc[3] < H);)
+    if (prim != 6 && !cgd && (res = trTris(w, &n, room, &prim, sc, (clr & 1) || !(RE(e, 0x50) & 1), w3d))) break;
     DEV(VT(VS_TRIS);)
     DEV(t_c[TC_VOUT] += n; t_c[TC_CUT] += n != nb; t_c[TC_SAME] += same;)
     if (!n) { pd = 0; continue; }  // (t, tw and th are this draw's now, not those of the state in the context)
@@ -1232,6 +1249,14 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     }
     if (same) goto ready;  // (the state is already set)
     RUN();
+    DEV(if (cgd || cg_cur) {
+          float wm[16];
+          trWvp(wm, cur_rt ? &cur_rt->vr : 0);
+          sceGxmSetVertexProgram(c, cgd ? cvp : nvp);
+          sceGxmReserveVertexDefaultUniformBuffer(c, &u); sceGxmSetUniformDataF(u, cgd ? c_wvp : n_wvp, 0, 16, wm);
+          if (cgd) sceGxmSetUniformDataF(u, c_sc, 0, 4, sc);
+          cg_cur = cgd;
+        })
     uint32_t afn = 1, aref = 0, c9 = RE(e, 0xC9), b2 = !(clr & 1) && blend2x(e);
     if (!(clr & 1) && (RE(e, 0x22) & 1)) alphaFn(e, &afn, &aref);
     int fast = tex && !(c9 & 0x10007) && afn == 1 && !b2 && !(w3d && t3.fog);
@@ -1280,7 +1305,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     // start on an even vertex, so its winding does not flip
     uint32_t pad = 0;
     if (nv + n + 3 > TV_N) { res = T_LIMIT; break; }
-    if (same && rn && rp == prim && prim != 5 && w == ts) {
+    if (same && rn && rp == prim && prim != 5 && w == ts DEV(&& !nj_on)) {
       if (prim == 4) { pad = 2 + (rn & 1); o[nv] = tl; o[nv + 1] = w[0]; o[nv + 2] = w[0]; }
     } else { RUN(); rv = nv; rp = prim; }
     DEV(if (vm) vc = now();)
