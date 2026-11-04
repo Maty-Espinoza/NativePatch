@@ -110,8 +110,30 @@ static void build(int frame) {
 static uint32_t stateSum(void) { uint32_t h = 0; for (int i = 0; i < 256; i++) h = h * 31 + reg[i]; for (int m = 0; m < 5; m++) for (int i = 0; i < 96; i++) h = h * 31 + mtx[m][i]; return h * 31 + vaddr * 7 + iaddr; }
 // Result of one case, in memory shared with the process that compares them. col: columns before "|" per frame, without
 // and with state; the rest are totals of what each case must exercise.
-typedef struct { char col[8][64]; uint32_t st[8], hit, chk, bad, fail, pre, late, lines, pv, skip, whole, lost, rt1, pal, tex2, tc, srt, xf, late_pr, ok; } Res;
+typedef struct { char col[8][64]; uint32_t st[8], hit, chk, bad, fail, pre, late, lines, pv, skip, whole, lost, rt1, rtr, wk, pal, tex2, tc, srt, xf, late_pr, ok; } Res;
 static Res *res;
+// An image drawn on many times counts once: with the list full, anything in target pages would pass for an image
+static int rtRepeatOk(void) {
+  sceClibMemset(rt_pg, 0, sizeof rt_pg); rt_nb = 0;
+  markRt(0x04195000, 0x10000); markRt(0x041FE000, 0x1000);
+  for (int i = 0; i < 12; i++) { rtNote(0x04000000); rtNote(0x041FE000); }
+  int ok = rt_nb == 2 && !rtRead(0x0419A040) && rtRead(0x041FE000);
+  sceClibMemset(rt_pg, 0, sizeof rt_pg); rt_nb = 0;
+  return ok;
+}
+static int wantKeptOk(void) {
+  uint32_t on = mir_on, p = 0x19A, q = 0x19B, c0 = CPY(0, p), c1 = CPY(1, p);
+  mir_on = 1; sceClibMemset(rt_pg, 0, sizeof rt_pg); sceClibMemset(want_now, 0, sizeof want_now);
+  want(0x0419A000, 0x1000, 0);
+  want_d[q >> 5] |= 1u << (q & 31);  // (asked for in an earlier frame)
+  markRt(0x0419A000, 0x2000);
+  int ok = want_d[p >> 5] >> (p & 31) & 1 && !(want_d[q >> 5] >> (q & 31) & 1);
+  CPY(0, p) = 0; CPY(1, p) = 5; ok = ok && rgMirrored(0x0419A000, 0x1000);
+  CPY(1, p) = 0; ok = ok && !rgMirrored(0x0419A000, 0x1000);
+  CPY(0, p) = c0; CPY(1, p) = c1; mir_on = on;
+  sceClibMemset(rt_pg, 0, sizeof rt_pg); sceClibMemset(want_d, 0, sizeof want_d); sceClibMemset(want_now, 0, sizeof want_now);
+  return ok;
+}
 static int report(const char *name, int ok) { printf("%s %s\n", ok ? "ok  " : "FAIL", name); return !ok; }
 // Frames from..7 of case a equal those of b (state too if st).
 static int same(Res *a, Res *b, int from, int st) {
@@ -170,6 +192,8 @@ static int checkAll(void) {
   bad += report("frame record: an image only counts as drawn in its frame", r[REG0].rt1);
   bad += report("frame record: not recorded while the presenter does not take frames", r[REG0].late_pr);
   bad += report("texture copy: right by CPU and by DMA", texCopyOk(1) && texCopyOk(32));
+  bad += report("an image repeated among the targets does not hide textures in its pages", r[REG0].rtr);
+  bad += report("a texture page used this frame stays requested under a target; another mirror's copy counts", r[REG0].wk);
   printf(bad ? "%d FAILED\n" : "all ok\n", bad);
   return bad;
 }
@@ -242,6 +266,7 @@ int main(int argc, char **argv) {
     markRt(0x04100000, 4096); rt_fb[0] = 0x100000; rt_nb = 1;
     res->rt1 &= rtRead(0x04100000) && !rtRead(0x04100400) && rtPage(0x04100400);
     sceClibMemset(rt_pg, 0, sizeof rt_pg); rt_nb = 0;
+    res->rtr = rtRepeatOk(); res->wk = wantKeptOk();
     *W(0x08C30000) = 1; reg[0xA0] = 0xC30000; reg[0xA8] = 0x080000 | 8; reg[0xB8] = 3 << 8 | 3; reg[0xC3] = 3;  // 8x8, 8888
     pub_ord = 100; uint32_t t0 = rgTex(0, 8), t1 = rgTex(0, 8);
     pub_ord = 101; uint32_t t2 = rgTex(0, 8);

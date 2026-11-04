@@ -2,21 +2,20 @@
 
 The only list of pending work. Ordered from what comes next to what can wait. Each item says where it came from
 (a document in `docs/dev/en/`, `docs/agent/en/`, `docs/changelog/en/` or the claude.ai project). Done items are removed;
-what was done is in `CHANGELOG.md`. Updated 2026-11-03 (NativeLink 0.0.6 + NativeDraw 0.0.14 confirmed). How the work is done: `docs/agent/en/workflow.md`; stage 3 plan and results:
+what was done is in `CHANGELOG.md`. Updated 2026-11-03 (NativeLink 0.0.6 + NativeDraw 0.0.15 confirmed). How the work is done: `docs/agent/en/workflow.md`; stage 3 plan and results:
 `docs/agent/en/stage3-plan.md`.
 
 ## Next
-Order agreed on 2026-11-03: first make the whole of Ridge Racer drawable in HD (the race included), then optimize with the
-game in its "final" form. Capturer, mirror and translator work goes after the race is drawable.
-- [ ] **Ridge Racer, performance first (user, 2026-11-03):** the race goes in HD at ~10 frames per second: translator ~50 ms per frame (3D vertices ~27 ms, GXM ~8 ms), GPU ~31 ms in the selector. See the crowd artifacts after this.
-- [ ] **Ridge Racer, crowd section artifacts** (user, 0.0.14.15): look again after the performance work. Up to 3700 draws per frame, capturer ~22 ms even without recording (~1000 ns per command against 580 in 0.0.1: not the log level).
+- [ ] **Measure Ridge Racer without the high clocks** (delete or set `no` in `ux0:data/nativedraw/clocks`): 0.0.15 was only tested with CPU 444 and crossbar 166.
+- [ ] **High clocks as an option of the L+R+START menu** (user, 2026-11-03): a plan B, the goal is not to need them. Today a development switch: production builds run at Adrenaline's clocks.
+- [ ] **Other games with 0.0.15** (KOF 96, Metal Slug XX, Retro City, Street Fighter, Gran Turismo): only Ridge Racer was tested with CPU and GPU in parallel. A GPU slower than the CPU now waits inside the hook instead of skipping the frame.
+- [ ] **GPU, the limit away from the crowd** (95 % busy, main scene ~30 ms): almost every 3D draw uses `nd_ft`, generic, with `discard`, because of the fog. A program with fog, no alpha test and no `discard`; `shacc` must be built in the container. Skip the image underneath when the frame covers it.
+- [ ] **3D vertices in a GXM vertex shader** (matrices, lights, texgen and fog as uniforms): the rest of the CPU cost, ~15-25 ms per frame and more in the crowd (17,000 vertices). Scissor with clip planes in the shader. A large change: ask first. Joined draws already leave ~250 state changes per frame.
+- [ ] **Ridge Racer, capturer in the crowd:** ~16 ms per frame at 444 MHz (~3500 draws), `behind` 6-12 per second. Without the high clocks it does not fit.
+- [ ] **Memory:** under 1 MB free in one go after start, dumps fail (`peek` replaces them for now). Look at what can go (4 x 1.5 MB of textures, `fails`).
+- [ ] **Differential test of the translator:** this conversation ran old and new `trFrame` on the PC with GXM stubs over a real `f0_record.bin`, comparing all triangles and states. Worth keeping as a test tool in `tools/`.
 - [ ] **Translator failures left:** color test that is not black under an add (`fails/003_color_test_or_logic`), the first frame of the flare before its texture is in the mirror, T8 with no copy (`fails/006_bad_texture`, not understood), points on images that are read, memory free after start: 0 MB in one go with the dev reservations.
-- [ ] **Ridge Racer, bright strip on the right edge and bars on the left in the bloom** (`stage3_0.0.14.8/rr1` dumps 271-273, `stage3_0.0.14.9` video). Cause unknown; dumps still lack the 088000 image (no memory for `dump_rt`).
 - [ ] **Ridge Racer, opening movie no longer plays in HD versions** (user, 0.0.14.11): check it after the race. Also dump 255 and the 2 videos in the claude.ai conversation of 2026-11-03.
-- [ ] **Sync object `t_sync`:** added on a suspicion that turned out not to be the tint's cause. Check whether it can go.
-- [ ] **3D vertices in a GXM vertex shader** (matrices, lights, texgen and fog as uniforms per draw): an HD frame of the race costs
-      ~100 ms of CPU today (76 ms in `trVerts`), and the selector's translator 42-48 ms. The shader compiler runs in the container
-      (`nativedraw/shaders/build.sh`). The translator on its own thread does not help: ~10-15 % of CPU is free across the 3 cores.
 - [ ] **VRAM mirror limit:** 64 data pages per copy (`MIR_DATA`) while Ridge Racer asks for 250-500; reached on every flip and each
       page refreshes every ~7 frames (HD frames could carry textures up to 7 frames old). `prof record: mirror_ge` reads ~20 ms but is an
       upper bound (the capturer looks between lists): refine it (look inside `walk`) and then size the copy by measured GE time

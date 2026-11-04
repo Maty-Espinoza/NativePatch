@@ -40,6 +40,11 @@ diferencia de L+R+SELECT, que parte en el frame siguiente. `tools/dump.py` lee l
 
 - Líneas `census:` de `nativedraw.log` (nivel extreme): todos los motivos por frame, qué son las texturas sin copia y la cadena de imágenes de cada tipo de frame. `record not_read:` de `nativedraw_capture.log`: la causa de cada frame incompleto y los frames solo recorridos.
 
+## Peek (versión de desarrollo)
+La memoria tras el arranque suele ser menos de 1 MB de una vez, así que L+R+SELECT suele dar `dump: no memory`. Entonces el dibujo se detiene ~3 s (el juego sigue) y se
+guardan `ux0:data/nativedraw/peekN_surface.bmp`, `peekN_psp.bmp` y `peekN_rt_<dirección>.bmp` (la esquina de cada imagen intermedia), todas de un mismo momento.
+La imagen PSP avanza mientras la Vita está detenida, así que no es el mismo frame.
+
 ## Archivos de cada volcado
 
 | Archivo | Qué es |

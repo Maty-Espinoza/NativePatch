@@ -54,6 +54,7 @@ Las mediciones de desarrollo están dentro de `#ifdef NP_DEV`. Una compilación 
 
 ## Volcados (NativeDraw 0.0.8.5)
 - Compilación de desarrollo: un NOP del GE con `0x4E5044` pide un volcado, como L+R+SELECT (NPTEST).
+- Compilación de desarrollo: sin memoria para un volcado, L+R+SELECT hace un `peek` (`dumps.md`).
 Niveles de volcado en `ux0:data/nativedraw/dump`: `off`, `screenshot`, `frame`, `sequence` (sin el archivo)
 o `auto` (se comparan 3 letras; `no` también lo apaga). Qué guarda cada uno, cuánto cuesta y cómo se leen con `tools/dump.py`: `dumps.md`.
 
@@ -79,6 +80,8 @@ o `auto` (se comparan 3 letras; `no` también lo apaga). Qué guarda cada uno, c
   qué los otros fueron con la imagen normal (`no_new_frame`, `3d`, `primitive`, `format`, `blend`...; `held_back`: dibujable,
   pero no dibujado porque pasó menos de un segundo desde un frame que no lo era).
 - Solo en compilación de desarrollo: `clocks: GPU N MHz (crossbar N), CPU N, bus N`, los relojes de la Vita que puso Adrenaline, cada 10 s.
+- Solo en compilación de desarrollo: el interruptor `clocks` pone CPU 444 y crossbar 166 en cada línea `clocks:`.
+- Solo en compilación de desarrollo: `translator: speed:` (reloj y memoria, una vez), `translator: per HD frame:` (vértices, draws, mismo estado que el anterior, luces, programas).
 - `translator: pace (PSP frames advanced per drawn frame): 0 (repeated) N, 1 N, 2 N...`: con muchos repetidos
   o saltos los juegos de Neo Geo destellan (hacen transparencias dibujando algo un frame sí y otro no).
 - `gpu: at each frame start, our unfinished scenes: average, max | unfinished: previous frame N, 2 frames ago N |

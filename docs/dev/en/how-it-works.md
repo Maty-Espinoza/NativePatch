@@ -169,7 +169,8 @@ unused: `SB[0x47]`, bits 4 and 8 of 0x4A and events 7, 8, 9, 10 and 12.
   that cannot be drawn looks like a jump back. When a frame cannot be drawn, HD only resumes once the frames have been
   drawable for a whole second (`held_back` in the log); meanwhile they are only checked and the normal image is shown.
 - **Synchronization with the GPU:** each scene of its own writes its number in a free word of the GXM notifications
-  when it finishes. Another frame is not sent to the GPU if the one from 2 frames ago has not finished (the surface is repeated), and before
+  when it finishes. The CPU prepares the next frame while the GPU draws the last one: the surface scene waits for it before being sent, and
+  no other frame starts if two are unfinished. Before
   rewriting vertices, palettes or the copy of the normal image it waits for the scene that was reading them to finish (at
   most 30 ms). This way there are no broken frames of one frame.
 - **"Covered":** the PS button dialog and the PSP's system notices are drawn on top of the game without going through the

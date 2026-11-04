@@ -4,6 +4,20 @@ Versions: `docs/dev/en/versions.md`. The detail of each step is in `docs/changel
 removed from there before the first release; this file stays as the summary). Versions marked "(test)" were sent to
 the Vita but not yet confirmed as a numbered release.
 
+## NativeDraw 0.0.15 (2026-11-03)
+Tests 0.0.15.1–0.0.15.10, checked on the Vita with Ridge Racer; NativeLink stays at 0.0.6. The whole lap goes in HD at 20-25 HD frames per
+second (about 18-22 in the crowd) with the game at 60, with the high clocks on; nitro, crowd, reflections and bloom look right.
+- **Intermediate images were drawn shrunken:** a scene with a valid region gets a viewport of that region, so the matrix now scales to it.
+  Reflections (image 1FE000) and bloom read the right place; the white blocks on the cars came from this.
+- **CPU and GPU in parallel:** the next frame is prepared while the GPU draws the last one, and its surface scene waits for it. From ~12 to ~22 HD frames per second.
+- **Draws with the same state joined** (triangle strips with repeated vertices in between) and their state set once.
+- **Vertices built in cached memory** and copied once: reading them back from uncached memory cost 153 ns per word against 21.
+- **Lit vertices with no lights on** (almost all of them): no normals, integer color. Checks and blends once per state; palettes compared in cached memory.
+- **Nitro:** the game reads the image of the frame before as a texture; it no longer stops the record and the Vita uses its HD image.
+- **Mirror:** a texture page can come from either mirror; a page used this frame stays requested under a target whose height is an estimate.
+- **Capturer:** each image counts once among the frame's targets: with the list full, textures in target pages were taken for images (`bad_texture` in the crowd).
+- **Development:** `clocks` switch (CPU 444, crossbar 166), `peek` when a dump has no memory, detail lines of the translator.
+
 ## NativeDraw 0.0.14 (2026-11-03)
 Tests 0.0.14.1–0.0.14.15, checked on the Vita with Ridge Racer; NativeLink stays at 0.0.6. A whole lap of the race goes in HD (0 frames
 with the normal image in the race), about 10 HD frames per second with the game at 60. The crowd section still shows artifacts.

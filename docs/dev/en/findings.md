@@ -143,6 +143,13 @@ proof.
 - **Lens flare and lamp halos are computed by the game with the GE:** it samples 64 pixels with points, draws a palette with the result and draws T8 sprites with it. The Vita reads the result from the mirror, one frame late [measured, 0.0.14.13].
 - **Dumps from a surface the GPU has not finished, and scenes on different render targets:** Adrenaline could show a surface half drawn. Showing the older one fixed the one-frame tiles [video, 0.0.14.11].
 - **sceGxmCreateRenderTarget:** at most 8 scenes per frame (24 gives 805b0003, and the presenter stays off) [measured, 0.0.14.2].
+- **A valid region is also the viewport:** a scene with region 128x128 on a 1024x544 target drew everything shrunken by 128/1024 and 128/544 (16x30 pixels), and bloom came out 228 wide instead of 484 [measured with `peek`, 0.0.15.9]. The matrix has to scale to the region. Reflections read the stale rest of the image: the white blocks.
+- **Uncached memory:** reading a word costs 153 ns against 21 with cache; writing, 9 against 6 [measured]. What hurts is reading back, not writing. The clock (`sceKernelGetProcessTimeLow`) costs ~0.6 us: per-draw timers add milliseconds in dev builds.
+- **A vertex at 333 MHz:** 0.92 us 3D, 1.73 lit with no lights, 1.83 with fog, 2.86 with one light [measured on synthetic draws, 0.0.15.5]. In Ridge Racer almost no lit vertex has a light on. 3.3 us in the game, with cold data.
+- **CPU and GPU one after the other were the limit:** 40 + 40 ms gave ~12 HD frames per second; overlapping them, ~22 [measured]. Now the GPU sets the pace away from the crowd (95 % busy) and the CPU in the crowd.
+- **CPU 444 and crossbar 166** (`clocks`): translator 50-65 ms -> 32-45 ms, and the capturer fits in the crowd [measured]. Plan B, the goal is not to need them.
+- **Nitro reads the image of the frame before** (04000000 or 04044000) as a texture; 92 % of Ridge Racer's draws share the state of the one before.
+- **Image 195140 is marked 69 pages high** by estimate, over real textures: requests were dropped and, once the list of images was full, those textures passed for images.
 - **128 textures per frame was too few:** Metal Slug XX reached it with 0.8 of 1.5 MB in use and lost frames. It is 256 now
   [measured, 0.0.8.25–0.0.8.26].
 - Neo Geo games make transparencies by drawing something one frame on and one frame off: if the Vita repeats or skips

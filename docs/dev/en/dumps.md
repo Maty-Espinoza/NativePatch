@@ -39,6 +39,11 @@ cause is in `record not_read:`) nor frames drawn wrong without a failure.
 
 - `census:` lines of `nativedraw.log` (extreme level): every reason per frame, what textures with no copy are, and the chain of images of each kind of frame. `record not_read:` of `nativedraw_capture.log`: the cause of each incomplete frame and the frames only walked.
 
+## Peek (development builds)
+Memory after start is usually under 1 MB in one go, so L+R+SELECT often logs `dump: no memory`. Then the drawing stops for ~3 s (the game goes on), and
+`ux0:data/nativedraw/peekN_surface.bmp`, `peekN_psp.bmp` and `peekN_rt_<address>.bmp` (the corner of each intermediate image) are saved, all of one moment.
+The PSP image moves on while the Vita is held, so it is not the same frame.
+
 ## Files of each dump
 
 | File | What it is |

@@ -148,6 +148,12 @@ static void markRt(uint32_t a, uint32_t n) {
 static uint32_t rt_fb[8], rt_nb;  // images the frame drew on (their addresses in VRAM)
 // 1 if a is in a page marked as render target
 static int rtPage(uint32_t a) { uint32_t p = (a & 0x1FFFFF) >> 12; return rt_pg[p >> 5] >> (p & 31) & 1; }
+// Notes image a among those the frame drew on, once each
+static void rtNote(uint32_t a) {
+  uint32_t k = 0;
+  while (k < rt_nb && rt_fb[k] != (a & 0x1FFFF0)) k++;
+  if (k == rt_nb && rt_nb < 8) rt_fb[rt_nb++] = a & 0x1FFFF0;
+}
 // 1 if a is the start of an image the frame drew on: the Vita holds it in HD. Anything else in those pages (data that shares a
 // page with an image, the z) comes from the mirror
 static int rtRead(uint32_t a) {
@@ -351,12 +357,7 @@ static void draw(uint32_t d) {
     uint32_t h = ((reg[0xD5] >> 10) & 0x3FF) + 1, hr = ((reg[0x16] >> 10) & 0x3FF) + 1, w = reg[0x9D] & 0x7FF;
     if (reg[0x16] & 0xFFFFF && hr < h) h = hr;
     // (an image started with points is the game sampling pixels: the Vita does not draw it, it reads the result in the mirror)
-    if (type) {
-      uint32_t k = 0;
-      markRt(fb, w * h * ((reg[0xD2] & 3) == 3 ? 4 : 2));
-      while (k < rt_nb && rt_fb[k] != (fb & 0x1FFFF0)) k++;
-      if (k == rt_nb && rt_nb < 8) rt_fb[rt_nb++] = fb & 0x1FFFF0;
-    }
+    if (type) { markRt(fb, w * h * ((reg[0xD2] & 3) == 3 ? 4 : 2)); rtNote(fb); }
     if (reg[0x23] & 1) markRt(reg[0x9E] & 0xFFFFF0, (reg[0x9F] & 0x7FF) * h * 2);  // z (with z test)
   }
   if (isVram(vaddr)) acc.dvert_vram++;

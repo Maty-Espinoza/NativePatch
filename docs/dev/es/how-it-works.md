@@ -170,7 +170,8 @@ quedan sin usar: `SB[0x47]`, los bits 4 y 8 de 0x4A y los eventos 7, 8, 9, 10 y 
   cuando los frames llevan un segundo entero siendo dibujables (`held_back` en el log); mientras tanto solo se revisan y se
   muestra la imagen normal.
 - **Sincronización con la GPU:** cada escena propia escribe su número en una palabra libre de las notificaciones de GXM
-  al terminar. No se le manda otro frame a la GPU si no terminó el de hace 2 (se repite la superficie), y antes de
+  al terminar. La CPU prepara el frame siguiente mientras la GPU dibuja el anterior: la escena de la superficie espera a que termine antes de
+  enviarse, y no parte otro frame si hay dos sin terminar. Antes de
   reescribir vértices, paletas o la copia de la imagen normal se espera a que termine la escena que los leía (como
   mucho 30 ms). Así no hay cuadros rotos de un frame.
 - **"Tapado":** el diálogo del botón PS y los avisos del sistema del PSP se dibujan encima del juego sin pasar por las

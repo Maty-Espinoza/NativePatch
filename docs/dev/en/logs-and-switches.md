@@ -55,6 +55,7 @@ The development measurements are inside `#ifdef NP_DEV`. A normal build has them
 
 ## Dumps (NativeDraw 0.0.8.5)
 - Development builds: a GE NOP carrying `0x4E5044` asks for a dump, like L+R+SELECT (NPTEST).
+- Development builds: with no memory for a dump, L+R+SELECT makes a `peek` (`dumps.md`).
 Dump levels in `ux0:data/nativedraw/dump`: `off`, `screenshot`, `frame`, `sequence` (without the file)
 or `auto` (3 letters are compared; `no` also turns it off). What each one saves, how much it costs and how they are read with `tools/dump.py`: `dumps.md`.
 
@@ -79,7 +80,8 @@ or `auto` (3 letters are compared; `no` also turns it off). What each one saves,
 - `translator: HD frames N, normal image M | reasons: ... | draws drawn N`: how many frames the Vita drew and
   why the others went with the normal image (`no_new_frame`, `3d`, `primitive`, `format`, `blend`...; `held_back`: drawable,
   but not drawn because less than a second passed since a frame that was not).
-- Development builds only: `clocks: GPU N MHz (crossbar N), CPU N, bus N`, the Vita clocks Adrenaline has set, every 10 s.
+- Development builds only: `clocks: GPU N MHz (crossbar N), CPU N, bus N`, the Vita clocks, every 10 s. The `clocks` switch (development) sets CPU 444 and crossbar 166 at each of those lines.
+- Development builds only: `translator: speed:` (clock and memory, once), `translator: per HD frame:` (vertices, draws, same state as the one before, lights, programs).
 - `translator: pace (PSP frames advanced per drawn frame): 0 (repeated) N, 1 N, 2 N...`: with many repeated frames
   or jumps, Neo Geo games flicker (they do transparencies by drawing something one frame yes and the next no).
 - `gpu: at each frame start, our unfinished scenes: average, max | unfinished: previous frame N, 2 frames ago N |
