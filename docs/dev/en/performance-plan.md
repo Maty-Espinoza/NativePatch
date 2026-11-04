@@ -112,7 +112,16 @@ instructions do not explain; the cause is open. A fit on 10 s windows gives ~27 
 Clip planes are exact but saturate the GPU, not because of the area (region clip does not help) or the program change; the cause is unknown. `discard` works with the generic program. Visual: one moment of artifacts in the sky in the crowd with `clip_discard`, cause open; the failure `color_test_or_logic` of that zone also appeared with `prog_swap`. `no_join`: +1 us of CPU per draw (GXM 5.43 -> 6.45 us), ~0.8 ms per HD frame, GPU unchanged: C.1 can draw without joining.
 **Lit vertices (`light_split`, 0.0.18.4):** car selection screen: ~5200 vertices, ~25 ms: types `0x142`/`0x143` with one directional light and specular ~5.5 us per vertex, generated UV ~3.3 us, against ~1.3 us of the fast path; the light is ~2 us of it. In the race, rival cars add only ~1-3.5 ms; the peaks are more `0x19f` vertices.
 
-## Order from here (2026-11-04)
+**C.1, first stage (0.0.18.6-0.0.18.8, confirmed as 0.0.19):** `nd_v3` reads the record's copy at the end of `tx`. Eligible: type `0x19F`, no indices, triangles, strip or fan, smooth, no lights, no generated UV, scissor that takes in the whole image.
+| Race, per HD frame | 0.0.18.5 | 0.0.19 |
+|---|---|---|
+| HD frames per second | 20.5 | 21.7 |
+| vertices, ms | ~19.5 | 13.1 |
+| translator, ms | ~37 | 32.1 |
+| GPU, ms | ~35 | 33.2 |
+| vertices moved by the GPU | 0 % | 54 % |
+Left on the CPU per HD frame: rear-view mirror ~1500 vertices (scissor 150,10 to 330,48) and other vertex types ~500. Marked vertices refused by the translator read uncached memory (177-207 ns per word against ~15), so a draw must not be marked and then refused. The capturer's copy to `tx` shows no clear cost in the race.
+
 1. **C.1 without touching NativeLink:** the vertices of eligible draws go to an uncached record area mapped for the GPU, like the textures (`tx`), with the same wait before reuse, and a vertex
    shader transforms them. No GE copy. Before starting: scissor in the shader (`trTris` stays on the CPU otherwise) and the cost of not joining draws (stage 1: ~1 us CPU, ~1.3 us GPU per draw). Expected:
    ~10-13 ms less translator, up to ~28 HD frames per second, where the GPU limits again.

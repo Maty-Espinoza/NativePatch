@@ -10,6 +10,13 @@ the Vita but not yet confirmed as a numbered release.
   KEEP/REVERT step (`iterate.sh`) and the unattended loop with Claude Code (`ai_loop.sh`, `docs/agent/en/perf-loop.md`).
 - `docs/dev/*/performance-plan.md`: the ordered plan towards 60 fps, from the analysis of the capturer on `stage3_0.0.16.4/rr1`.
 
+## NativeDraw 0.0.19 (2026-11-04)
+Tests 0.0.18.1–0.0.18.8, checked on the Vita with Ridge Racer; NativeLink stays at 0.0.6. Race against 0.0.18: vertices ~19.5 -> 13.1 ms per HD frame,
+translator ~37 -> 32.1 ms, GPU ~35 -> 33.2 ms; 54 % of the vertices moved by the GPU; the HD rate has no clear gain (20.5 -> 21.7, noise 19.4-21.0); game at 60 fps.
+- **`nd_v3` (first stage of C.1):** a vertex program reads the 3D vertices as the game wrote them (type `0x19F`, no lights, no generated UV, smooth) when the scissor takes in the whole image. They stay at the end of `tx`, so no new memory. Narrow textures are always copied without their gap.
+- **Removed:** `clip_gpu`, `prog_swap`, `no_join`, `light_split`, `clip_discard`, `nd_vc`, `nd_vs`, `nd_ftc`, `nd_fcc`. New switch: `cpu_verts`.
+- **Tools:** `tools/perf/tr_gv.sh` (in `test_ci.sh`): both paths send the same triangles to the surface on real frames.
+
 ## NativeDraw 0.0.18 (2026-11-04)
 Tests 0.0.17.3–0.0.17.6, checked on the Vita with Ridge Racer; NativeLink stays at 0.0.6. Race seconds against 0.0.17: GPU 38.1 -> 32.5 ms per
 HD frame, idle 24 -> 36 %, pixels on `nd_ft` 1392 -> 90 thousand; the HD rate does not change (~19.5 per second): the translator now limits alone.
