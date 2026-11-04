@@ -10,6 +10,20 @@ the Vita but not yet confirmed as a numbered release.
   KEEP/REVERT step (`iterate.sh`) and the unattended loop with Claude Code (`ai_loop.sh`, `docs/agent/en/perf-loop.md`).
 - `docs/dev/*/performance-plan.md`: the ordered plan towards 60 fps, from the analysis of the capturer on `stage3_0.0.16.4/rr1`.
 
+## NativeDraw 0.0.16 (2026-11-04)
+Tests 0.0.16.1–0.0.16.8, checked on the Vita with Ridge Racer; NativeLink stays at 0.0.6. **Without the high clocks:** game at 60 fps in
+every part, the whole race in HD with no frames of normal image, 21-25 HD frames per second; in the crowd complete frames went from
+4-5 to ~18 per second.
+- **Mirror leak:** a texture in a page of an image was requested for good; in a session the PSP copied 370 pages per frame (3.2 ms) and
+  the game fell to 40-46 fps. Those pages now expire when no frame reads them.
+- **Capturer lighter:** plain and matrix commands in a tight loop with counters once per line; a repeated texture skips its checks and,
+  in 3D, the record's lookup; the record reads the clock on 1 draw in 64.
+- **Tried and removed:** cutting a late list at the flip (broke the state) and not walking unrecorded frames (lists read late).
+- **Development:** `bottleneck:` lines and `tools/bottleneck.py` (what limits each second, pixels per program), `cap_split` (capturer by
+  parts; its clock reads slow it down, off for speed runs), capture time no longer counts the flip walk twice.
+- **Tools:** `tools/perf`: exact instructions per frame with Callgrind, profile by function and line, the translator on real frames,
+  pages asked of the mirror, A/B against a commit.
+
 ## NativeDraw 0.0.15 (2026-11-03)
 Tests 0.0.15.1–0.0.15.10, checked on the Vita with Ridge Racer; NativeLink stays at 0.0.6. The whole lap goes in HD at 20-25 HD frames per
 second (about 18-22 in the crowd) with the game at 60, with the high clocks on; nitro, crowd, reflections and bloom look right.
