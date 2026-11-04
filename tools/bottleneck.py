@@ -38,6 +38,28 @@ def capture(path):
         if m and t in out: out[t].update(rec=int(m[1]), states=int(m[2]), verts=int(m[3]), tex=int(m[4]))
     return out
 
+def cap_split(path):
+    # "capture split" lines: us per frame by kind of frame, weighted by frames, in bands of draws per frame
+    out = {}
+    for line in open(path, errors='replace'):
+        m = re.search(r'capture split (\w+): frames=(\d+) commands=(\d+) draws=(\d+) \| us/f: (.*)', line)
+        if not m: continue
+        v = {k: int(x) for k, x in re.findall(r'(\w+)=(\d+)', m[5])}
+        d, n = int(m[4]), int(m[2])
+        b = (m[1], 0 if d < 1500 else 1 if d < 3000 else 2)
+        o = out.setdefault(b, {'frames': 0, 'commands': 0, 'draws': 0})
+        o['frames'] += n; o['commands'] += n * int(m[3]); o['draws'] += n * d
+        for k, x in v.items(): o[k] = o.get(k, 0) + n * x
+    return out
+
+def show_split(s):
+    for (kind, band), o in sorted(s.items()):
+        n = o['frames']; g = lambda k: o[k] / n / 1000
+        interp = g('walk') - g('hit') - g('own') - g('draw'); stats = g('draw') - g('record')
+        print(f'  {kind}, draws {("<1500", "1500-3000", ">3000")[band]}: {n} frames, {o["commands"] / n:.0f} commands, {o["draws"] / n:.0f} draws | ms: total {g("total"):.1f}, cpu {g("cpu"):.1f} | '
+              f'interpreter {interp:.1f}, reads shared {g("hit"):.1f} own {g("own"):.1f}, draw() {stats:.1f}, record {g("record"):.1f} (state {g("state"):.1f}, vertices {g("vertices"):.1f}, textures {g("textures"):.1f}), '
+              f'events {g("events") - g("flip"):.1f}, flip {g("flip"):.1f}, vflush {g("vflush"):.1f}')
+
 def split(r):
     # ms of the drawing thread's second
     work = max(r['translator'] - r['gpu_wait'], 0)
@@ -79,7 +101,10 @@ def main():
         print(f'  total {tot / len(px):.0f} ({tot / len(px) / 522:.1f} screens); with fog and nothing else, the generic program for no reason: {sum(x["s_fog"] + x["i_fog"] for x in px) * 100 / max(tot, 1):.0f} %; '
               f'image underneath: {sum(x["s_base"] for x in px) * 100 / max(tot, 1):.0f} %')
     if why: print('  why not the fast program: ' + ', '.join(f'{k} {sum(x[k] for x in why) / len(why):.0f}' for k in WN))
-    cap = capture(os.path.join(d, 'nativedraw_capture.log'))
+    cp = os.path.join(d, 'nativedraw_capture.log')
+    if os.path.exists(cp) and (s := cap_split(cp)):
+        print('\ncapturer split, per frame:'); show_split(s)
+    cap = capture(cp)
     v = [cap[r['t']] for r in rows if r['t'] in cap] or [c for c in cap.values() if c.get('rec') is not None]
     v = [c for c in v if c.get('rec') is not None]
     if v:

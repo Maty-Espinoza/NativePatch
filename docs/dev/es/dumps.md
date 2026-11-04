@@ -38,7 +38,7 @@ como máximo 4 por motivo y 64 por sesión. Usa 2 MB reservados al arrancar, as�
 diferencia de L+R+SELECT, que parte en el frame siguiente. `tools/dump.py` lee la carpeta. No ve frames que nunca se completaron
 (la causa está en `record not_read:`) ni frames mal dibujados sin un fallo.
 
-- Líneas `census:` de `nativedraw.log` (nivel extreme): todos los motivos por frame, qué son las texturas sin copia y la cadena de imágenes de cada tipo de frame. `record not_read:` de `nativedraw_capture.log`: la causa de cada frame incompleto y los frames saltados.
+- Líneas `census:` de `nativedraw.log` (nivel extreme): todos los motivos por frame, qué son las texturas sin copia y la cadena de imágenes de cada tipo de frame. `record not_read:` de `nativedraw_capture.log`: la causa de cada frame incompleto y los frames solo recorridos.
 
 ## Peek (versión de desarrollo)
 La memoria tras el arranque suele ser menos de 1 MB de una vez, así que L+R+SELECT suele dar `dump: no memory`. Entonces el dibujo se detiene ~3 s (el juego sigue) y se

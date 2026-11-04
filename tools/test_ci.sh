@@ -37,6 +37,9 @@ echo "ok   prof_summary.py"
 
 printf ' 1000 bottleneck: slots 40 drawn 20 repeated 5 behind 10 no_record 0 normal 0 | ms: translator 600 gpu_wait 100 | translator ms: check 5 textures 50 vertices 300 gxm 100 scenes 45 | gpu ms: adrenaline 40 normal 0 surface 500 intermediate 300 idle 100\n' > $B/bn.log
 python3 $R/tools/bottleneck.py $B/bn.log | grep -q 'translator limits' || { echo "FAIL: bottleneck.py"; exit 1; }
+mkdir $B/bn; mv $B/bn.log $B/bn/nativedraw.log
+printf ' 1000   capture split complete: frames=20 commands=8000 draws=900 | us/f: total=10000 cpu=9000 events=500 flip=200 walk=9000 hit=500 own=800 draw=4000 record=3000 state=500 vertices=1000 textures=1000 vflush=100\n' > $B/bn/nativedraw_capture.log
+python3 $R/tools/bottleneck.py $B/bn | grep -q 'interpreter 3.7' || { echo "FAIL: bottleneck.py capture split"; exit 1; }
 echo "ok   bottleneck.py"
 
 echo "== production build"

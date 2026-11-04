@@ -69,6 +69,7 @@ or `auto` (3 letters are compared; `no` also turns it off). What each one saves,
 | `gate_sync` | (v13.10) the wait for the Vita stays at the sync, as before dev66 (for comparison); see `etapa2_fase2_compuerta.md` |
 | `no_lookahead` | (v13.12) the readers do not do the look-ahead check of the plan (only on reaching each CALL, as before); see `etapa2_fase2_adelanto.md` |
 | `mirror_wait` | (NativeLink 0.0.3) the PSP flip waits for the mirror copy to finish (mailbox switch 32): in KOF 96 the frame's sprites are copied by the time the Vita asks for them. On the user's Vita it is set to `yes` |
+| `cap_split` | (development) times every part of the capturer on every frame (it costs ~0.4 us per clock read): `capture split` lines by kind of frame, summed up by `tools/bottleneck.py` |
 | `capture_core` | (v13.13) `0`, `1` or `2` pins the capturer to that core (before v13.13 always core 1); no file or anything else: any of the 3. The `threads: capture` line of the log says which one was used; see `etapa2_ridge_racer.md` |
 
 ## Drawing on the Vita (stage 3, with `draw`; `nativedraw.log`, every 10 s)

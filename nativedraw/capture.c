@@ -71,7 +71,16 @@ static uint32_t level = 1;
 #else
 #define EXTREME 0
 #endif
-static uint32_t f_cmds, f_draws, f_us;  // of the current frame
+static uint32_t f_cmds, f_draws, f_us, f_t0;  // of the current frame; f_t0: start of the work not yet added to f_us
+#ifdef NP_DEV
+// Exact split of the capturer's time (switch cap_split; the clock costs ~0.4 us per read), per kind of frame: cs_t adds up the
+// current frame, cs_s the second by kind, cs_r is what the log thread prints. The five extra slots: frames, commands, draws, us and
+// processor us.
+enum { CS_EV, CS_FLIP, CS_WALK, CS_HIT, CS_OWN, CS_DRAW, CS_REG, CS_RST, CS_RVT, CS_RTX, CS_VFL, CS_N };
+static uint32_t cs_on, cs_t[CS_N], cs_s[3][CS_N + 5], cs_r[3][CS_N + 5];
+#define CST() (cs_on ? now() : 0)
+#define CSA(k, t) do { if (cs_on) cs_t[k] += now() - (t); } while (0)
+#endif
 
 // --- PSP RAM reads ---
 // PSP RAM is uncached from the ARM: each read waits a long time and nearly all the capturer's cost is that
@@ -230,7 +239,8 @@ static uint32_t rdc(Rd *r, uint32_t a, uint32_t ord) {
   if (b + 64 > e) return *(volatile uint32_t *)PSP(a);  // (end of a range)
   // 1 in 8 shared cache lines, timed
   uint32_t th = EXTREME && r == &R0 && !(r->hits & 7) ? now() : 0;
-  if (clGet(b, ord, r->buf)) { r->a = b; r->n = 64; r->hits++; if (th) { acc.hit_us += now() - th; acc.hit_n++; } return r->buf[(a - b) >> 2]; }
+  DEV(uint32_t tc = r == &R0 ? CST() : 0;)
+  if (clGet(b, ord, r->buf)) { DEV(if (tc) cs_t[CS_HIT] += now() - tc;) r->a = b; r->n = 64; r->hits++; if (th) { acc.hit_us += now() - th; acc.hit_n++; } return r->buf[(a - b) >> 2]; }
   uint32_t n = b + 256 <= e ? 256 : 64;
   // 1 in 16 capturer reads, timed
   uint32_t t = EXTREME && r == &R0 && !(r->own & 15) ? now() : 0;
@@ -238,6 +248,7 @@ static uint32_t rdc(Rd *r, uint32_t a, uint32_t ord) {
   if (t) { acc.rd_us += now() - t; acc.rd_n++; }
   r->a = b; r->n = n; r->own++;
   for (uint32_t k = 0; k < n; k += 64) clPut(b + k, ord, r->buf + k / 4);
+  DEV(if (tc) cs_t[CS_OWN] += now() - tc;)
   return r->buf[(a - b) >> 2];
 }
 
@@ -339,10 +350,12 @@ static void regDraw(uint32_t n, uint32_t type, uint32_t vt, uint32_t idx), regCl
 // the previous one, advances vaddr/iaddr, notes new textures, requests VRAM textures from the mirror and marks the
 // render target so it is not requested as data
 static void draw(uint32_t d) {
-  DEV(uint32_t tp = p_on && !(acc.draws & 7) ? now() : 0;)  // (1 in 8 draws, timed)
+  DEV(uint32_t tp = p_on && !(acc.draws & 7) ? now() : 0, tc = CST();)  // (1 in 8 draws, timed)
   uint32_t n = d & 0xFFFF, type = (d >> 16) & 7, vt = reg[0x12], idx = (vt >> 11) & 3;
   if (!n) { acc.dempty++; return; }
+  DEV(uint32_t tr = CST();)
   if (reg_on) regDraw(n, type, vt, idx);  // frame record
+  DEV(CSA(CS_REG, tr);)
   acc.draws++; f_draws++; acc.prim[type]++; acc.verts += n;
   int clear = reg[0xD3] & 1, tex = (reg[0x1E] & 1) && !clear;
   if (rec) recDraw(idx, tex);  // (before vaddr/iaddr change)
@@ -404,7 +417,7 @@ static void draw(uint32_t d) {
   if ((dirty & ~C_TL) || type != last_prim) acc.batches_notl++;  // if TEXLEVEL were per draw (does not break the batch)
   if (!same || idx || (vset && vstart != last_vend)) acc.batches_cont++;
   last_prim = type; last_vend = vaddr; dirty = vset = 0;
-  DEV(if (tp) p_draw += (now() - tp) * 8;)
+  DEV(if (tp) p_draw += (now() - tp) * 8; CSA(CS_DRAW, tc);)
 }
 
 #include "record.c"  // frame record: uses the code above
@@ -1075,9 +1088,6 @@ static void walk(void) {
   if (no_capture) { while (qh != qt) { capt = q[qh & 63].ord; qh++; acc.lists++; } SB[3] = capt; return; }
   while (qh != qt) {
     List *l = &q[qh & 63];
-    // A frame that will not be recorded is not walked: the list counts as captured, so the capturer has this frame free
-    // and the state comes from the next lists and the GE snapshot at the flip. Lists of a closed frame are still finished.
-    if (reg_on && rf[rg_w]->flags & R_SKIP && !l->n && (int)(fin_ord - l->ord) < 0) { capt = l->ord; SB[3] = capt; qh++; acc.lists++; continue; }
     R0.n = 0;  // what was read past the previous stall may have changed
     // the readers start this list (and what was left half done of the previous one)
     if (l->ord != pub_ord) { pubList(l); recAbort(); chk = NULL; }
@@ -1088,7 +1098,7 @@ static void walk(void) {
     int past = fin_ord - l->ord, late = past >= 2, finish = late || walkList(l);
     int no_end = !finish && past >= 0 && l->stall && l->pc == l->stall;
     if (late || no_end) { finish = 1; acc.aborted++; regLost(late ? NR_LATE : NR_NO_END, l->pc); DEV(if (p_on) pAdd(late ? P_X_LATE : P_X_NOEND, 0);) }
-    DEV(l->work += now() - tw;)
+    DEV(l->work += now() - tw; if (cs_on) cs_t[CS_WALK] += now() - tw;)
     DEV(if (!finish) stuckNote(l);)
     if (!finish) return;
     recAbort(); chk = NULL;  // the list ended inside a sublist (END, jump to VRAM...): not saved
@@ -1206,9 +1216,10 @@ static void event(volatile uint32_t *e) {
   } else if (t == EV_FLIP) {
     DEV(p_flip = e[4] + off;)
     fin_ord = sync_seen;
-    uint32_t t0 = now(), c0 = acc.cmds;  // what was queued before the flip is walked before closing the frame
-    walk();
-    if (acc.cmds != c0) { uint32_t dt = now() - t0; acc.us += dt; f_us += dt; }
+    DEV(uint32_t tfw = CST();)
+    walk();  // what was queued before the flip is walked before closing the frame
+    DEV(if (cs_on) cs_t[CS_EV] -= now() - tfw; uint32_t tf = CST();)
+    { uint32_t dt = now() - f_t0; acc.us += dt; f_us += dt; f_t0 = now(); }
 #ifdef NP_DEV
     if (level >= 2) {  // one line per frame in nativedraw_frames.log (extreme)
       uint32_t cc = runClk(cap_uid), cal = SB[0x4D], fus = pfr[0] ? pfr[0] : 1;
@@ -1251,8 +1262,8 @@ static void event(volatile uint32_t *e) {
     }
     // closes the frame record (a: displayed image, b: width | format << 16)
     DEV(uint32_t tp = PT();)
-    // Lists still queued: this frame misses their draws. The next one is skipped, which lets the capturer finish them and
-    // catch up, so the delay does not pass from frame to frame.
+    // Lists still queued: this frame misses their draws and the next starts with what is left of them, so neither is
+    // drawn. A record marked incomplete stops copying, which is what lets the capturer catch up.
     int behind = qh != qt;
     if (behind) regLost(NR_BEHIND, qt - qh);
     // A frame walked late may have read a list the game was already rewriting, and that garbage would stay in the state
@@ -1260,12 +1271,23 @@ static void event(volatile uint32_t *e) {
     static GeState st_good;
     static int st_ok;
     int clean = !behind && !(reg_on && rf[rg_w]->flags & R_READ);
+    DEV(int cl = !reg_on || !rf[rg_w]->flags ? 1 : rf[rg_w]->flags & R_SKIP ? 0 : 2;)  // (0: not recorded, 1: complete, 2: incomplete)
     if (reg_on) { regFlip(a, b, f_draws); reg_big = f_draws > RD_N; }
-    if (behind && reg_on) rf[rg_w]->flags |= R_SKIP;
+    if (behind) regLost(NR_BEHIND_NEXT, qt - qh);
     if (clean) { stSave(&st_good); st_ok = 1; }
     else if (st_ok) { uint32_t kv = vaddr, ki = iaddr; stLoad(&st_good); vaddr = kv; iaddr = ki; }
     DEV(if (tp) { PA(P_C_FLIP, tp); if ((int)(now() - p_flip) > 0) pAdd(P_L_CLOSE, now() - p_flip); pAdd(P_C_TOTAL, f_us); pAdd(P_C_DRAW, p_draw); p_draw = 0; })
     acc.frames++;
+#ifdef NP_DEV
+    if (cs_on) {
+      static uint32_t pc0;
+      uint32_t pc = runClk(cap_uid);
+      CSA(CS_FLIP, tf);
+      for (int k = 0; k < CS_N; k++) { cs_s[cl][k] += cs_t[k]; cs_t[k] = 0; }
+      uint32_t *x = cs_s[cl] + CS_N;
+      x[0]++; x[1] += f_cmds; x[2] += f_draws; x[3] += f_us; x[4] += pc - pc0; pc0 = pc;
+    }
+#endif
     if (qh != qt) acc.flips_behind++;
     if (f_cmds > acc.cmds_max) acc.cmds_max = f_cmds;
     if (f_draws > acc.draws_max) acc.draws_max = f_draws;
@@ -1290,7 +1312,7 @@ static void event(volatile uint32_t *e) {
       acc.t0 = n - sec_t0;
       if (level) cpuSample();
       DEV(if (off_min != ~0u) { off = off_min; off_min = ~0u; })  // clock: the minimum of the last second
-      if (!rep_ready) { rep = acc; gr = ga; rep_ready = 1; }
+      if (!rep_ready) { DEV(sceClibMemcpy(cs_r, cs_s, sizeof cs_r); sceClibMemset(cs_s, 0, sizeof cs_s);) rep = acc; gr = ga; rep_ready = 1; }
       // the record yields complete 2D frames (drawn by the Vita): NativeLink copies all requested VRAM at each flip
       if (reg_on) {
         if ((ga.ok + ga.skip) * 2 > ga.fr && ga.d3 * 10 < (ga.draws ? ga.draws : 1)) gp_flags |= 16; else gp_flags &= ~16u;
@@ -1353,13 +1375,15 @@ static int capThread(SceSize args, void *argp) {
     if ((int)(h - tail) < 0 || h - tail > SB_N) {  // events were lost (or NativeLink reset the mailbox)
       acc.resyncs++; tail = h; resetQueue();
     }
-    uint32_t t0 = now();
+    f_t0 = now();
+    DEV(uint32_t te = CST();)
     while (tail != h) { event(SB + 0x400 + (tail % SB_N) * 8); tail++; work = 1; }
+    DEV(CSA(CS_EV, te);)
     SB[5] = tail;
     uint32_t c0 = acc.cmds;
     walk();
     if (acc.cmds != c0) work = 1;
-    uint32_t dt = now() - t0;
+    uint32_t dt = now() - f_t0;
     if (work) { acc.us += dt; f_us += dt; idle_t = now(); }
     // idle for 0.3 ms: sleep briefly
     else if (now() - idle_t > 300) { uint32_t s0 = now(); sceKernelDelayThread(100); acc.sleep_us += now() - s0; }
@@ -1491,6 +1515,14 @@ static int repThread(SceSize args, void *argp) {
       uint32_t f = r->frames ? r->frames : 1, d = r->draws ? r->draws : 1;
       clog("sec: frames=%u lists/f=%u commands/f=%u (max %u) draws/f=%u (max %u) | ARM us/f=%u (max %u) ns/command=%u | reads/f own=%u from_readers=%u (readers read %u+%u) events/f=%u\n",
            r->frames, PF(lists), PF(cmds), r->cmds_max, PF(draws), r->draws_max, PF(us), r->us_max, r->cmds ? (uint32_t)((unsigned long long)r->us * 1000 / r->cmds) : 0, PF(own), PF(hits), PF(rown[0]), PF(rown[1]), PF(events));
+#ifdef NP_DEV
+      static const char *cn[3] = { "not_recorded", "complete", "incomplete" };
+      for (int c = 0; c < 3; c++) if (cs_r[c][CS_N]) {
+        const uint32_t *x = cs_r[c], n = x[CS_N];
+        clog("  capture split %s: frames=%u commands=%u draws=%u | us/f: total=%u cpu=%u events=%u flip=%u walk=%u hit=%u own=%u draw=%u record=%u state=%u vertices=%u textures=%u vflush=%u\n", cn[c], n,
+             x[CS_N + 1] / n, x[CS_N + 2] / n, x[CS_N + 3] / n, x[CS_N + 4] / n, x[CS_EV] / n, x[CS_FLIP] / n, x[CS_WALK] / n, x[CS_HIT] / n, x[CS_OWN] / n, x[CS_DRAW] / n, x[CS_REG] / n, x[CS_RST] / n, x[CS_RVT] / n, x[CS_RTX] / n, x[CS_VFL] / n);
+      }
+#endif
       if (!level) goto sync;  // (minimum: only this line and the vram and sync one)
       if (reg_on) {  // frame record
         uint32_t g = gr.fr ? gr.fr : 1, dd = gr.draws ? gr.draws : 1;
@@ -1498,7 +1530,7 @@ static int repThread(SceSize args, void *argp) {
 #ifdef NP_DEV
         char nb[300]; int nk = 0; nb[0] = 0;
         for (int i = 0; i < NR_N; i++) if (gr.nr[i]) nk += sceClibSnprintf(nb + nk, sizeof nb - nk, " %s=%u", nr_names[i], gr.nr[i]);
-        if (nk || gr.skip) clog("  record not_read:%s | frames skipped: %u\n", nb, gr.skip);
+        if (nk || gr.skip) clog("  record not_read:%s | frames only walked: %u\n", nb, gr.skip);
 #endif
         clog("  record: frames=%u complete=%u incomplete: memory=%u not_read=%u limit=%u curves=%u | per frame: draws=%u states=%u KB=%u palettes=%u us=%u (states %u vertices %u textures %u [copied %u KB by DMA in %u us, of them swizzled %u KB sorted in %u us; pending lost %u, without the copy of their flip %u, with the GPU unfinished (measured) %u] palettes %u) | of the draws: 3d=%u%% clear=%u%% blend=%u%% alpha_test=%u%% swizzle=%u%% | draws per sec with texture 5650/5551/4444/8888/T4/T8/T16/T32/DXT1/3/5: %u %u %u %u %u %u %u %u %u %u %u\n",
              gr.fr, gr.ok, gr.memo, gr.rd_fail, gr.limit, gr.curve, gr.draws / g, gr.st / g, gr.kb / g >> 10, gr.cl / g, gr.us / g,
@@ -1775,7 +1807,7 @@ void capStart(void) {
   static const char *sw[] = { "ux0:data/nativedraw/no_gate", "ux0:data/nativedraw/no_mirror" DEV(, "ux0:data/nativedraw/no_idle", "ux0:data/nativedraw/gate_sync") };
   for (int k = 0; k < (int)(sizeof sw / sizeof *sw); k++) if (swOn(sw[k])) gp_flags |= 1u << k;
   if (swOn("ux0:data/nativedraw/mirror_wait")) gp_flags |= 32;  // the PSP flip waits for the mirror copy
-  DEV(no_capture = swOn("ux0:data/nativedraw/no_capture");)
+  DEV(no_capture = swOn("ux0:data/nativedraw/no_capture"); cs_on = swOn("ux0:data/nativedraw/cap_split");)
   DEV(pv_on = !swOn("ux0:data/nativedraw/no_lookahead");)
   DEV(p_on = level >= 2;)
   reg_on = swOn("ux0:data/nativedraw/draw");  // frame record
