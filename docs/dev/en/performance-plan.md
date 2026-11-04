@@ -87,6 +87,10 @@ limits 126 of 139 s. Tried on the bench: remembering the last `t3Flat` color (+1
 GPU 45.0 -> 38.2 ms, idle 17 -> 27 %. The HD rate does not change (18.7 per second): the translator limits 128 of 140 s, 42.8 ms per HD
 frame in the race, 22.4 of them vertices. 1.36 M pixels stay on `nd_ft` because of the alpha test.
 
+**Translator (bench, 0.0.17.2):** real frames are uniform: ~15,000 vertices in ~2,700 draws, 5.5 per draw, 77-99 % in format `0x19f`, 87-99 %
+lit with no light on, 87 % with fog. A NEON loop for that vertex and a shorter path for draws that share the state: **ARM instructions
+per frame 8.14 M -> 5.78 M (-29 %)**, same draws and vertices in `tr_check.sh`. To confirm on the Vita (`bottleneck`: translator, vertices).
+
 ## C. Large changes (ask the user first)
 1. **3D vertices in a GXM vertex shader reading the PSP RAM mapped for the GPU** (`sceGxmMapMemory` at 0x70000000 works,
    stage 1). Removes the vertex copy from the capturer (~5 ms) and the CPU transform from the translator (16-20 ms per HD

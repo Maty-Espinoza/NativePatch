@@ -67,7 +67,7 @@ GitHub release built by `.github/workflows/toolchain.yml` on push.
 | `prof_summary.py <run> [from_s to_s]` | Ranks the `prof` lines of the extreme log level: where each frame goes, per piece (`../../dev/en/logs-and-switches.md`) |
 | `bottleneck.py <run> [from_s to_s]` | What limits the HD frames, second by second: translator, GPU, no new frame; translator parts, pixels per program, capturer (`../../dev/en/logs-and-switches.md`) |
 | `perf/bench.sh [--save] [scene]` | Performance bench of the capturer and the record on ARM under qemu (`perf/capture_bench.c`): per scene, a deterministic estimate of Vita microseconds from the memory counters and the CPU time under qemu, compared with `perf/baseline.json`. `perf/iterate.sh [--keep]` adds the capturer test and prints KEEP/REVERT; `perf/ai_loop.sh [n]` runs Claude Code unattended on it (`perf-loop.md`) |
-| `perf/bench.sh`, `perf/iterate.sh`, `perf/instr.sh`, `perf/ab.sh` | Performance bench (`perf-loop.md`): counters, instructions per frame, verdict, comparison with a commit |
+| `perf/bench.sh`, `perf/iterate.sh`, `perf/instr.sh`, `perf/ab.sh`, `perf/tr_check.sh`, `perf/arm_count.sh` | Performance bench (`perf-loop.md`): counters, instructions per frame, verdict, comparison with a commit, same translator output, real ARM count |
 | `dump.py <dump folder> [K]` | Draws a dumped frame on the PC imitating the GE and compares it with the normal image and the Vita's (`../../dev/en/dumps.md`). Needs numpy and Pillow |
 
 ## Tests

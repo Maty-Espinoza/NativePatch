@@ -3,6 +3,7 @@
 // the presenter calls trInit at startup and trFrame in the Adrenaline thread, instead of copying the PSP image. If the
 // frame has something it cannot draw it returns the reason (T_*) and the presenter shows the normal image.
 // Own shaders in shaders/*.cg.
+#include <arm_neon.h>
 #include "record.h"
 #include "shaders_nd.h"
 // Result of trCheck/trFrame: T_OK or the reason the frame was not drawn (tnames: its name in the log)
@@ -477,6 +478,35 @@ static int trVerts(RFrame *f, RDraw *d, TV *o, float tw, float th, uint32_t col0
   const uint8_t *vb = f->a + d->voff - 1, *ib = d->ioff ? f->a + d->ioff - 1 : 0;  // (offsets + 1; 0: absent)
   uint32_t ix = d->vt >> 11 & 3, n = 0;
   float itw = 1 / tw, ith = 1 / th;
+  // The common 3D vertex: float position and texture coordinates, 8888 color, no lights on and no generated texture coordinates. The
+  // four columns of the matrix and the viewport go in NEON vectors: x, y, z and w come out together, in the order of TV
+  if (t && tc == 3 && ct == 7 && !nt && pt == 3 && !t->nl && !t->gen && d->prim != 6) {
+    if (d->n > TV_N) return T_LIMIT;
+    const float *m = t->m;
+    float32x4_t c0 = vld1q_f32(m), c1 = vld1q_f32(m + 4), c2 = vld1q_f32(m + 8), c3 = vld1q_f32(m + 12);
+    const float vs[4] = { t->sx * 2, t->sy * 2, t->sz / -131072.0f, 0 }, vt4[4] = { t->tx * 2, t->ty * 2, .5f - t->tz / 131072.0f, 1 };
+    float32x4_t sv = vld1q_f32(vs), tv4 = vld1q_f32(vt4);
+    float us = t->us, uo = t->uo, vsc = t->vs, vo = t->vo, ku = t->tw * itw, kv = t->th * ith;
+    int flat = t->lit && (t->upd & 1), fog = t->fog, lit = t->lit;
+    for (uint32_t i = 0; i < d->n; i++) {
+      uint32_t k = !ib ? i : ix == 1 ? ib[i] : ix == 2 ? ((const uint16_t *)ib)[i] : ((const uint32_t *)ib)[i];
+      if ((k + 1) * sz > d->vlen) return T_VERT;
+      const uint8_t *p = vb + k * sz;
+      const float *x = (const float *)(p + opos), *uv = (const float *)(p + otc);
+      float32x4_t c = vmlaq_n_f32(vmlaq_n_f32(vmlaq_n_f32(c3, c0, x[0]), c1, x[1]), c2, x[2]);
+      float w = vgetq_lane_f32(c, 3);
+      if (!(w > -1e9f && w < 1e9f)) { DEV(trOutLog(f, d, i, k, sz, p);) return T_OUT; }
+      vst1q_f32(&o[n].x, vmlaq_n_f32(vmulq_f32(c, sv), tv4, w));
+      o[n].u = (uv[0] * us + uo) * ku; o[n].v = (uv[1] * vsc + vo) * kv;
+      uint32_t cl = *(const uint32_t *)(p + ocol);
+      o[n].c = flat ? t3Flat(t, cl) : lit ? t->lc : cl;
+      float g = 1;
+      if (fog) { g = (x[0] * t->wv[2] + x[1] * t->wv[5] + x[2] * t->wv[8] + t->wv[11] + t->f1) * t->f2; g = g < 0 ? 0 : g > 1 ? 1 : g; }
+      o[n++].f = g;
+    }
+    *nout = n;
+    return T_OK;
+  }
   TV r[2];
   for (uint32_t i = 0; i < d->n; i++) {
     uint32_t k = !ib ? i : ix == 1 ? ib[i] : ix == 2 ? ((const uint16_t *)ib)[i] : ((const uint32_t *)ib)[i];

@@ -15,10 +15,10 @@
   "complete": 38.0,
   "want": 13.0,
   "mem_us/f": 6238.0,
-  "qemu_us/f": 1859.0,
-  "qemu_min_us": 955.0,
-  "ir_k/f": 3717.0,
-  "runs": 3
+  "qemu_us/f": 2074.0,
+  "qemu_min_us": 1254.0,
+  "ir_k/f": 3718.0,
+  "runs": 2
  },
  "rr_crowd_late": {
   "scene": "rr_crowd_late",
@@ -36,10 +36,10 @@
   "complete": 26.0,
   "want": 13.0,
   "mem_us/f": 4628.0,
-  "qemu_us/f": 1530.0,
-  "qemu_min_us": 698.0,
-  "ir_k/f": 3137.0,
-  "runs": 3
+  "qemu_us/f": 2002.0,
+  "qemu_min_us": 798.0,
+  "ir_k/f": 3138.0,
+  "runs": 2
  },
  "rr_race": {
   "scene": "rr_race",
@@ -57,10 +57,10 @@
   "complete": 38.0,
   "want": 13.0,
   "mem_us/f": 1671.0,
-  "qemu_us/f": 631.0,
-  "qemu_min_us": 444.0,
+  "qemu_us/f": 896.0,
+  "qemu_min_us": 522.0,
   "ir_k/f": 1043.0,
-  "runs": 3
+  "runs": 2
  },
  "rr_race_late": {
   "scene": "rr_race_late",
@@ -78,10 +78,10 @@
   "complete": 26.0,
   "want": 13.0,
   "mem_us/f": 1241.0,
-  "qemu_us/f": 680.0,
-  "qemu_min_us": 185.0,
+  "qemu_us/f": 588.0,
+  "qemu_min_us": 190.0,
   "ir_k/f": 875.0,
-  "runs": 3
+  "runs": 2
  },
  "sprites2d": {
   "scene": "sprites2d",
@@ -99,10 +99,10 @@
   "complete": 39.0,
   "want": 0.0,
   "mem_us/f": 3334.0,
-  "qemu_us/f": 693.0,
-  "qemu_min_us": 386.0,
-  "ir_k/f": 1083.0,
-  "runs": 3
+  "qemu_us/f": 869.0,
+  "qemu_min_us": 406.0,
+  "ir_k/f": 1082.0,
+  "runs": 2
  },
  "sublists": {
   "scene": "sublists",
@@ -120,10 +120,10 @@
   "complete": 0.0,
   "want": 0.0,
   "mem_us/f": 56.0,
-  "qemu_us/f": 424.0,
-  "qemu_min_us": 245.0,
+  "qemu_us/f": 624.0,
+  "qemu_min_us": 263.0,
   "ir_k/f": 889.0,
-  "runs": 3
+  "runs": 2
  },
  "images": {
   "scene": "images",
@@ -141,14 +141,14 @@
   "complete": 10.0,
   "want": 4.0,
   "mem_us/f": 45.0,
-  "qemu_us/f": 149.0,
-  "qemu_min_us": 8.0,
+  "qemu_us/f": 191.0,
+  "qemu_min_us": 9.0,
   "ir_k/f": 20.0,
-  "runs": 3
+  "runs": 2
  },
  "tr_rr_2227": {
   "scene": "tr_rr_2227",
-  "ir_k/f": 9302.0,
+  "ir_k/f": 9296.0,
   "cmds/f": 0,
   "draws/f": 0,
   "verts/f": 0,
@@ -168,7 +168,7 @@
  },
  "tr_rr_2722": {
   "scene": "tr_rr_2722",
-  "ir_k/f": 10018.0,
+  "ir_k/f": 10217.0,
   "cmds/f": 0,
   "draws/f": 0,
   "verts/f": 0,

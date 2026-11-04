@@ -11,7 +11,7 @@ cp $P/translate_bench.c $W/tools/perf/
 F="-g -O2 -w -I$P/host -I$B/inc"
 gcc -m32 $F -I$W/nativedraw -o $B/tr_old $W/tools/perf/translate_bench.c $P/host/vita_stubs.c -lm
 gcc -m32 $F -I$R/nativedraw -o $B/tr_new $P/translate_bench.c $P/host/vita_stubs.c -lm
-arm-linux-gnueabihf-gcc -static -O2 -mthumb -mfpu=neon -mfloat-abi=hard -w -I$P/host -I$B/inc -I$R/nativedraw -o $B/tr_arm $P/translate_bench.c $P/host/vita_stubs.c -lm
+arm-linux-gnueabihf-gcc -static -O2 -mthumb -mfpu=neon -mfloat-abi=hard -w -I$B/inc -I$R/nativedraw -o $B/tr_arm $P/translate_bench.c $P/host/vita_stubs.c -lm
 git -C $R worktree remove --force $W
 Q=$(command -v qemu-arm-static || command -v qemu-arm)
 for g in $P/data/*.bin.gz; do

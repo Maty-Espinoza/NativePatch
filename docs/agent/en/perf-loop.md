@@ -19,6 +19,10 @@ palettes, texture cache) and `sublists` (sublist memory and the readers, no reco
   gives the same number on any PC, so 1 % counts. **This is the judge for CPU work**, and `instr.sh --top` shows where it goes,
   function by function; `callgrind_annotate --auto=yes` on `build/perf/instr/cg.*`, line by line. The `tr_*` scenes are the
   translator on real frames (`tools/perf/translate_bench.c`, `tools/perf/data/`: dumps of the Vita).
+- **`tools/perf/tr_check.sh <commit>`**: same draws, state and vertices as a commit, on the real frames, in the x86 and the ARM
+  builds. Run it on every change to the translator: a faster translator must draw the same. `sh tools/perf/arm_count.sh [--top]`:
+  real ARM instructions per frame of the translator under qemu (slow, ~1 min). **`tr_*` in `ir_k/f` does not see NEON** (on x86
+  each NEON operation is C): for NEON work the judge is `arm_count.sh`.
 - **`want`**: pages asked of the mirror after the last frame. The `images` scene moves its images every frame: a leak shows here.
 - **`qemu_min_us`**: CPU time of the fastest frame under qemu (interpretation, record bookkeeping, hashes, sorting). It is not
   Vita time and varies ~5 % between runs: it only counts for changes over 10 % (`RUNS=10` tightens it).

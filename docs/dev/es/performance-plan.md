@@ -93,6 +93,10 @@ imagen normal, 21-25 frames HD por segundo, 7-12 en el segundo del público; `li
 30,0 ms, GPU 45,0 -> 38,2 ms, inactiva 17 -> 27 %. El ritmo HD no cambia (18,7 por segundo): el traductor limita 128 de 140 s, 42,8 ms por
 frame HD en carrera, 22,4 de ellos vértices. 1,36 M de píxeles siguen en `nd_ft` por el alpha test.
 
+**Traductor (banco, 0.0.17.2):** los frames reales son uniformes: ~15.000 vértices en ~2.700 draws, 5,5 por draw, 77-99 % en formato `0x19f`,
+87-99 % con iluminación y ninguna luz, 87 % con niebla. Un bucle NEON para ese vértice y un camino más corto para draws que comparten estado:
+**instrucciones ARM por frame 8,14 M -> 5,78 M (-29 %)**, mismos draws y vértices en `tr_check.sh`. Por confirmar en la Vita (`bottleneck`: translator, vertices).
+
 ## C. Cambios grandes (preguntar primero al usuario)
 1. **Vértices 3D en un vertex shader de GXM leyendo la RAM del PSP mapeada para la GPU** (`sceGxmMapMemory` en 0x70000000
    funciona, etapa 1). Quita la copia de vértices del capturador (~5 ms) y la transformación en CPU del traductor (16-20 ms
