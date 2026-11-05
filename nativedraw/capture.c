@@ -1658,11 +1658,38 @@ static void capWatch(void) {
        (now() - t0) / 1000, cap_at, e, c.status, c.waitType, c.waitId, (uint32_t)c.runClocks, e2, r.status, r.waitType, (uint32_t)r.runClocks, qt - qh, l->ord, l->pc, l->stall, l->sp, l->n, gen);
 }
 #endif
+#ifdef NP_DEV
+// Samples the blocks of 16 MB or more that are not PSP RAM, MB by MB: which hold data and which changed since the last
+// call (a hash of 256 words spread over each MB), to see which of them the process really uses
+static void memSample(void) {
+  static uint32_t h0[2][256], base[2], mb[2], calls;
+  if (!calls++)
+    for (uint32_t a = 0x75000000, n = 0; a < 0x8C000000 && n < 2; a += 0x100000) {
+      SceKernelMemBlockInfo in;
+      sceClibMemset(&in, 0, sizeof in); in.size = sizeof in;
+      if (a >= 0x7E000000 && a < 0x81000000) continue;
+      if (sceKernelGetMemBlockInfoByAddr((void *)a, &in) < 0 || in.mappedSize < (16 << 20)) continue;
+      base[n] = (uint32_t)in.mappedBase; mb[n] = in.mappedSize >> 20; n++;
+      a = base[n - 1] + (mb[n - 1] << 20) - 0x100000;
+    }
+  for (int k = 0; k < 2 && base[k]; k++) {
+    uint32_t used = 0, chg = 0, bits[8] = { 0 }, n = mb[k] > 256 ? 256 : mb[k];
+    for (uint32_t m = 0; m < n; m++) {
+      uint32_t h = 2166136261u, any = 0;
+      for (uint32_t i = 0; i < 256; i++) { uint32_t v = *(volatile uint32_t *)(base[k] + (m << 20) + i * 4096); any |= v; h = (h ^ v) * 16777619u; }
+      used += !!any;
+      if (calls > 1 && h != h0[k][m]) { chg++; bits[m >> 5] |= 1u << (m & 31); }
+      h0[k][m] = h;
+    }
+    clog("memory sample %08x, %u MB: %u MB with data, %u MB changed | changed %08x %08x %08x %08x %08x\n", base[k], mb[k], used, chg, bits[0], bits[1], bits[2], bits[3], bits[4]);
+  }
+}
+#endif
 static int repThread(SceSize args, void *argp) {
   uint32_t last_write = 0;
   for (;;) {
     sceKernelDelayThread(200000);
-    DEV(capWatch();)
+    DEV(capWatch(); static uint32_t st; if (++st == 50 || st == 250 || st == 500 || st == 1000) memSample();)
     if (logs_new) {  // new game: what is pending goes to the old logs
       logWrite(); DEV(rflush(0); rflush(1);)
       logsRotate(); logsHead(); alogNew();
