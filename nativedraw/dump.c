@@ -317,6 +317,19 @@ static void rtPeek(void) {
 // Records go in physical memory: the translator's intermediate images are reserved earlier.
 static int dumpAlloc(void) {
   uint32_t n = 0, ok = 1;
+#ifdef NP_DEV
+  if (exo_d) {  // (test) everything from the area tested by exoTest; nothing to free
+    uint8_t *p = (uint8_t *)exo_d;
+    for (int i = 0; i < (int)dump_nf; i++) { dump_hd[i] = p; dump_ps[i] = p + LINE * H * 4; p += (LINE * H * 4 + 512 * 272 * 4 + 0xFFF) & ~0xFFFu; }
+    dump_w = p; p += 0x40000;
+    for (int i = 0; i < (int)dump_nf && dump_level >= 2; i++) { dump_bb[i] = p; dump_bblk[i] = 0; p += VB_N; }
+    dump_rt = dump_level >= 2 ? p : 0; p += LINE * H * 4;
+    dump_nat = dump_level >= 2 ? p : 0; dump_natok = 0;
+    dump_bpend = VN; dump_mem = 1;
+    alog("dump: memory ready in the test area %08x, level %s (%u frames)\n", exo_d, dump_names[dump_level], dump_nf);
+    return 1;
+  }
+#endif
   for (int i = 0; i < (int)dump_nf && ok; i++) {  // Vita surface + PSP image, in one block
     void *p = 0;
     dump_blk[n] = sceKernelAllocMemBlock("nativedraw_dump", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW_UNCACHE, (LINE * H * 4 + 512 * 272 * 4 + 0x3FFFF) & ~0x3FFFFu, 0);

@@ -58,6 +58,41 @@ static void *gmem1(uint32_t type, uint32_t size, int attr) {
 static void *gmem(uint32_t size, int attr) { return gmem1(UNC, size, attr); }  // uncached LPDDR: programs, vertices
 #ifdef NP_DEV
 // KB of type that can be reserved in chunks of step KB, adding them up: what is free even when no large block fits
+uint32_t nd_exo __attribute__((weak));  // test area (16 MB with the pattern, then 16 MB for dumps); 0: not usable
+static uint32_t exo_d;                  // the dump part, mapped for the GPU
+// Tests the empty block of 64 MB or more above PSP RAM, one step per log line with a pause so that the line reaches the
+// card before the next step: read, one write, pattern over 16 MB, GPU mapping. Leaves nd_exo set if everything went well.
+static void exoTest(void) {
+  SceKernelMemBlockInfo in;
+  uint32_t base = 0, size = 0;
+  for (uint32_t a = 0x75000000; a < 0x7E000000 && !base; a += 0x100000) {
+    sceClibMemset(&in, 0, sizeof in); in.size = sizeof in;
+    if (sceKernelGetMemBlockInfoByAddr((void *)a, &in) >= 0 && in.mappedSize >= (64 << 20)) { base = (uint32_t)in.mappedBase; size = in.mappedSize; }
+  }
+#define STEP(...) do { alog(__VA_ARGS__); sceKernelDelayThread(400000); } while (0)
+  if (!base) { STEP("exo: no block\n"); return; }
+  uint32_t t = base + size - (32 << 20), d = t + (16 << 20), nz = 0;
+  STEP("exo 1: block %08x %u KB type %08x memoryType %x access %x | test area %08x, dump area %08x\n", base, size >> 10, in.type, in.memoryType, in.access, t, d);
+  STEP("exo 2: reading 32 MB\n");
+  for (uint32_t o = 0; o < (32 << 20); o += 4) nz += *(volatile uint32_t *)(t + o) != 0;
+  STEP("exo 3: %u words that are not zero; writing one word at %08x\n", nz, t);
+  volatile uint32_t *w = (volatile uint32_t *)t;
+  w[0] = 0x12345678;
+  uint32_t b = w[0];
+  STEP("exo 4: read back %08x; writing the pattern over 16 MB\n", b);
+  if (b != 0x12345678) return;
+  for (uint32_t o = 0; o < (16 << 20); o += 4) w[o / 4] = (t + o) ^ 0x5A5AA5A5u;
+  STEP("exo 5: pattern written; checking it\n");
+  uint32_t bad = 0;
+  for (uint32_t o = 0; o < (16 << 20); o += 4) bad += w[o / 4] != ((t + o) ^ 0x5A5AA5A5u);
+  STEP("exo 6: %u words differ; mapping the dump area for the GPU\n", bad);
+  if (bad) return;
+  int r = sceGxmMapMemory((void *)d, 16 << 20, RW);
+  STEP("exo 7: sceGxmMapMemory %08x\n", r);
+  if (r < 0) return;
+  exo_d = d; nd_exo = t;
+  STEP("exo 8: test area in use: dumps go to %08x\n", d);
+}
 static uint32_t probeAll(uint32_t type, uint32_t step);
 // Logs the process budget and every memory block mapped in it (also Adrenaline's), with the total per type
 static void memMap(void) {
@@ -682,6 +717,7 @@ static int presThread(SceSize args, void *argp) {
        "LPDDR physical %u, LPDDR %u\n", r1, r2, ty(surf[0]), ty(surf[1]), probe(CDRAM), probe(PHY), probe(UNC));
   DEV(memMap();)
   DEV(alog("memory free in small chunks: LPDDR uncached %u KB, LPDDR cached %u KB, LPDDR physical %u KB, CDRAM %u KB\n", probeAll(UNC, 256), probeAll(SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, 256), probeAll(PHY, 1024), probeAll(CDRAM, 256));)
+  DEV(exoTest();)
   if (r1 < 0 || r2 < 0) return sceKernelExitDeleteThread(0);
   volatile uint32_t *nr = sceGxmGetNotificationRegion();  // scene end: the last word Adrenaline does not use
   char ua[80]; int ka = 0;

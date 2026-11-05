@@ -195,6 +195,7 @@ typedef struct { uint32_t buf[64] __attribute__((aligned(16))); uint32_t a, n, o
 static Rd R0, RR[2];  // capturer and readers
 static uint32_t tm_memo, tm_apply;  // us of the frame in memoTry (all) and in applying what was saved (extreme level)
 static uint32_t runClk(SceUID t);
+DEV(uint32_t nd_exo __attribute__((weak));)  // test area in the block no one seems to use (exoTest in presenter.c), 0: none
 static SceUID cap_uid;
 DEV(static volatile uint32_t cap_at;)  // where the capturer is, for the watchdog: 1 events, 2 walk, 3 mirror copy, 4 record transfer, 5 frame close, 6 record wait
 // Cache shared by readers and capturer: CL_N 64-byte lines (cl_data) each with a tag (cl_tag:
@@ -1664,14 +1665,14 @@ static void capWatch(void) {
 static void memSample(void) {
   static uint32_t h0[2][256], base[2], mb[2], calls;
   if (!calls++)
-    for (uint32_t a = 0x75000000, n = 0; a < 0x8C000000 && n < 2; a += 0x100000) {
-      SceKernelMemBlockInfo in;
-      sceClibMemset(&in, 0, sizeof in); in.size = sizeof in;
-      if (a >= 0x7E000000 && a < 0x81000000) continue;
-      if (sceKernelGetMemBlockInfoByAddr((void *)a, &in) < 0 || in.mappedSize < (16 << 20)) continue;
-      base[n] = (uint32_t)in.mappedBase; mb[n] = in.mappedSize >> 20; n++;
-      a = base[n - 1] + (mb[n - 1] << 20) - 0x100000;
-    }
+    for (int k = 0; k < 2; k++)
+      for (uint32_t a = k ? 0x84000000 : 0x75000000; a < (k ? 0x88000000 : 0x7E000000); a += 0x100000) {
+        SceKernelMemBlockInfo in;
+        sceClibMemset(&in, 0, sizeof in); in.size = sizeof in;
+        if (sceKernelGetMemBlockInfoByAddr((void *)a, &in) < 0 || in.mappedSize < (16 << 20)) continue;
+        base[k] = (uint32_t)in.mappedBase; mb[k] = in.mappedSize >> 20;
+        break;
+      }
   for (int k = 0; k < 2 && base[k]; k++) {
     uint32_t used = 0, chg = 0, bits[8] = { 0 }, n = mb[k] > 256 ? 256 : mb[k];
     for (uint32_t m = 0; m < n; m++) {
@@ -1681,7 +1682,17 @@ static void memSample(void) {
       if (calls > 1 && h != h0[k][m]) { chg++; bits[m >> 5] |= 1u << (m & 31); }
       h0[k][m] = h;
     }
-    clog("memory sample %08x, %u MB: %u MB with data, %u MB changed | changed %08x %08x %08x %08x %08x\n", base[k], mb[k], used, chg, bits[0], bits[1], bits[2], bits[3], bits[4]);
+    if (chg || calls % 12 == 1) clog("memory sample %08x, %u MB: %u MB with data, %u MB changed | changed %08x %08x %08x %08x %08x\n", base[k], mb[k], used, chg, bits[0], bits[1], bits[2], bits[3], bits[4]);
+  }
+  if (nd_exo) {  // the test pattern written by exoTest (presenter.c), one word every 4 KB
+    uint32_t bad = 0, first = 0, val = 0;
+    static uint32_t bad0;
+    for (uint32_t o = 0; o < (16 << 20); o += 4096) {
+      uint32_t v = *(volatile uint32_t *)(nd_exo + o);
+      if (v != ((nd_exo + o) ^ 0x5A5AA5A5u)) { if (!bad++) { first = nd_exo + o; val = v; } }
+    }
+    if (bad != bad0 || calls % 12 == 1) clog("memory test area %08x: %u of 4096 words differ from the pattern (first at %08x: %08x), frame %u\n", nd_exo, bad, first, val, gen);
+    bad0 = bad;
   }
 }
 #endif
@@ -1689,7 +1700,7 @@ static int repThread(SceSize args, void *argp) {
   uint32_t last_write = 0;
   for (;;) {
     sceKernelDelayThread(200000);
-    DEV(capWatch(); static uint32_t st; if (++st == 50 || st == 250 || st == 500 || st == 1000) memSample();)
+    DEV(capWatch(); static uint32_t st; if (!(++st % 25)) memSample();)
     if (logs_new) {  // new game: what is pending goes to the old logs
       logWrite(); DEV(rflush(0); rflush(1);)
       logsRotate(); logsHead(); alogNew();
