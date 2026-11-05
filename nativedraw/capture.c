@@ -853,6 +853,24 @@ static void recTex(uint32_t ta) {
 
 // Returns to the top level of the list (abandons the current sublist and its recording or check)
 #define UNWIND() (l->sp = 0, l->pc = l->stk[0][0], l->off = l->stk[0][1], recAbort(), chk = NULL)
+// Applies a RAM to VRAM transfer to the mirror the list is read with, row by row and page by page: the mirror is from the
+// last flip, and a game can copy sublists or data to VRAM during the frame and use them right after. Pages without a copy
+// are skipped; the lines of the destination leave the read buffer and the readers' cache.
+static void xferMirror(uint32_t s, uint32_t t, uint32_t bp) {
+  if (isVram(s) || !isVram(t)) return;
+  uint32_t sw = reg[0xB3] & 0xFFFF, dw = reg[0xB5] & 0xFFFF, w = ((reg[0xEE] & 0x3FF) + 1) * bp, h = (reg[0xEE] >> 10 & 0x3FF) + 1;
+  uint32_t src = s + ((reg[0xEB] >> 10 & 0x3FF) * sw + (reg[0xEB] & 0x3FF)) * bp, dst = t + ((reg[0xEC] >> 10 & 0x3FF) * dw + (reg[0xEC] & 0x3FF)) * bp;
+  for (uint32_t y = 0; y < h; y++, src += sw * bp, dst += dw * bp)
+    for (uint32_t o = 0, n; o < w; o += n) {
+      n = 4096 - ((dst + o) & 4095);
+      if (n > w - o) n = w - o;
+      uint32_t ra = vtr(dst + o);
+      if (!ra || ramEnd(src + o) < src + o + n) continue;
+      sceClibMemcpy((void *)PSP(ra), (const void *)PSP(src + o), n);
+      for (uint32_t b = ra & ~63u; b < ra + n; b += 64) if (clOk(b)) cl_tag[clSlot(b)] = 0;
+    }
+  R0.n = 0;
+}
 #define MEASURES_WALK
 #include "measures.h"
 #ifdef NP_DEV
@@ -1020,6 +1038,7 @@ static int __attribute__((noinline)) walkList(List *l) {
       uint32_t s = (reg[0xB2] & 0xFFFFF0) | ((reg[0xB3] << 8) & 0x0F000000), t = (reg[0xB4] & 0xFFFFF0) | ((reg[0xB5] << 8) & 0x0F000000);
       if (isVram(s) || isVram(t)) acc.tr_vram++;
       DEV(xferNote(s, t, d & 1 ? 4 : 2);)
+      xferMirror(s, t, d & 1 ? 4 : 2);
       if (reg_on) regXfer(s, t, d & 1 ? 4 : 2);
       break;
     }
