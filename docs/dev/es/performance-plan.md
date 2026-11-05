@@ -156,6 +156,15 @@ Con `hold_game` el juego espera a toda la cadena: todos los frames completos y e
 
 **Lo que sigue, por ganancia:** juntar dibujos con el mismo estado en un `sceGxmDraw` (GXM, GPU); agrupar las escenas intermedias (GPU); un camino corto para BASE, VADDR y PRIM en el intérprete (capturador); luego los vértices del retrovisor.
 
+## Dibujos juntos (0.0.21.5, `stage3_0.0.21.5/rr1`, `hold_game`, log medio)
+Juntar funciona: 3405 -> 267 llamadas GXM en el frame del público, mismos triángulos. Los vértices para la GPU deben mantener alineación de 16 bytes: pegados uno tras otro (0.0.21.4) la GPU cayó al entrar a la selección de autos, juntos o no; en múltiplos de 48 no cae. La razón exacta dentro de la GPU no se conoce.
+- Los fps se mueven en escalones, 60 / n: 30, 20, 15. Traductor bajo 33 ms da 30 fps; entre 33 y 50 ms da 20.
+- El tiempo "GXM" no bajó con la cantidad de dibujos (público ~13 ms): esa cuenta es sobre todo trabajo por dibujo antes de la llamada a GXM. En el PC, el frame del público toma ~6 M instrucciones, ~1600 por dibujo, sin un punto único: `trFrame` 36 %, `trClipTri` 11 % (retrovisor), división por software 7 % (`__udivsi3`, en el propio juntar), `trCheckFrame` 6 %.
+- Donde limita la GPU: tramos de ~550 dibujos a ~30 fps con `gpu_wait` 270-450 ms por segundo. Sin medir, con `gpu_timer` apagado.
+- Recta del puente (~1850 dibujos, antes del túnel verde): 20 fps, traductor ~40 ms, capturador ~21 ms. Público: 15-20 fps, traductor 45-54 ms, capturador ~30 ms. Selección de autos: 41 fps, traductor 15 ms.
+
+**Lo que sigue:** un camino corto en el traductor para un dibujo con el estado del anterior; sin división al juntar; retrovisor en la GPU; la vuelta de control con `no_join` para saber qué aportó juntar; `gpu_timer` donde limita la GPU.
+
 ## Orden desde aquí (2026-11-04)
 0. **Hecho en 0.0.21:** un frame se salta solo si el capturador iba atrasado en una sincronización y el último frame no fue tomado, o si la GPU aún lee el registro a escribir: selección de autos ~28 -> ~35 frames HD por segundo, carrera y público iguales. Queda bajo ~45 porque los registros están ocupados con la GPU. Nunca escribir un registro que la GPU lee: congeló el hilo de dibujo y colgó la GPU.
 1. **GPU (C.3), primero por decisión del usuario:** el capturador en el público queda en espera; B.3 falló y queda B.9 como idea. Ahí se atrasa: 7-10 frames completos por segundo, y las listas leídas tarde dan frames que fallan en el traductor (1 a 8 por corrida), cada uno visible como imagen normal durante varios frames del juego.

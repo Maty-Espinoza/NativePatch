@@ -150,6 +150,15 @@ With `hold_game` the game waits for the whole chain: every frame complete and in
 
 **Next, by gain:** join draws with the same state into one `sceGxmDraw` (GXM, GPU); group the intermediate scenes (GPU); a tight path for BASE, VADDR and PRIM in the interpreter (capturer); then vertices of the rear-view mirror.
 
+## Draws joined (0.0.21.5, `stage3_0.0.21.5/rr1`, `hold_game`, medium log)
+Joining works: 3405 -> 267 GXM draws in the crowd frame, same triangles. Vertices for the GPU must keep 16-byte alignment: packed one after another (0.0.21.4) the GPU crashed on entering car selection, with draws joined or not; in multiples of 48 it does not. The exact reason inside the GPU is unknown.
+- The frame rate moves in steps, 60 / n: 30, 20, 15. Translator under 33 ms gives 30 fps; 33-50 ms gives 20.
+- The "GXM" time did not fall with the number of draws (crowd ~13 ms): that bucket is mostly work per draw before the GXM call. On the PC, the crowd frame takes ~6 M instructions, ~1600 per draw, with no single hot spot: `trFrame` 36 %, `trClipTri` 11 % (rear-view mirror), software division 7 % (`__udivsi3`, in the join itself), `trCheckFrame` 6 %.
+- Where the GPU limits: stretches of ~550 draws at ~30 fps with `gpu_wait` 270-450 ms per second. Not measured with `gpu_timer` off.
+- Bridge straight (draws ~1850, before the green tunnel): 20 fps, translator ~40 ms, capturer ~21 ms. Crowd: 15-20 fps, translator 45-54 ms, capturer ~30 ms. Car selection: 41 fps, translator 15 ms.
+
+**Next:** a short path in the translator for a draw with the state of the one before; no division in the join; rear-view mirror on the GPU; the control run with `no_join` to know what joining gave; `gpu_timer` where the GPU limits.
+
 ## Order from here (2026-11-04)
 0. **Done in 0.0.21:** a frame is skipped only when the capturer was behind at a sync and the last frame was not taken, or when the record to write is still read by the GPU: car selection ~28 -> ~35 HD frames per second, race and crowd the same. Below ~45 because records are busy with the GPU. Never write a record the GPU reads: it froze the drawing thread and crashed the GPU. Original item: expected ~45 HD frames per second in car selection; the race and the crowd must stay the same. Verify: Vita (`frames only walked`, `gate_us`, game fps).
 1. **GPU (C.3), started first by the user:** the capturer in the crowd waits; B.3 failed and B.9 is the remaining idea there. It falls behind there: 7-10 complete frames per second, and lists read late give frames that fail in the translator (1 to 8 per run), each shown as the normal image for several game frames.
