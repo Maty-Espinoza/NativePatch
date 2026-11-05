@@ -629,9 +629,17 @@ static void recEnd(List *l) {
   __sync_synchronize();  // (readers read it from another core: everything is written before marking it ready)
   e->state = 1;
 }
+#ifdef NP_DEV
+// Logs a change of the capture's BASE: who made it, at which list position, old and new value
+static void baseLog(const char *who, uint32_t pc, uint32_t d) {
+  static int nlog;
+  if (nlog < 48 && reg[0x10] != d) { nlog++; clog("base: %s at pc %08x changes %06x to %06x (frame %u)\n", who, pc, reg[0x10], d, gen); }
+}
+#endif
 // Leaves the GE state as if sublist e had been walked
 static void memoApply(Memo *e) {
   rg_chg = rg_lchg = rg_mchg = 1;
+  DEV(for (uint32_t i = 0; i < e->nreg; i++) if (e->rc[i] == 0x10) baseLog("saved sublist", e->t, e->rv[i]);)
   for (uint32_t i = 0; i < e->nreg; i++) reg[e->rc[i]] = e->rv[i];
   for (int m = 0; m < 5; m++) if (e->mmask >> m & 1) { mi[m] = e->mi[m]; sceClibMemcpy(mtx[m], e->mtx + moff[m], msz[m] * 4); }
   vaddr = e->flags & M_VABS ? e->vaddr : vaddr + e->vaddr;
@@ -902,6 +910,7 @@ static int __attribute__((noinline)) walkList(List *l) {
         if (mi[m] < (uint32_t)max) { if (mtx[m][mi[m]] != d) { mtx[m][mi[m]] = d; dirty |= C_MTX; rg_mchg = 1; } mi[m]++; }
       } else {
         if (cls[c] && reg[c] != d) { rg_chg = rg_lchg = 1; rg_tchg |= cls[c] & C_TEX; dirty |= cls[c]; if (cls[c] & (C_OTHER | C_TL)) acc.chg[c]++; }
+        DEV(if (c == 0x10) baseLog("list", pc, d);)
         reg[c] = d; TOUCH(c);
       }
       if (--k) { pc += 4; op = R0.buf[++i]; continue; }
