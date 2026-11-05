@@ -13,6 +13,7 @@ Folder                          Switches                       What it shows
                                                                are wrong: counters were not reset. Lists starting mid-frame are partial
 0.0.23.3_rr_keep_base           hold_game, gpu_timer, keep_base  Control for the one below. "gpu scenes" and "resources" lines are right from here on
 0.0.23.3_rr_no_base             hold_game, gpu_timer           No image underneath: 522 k fewer pixels, GPU time the same
+0.0.23.4_rr_fx                  hold_game, gpu_timer, fx_log   Pixels per effect on the surface. The bloom image was still at double size
 
 Summaries of runs (tests/perf, compare with tools/run_compare.py <reference.json> <run>)
 rr_hold_0.0.21.3.json           Crowd before joining draws (extreme log: not comparable with the others)
