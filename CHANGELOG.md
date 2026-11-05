@@ -10,6 +10,13 @@ the Vita but not yet confirmed as a numbered release.
   KEEP/REVERT step (`iterate.sh`) and the unattended loop with Claude Code (`ai_loop.sh`, `docs/agent/en/perf-loop.md`).
 - `docs/dev/*/performance-plan.md`: the ordered plan towards 60 fps, from the analysis of the capturer on `stage3_0.0.16.4/rr1`.
 
+## NativeDraw 0.0.24 (2026-11-05)
+Tests 0.0.23.1-0.0.23.5, checked on the Vita with Ridge Racer and `hold_game`. Against 0.0.23: normal race 29.7 -> 32.4 fps, hard stretches 27.8 -> 29.8, crowd 26.9 -> 29.1; GPU ~4 ms less per frame.
+- **Images that only blur at PSP size:** an intermediate image of half the screen or less, made only of 2D rectangles that read no record texture, is kept at PSP size. The bloom chain falls from 8.9 to 4.7 ms.
+- **Measurements (development):** `gpu scenes:` (scenes per image and kind, one whole frame), `resources:` (GPU, battery, temperature, clocks), `fx_log` (pixels per effect on the surface), `keep_hd` (to compare).
+- **Tried and dropped:** not drawing the image underneath: 522 thousand fewer pixels, same GPU time.
+- **Found:** undocumented power functions restart the Vita; close cars add 8-10 ms in blended layers. `tests/perf/runs/` keeps the useful runs, with an inventory.
+
 ## NativeDraw 0.0.23 (2026-11-05)
 Test 0.0.22.1, checked on the Vita with Ridge Racer and `hold_game`. Against 0.0.21.6: hard stretches 24.5 -> 28.8 fps, crowd 25.5 -> 28.4 fps, vertices 37-60 % lower. The rear-view mirror looks right.
 - **Boxed stretch (rear-view mirror) on the GPU:** a stretch behind a partial scissor that starts with a clear of color and depth covering it goes to an image of its own, moved to its corner, before the surface; the edge of that image clips it on the GPU and the result is pasted on the surface. The capturer marks those draws for the GPU. One stretch per frame.

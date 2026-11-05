@@ -184,7 +184,7 @@ Juntar funciona: 3405 -> 267 llamadas GXM en el frame del público, mismos triá
 0. **Hecho en 0.0.21:** un frame se salta solo si el capturador iba atrasado en una sincronización y el último frame no fue tomado, o si la GPU aún lee el registro a escribir: selección de autos ~28 -> ~35 frames HD por segundo, carrera y público iguales. Queda bajo ~45 porque los registros están ocupados con la GPU. Nunca escribir un registro que la GPU lee: congeló el hilo de dibujo y colgó la GPU.
 1. **GPU (C.3), primero por decisión del usuario:** el capturador en el público queda en espera; B.3 falló y queda B.9 como idea. Ahí se atrasa: 7-10 frames completos por segundo, y las listas leídas tarde dan frames que fallan en el traductor (1 a 8 por corrida), cada uno visible como imagen normal durante varios frames del juego.
 2. **GPU (C.3):** menos píxeles (9,4 pantallas por frame). En carrera normal traductor y GPU tardan casi lo mismo, ~33 ms.
-3. **Hecho en 0.0.23:** retrovisor en la GPU, en una imagen propia.
+3. **Hecho en 0.0.23:** retrovisor en la GPU, en una imagen propia. **En 0.0.24:** brillo a tamaño PSP.
 4. **C.2 solo si el capturador limita después de B.3.**
 
 ## C. Cambios grandes (preguntar primero al usuario)

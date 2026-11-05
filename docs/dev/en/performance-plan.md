@@ -178,7 +178,7 @@ Joining works: 3405 -> 267 GXM draws in the crowd frame, same triangles. Vertice
 0. **Done in 0.0.21:** a frame is skipped only when the capturer was behind at a sync and the last frame was not taken, or when the record to write is still read by the GPU: car selection ~28 -> ~35 HD frames per second, race and crowd the same. Below ~45 because records are busy with the GPU. Never write a record the GPU reads: it froze the drawing thread and crashed the GPU. Original item: expected ~45 HD frames per second in car selection; the race and the crowd must stay the same. Verify: Vita (`frames only walked`, `gate_us`, game fps).
 1. **GPU (C.3), started first by the user:** the capturer in the crowd waits; B.3 failed and B.9 is the remaining idea there. It falls behind there: 7-10 complete frames per second, and lists read late give frames that fail in the translator (1 to 8 per run), each shown as the normal image for several game frames.
 2. **GPU (C.3):** fewer pixels (9.4 screens per frame). In the normal race translator and GPU take about the same, ~33 ms.
-3. **Done in 0.0.23:** rear-view mirror on the GPU, in an image of its own.
+3. **Done in 0.0.23:** rear-view mirror on the GPU, in an image of its own. **In 0.0.24:** bloom at PSP size.
 4. **C.2 only if the capturer limits after B.3.**
 
 ## C. Large changes (ask the user first)
