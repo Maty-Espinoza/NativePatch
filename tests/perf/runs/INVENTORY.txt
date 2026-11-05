@@ -14,11 +14,13 @@ Folder                          Switches                       What it shows
 0.0.23.3_rr_keep_base           hold_game, gpu_timer, keep_base  Control for the one below. "gpu scenes" and "resources" lines are right from here on
 0.0.23.3_rr_no_base             hold_game, gpu_timer           No image underneath: 522 k fewer pixels, GPU time the same
 0.0.23.4_rr_fx                  hold_game, gpu_timer, fx_log   Pixels per effect on the surface. The bloom image was still at double size
+0.0.23.5_rr_bloom_psp           hold_game, gpu_timer, fx_log   Bloom at PSP size. Seconds 78-80: start of the race beside 3 cars
 
 Summaries of runs (tests/perf, compare with tools/run_compare.py <reference.json> <run>)
 rr_hold_0.0.21.3.json           Crowd before joining draws (extreme log: not comparable with the others)
 rr_hold_0.0.21.6.json           Reference before the rear-view mirror
 rr_hold_0.0.22.1.json           Reference after it (its logs are in the Mac relay, stage3_0.0.22.1/rr1)
+rr_hold_0.0.23.5.json           With the bloom at PSP size (fx_log on: GXM slightly high)
 
 Real frames for the PC bench (tools/perf/data)
 rr_2227.bin.gz                  Race, bloom chain and no mirror
