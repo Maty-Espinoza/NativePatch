@@ -21,9 +21,9 @@ static const uint8_t RI[256] __attribute__((unused)) = {
   [0x58] = 66, [0x9B] = 67, [0xC0] = 68, [0xC1] = 69, [0xCD] = 70, [0xCE] = 71, [0xCF] = 72,
 };
 #define NRS ((int)sizeof RS)
-#define RD_N 16384        // draws per frame
+#define RD_N 12288        // draws per frame
 #define RE_N 1024         // states per frame
-#define RA_N (2 << 20)    // vertices, indices and palettes per frame
+#define RA_N (3 << 19)    // vertices, indices and palettes per frame
 #define TN_N 256          // textures per frame
 // A draw: st = index of its state in e[]; prim, n, vt = GE type, count and vertex type; voff/vlen = vertices
 // in a[], offset + 1, or with VX their offset in tx, where the GPU reads them (RV); ioff/clut/toff: offset + 1 (0: absent) of indices and palette in a[] and of the texture in tx; clen: palette
