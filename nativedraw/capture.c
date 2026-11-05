@@ -847,6 +847,18 @@ static void recTex(uint32_t ta) {
 #define UNWIND() (l->sp = 0, l->pc = l->stk[0][0], l->off = l->stk[0][1], recAbort(), chk = NULL)
 #define MEASURES_WALK
 #include "measures.h"
+#ifdef NP_DEV
+// Logs a CALL or JUMP whose target is neither RAM nor VRAM: how the address was formed and the commands before it
+static void badTarget(List *l, uint32_t pc, uint32_t op, uint32_t t) {
+  static int nlog;
+  if (nlog >= 32) return;
+  nlog++;
+  uint32_t a = pc - 28, w[8] = { 0 }, ra = vtr(a);
+  if (ra && ramEnd(ra) >= ra + 32) for (int i = 0; i < 8; i++) w[i] = ((volatile uint32_t *)PSP(ra))[i];
+  clog("bad target: %08x from op %08x at pc %08x | base %06x off %08x | list %u start %08x sublevel %u return %08x | before pc: %08x %08x %08x %08x %08x %08x %08x > %08x\n",
+       t, op, pc, reg[0x10], l->off, l->ord, l->lo, l->sp, l->sp ? l->stk[l->sp - 1][0] : 0, w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7]);
+}
+#endif
 // Interprets list l like the GE up to its stall or end (1: finished), with a command limit per call. Goes in
 // 64-byte lines: stall, translation (vtr), read (rdc), list limit, recLine and lo/hi are looked at once
 // per line; inside the line it continues while the walk is sequential (no jumps) and the R0 buffer stays the
@@ -906,6 +918,7 @@ static int __attribute__((noinline)) walkList(List *l) {
       uint32_t t = rel(l, d & 0xFFFFFC);
       if (!vtr(t)) {  // in VRAM without copy in the mirror (yet) or invalid
         regLost(NR_CALL, t);
+        DEV(if (!isVram(t)) badTarget(l, pc, op, t);)
         if (!isVram(t)) { acc.bad++; return 1; }
         want(t, 4096, 1);  // its page and the next: from the next frame on it is walked from the mirror
         if (c == 0x0A) { acc.vcalls++; break; }  // skipped
