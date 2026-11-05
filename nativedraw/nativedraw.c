@@ -191,6 +191,14 @@ static SceUID hookCT(const char *name, SceKernelThreadEntry entry, int prio, int
 }
 
 // Starts a new log: the current one becomes nativedraw_prev.log and the new one begins with the version line
+#ifdef NP_DEV
+// Reserves a block and logs its name, type and size (the sizing probes stay out of the log)
+SceUID ndAlloc(const char *name, SceKernelMemBlockType type, SceSize size, SceKernelAllocMemBlockOpt *opt) {
+  SceUID b = sceKernelAllocMemBlock(name, type, size, opt);
+  if (sceClibStrncmp(name, "nativedraw_test", 16)) alog("memory block: %s type %08x %u KB -> %08x\n", name, type, size >> 10, b);
+  return b;
+}
+#endif
 void alogNew(void) {
   if (writer) aFlush();
   sceIoRemove(LOGP);

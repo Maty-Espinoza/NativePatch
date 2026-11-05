@@ -55,6 +55,16 @@ static void *gmem1(uint32_t type, uint32_t size, int attr) {
   return p;
 }
 static void *gmem(uint32_t size, int attr) { return gmem1(UNC, size, attr); }  // uncached LPDDR: programs, vertices
+#ifdef NP_DEV
+// KB of type that can be reserved in chunks of step KB, adding them up: what is free even when no large block fits
+static uint32_t probeAll(uint32_t type, uint32_t step) {
+  static SceUID b[256];
+  uint32_t n = 0;
+  while (n < 256 && (b[n] = sceKernelAllocMemBlock("nativedraw_test", type, step << 10, 0)) >= 0) n++;
+  for (uint32_t i = 0; i < n; i++) sceKernelFreeMemBlock(b[i]);
+  return n * step;
+}
+#endif
 static uint32_t probe(uint32_t type) {  // MB that can be reserved at once (binary search; for the log)
   uint32_t lo = 0, hi = 64;
   while (lo < hi) {
@@ -645,6 +655,7 @@ static int presThread(SceSize args, void *argp) {
   DEV(if (t_on) failInit();)
   alog("presenter: programs %08x, target %08x (surfaces in %s and %s) | free afterwards (MB in one go): CDRAM %u, "
        "LPDDR physical %u, LPDDR %u\n", r1, r2, ty(surf[0]), ty(surf[1]), probe(CDRAM), probe(PHY), probe(UNC));
+  DEV(alog("memory free in small chunks: LPDDR uncached %u KB, LPDDR cached %u KB, LPDDR physical %u KB, CDRAM %u KB\n", probeAll(UNC, 256), probeAll(SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, 256), probeAll(PHY, 1024), probeAll(CDRAM, 256));)
   if (r1 < 0 || r2 < 0) return sceKernelExitDeleteThread(0);
   volatile uint32_t *nr = sceGxmGetNotificationRegion();  // scene end: the last word Adrenaline does not use
   char ua[80]; int ka = 0;
