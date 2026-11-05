@@ -249,6 +249,8 @@ static uint32_t blendKey(const uint32_t *e) {
                                  SCE_GXM_BLEND_FUNC_MIN, SCE_GXM_BLEND_FUNC_MAX };
   uint32_t gs, gd, fa = RE(e, 0xE0) & 0xFFFFFF, fb = RE(e, 0xE1) & 0xFFFFFF;
   if (grayFix(e)) { gs = SCE_GXM_BLEND_FACTOR_ONE; gd = SCE_GXM_BLEND_FACTOR_SRC_ALPHA; goto ready; }
+  if (fa <= 0x010101) fa = 0;  // (1 of 255 at most: nothing, there is no factor for it)
+  if (fb <= 0x010101) fb = 0;
   if (op == 3 || op == 4) gs = SCE_GXM_BLEND_FACTOR_ONE; else if (s < 4 || s == 6 || s == 7) gs = fs[s]; else if (s == 10 && (fa == 0 || fa == 0xFFFFFF)) gs = fa ? SCE_GXM_BLEND_FACTOR_ONE : SCE_GXM_BLEND_FACTOR_ZERO; else return ~0u;
   if (op == 3 || op == 4) gd = SCE_GXM_BLEND_FACTOR_ONE; else if (d < 4 || d == 6 || d == 7) gd = fd[d]; else if (d == 10 && (fb == 0 || fb == 0xFFFFFF)) gd = fb ? SCE_GXM_BLEND_FACTOR_ONE : SCE_GXM_BLEND_FACTOR_ZERO; else return ~0u;
 ready:
@@ -328,6 +330,12 @@ static int trCheck(RFrame *f, RDraw *d) {
   return T_OK;
 }
 
+// 1 if draw d goes to an image other than the displayed one that the translator cannot draw: wider than 512, or a state with
+// no equivalent. It is left out: only what reads that image can miss it
+static int trSkip(RFrame *f, RDraw *d) {
+  int r = trCheck(f, d);
+  return r == T_DEST || r == T_ODD || r == T_MASK || r == T_BLEND;
+}
 // Color of a vertex at p with GE color type ct (4 5650, 5 5551, 6 4444, 7 8888) -> 0xAABBGGRR
 static uint32_t col8888(const uint8_t *p, uint32_t ct) {
   if (ct == 7) return *(const uint32_t *)p;
@@ -976,6 +984,7 @@ static int trCheckFrame(RFrame *f, uint32_t *disp_p, uint32_t *ord_p) {
     const uint32_t *e0 = f->e[f->d[i].st];
     uint32_t fb = RE(e0, 0x9C) & 0x1FFFF0, k;
     int kd = -1;  // destination intermediate image (-1: the surface)
+    if (fb != disp && trSkip(f, &f->d[i])) { DEV(static int once; if (!once++) alog("translator: draws to image %06x/%u are left out, it cannot be drawn\n", fb, RE(e0, 0x9D) & 0x7FF);) continue; }
     if (!r && fb != disp) {
       for (k = 0; k < nif && ifb[k] != fb; k++) {}
       if (k == nif) {
@@ -1279,6 +1288,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     gd = 0;
     const uint32_t *e = f->e[d->st];
     uint32_t clr = RE(e, 0xD3), tex = hasTex(e, d), fb = RE(e, 0x9C) & 0x1FFFF0, w3d = !(d->vt >> 23 & 1);
+    if (fb != disp && trSkip(f, d)) continue;
     RT *dst = fb == disp ? (i >= t_b0 && i < t_b1 ? &rtb : 0) : rtOf(fb, f->frame, 1);
     if (fb != disp && !dst) { res = T_DEST; break; }
     if (pass == 1 && i == t_b0 && t_b1) {  // the box goes on the surface where the game drew it
