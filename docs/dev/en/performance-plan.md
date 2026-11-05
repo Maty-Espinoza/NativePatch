@@ -159,6 +159,8 @@ Joining works: 3405 -> 267 GXM draws in the crowd frame, same triangles. Vertice
 
 **Next:** a short path in the translator for a draw with the state of the one before; no division in the join; rear-view mirror on the GPU; the control run with `no_join` to know what joining gave; `gpu_timer` where the GPU limits.
 
+**Short path (0.0.21.6, `stage3_0.0.21.6/rr1`, against 0.0.21.5, same switches):** crowd 18.8 -> 25.5 fps, translator 45 -> 30 ms; hard stretches 21.9 -> 24.5 fps, 35 -> 32 ms. Normal race (without car selection, which skews the zone) 27.2 -> 28.6 fps. No normal image during the race. Bridge straight stays at ~20 fps, translator ~36 ms: vertices are 14 ms of it, and 2973 of its ~4300 CPU vertices are the rear-view mirror, kept off the GPU path only by its scissor. Fair reference for the next changes: `tests/perf/rr_hold_0.0.21.6.json`.
+
 ## Order from here (2026-11-04)
 0. **Done in 0.0.21:** a frame is skipped only when the capturer was behind at a sync and the last frame was not taken, or when the record to write is still read by the GPU: car selection ~28 -> ~35 HD frames per second, race and crowd the same. Below ~45 because records are busy with the GPU. Never write a record the GPU reads: it froze the drawing thread and crashed the GPU. Original item: expected ~45 HD frames per second in car selection; the race and the crowd must stay the same. Verify: Vita (`frames only walked`, `gate_us`, game fps).
 1. **GPU (C.3), started first by the user:** the capturer in the crowd waits; B.3 failed and B.9 is the remaining idea there. It falls behind there: 7-10 complete frames per second, and lists read late give frames that fail in the translator (1 to 8 per run), each shown as the normal image for several game frames.

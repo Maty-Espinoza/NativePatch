@@ -165,6 +165,8 @@ Juntar funciona: 3405 -> 267 llamadas GXM en el frame del público, mismos triá
 
 **Lo que sigue:** un camino corto en el traductor para un dibujo con el estado del anterior; sin división al juntar; retrovisor en la GPU; la vuelta de control con `no_join` para saber qué aportó juntar; `gpu_timer` donde limita la GPU.
 
+**Camino corto (0.0.21.6, `stage3_0.0.21.6/rr1`, contra 0.0.21.5, mismos interruptores):** público 18,8 -> 25,5 fps, traductor 45 -> 30 ms; tramos difíciles 21,9 -> 24,5 fps, 35 -> 32 ms. Carrera normal (sin la selección de autos, que distorsiona la zona) 27,2 -> 28,6 fps. Sin imagen normal en la carrera. La recta del puente sigue en ~20 fps, traductor ~36 ms: los vértices son 14 ms, y 2973 de sus ~4300 vértices en CPU son del retrovisor, fuera del camino de GPU solo por su scissor. Referencia justa para los próximos cambios: `tests/perf/rr_hold_0.0.21.6.json`.
+
 ## Orden desde aquí (2026-11-04)
 0. **Hecho en 0.0.21:** un frame se salta solo si el capturador iba atrasado en una sincronización y el último frame no fue tomado, o si la GPU aún lee el registro a escribir: selección de autos ~28 -> ~35 frames HD por segundo, carrera y público iguales. Queda bajo ~45 porque los registros están ocupados con la GPU. Nunca escribir un registro que la GPU lee: congeló el hilo de dibujo y colgó la GPU.
 1. **GPU (C.3), primero por decisión del usuario:** el capturador en el público queda en espera; B.3 falló y queda B.9 como idea. Ahí se atrasa: 7-10 frames completos por segundo, y las listas leídas tarde dan frames que fallan en el traductor (1 a 8 por corrida), cada uno visible como imagen normal durante varios frames del juego.
