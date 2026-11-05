@@ -12,6 +12,7 @@
 #include <psp2/kernel/clib.h>
 #include <psp2/kernel/processmgr.h>
 #include <psp2/kernel/sysmem.h>
+#include <psp2/gxm.h>
 #include <psp2/io/fcntl.h>
 #include <psp2/io/stat.h>
 #include <taihen.h>
@@ -191,6 +192,44 @@ static SceUID hookCT(const char *name, SceKernelThreadEntry entry, int prio, int
 }
 
 // Starts a new log: the current one becomes nativedraw_prev.log and the new one begins with the version line
+// --- Spare block ---
+// ScePspemu maps a block of 128 MB of uncached LPDDR that nothing uses, while the memory the process can reserve runs out
+// at about 54 MB. What the GPU reads goes here: ndExoGet hands out pieces of it, skipping the first 32 MB as a margin.
+#define EXO_SKIP (32 << 20)
+static uint32_t exo_b, exo_p, exo_e;
+static volatile int exo_lock, exo_done;
+// Looks for the block once: 5 s at most, it may be mapped after this plugin starts
+static void exoFind(void) {
+  for (int t = 0; t < 50 && !exo_b; t++) {
+    for (uint32_t a = 0x75000000; a < 0x7E000000; a += 0x100000) {
+      SceKernelMemBlockInfo in;
+      sceClibMemset(&in, 0, sizeof in); in.size = sizeof in;
+      if (sceKernelGetMemBlockInfoByAddr((void *)a, &in) < 0 || in.mappedSize < (64 << 20) || in.type != SCE_KERNEL_MEMBLOCK_TYPE_USER_RW_UNCACHE) continue;
+      exo_b = (uint32_t)in.mappedBase; exo_p = exo_b + EXO_SKIP; exo_e = exo_b + in.mappedSize;
+      break;
+    }
+    if (!exo_b) sceKernelDelayThread(100000);
+  }
+  alog("spare block: %08x, %u MB usable\n", exo_b, exo_b ? (exo_e - exo_p) >> 20 : 0);
+}
+// n bytes of the block aligned to 256 KB, 0 if there is no block or no room
+void *ndExoGet(uint32_t n) {
+  while (__sync_lock_test_and_set(&exo_lock, 1)) sceKernelDelayThread(100);
+  if (!exo_done) { exoFind(); exo_done = 1; }
+  uint32_t a = (exo_p + 0x3FFFF) & ~0x3FFFFu;
+  void *r = exo_b && a + n <= exo_e ? (void *)a : 0;
+  if (r) exo_p = a + n;
+  __sync_lock_release(&exo_lock);
+  return r;
+}
+// (GXM initialized) Maps the usable part for the GPU
+int ndExoMap(void) {
+  ndExoGet(0);
+  if (!exo_b) return 0;
+  int r = sceGxmMapMemory((void *)(exo_b + EXO_SKIP), exo_e - exo_b - EXO_SKIP, SCE_GXM_MEMORY_ATTRIB_READ | SCE_GXM_MEMORY_ATTRIB_WRITE);
+  alog("spare block: mapped for the GPU %08x\n", r);
+  return r;
+}
 #ifdef NP_DEV
 // Reserves a block and logs its name, type and size (the sizing probes stay out of the log)
 SceUID ndAlloc(const char *name, SceKernelMemBlockType type, SceSize size, SceKernelAllocMemBlockOpt *opt) {

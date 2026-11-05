@@ -195,7 +195,6 @@ typedef struct { uint32_t buf[64] __attribute__((aligned(16))); uint32_t a, n, o
 static Rd R0, RR[2];  // capturer and readers
 static uint32_t tm_memo, tm_apply;  // us of the frame in memoTry (all) and in applying what was saved (extreme level)
 static uint32_t runClk(SceUID t);
-DEV(uint32_t nd_exo __attribute__((weak));)  // test area in the block no one seems to use (exoTest in presenter.c), 0: none
 static SceUID cap_uid;
 DEV(static volatile uint32_t cap_at;)  // where the capturer is, for the watchdog: 1 events, 2 walk, 3 mirror copy, 4 record transfer, 5 frame close, 6 record wait
 // Cache shared by readers and capturer: CL_N 64-byte lines (cl_data) each with a tag (cl_tag:
@@ -855,6 +854,7 @@ static void recTex(uint32_t ta) {
 
 // Returns to the top level of the list (abandons the current sublist and its recording or check)
 #define UNWIND() (l->sp = 0, l->pc = l->stk[0][0], l->off = l->stk[0][1], recAbort(), chk = NULL)
+DEV(static uint32_t xm_ok, xm_skip, xm_out, xc_more;)  // pages applied to the mirror, without a copy, out of the real VRAM; extra log lines allowed
 // Applies a RAM to VRAM transfer to the mirror the list is read with, row by row and page by page: the mirror is from the
 // last flip, and a game can copy sublists or data to VRAM during the frame and use them right after. Pages without a copy
 // are skipped; the lines of the destination leave the read buffer and the readers' cache. Copies by aligned words:
@@ -869,6 +869,7 @@ static void xferMirror(uint32_t s, uint32_t t, uint32_t bp) {
       n = 4096 - ((dst + o) & 4095);
       if (n > w - o) n = w - o;
       uint32_t ra = vtr(dst + o);
+      DEV(if ((dst + o) >> 21 != 0x04000000u >> 21) xm_out++; else if (!ra) xm_skip++; else xm_ok++;)
       if (!ra || (dst + o) >> 21 != 0x04000000u >> 21 || ramEnd(src + o) < src + o + n) continue;
       if ((ra | (src + o) | n) & 3) for (uint32_t i = 0; i < n; i += 2) ((volatile uint16_t *)PSP(ra))[i / 2] = ((volatile uint16_t *)PSP(src + o))[i / 2];
       else for (uint32_t i = 0; i < n; i += 4) ((volatile uint32_t *)PSP(ra))[i / 4] = ((volatile uint32_t *)PSP(src + o))[i / 4];
@@ -906,13 +907,22 @@ static void xferCall(uint32_t t) {
     volatile uint32_t *m = (volatile uint32_t *)PSP(vtr(t)), *r = (volatile uint32_t *)PSP(xc[i].s + (t - xc[i].t));
     int same = 1;
     for (int k = 0; k < 8; k++) same &= m[k] == r[k];
-    if (same ? nfresh++ < 32 : nstale++ < 64)
+    if (xc_more ? xc_more-- : same ? nfresh++ < 32 : nstale++ < 64)
       clog("vram copy: walked at %08x, copied %u frames ago from %08x: mirror %s the source (mirror %08x %08x, source %08x %08x, frame %u)\n",
            t, gen - xc[i].gen, xc[i].s, same ? "equals" : "DIFFERS from", m[0], m[1], r[0], r[1], gen);
     return;
   }
 }
 static uint32_t vcall, vcall_n, vcall_w[4];  // last sublist called in VRAM: where, list commands walked then, its first words
+// Many registers differ from the real GE, so the walk went through something that is not a list: logs the last VRAM sublist,
+// the transfers noted, how the mirror copies went, and lets the next jumps into transfers reach the log
+static void xferSuspect(uint32_t n) {
+  static int nlog;
+  if (nlog++ >= 8) return;
+  clog("walk suspect: %u registers differ (frame %u) | mirror pages applied %u, without a copy %u, outside VRAM %u | last VRAM sublist %08x began %08x %08x %08x %08x\n", n, gen, xm_ok, xm_skip, xm_out, vcall, vcall_w[0], vcall_w[1], vcall_w[2], vcall_w[3]);
+  for (int i = 0; i < 16; i++) if (xc[i].n && gen - xc[i].gen < 4) clog("  transfer %08x to %08x, %u bytes, %u frames ago\n", xc[i].s, xc[i].t, xc[i].n, gen - xc[i].gen);
+  xc_more = 16;
+}
 // Logs a CALL or JUMP whose target is neither RAM nor VRAM: how the address was formed and the commands before it
 static void badTarget(List *l, uint32_t pc, uint32_t op, uint32_t t) {
   static int nlog;
@@ -1376,14 +1386,16 @@ static void event(volatile uint32_t *e) {
     static uint32_t snap, snr[NRS];
     if (SB[0xA0] && SB[0xA0] != snap) {
       snap = SB[0xA0];
+      DEV(uint32_t nsus = 0;)
       for (int i = 0; i < NRS; i++) {
         uint32_t v = SB[0x100 + RS[i]] & 0xFFFFFF;
         if (v == snr[i] && reg[RS[i]] != v) {
           DEV(static uint32_t nsn; if (nsn < 40) { nsn++; clog("register %02x: capture %06x real %06x (frame %u)\n", RS[i], reg[RS[i]], v, gen); })
-          reg[RS[i]] = v; rg_chg = 1;
+          reg[RS[i]] = v; rg_chg = 1; DEV(nsus++;)
         }
         snr[i] = v;
       }
+      DEV(if (nsus >= 8) xferSuspect(nsus);)
       // BASE on its own: it adds to every address, and a walk through bytes that are not commands can leave it wrong
       static uint32_t snb;
       uint32_t vb = SB[0x110] & 0xFFFFFF;
@@ -1683,16 +1695,6 @@ static void memSample(void) {
       h0[k][m] = h;
     }
     if (chg || calls % 12 == 1) clog("memory sample %08x, %u MB: %u MB with data, %u MB changed | changed %08x %08x %08x %08x %08x\n", base[k], mb[k], used, chg, bits[0], bits[1], bits[2], bits[3], bits[4]);
-  }
-  if (nd_exo) {  // the test pattern written by exoTest (presenter.c), one word every 4 KB
-    uint32_t bad = 0, first = 0, val = 0;
-    static uint32_t bad0;
-    for (uint32_t o = 0; o < (16 << 20); o += 4096) {
-      uint32_t v = *(volatile uint32_t *)(nd_exo + o);
-      if (v != ((nd_exo + o) ^ 0x5A5AA5A5u)) { if (!bad++) { first = nd_exo + o; val = v; } }
-    }
-    if (bad != bad0 || calls % 12 == 1) clog("memory test area %08x: %u of 4096 words differ from the pattern (first at %08x: %08x), frame %u\n", nd_exo, bad, first, val, gen);
-    bad0 = bad;
   }
 }
 #endif

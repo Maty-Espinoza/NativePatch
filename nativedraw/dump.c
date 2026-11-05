@@ -7,7 +7,7 @@
 void *sceDmacMemcpy(void *dst, const void *src, SceSize size);
 #define VN 3            // frames per dump (at most)
 #define VL 256          // line of each frame (how the surface was made)
-#define VB_N (2 << 20)  // record per frame
+#define VB_N (6 << 20)  // record per frame
 // dump_req: L+R+SELECT request; dump_on: 0 nothing, 3 armed (auto), 1 capturing, 2 to write; dump_k: frames ready
 static volatile uint32_t dump_req, dump_on, dump_k;
 extern volatile uint32_t nd_exact_until;  // (capture.c) until when the record carries the exact PSP image
@@ -91,12 +91,8 @@ static volatile uint32_t fl_busy;
 static int fl_r;
 static char fl_t[2048];
 static void failInit(void) {
-  void *p = 0;
-  SceUID b = sceKernelAllocMemBlock("nativedraw_fail", SCE_KERNEL_MEMBLOCK_TYPE_USER_MAIN_PHYCONT_NC_RW, VB_N, 0);
-  if (b >= 0 && sceKernelGetMemBlockBase(b, &p) >= 0) fl_b = p;
-  p = 0;
-  b = sceKernelAllocMemBlock("nativedraw_fail_img", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW_UNCACHE, (512 * 272 * 4 + 0x3FFFF) & ~0x3FFFFu, 0);
-  if (b >= 0 && sceKernelGetMemBlockBase(b, &p) >= 0) fl_img = p;
+  fl_b = ndExoGet ? ndExoGet(VB_N) : 0;
+  fl_img = gmem(512 * 272 * 4, RW);
   alog("fail: frames saved on failure: %s, normal image %s\n", fl_b ? "yes" : "no memory", fl_img ? "yes" : "no memory");
 }
 // (Adrenaline thread) Draw i of frame f failed with reason r: saves the frame if this kind of failure is new
@@ -317,19 +313,19 @@ static void rtPeek(void) {
 // Records go in physical memory: the translator's intermediate images are reserved earlier.
 static int dumpAlloc(void) {
   uint32_t n = 0, ok = 1;
-#ifdef NP_DEV
-  if (exo_d) {  // (test) everything from the area tested by exoTest; nothing to free
-    uint8_t *p = (uint8_t *)exo_d;
+  static uint8_t *area;  // everything from the spare block, kept for the next dump; without it, blocks of its own
+  if (!area && ndExoGet) area = ndExoGet(32 << 20);
+  if (area) {
+    uint8_t *p = area;
     for (int i = 0; i < (int)dump_nf; i++) { dump_hd[i] = p; dump_ps[i] = p + LINE * H * 4; p += (LINE * H * 4 + 512 * 272 * 4 + 0xFFF) & ~0xFFFu; }
     dump_w = p; p += 0x40000;
     for (int i = 0; i < (int)dump_nf && dump_level >= 2; i++) { dump_bb[i] = p; dump_bblk[i] = 0; p += VB_N; }
     dump_rt = dump_level >= 2 ? p : 0; p += LINE * H * 4;
     dump_nat = dump_level >= 2 ? p : 0; dump_natok = 0;
     dump_bpend = VN; dump_mem = 1;
-    alog("dump: memory ready in the test area %08x, level %s (%u frames)\n", exo_d, dump_names[dump_level], dump_nf);
+    alog("dump: memory ready in the spare block, level %s (%u frames)\n", dump_names[dump_level], dump_nf);
     return 1;
   }
-#endif
   for (int i = 0; i < (int)dump_nf && ok; i++) {  // Vita surface + PSP image, in one block
     void *p = 0;
     dump_blk[n] = sceKernelAllocMemBlock("nativedraw_dump", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW_UNCACHE, (LINE * H * 4 + 512 * 272 * 4 + 0x3FFFF) & ~0x3FFFFu, 0);

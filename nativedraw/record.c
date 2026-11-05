@@ -256,6 +256,14 @@ static void rcInval(uint32_t a, uint32_t n) {
 // Reserves the RN records: the main part in cached memory and the textures in uncached memory (read by the GPU), and
 // the transit memory for sorting swizzled textures. Without memory it turns the record off (reg_on = 0). Without
 // memory for the texture cache, every texture goes to the record.
+void *ndExoGet(uint32_t n) __attribute__((weak));  // nativedraw.c
+// n bytes of uncached memory: from the spare block or, without it, a block of its own. 0 if there is none
+static void *rgUnc(const char *name, uint32_t n) {
+  void *p = ndExoGet ? ndExoGet(n) : 0;
+  if (p) return p;
+  SceUID b = sceKernelAllocMemBlock(name, SCE_KERNEL_MEMBLOCK_TYPE_USER_RW_UNCACHE, n, 0);
+  return b >= 0 && sceKernelGetMemBlockBase(b, &p) >= 0 ? p : 0;
+}
 static void regInit(void) {
   DEV(SceKernelFreeMemorySizeInfo fm; fm.size = sizeof fm; if (sceKernelGetFreeMemorySize(&fm) >= 0) clog("free memory before the record: user %u KB, cdram %u KB, phycont %u KB\n", fm.size_user >> 10, fm.size_cdram >> 10, fm.size_phycont >> 10);)
   for (int i = 0; i < RN; i++) {
@@ -264,9 +272,7 @@ static void regInit(void) {
                                       (sizeof(RFrame) + 0x3FFFF) & ~0x3FFFFu, 0);
     if (b < 0 || sceKernelGetMemBlockBase(b, &p) < 0) { reg_on = 0; clog("frame record: no memory (%08x)\n", b); return; }
     rf[i] = p; rf[i]->nd = rf[i]->ne = rf[i]->na = rf[i]->flags = rf[i]->nt = rf[i]->ntx = rf[i]->nvx = 0;
-    SceUID t = sceKernelAllocMemBlock("nativedraw_record_tex", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW_UNCACHE, TX_N, 0);
-    if (t < 0 || sceKernelGetMemBlockBase(t, &p) < 0) { reg_on = 0; clog("frame record: no memory for textures (%08x)\n", t); return; }
-    rf[i]->tx = p;
+    if (!(rf[i]->tx = rgUnc("nativedraw_record_tex", TX_N))) { reg_on = 0; clog("frame record: no memory for textures\n"); return; }
   }
   // Transit for swizzled textures: cached if the DMA copy keeps it up to date (rgCoherent); otherwise uncached
   void *p = 0;
@@ -287,11 +293,11 @@ static void regInit(void) {
     for (int i = 0; i < RN; i++) rg_hash[i] = (void *)((uint8_t *)p + i * 0x20000);
   }
   void *q = 0;
-  b = sceKernelAllocMemBlock("nativedraw_tex_cache", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW_UNCACHE, RC_N, 0);
+  p = rgUnc("nativedraw_tex_cache", RC_N);
   SceUID c = sceKernelAllocMemBlock("nativedraw_tex_index", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, (sizeof(RC) * RC_E + 0x3FFFF) & ~0x3FFFFu, 0);
-  if (b >= 0 && c >= 0 && sceKernelGetMemBlockBase(b, &p) >= 0 && sceKernelGetMemBlockBase(c, &q) >= 0) {
+  if (p && c >= 0 && sceKernelGetMemBlockBase(c, &q) >= 0) {
     rc_tx = p; rc = q; sceClibMemset(rc, 0, sizeof(RC) * RC_E);
-  } else clog("texture cache: no memory (%08x %08x)\n", b, c);
+  } else clog("texture cache: no memory (%08x)\n", c);
   clog("frame record: active (draw), %u x %u KB; swizzled textures sorted by the CPU from memory %s\n", RN,
        (unsigned)(sizeof(RFrame) >> 10), rg_ordc ? "with cache (the DMA keeps it up to date)" : "without cache (the DMA does not keep the cache up to date: slow)");
 }
@@ -388,6 +394,7 @@ int sceGxmMapMemory(void *base, SceSize size, int attr);
 // (translator, with GXM initialized) maps for the GPU, read-only, the textures of all records
 int regMapGpu(void) {
   int r = 0;
+  if (ndExoGet && ndExoGet(0)) return 0;  // (the spare block is already mapped)
   for (int i = 0; i < RN && rf[i] && r >= 0; i++) r = sceGxmMapMemory(rf[i]->tx, TX_N, 1);  // (1: read)
   if (r >= 0 && rc_tx) r = sceGxmMapMemory(rc_tx, RC_N, 1);
   return r;
