@@ -198,9 +198,9 @@ static SceUID hookCT(const char *name, SceKernelThreadEntry entry, int prio, int
 #define EXO_SKIP (32 << 20)
 static uint32_t exo_b, exo_p, exo_e;
 static volatile int exo_lock, exo_done;
-// Looks for the block once: 5 s at most, it may be mapped after this plugin starts
+// Looks for the block once: 30 s at most, ScePspemu maps it several seconds after this plugin starts
 static void exoFind(void) {
-  for (int t = 0; t < 50 && !exo_b; t++) {
+  for (int t = 0; t < 300 && !exo_b; t++) {
     for (uint32_t a = 0x75000000; a < 0x7E000000; a += 0x100000) {
       SceKernelMemBlockInfo in;
       sceClibMemset(&in, 0, sizeof in); in.size = sizeof in;
