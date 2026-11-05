@@ -164,7 +164,7 @@ static void gvMark(RFrame *f) {
   for (uint32_t i = 0; i < f->nd; i++) {
     RDraw *d = &f->d[i];
     const uint32_t *e = f->e[d->st];
-    uint32_t d5 = RE(e, 0xD5), w = RE(e, 0x9D) & 0x7FF, m = (d->vlen + 3) & ~3u;
+    uint32_t d5 = RE(e, 0xD5), w = RE(e, 0x9D) & 0x7FF, m = (d->vlen + 47) / 48 * 48;
     if ((d->vt != 0x19F && !GVL(d->vt)) || d->ioff || d->prim < 3 || d->prim > 5 || RE(e, 0xD3) & 1 || !(RE(e, 0x50) & 1) ||
         (d->vt == 0x19F && (RE(e, 0xC0) & 3 || RE(e, 0x17) & (RE(e, 0x18) | RE(e, 0x19) | RE(e, 0x1A) | RE(e, 0x1B)) & 1)) ||
         (GVL(d->vt) && (RE(e, 0x17) & 1 ? RE(e, 0xC0) & 3 : (RE(e, 0xC0) & 0x303) != 0x301)) || RE(e, 0xD4) & 0xFFFFF || (d5 & 0x3FF) + 1 < (w < 480 ? w : 480) ||

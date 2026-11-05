@@ -42,7 +42,7 @@ static uint32_t t_mark[RD_N / 32 + 1];  // a bit per draw not done
 static uint32_t t_prevd = ~0u, t_prev2 = ~0u;  // images shown by the last frames drawn, the latest first: t_prevd's surface is the one not being drawn
 DEV(static void failNote(RFrame *f, uint32_t i, int r);)  // dump.c
 static uint16_t *tib;        // 0, 1, 2... (indices for the GPU)
-#define TG_N (48 << 10)      // indices of the joined draws of the GPU path, per surface
+#define TG_N (64 << 10)      // indices of the joined draws of the GPU path, per surface
 static uint16_t *tgi[2];
 // Intermediate image: a game draw to another VRAM image (not the shown one) goes to our own double-size surface
 // (1024x544); if later in the same frame a texture is at that address, it is read from that surface.
@@ -139,7 +139,8 @@ static int trInit(void) {
   for (int i = 0; i < 2; i++)
     if (!(tv[i] = gmem(TV_N * sizeof(TV), RD)) || !(tpal[i] = gmem(TP_B, RD))) return -1;
   if (!(tib = gmem(TV_N * 2, RD))) return -1;
-  for (int i = 0; i < 2; i++) if (!(tgi[i] = gmem(TG_N * 2, RD))) return -1;
+  if (!(tgi[0] = gmem(TG_N * 4, RD))) return -1;
+  tgi[1] = tgi[0] + TG_N;
   for (uint32_t i = 0; i < TV_N; i++) tib[i] = i;
   SceGxmShaderPatcherId iv;
   int r = sceGxmShaderPatcherRegisterProgram(pat, (const SceGxmProgram *)nd_v_gxp, &iv);
