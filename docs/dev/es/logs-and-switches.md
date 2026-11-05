@@ -76,7 +76,8 @@ Las mediciones de desarrollo están en `nativedraw/measures.h`, una línea cada 
 | `cap_split` | (desarrollo) mide cada parte del capturador en todos los frames (cuesta ~0,4 us por lectura del reloj): líneas `capture split` por tipo de frame, resumidas por `tools/bottleneck.py` Cuesta ~0,7 us por lectura de reloj y en un juego pesado atrasa al capturador: errores gráficos e imagen normal; avisar antes de usarlo. |
 | `crowd_log` | (desarrollo) cada segundo en el log del capturador: comandos por tipo, saltos por caja envolvente, qué necesita un frame del anterior |
 | `no_join` | (desarrollo) los dibujos del camino de GPU no se juntan, para comparar |
-| `keep_base` | (desarrollo) la imagen de abajo se dibuja aunque el frame la tape, para comparar |
+| `keep_hd` | (desarrollo) las imágenes que solo difuminan quedan al doble, para comparar |
+| `fx_log` | (desarrollo) `bottleneck effects:` píxeles y dibujos del 3D sobre la superficie por efecto, 1 frame de cada 32 |
 | `hold_game` | (desarrollo) el juego espera a toda la cadena (compuerta hasta 200 ms, el flip hasta recorrer el frame, el capturador al presentador y a la GPU): todos los frames completos y en HD, y el juego más lento. Se lee al abrir Adrenaline. Para medir |
 | `rec_cost` | (desarrollo) sigue grabando un frame ya incompleto, sin publicarlo, para medir cuánto cuesta grabar |
 | `capture_core` | (v13.13) `0`, `1` o `2` fija el capturador a ese núcleo (antes de v13.13 siempre el 1); sin archivo o cualquier otra cosa: cualquiera de los 3. La línea `threads: capture` del log dice cuál se usó; ver `etapa2_ridge_racer.md` |

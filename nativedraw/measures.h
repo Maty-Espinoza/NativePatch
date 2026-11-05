@@ -18,7 +18,8 @@
   X(clocks, clk_on)             /* CPU 444 and crossbar 166 */ \
   X(vert_split, v_on)           /* splits the vertex work of 1 HD frame in 8 */ \
   X(no_join, no_join)           /* draws of the GPU path are not joined, to compare */ \
-  X(keep_base, keep_base)       /* the image underneath is drawn even if the frame covers it, to compare */
+  X(keep_hd, keep_hd)           /* images that only blur stay at double size, to compare */ \
+  X(fx_log, fx_log)             /* pixels per effect in the surface, 1 frame in 32 */
 // Others that are not on/off, or that stay where they act: log_level, no_lookahead, no_idle, gate_sync, dump.
 #define MEASURE_READ(file, var) var = swOn("ux0:data/nativedraw/" #file);
 

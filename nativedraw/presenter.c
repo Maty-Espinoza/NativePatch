@@ -35,7 +35,7 @@ static uint32_t thrRun(void) { SceKernelThreadInfo i; i.size = sizeof i; return 
 #endif
 #include "prof.h"
 #include "measures.h"
-DEV(static int no_join, keep_base;)
+DEV(static int no_join, keep_hd, fx_log;)
 DEV(extern volatile SceUID nd_gfx_uid; uint32_t regState(void);
     // where Adrenaline's drawing thread is: 0 outside hookEnd, 1 its sceGxmEndScene, 2 checks, 3 the record, 4 translating
     // draw h_i, 5 sceGxmBeginScene, 6 sceGxmEndScene, 7 normal image
@@ -305,12 +305,12 @@ static int hookTex(SceGxmContext *c, unsigned int i, const SceGxmTexture *t) {
 static uint32_t b_t0[6];  // t_us at the last line
 // Every 10 s, what the game costs the console: tools/run_compare.py reads it
 static void resLog(void) {
-  static uint32_t g0, i0, b0[2];
-  uint32_t g = 0, id = b_idle - i0, w = b_base[0] - b0[0], wo = b_base[1] - b0[1];
+  static uint32_t g0, i0, f0;
+  uint32_t g = 0, id = b_idle - i0, fr = b_fr - f0;
   for (int i = 0; i < CN; i++) g += b_gus[i];
-  uint32_t dg = g - g0; g0 = g; i0 += id; b0[0] += w; b0[1] += wo;
-  alog("resources: frames with image underneath %u without %u | GPU busy %u ms idle %u ms | battery %d %% %d mAh %d mV charging %d temp %d | MHz arm %d gpu %d xbar %d\n",
-       w, wo, dg / 1000, id / 1000, scePowerGetBatteryLifePercent(), scePowerGetBatteryRemainCapacity(), scePowerGetBatteryVolt(),
+  uint32_t dg = g - g0; g0 = g; i0 += id; f0 += fr;
+  alog("resources: frames %u | GPU busy %u ms idle %u ms | battery %d %% %d mAh %d mV charging %d temp %d | MHz arm %d gpu %d xbar %d\n",
+       fr, dg / 1000, id / 1000, scePowerGetBatteryLifePercent(), scePowerGetBatteryRemainCapacity(), scePowerGetBatteryVolt(),
        scePowerIsBatteryCharging(), scePowerGetBatteryTemp(), scePowerGetArmClockFrequency(), scePowerGetGpuClockFrequency(), scePowerGetGpuXbarClockFrequency());
 }
 static uint32_t v0[2][VS_N];  // v_us at the last line
@@ -339,6 +339,13 @@ static void bnLog(void) {
        t[0] / 1000, t[1] / 1000, t[2] / 1000, t[3] / 1000, t[4] / 1000, g[C_ADR] / 1000, g[C_NORMAL] / 1000, g[C_TR] / 1000, g[C_INT] / 1000, id / 1000);
   if (n) alog("bottleneck pixels (thousands per frame of %u): surface: fast %u mid %u textured %u color %u base %u | intermediate: fast %u mid %u textured %u color %u\n", n,
               p[0][BP_FAST] / n, p[0][BP_MID] / n, p[0][BP_TEX] / n, p[0][BP_COL] / n, p[0][BP_BASE] / n, p[1][BP_FAST] / n, p[1][BP_MID] / n, p[1][BP_TEX] / n, p[1][BP_COL] / n);
+  static uint32_t fn0; uint32_t fn = b_fxn - fn0; fn0 += fn;
+  if (fn) {
+    static uint32_t q0[8], d0[8]; uint32_t q[8], e[8];
+    for (int i = 0; i < 8; i++) { q[i] = (b_fx[i] - q0[i]) / fn; q0[i] += q[i] * fn; e[i] = (b_fxd[i] - d0[i]) / fn; d0[i] += e[i] * fn; }
+    alog("bottleneck effects (3D on the surface, thousands of pixels/draws per frame of %u): plain %u/%u blended %u/%u fog %u/%u fog+blended %u/%u image %u/%u image+blended %u/%u image+fog %u/%u image+fog+blended %u/%u\n",
+         fn, q[0], e[0], q[1], e[1], q[2], e[2], q[3], e[3], q[4], e[4], q[5], e[5], q[6], e[6], q[7], e[7]);
+  }
   if (n) alog("bottleneck why generic (thousands of pixels per frame, a draw can have several): function %u double %u alpha_test %u fog %u blend2x %u\n", w[BW_FUNC] / n, w[BW_DOUBLE] / n, w[BW_ATEST] / n, w[BW_FOG] / n, w[BW_BLEND2X] / n);
 }
 #endif

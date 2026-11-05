@@ -27,7 +27,9 @@ DEV(enum { VS_STATE, VS_FAST, VS_SLOW, VS_BIG, VS_TOUCH, VS_AGAIN_F, VS_AGAIN_S,
 DEV(enum { BP_FAST, BP_MID, BP_TEX, BP_COL, BP_BASE, BP_N };
     static volatile uint32_t b_px[2][BP_N], b_pxn;
     enum { BW_FUNC, BW_DOUBLE, BW_ATEST, BW_FOG, BW_BLEND2X, BW_N };  // why a textured draw is not on the fast program
-    static volatile uint32_t b_why[BW_N], b_base[2];)  // b_base: frames with and without the image underneath
+    static volatile uint32_t b_why[BW_N], b_fr;
+    // on the sampled frames, 3D on the surface by effect (bit 0 blended, 1 fog, 2 reads an intermediate image): thousands of pixels, draws
+    static volatile uint32_t b_fx[8], b_fxd[8], b_fxn;)
 static uint32_t t_seen[TN];   // times each reason was seen (the first one is logged in detail)
 typedef struct { float x, y, z, w, u, v, f; uint32_t c; } TV;  // translated vertex (32 bytes, the nd_v format); f: fog (1: none)
 static TV *tv[2];            // translated vertices, one per surface
@@ -47,9 +49,9 @@ static uint16_t *tgi[2];
 // Intermediate image: a game draw to another VRAM image (not the shown one) goes to our own double-size surface
 // (1024x544); if later in the same frame a texture is at that address, it is read from that surface.
 // fb: image address in VRAM (~0u: free); fr: last frame it was used.
-// vr: what the frame draws on it (its scenes touch only that). have, dirty: for an image read while being drawn, the part
+// vr: what the frame draws on it (its scenes touch only that). sh: 1 if the image is kept at PSP size, half of its coordinates. have, dirty: for an image read while being drawn, the part
 // already in rtc and the part drawn since (x0, y0, x1, y1).
-typedef struct { uint32_t fb, fr; void *mem; SceGxmColorSurface cs; SceGxmValidRegion vr; float have[4], dirty[4]; } RT;
+typedef struct { uint32_t fb, fr, sh; void *mem; SceGxmColorSurface cs; SceGxmValidRegion vr; float have[4], dirty[4]; } RT;
 // Scenes on different render targets may run at the same time: this object keeps those of a frame in order, because a
 // scene reads what the one before drew
 static SceGxmSyncObject *t_sync;
@@ -1074,9 +1076,10 @@ static void trCensusLog(void) {
 #endif
 
 // Leaves in each intermediate image of frame f the region its draws touch, so its scenes do not load and store the whole
-// surface: the corners of rectangles with 16-bit positions, the whole image for the rest
+// surface: the corners of rectangles with 16-bit positions, the whole image for the rest. An image of half the screen or less made
+// only of those rectangles, reading no texture of the record, only shrinks and blurs what is on screen: it stays at PSP size
 static void trRegions(RFrame *f, uint32_t disp) {
-  uint32_t bx[2] = { 0, 0 }, by[2] = { 0, 0 };
+  uint32_t bx[2] = { 0, 0 }, by[2] = { 0, 0 }, soft[2] = { 1, 1 };
   for (uint32_t i = 0; i < f->nd; i++) {
     RDraw *d = &f->d[i];
     const uint32_t *e = f->e[d->st];
@@ -1090,12 +1093,14 @@ static void trRegions(RFrame *f, uint32_t disp) {
       uint32_t st = tc ? 5 : 3, w = p[0] > p[st] ? p[0] : p[st], h = p[1] > p[st + 1] ? p[1] : p[st + 1];
       if (2 * w + 2 < x) x = 2 * w + 2;
       if (2 * h + 2 < y) y = 2 * h + 2;
-    }
+      if (d->toff) soft[k] = 0;
+    } else soft[k] = 0;
     if (x > bx[k]) bx[k] = x;
     if (y > by[k]) by[k] = y;
   }
   for (int i = 0; i < 2; i++) {
-    rts[i].vr.xMax = (bx[i] > LINE ? LINE : bx[i] ? bx[i] : LINE) - 1; rts[i].vr.yMax = (by[i] > H ? H : by[i] ? by[i] : H) - 1;
+    rts[i].sh = soft[i] && bx[i] && bx[i] <= LINE / 2 && by[i] <= H / 2 DEV(&& !keep_hd);
+    rts[i].vr.xMax = ((bx[i] > LINE ? LINE : bx[i] ? bx[i] : LINE) >> rts[i].sh) - 1; rts[i].vr.yMax = ((by[i] > H ? H : by[i] ? by[i] : H) >> rts[i].sh) - 1;
     for (int k = 0; k < 4; k++) rts[i].have[k] = rts[i].dirty[k] = k < 2 ? 1e9f : -1e9f;
   }
 }
@@ -1109,17 +1114,6 @@ static int trClearBox(const RFrame *f, const RDraw *d, int *b) {
     b[0] = p[0] < b[0] ? p[0] : b[0]; b[1] = p[1] < b[1] ? p[1] : b[1]; b[2] = p[0] > b[2] ? p[0] : b[2]; b[3] = p[1] > b[3] ? p[1] : b[3];
   }
   return 1;
-}
-// 1 if the first draw on the shown image of frame f is a clear of color over all of it: what goes underneath would not be seen
-static int trCovers(const RFrame *f, uint32_t disp) {
-  for (uint32_t i = 0; i < f->nd; i++) {
-    const uint32_t *e = f->e[f->d[i].st];
-    if ((RE(e, 0x9C) & 0x1FFFF0) != disp) continue;
-    int b[4];
-    return trClearBox(f, &f->d[i], b) && RE(e, 0xD3) & 0x100 && !(RE(e, 0xE8) & 0xFFFFFF) && !(RE(e, 0xD4) & 0xFFFFF) && (RE(e, 0xD5) & 0x3FF) >= 479 &&
-           (RE(e, 0xD5) >> 10 & 0x3FF) >= 271 && b[0] <= 0 && b[1] <= 0 && b[2] >= 480 && b[3] >= 272;
-  }
-  return 0;
 }
 // Looks in the first ord draws of frame f (they can be reordered) for a boxed stretch: on the shown image, behind one partial
 // scissor, a clear of color and depth that covers the box and at least one 3D draw after it. Nothing in it needs what the
@@ -1179,6 +1173,7 @@ static inline uint32_t gAdd(uint16_t *o, uint32_t ix, uint32_t prim, uint32_t nt
 static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base) {
   t3.ke = 0;
   DEV(uint32_t t_ss = 0; c_fr++;)
+  DEV(static uint32_t fxn; int sfx = fx_log && !(++fxn & 31); b_fr++; b_fxn += sfx;)
   DEV(uint32_t ta = now(), tb, ut[6]; sceClibMemcpy(ut, (void *)t_us, sizeof ut);
       static uint32_t hdn; int smp = !(++hdn & 3), pb = BP_COL, why = 0; float bpx[2][BP_N] = { { 0 } }, bwy[BW_N] = { 0 };)
   uint32_t disp, ord;
@@ -1187,7 +1182,6 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
   DEV(t_us[0] += now() - ta; if (p_on) pAdd(P_T_CHECK, now() - ta);)
   trRegions(f, disp);
   trBoxed(f, disp, ord);
-  int cover = trCovers(f, disp) DEV(&& !keep_base);
   // Depth lives in one scene: if the surface is drawn with depth after its scene was cut, it is stored and loaded. The other
   // scenes use the same memory without storing it, so they do not touch it
   SceGxmDepthStencilSurface dss = ds;
@@ -1207,14 +1201,14 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
 #define CTAG() (c_tag = cur_rt == &rtb ? CK_BOX : cur_rt ? cur_rt->fb | CK_IMG : t_ss++ ? CK_SURF2 : CK_SURF)
   // SCENE: starts a scene on surface surf_tex with the vertex program and the matrix
 #define SCENE(surf_tex, reg) do { DEV(h_at = 5;) sceGxmBeginScene(c, 0, cur_rt ? rt_i : rt, reg, 0, t_sync, surf_tex, cur_rt ? &ds : &dss); DEV(h_at = 4;) t_zs = t_st = t_sr = t_cl = ~0u; zsSet(c, 0, 0); sceGxmSetVertexProgram(c, nvp); gv_cur = 0; \
-    trWvp(wm, reg); if (cur_rt == &rtb) { wm[12] -= t_bx * wm[0]; wm[13] -= t_by * wm[5]; } sceGxmReserveVertexDefaultUniformBuffer(c, &u); sceGxmSetUniformDataF(u, n_wvp, 0, 16, wm); } while (0)
+    trWvp(wm, reg); if (cur_rt == &rtb) { wm[12] -= t_bx * wm[0]; wm[13] -= t_by * wm[5]; } if (cur_rt && cur_rt->sh) { wm[0] /= 2; wm[5] /= 2; } sceGxmReserveVertexDefaultUniformBuffer(c, &u); sceGxmSetUniformDataF(u, n_wvp, 0, 16, wm); } while (0)
   // OPEN: closes the open scene (if any) and opens one on dst (0: surface s); the first time on the surface,
-  // puts the normal image (or black: trBase) underneath, unless the frame covers it
+  // puts the normal image (or black: trBase) underneath
 #define OPEN(dst_) do { RUN(); pd = 0; if (opened) { SURF_WAIT(); DEV(h_at = 6;) sceGxmEndScene(c, 0, gEnd()); DEV(h_at = 4; CTAG();) cNote(cur_rt ? C_INT : C_TR, &gq_n, t_draws - d0, spx / 1000, ssw); } \
     d0 = t_draws; spx = 0; ssw = 0; cur_rt = (dst_); opened = 1; \
     if (!cur_rt && has_base && zcut) sceGxmDepthStencilSurfaceSetForceLoadMode(&dss, SCE_GXM_DEPTH_STENCIL_FORCE_LOAD_ENABLED); \
     SCENE(cur_rt ? &cur_rt->cs : &cs[s], cur_rt ? &cur_rt->vr : 0); \
-    if (!cur_rt && !has_base) { has_base = 1; DEV(b_base[cover]++;) if (!cover) { nv = trBase(c, base, o, nv); spx += W * H; DEV(bpx[0][BP_BASE] += W * H;) } } } while (0)
+    if (!cur_rt && !has_base) { has_base = 1; nv = trBase(c, base, o, nv); spx += W * H; DEV(bpx[0][BP_BASE] += W * H;) } } while (0)
   // SURF_WAIT: the surface s is being sampled for the screen until the previous frame's scenes end, and its scene must not start before
 #define SURF_WAIT() do { if (!cur_rt) gWait(fq[0]); } while (0)
   // GRUN: sends the pending draw of the GPU path, triangles of indices gs to gn on the vertices of the record at gb
@@ -1258,7 +1252,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     RDraw *d = &f->d[i];
     if (t_mark[i >> 5] >> (i & 31) & 1) continue;
     // Short path: same state as the draw before, already joined by indices: only its indices are added
-    if (gd && d == gd + 1 && pd == gd && i != ord && gSame(gd, d) && gn > gs) {
+    if (gd && d == gd + 1 && pd == gd && i != ord && gSame(gd, d) && gn > gs DEV(&& !sfx)) {
       uint32_t n = d->n, nt = gd->prim == 3 ? n / 3 : n - 2, vo = d->voff & ~VX, ix;
       if (d->voff & VX && n >= 3 && gn + nt * 3 <= TG_N && gOff(vo, gb, gz, &ix) && ix + n <= 0xFFFF) {
         gn += gAdd(gi + gn, ix, d->prim, nt);
@@ -1307,7 +1301,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
       if (src || shown || prev) {  // intermediate or shown image: its double-size surface (512 x 272 of the PSP -> 1024 x 544)
         self = src && src == dst;
         if (sceGxmTextureInitLinear(&t, shown ? surf[s] : prev ? surf[s ^ 1] : src->mem, SCE_GXM_TEXTURE_FORMAT_A8B8G8R8, LINE, H, 0) < 0) { res = T_TEX; break; }
-        tw = LINE / 2; th = H / 2; fmt = 3;
+        tw = src && src->sh ? LINE : LINE / 2; th = src && src->sh ? H : H / 2; fmt = 3;
       } else if (!d->toff || sceGxmTextureInitLinear(&t, f->tx + d->toff - 1, gf[fmt], tbw, (uint32_t)th, 0) < 0) { res = T_TEX; break; }
       if (fmt >= 4) {  // palette: to 8888, with shift, mask and start (0xC5)
         uint32_t c5 = RE(e, 0xC5), cf = c5 & 3, sh = c5 >> 2 & 31, mk = c5 >> 8 & 0xFF, st = (c5 >> 16 & 31) << 4;
@@ -1449,8 +1443,9 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
       if (w3d) { dy[0] = dy[1] = 0; dy[2] = LINE; dy[3] = H; }
       else for (uint32_t j = 0; j < n; j++) {
         const TV *q = &w[j];
-        dy[0] = q->x < dy[0] ? q->x : dy[0]; dy[2] = q->x > dy[2] ? q->x : dy[2];
-        dy[1] = q->y < dy[1] ? q->y : dy[1]; dy[3] = q->y > dy[3] ? q->y : dy[3];
+        float qx = dst->sh ? q->x / 2 : q->x, qy = dst->sh ? q->y / 2 : q->y;
+        dy[0] = qx < dy[0] ? qx : dy[0]; dy[2] = qx > dy[2] ? qx : dy[2];
+        dy[1] = qy < dy[1] ? qy : dy[1]; dy[3] = qy > dy[3] ? qy : dy[3];
       }
     }
     DEV(VT(VS_REST); t_us[2] += now() - tb; tb = now();)
@@ -1524,6 +1519,10 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     uint32_t cl = w3d && d->prim > 2 && prim != 6 && !(clr & 1) && (RE(e, 0x1D) & 1) ? (RE(e, 0x9B) & 1 ? SCE_GXM_CULL_CCW : SCE_GXM_CULL_CW) : SCE_GXM_CULL_NONE;
     if (cl != t_cl) { t_cl = cl; sceGxmSetCullMode(c, cl); }
   ready:;
+    DEV(if (sfx && !dst && w3d && !(clr & 1)) {  // (the GPU path has no vertices here: they are done once more, as the CPU path)
+          uint32_t z = n, cu = d->prim > 2 && prim != 6 && (RE(e, 0x1D) & 1), k = (key != 0) | (t3.fog != 0) << 1 | (tex && !d->toff) << 2;
+          if (!gv || (d->n * 22 + 8 <= sizeof ts / sizeof *ts && !trVerts(f, d, ts, tw, th, mat, sc, &z, &t3))) { b_fx[k] += trPx3(gv ? ts : w, z, prim, cu) / 1000; b_fxd[k]++; }
+        })
     if (gv) {
       if (nu) { sceGxmReserveVertexDefaultUniformBuffer(c, &u); t3Uni(u, &t3, tw, th, wm, gl, mat); }
       // Same state as the pending draw and same vertex size: its triangles are added by indices to the pending draw, on the
