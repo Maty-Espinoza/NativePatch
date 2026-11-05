@@ -5,10 +5,11 @@
 // GPU writes when done (Adrenaline's, which have none, get our own). A thread checks every ~0.1 ms the
 // oldest scene in the queue; when the GPU finishes it, its time is: end time - (send or end of the previous one, the
 // later). If the GPU was idle when the scene arrived, that gap is added as idle time. Every 10 s the
-// presenter logs the totals per type and, in detail, the scenes following the report.
+// presenter logs the totals per type and, in detail, the scenes following the report. Translator scenes also carry a tag
+// (c_tag: image | kind): the report adds them up per tag and lists the scenes of one whole frame.
 enum { C_ADR, C_NORMAL, C_TR, C_INT, CN };
 static const char *cnames[CN] = { "Adrenaline (screen)", "normal image doubled", "translator (surface)", "translator (intermediate)" };
-typedef struct { volatile uint32_t *a; uint32_t v, t, ty, dr, px, sw; } CScene;  // px: thousands of pixels; sw: swizzled draws
+typedef struct { volatile uint32_t *a; uint32_t v, t, ty, dr, px, sw, tag, fr; } CScene;  // px: thousands of pixels; sw: swizzled draws
 #define CQ 64
 static CScene cq[CQ];
 static volatile uint32_t c_in, c_out, c_on, c_full, c_spins, c_idle;
@@ -24,6 +25,16 @@ static volatile uint32_t c_dn = CD;  // scenes already noted in c_det (CD: full,
 #define CL 8
 static struct { uint8_t ty; uint16_t dr; uint32_t px, us, queue; } c_slow[CL];
 static volatile uint32_t c_ln;
+// c_tag: of the scene being closed, its image | kind (CK_*); c_fr: frame it belongs to, set by the translator
+enum { CK_SURF = 1, CK_SURF2, CK_IMG, CK_COPY, CK_BOX };
+#define CT_N 16
+#define CF_N 48
+typedef struct { uint32_t tag, n, us, dr, px; } CTag;
+static uint32_t c_tag, c_fr;
+static CTag c_t[CT_N];         // per tag, since the report
+static CTag c_f[CF_N];         // the scenes of one frame, in order (n unused)
+static volatile uint32_t c_fn = ~0u, c_ff, c_fdone;  // scenes in c_f (~0u: waiting for a new frame), its frame, 1 when complete
+static uint32_t c_tfr, c_tlast;  // frames seen since the report, the last one
 static volatile uint32_t b_gus[CN], b_idle;  // GPU us per type and idle us, never cleared ("bottleneck:" line)
 
 // notes in the queue a scene just sent (n: its end notification; dr: draws; px: thousands of pixels drawn,
@@ -33,7 +44,7 @@ static void cNote(int ty, const SceGxmNotification *n, uint32_t dr, uint32_t px,
   uint32_t i = c_in;
   if (i - c_out >= CQ) { c_full++; return; }  // (the next scene takes its time)
   CScene *e = &cq[i % CQ];
-  e->a = n->address; e->v = n->value; e->ty = ty; e->dr = dr; e->px = px; e->sw = sw; e->t = now();
+  e->a = n->address; e->v = n->value; e->ty = ty; e->dr = dr; e->px = px; e->sw = sw; e->t = now(); e->tag = c_tag; e->fr = c_fr;
   __sync_synchronize();
   c_in = i + 1;
 }
@@ -42,6 +53,19 @@ static const SceGxmNotification *cAdr(const SceGxmNotification *f) {
   if (!c_on || f) return f;
   c_adr.value = ++c_seq;
   return &c_adr;
+}
+// adds a finished translator scene to its tag and, if it is its turn, to the listed frame
+static void cTag(const CScene *e, uint32_t us) {
+  int i = 0;
+  while (i < CT_N - 1 && c_t[i].n && c_t[i].tag != e->tag) i++;
+  CTag *x = &c_t[i];
+  x->tag = e->tag; x->n++; x->us += us; x->dr += e->dr; x->px += e->px;
+  if (e->fr != c_tlast) { c_tlast = e->fr; c_tfr++; }
+  if (c_fdone) return;
+  if (c_fn == ~0u) { if (e->fr == c_ff) return; c_ff = e->fr; c_fn = 0; }
+  if (e->fr != c_ff || c_fn == CF_N) { c_fdone = 1; return; }
+  CTag *f = &c_f[c_fn++];
+  f->tag = e->tag; f->us = us; f->dr = e->dr; f->px = e->px;
 }
 // thread: takes from the queue the scenes the GPU finished and adds up their times
 static int cThread(SceSize args, void *argp) {
@@ -56,6 +80,7 @@ static int cThread(SceSize args, void *argp) {
       if ((int)(e->t - prev) > 0) { c_idle += e->t - prev; b_idle += e->t - prev; begin = e->t; }  // the GPU had nothing: idle gap
       uint32_t us = t - begin, k = e->ty, ms = us / 1000;
       pAdd(P_G_ADR + k, us); b_gus[k] += us;
+      if (k >= C_TR) cTag(e, us);
       c_n[k]++; c_us[k] += us; c_dr[k] += e->dr; c_queue[k] += begin - e->t; c_px[k] += e->px; c_sw[k] += e->sw;
       if (us > c_max[k]) c_max[k] = us;
       c_h[k][ms < 20 ? ms / 5 : ms < 30 ? 4 : 5]++;
@@ -107,4 +132,20 @@ static void cReport(uint32_t dt) {
     alog("gpu times: detail (type and draws: GPU ms / queue ms; A Adrenaline, N normal image, T translator, I intermediate):%s\n", b);
   }
   c_dn = 0;
+  static const char kn[] = "?SsICB";  // S surface, s surface again, I image, C copy of an image read while drawn on it, B box
+  uint32_t fr = c_tfr; c_tfr = 0;
+  for (int i = 0; i < CT_N && c_t[i].n; i++) {
+    CTag *x = &c_t[i];
+    if (fr) alog("gpu scenes: %c %06x: per frame %u.%02u scenes, %u.%u ms, %u draws, %u thousand pixels | ms per scene %u.%02u\n", kn[x->tag & 15], x->tag & ~15u,
+                 x->n / fr, x->n * 100 / fr % 100, x->us / fr / 1000, x->us / fr / 100 % 10, x->dr / fr, x->px / fr, x->us / x->n / 1000, x->us / x->n / 10 % 100);
+    x->n = 0;
+  }
+  if (c_fdone) {  // one frame, scene by scene
+    char b[900]; int n = 0;
+    for (uint32_t i = 0; i < c_fn && n < (int)sizeof b - 40; i++)
+      n += sceClibSnprintf(b + n, sizeof b - n, " %c%06x:%u:%u.%u", kn[c_f[i].tag & 15], c_f[i].tag & ~15u, c_f[i].dr, c_f[i].us / 1000, c_f[i].us / 100 % 10);
+    b[n] = 0;
+    alog("gpu scenes: one frame (scene:draws:GPU ms):%s\n", b);
+    c_fn = ~0u; __sync_synchronize(); c_fdone = 0;
+  }
 }

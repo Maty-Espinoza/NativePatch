@@ -1161,6 +1161,7 @@ static inline uint32_t gAdd(uint16_t *o, uint32_t ix, uint32_t prim, uint32_t nt
 }
 static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base) {
   t3.ke = 0;
+  DEV(uint32_t t_ss = 0; c_fr++;)
   DEV(uint32_t ta = now(), tb, ut[6]; sceClibMemcpy(ut, (void *)t_us, sizeof ut);
       static uint32_t hdn; int smp = !(++hdn & 3), pb = BP_COL, why = 0; float bpx[2][BP_N] = { { 0 } }, bwy[BW_N] = { 0 };)
   uint32_t disp, ord;
@@ -1184,12 +1185,14 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
   TV *o = tv[s];
   uint32_t *pal = tpal[s], np = 0, nv = 0, pal_prev = ~0u, pn = 0;  // np: words used; pal_prev/pn: the previous palette
   void *u;
+  // CTAG: tag of the scene being closed, for the GPU timer
+#define CTAG() (c_tag = cur_rt == &rtb ? CK_BOX : cur_rt ? cur_rt->fb | CK_IMG : t_ss++ ? CK_SURF2 : CK_SURF)
   // SCENE: starts a scene on surface surf_tex with the vertex program and the matrix
 #define SCENE(surf_tex, reg) do { DEV(h_at = 5;) sceGxmBeginScene(c, 0, cur_rt ? rt_i : rt, reg, 0, t_sync, surf_tex, cur_rt ? &ds : &dss); DEV(h_at = 4;) t_zs = t_st = t_sr = t_cl = ~0u; zsSet(c, 0, 0); sceGxmSetVertexProgram(c, nvp); gv_cur = 0; \
     trWvp(wm, reg); if (cur_rt == &rtb) { wm[12] -= t_bx * wm[0]; wm[13] -= t_by * wm[5]; } sceGxmReserveVertexDefaultUniformBuffer(c, &u); sceGxmSetUniformDataF(u, n_wvp, 0, 16, wm); } while (0)
   // OPEN: closes the open scene (if any) and opens one on dst (0: surface s); the first time on the surface,
   // puts the normal image (or black: trBase) underneath
-#define OPEN(dst_) do { RUN(); pd = 0; if (opened) { SURF_WAIT(); DEV(h_at = 6;) sceGxmEndScene(c, 0, gEnd()); DEV(h_at = 4;) cNote(cur_rt ? C_INT : C_TR, &gq_n, t_draws - d0, spx / 1000, ssw); } \
+#define OPEN(dst_) do { RUN(); pd = 0; if (opened) { SURF_WAIT(); DEV(h_at = 6;) sceGxmEndScene(c, 0, gEnd()); DEV(h_at = 4; CTAG();) cNote(cur_rt ? C_INT : C_TR, &gq_n, t_draws - d0, spx / 1000, ssw); } \
     d0 = t_draws; spx = 0; ssw = 0; cur_rt = (dst_); opened = 1; \
     if (!cur_rt && has_base && zcut) sceGxmDepthStencilSurfaceSetForceLoadMode(&dss, SCE_GXM_DEPTH_STENCIL_FORCE_LOAD_ENABLED); \
     SCENE(cur_rt ? &cur_rt->cs : &cs[s], cur_rt ? &cur_rt->vr : 0); \
@@ -1408,7 +1411,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
         sceClibMemcpy(q, qv, sizeof qv); extra = 4;
         RUN();
         sceGxmTextureInitLinear(&ts, dst->mem, SCE_GXM_TEXTURE_FORMAT_A8B8G8R8, LINE, H, 0);
-        sceGxmEndScene(c, 0, gEnd()); cNote(C_INT, &gq_n, t_draws - d0, spx / 1000, ssw); opened = 0;
+        sceGxmEndScene(c, 0, gEnd()); DEV(CTAG();) cNote(C_INT, &gq_n, t_draws - d0, spx / 1000, ssw); opened = 0;
         sceGxmBeginScene(c, 0, rt_c, &vr, 0, t_sync, &rtc.cs, &ds);
         t_zs = t_st = t_sr = t_cl = ~0u; zsSet(c, 0, 0); sceGxmSetCullMode(c, SCE_GXM_CULL_NONE);
         sceGxmSetVertexProgram(c, vp); sceGxmSetFragmentProgram(c, fp);
@@ -1416,7 +1419,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
         sceGxmReserveVertexDefaultUniformBuffer(c, &u); sceGxmSetUniformDataF(u, p_wvp, 0, 16, wm);
         sceGxmSetFragmentTexture(c, 0, &ts); sceGxmSetVertexStream(c, 0, q);
         sceGxmDraw(c, SCE_GXM_PRIMITIVE_TRIANGLE_STRIP, SCE_GXM_INDEX_FORMAT_U16, ib, 4);
-        sceGxmEndScene(c, 0, gEnd()); cNote(C_INT, &gq_n, 1, 0, 0);
+        sceGxmEndScene(c, 0, gEnd()); DEV(c_tag = dst->fb | CK_COPY;) cNote(C_INT, &gq_n, 1, 0, 0);
         OPEN(dst);
         sceClibMemcpy(hv, b, sizeof b); dy[0] = dy[1] = 1e9f; dy[2] = dy[3] = -1e9f;
       }
@@ -1550,7 +1553,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     DEV(tb = PT();)
     DEV(h_at = 6;)
     sceGxmEndScene(c, 0, gEnd());
-    DEV(PA(P_T_END, tb);)
+    DEV(PA(P_T_END, tb); CTAG();)
     cNote(cur_rt ? C_INT : C_TR, &gq_n, t_draws - d0, spx / 1000, ssw);
   }
 #undef VT
@@ -1559,6 +1562,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
 #undef RUN
 #undef GRUN
 #undef SCENE
+#undef CTAG
   t_q[s] = gq;
   DEV(if (smp) { for (int a = 0; a < 2; a++) for (int i = 0; i < BP_N; i++) b_px[a][i] += bpx[a][i] / 1000; for (int k = 0; k < BW_N; k++) b_why[k] += bwy[k] / 1000; b_pxn++; })
   if (res == T_OK && disp != t_prevd) { t_prev2 = t_prevd; t_prevd = disp; }
