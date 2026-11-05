@@ -848,6 +848,7 @@ static void recTex(uint32_t ta) {
 #define MEASURES_WALK
 #include "measures.h"
 #ifdef NP_DEV
+static uint32_t vcall, vcall_n, vcall_w[4];  // last sublist called in VRAM: where, list commands walked then, its first words
 // Logs a CALL or JUMP whose target is neither RAM nor VRAM: how the address was formed and the commands before it
 static void badTarget(List *l, uint32_t pc, uint32_t op, uint32_t t) {
   static int nlog;
@@ -857,6 +858,7 @@ static void badTarget(List *l, uint32_t pc, uint32_t op, uint32_t t) {
   if (ra && ramEnd(ra) >= ra + 32) for (int i = 0; i < 8; i++) w[i] = ((volatile uint32_t *)PSP(ra))[i];
   clog("bad target: %08x from op %08x at pc %08x | base %06x off %08x | list %u start %08x sublevel %u return %08x | before pc: %08x %08x %08x %08x %08x %08x %08x > %08x\n",
        t, op, pc, reg[0x10], l->off, l->ord, l->lo, l->sp, l->sp ? l->stk[l->sp - 1][0] : 0, w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7]);
+  clog("bad target: last VRAM sublist %08x, %u commands ago, began %08x %08x %08x %08x\n", vcall, l->n - vcall_n, vcall_w[0], vcall_w[1], vcall_w[2], vcall_w[3]);
 }
 #endif
 // Interprets list l like the GE up to its stall or end (1: finished), with a command limit per call. Goes in
@@ -926,7 +928,10 @@ static int __attribute__((noinline)) walkList(List *l) {
         if (!l->sp) { acc.lost++; return 1; }
         acc.v_cut++; UNWIND(); break;
       }
-      if (c == 0x0A && isVram(t)) acc.v_ok++;
+      if (c == 0x0A && isVram(t)) {
+        acc.v_ok++;
+        DEV(vcall = t; vcall_n = l->n; uint32_t vr = vtr(t); for (int i = 0; i < 4; i++) vcall_w[i] = ((volatile uint32_t *)PSP(vr))[i];)
+      }
       if (c == 0x0A) {
         if (l->sp >= 32) { acc.bad++; regLost(NR_DEPTH, pc); return 1; }
         acc.calls_ram++;
@@ -1308,6 +1313,14 @@ static void event(volatile uint32_t *e) {
         }
         snr[i] = v;
       }
+      // BASE on its own: it adds to every address, and a walk through bytes that are not commands can leave it wrong
+      static uint32_t snb;
+      uint32_t vb = SB[0x110] & 0xFFFFFF;
+      if (vb == snb && reg[0x10] != vb) {
+        DEV(static uint32_t nsb; if (nsb < 40) { nsb++; clog("register 10: capture %06x real %06x (frame %u)\n", reg[0x10], vb, gen); })
+        reg[0x10] = vb;
+      }
+      snb = vb;
       static uint32_t snl[72];  // the same with the lights and materials block (0x53-0x9A)
       for (int i = 0; i < 72; i++) {
         uint32_t v = SB[0x153 + i] & 0xFFFFFF;

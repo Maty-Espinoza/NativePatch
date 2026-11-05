@@ -590,7 +590,7 @@ int sceDisplaySetFrameBufPatched(void *topaddr, int bufferwidth, int pixelformat
     }
     if (_sceGeGetCmd && !(log_frame & 31)) { // real GE registers, for NativeDraw to compare with the capture
       SB[0xA0] = 0;
-      for (int i = 0x15; i < 256; i++) SB[0x100 + i] = _sceGeGetCmd(i);
+      for (int i = 0x10; i < 256; i++) SB[0x100 + i] = _sceGeGetCmd(i);
       SB[0xA0] = log_frame + 1;
     }
     sbPost(EV_FLIP, 0, (u32)topaddr, bufferwidth | pixelformat << 16, log_frame);
