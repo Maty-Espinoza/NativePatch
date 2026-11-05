@@ -257,6 +257,7 @@ static void rcInval(uint32_t a, uint32_t n) {
 // the transit memory for sorting swizzled textures. Without memory it turns the record off (reg_on = 0). Without
 // memory for the texture cache, every texture goes to the record.
 static void regInit(void) {
+  DEV(SceKernelFreeMemorySizeInfo fm; fm.size = sizeof fm; if (sceKernelGetFreeMemorySize(&fm) >= 0) clog("free memory before the record: user %u KB, cdram %u KB, phycont %u KB\n", fm.size_user >> 10, fm.size_cdram >> 10, fm.size_phycont >> 10);)
   for (int i = 0; i < RN; i++) {
     void *p = 0;
     SceUID b = sceKernelAllocMemBlock("nativedraw_record", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW,

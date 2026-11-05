@@ -54,6 +54,7 @@ int sceKernelGetThreadInfo(SceUID t, SceKernelThreadInfo *i) { return -1; }
 void *sceDmacMemcpy(void *d, const void *s, SceSize n) { return memcpy(d, s, n); }
 int sceGxmMapMemory(void *b, SceSize n, int a) { return 0; }
 static void *blk[16]; static int nblk;  // blocks for the frame record
+int sceKernelGetFreeMemorySize(SceKernelFreeMemorySizeInfo *i) { return -1; }
 SceUID sceKernelAllocMemBlock(const char *n, SceKernelMemBlockType t, SceSize s, SceKernelAllocMemBlockOpt *o) { return nblk < 16 && (blk[nblk] = calloc(1, s)) ? nblk++ : -1; }
 int sceKernelGetMemBlockBase(SceUID u, void **b) { if (u < 0 || u >= nblk) return -1; *b = blk[u]; return 0; }
 int sceKernelFreeMemBlock(SceUID u) { return 0; }
