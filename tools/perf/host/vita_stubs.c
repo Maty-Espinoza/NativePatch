@@ -57,10 +57,8 @@ int scePowerSetGpuXbarClockFrequency(void) { return 0; }
 int taiGetModuleExportFunc(void) { return 0; }
 int taiHookFunctionImportForUser(void) { return 0; }
 int taiHookRelease(void) { return 0; }
-int scePowerGetBatteryElec(void) { return 0; }
-int scePowerGetCaseTemp(void) { return 0; }
-int scePowerGetBatteryChargingStatus(void) { return 0; }
 int scePowerGetBatteryLifePercent(void) { return 0; }
 int scePowerGetBatteryRemainCapacity(void) { return 0; }
 int scePowerGetBatteryVolt(void) { return 0; }
 int scePowerGetBatteryTemp(void) { return 0; }
+int scePowerIsBatteryCharging(void) { return 0; }

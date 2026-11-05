@@ -303,24 +303,20 @@ static int hookTex(SceGxmContext *c, unsigned int i, const SceGxmTexture *t) {
 #include "dump.c"  // dumps (L+R+SELECT and automatic)
 #ifdef NP_DEV
 static uint32_t b_t0[6];  // t_us at the last line
-int scePowerGetBatteryElec(void), scePowerGetCaseTemp(void), scePowerGetBatteryChargingStatus(void);
-static int r_ma, r_man;  // battery current, added up every second
-// Every 10 s, what the game costs the console: tools/run_compare.py reads it. Current is the average of the last 10 s; the rest, the moment of the line
+// Every 10 s, what the game costs the console: tools/run_compare.py reads it
 static void resLog(void) {
   static uint32_t g0, i0, b0[2];
   uint32_t g = 0, id = b_idle - i0, w = b_base[0] - b0[0], wo = b_base[1] - b0[1];
   for (int i = 0; i < CN; i++) g += b_gus[i];
   uint32_t dg = g - g0; g0 = g; i0 += id; b0[0] += w; b0[1] += wo;
-  alog("resources: frames with image underneath %u without %u | GPU busy %u ms idle %u ms | battery %d %% %d mAh %d mV current %d charging %d temp %d case %d | MHz arm %d gpu %d xbar %d\n",
-       w, wo, dg / 1000, id / 1000, scePowerGetBatteryLifePercent(), scePowerGetBatteryRemainCapacity(), scePowerGetBatteryVolt(), r_man ? r_ma / r_man : 0,
-       scePowerGetBatteryChargingStatus(), scePowerGetBatteryTemp(), scePowerGetCaseTemp(), scePowerGetArmClockFrequency(), scePowerGetGpuClockFrequency(), scePowerGetGpuXbarClockFrequency());
-  r_ma = r_man = 0;
+  alog("resources: frames with image underneath %u without %u | GPU busy %u ms idle %u ms | battery %d %% %d mAh %d mV charging %d temp %d | MHz arm %d gpu %d xbar %d\n",
+       w, wo, dg / 1000, id / 1000, scePowerGetBatteryLifePercent(), scePowerGetBatteryRemainCapacity(), scePowerGetBatteryVolt(),
+       scePowerIsBatteryCharging(), scePowerGetBatteryTemp(), scePowerGetArmClockFrequency(), scePowerGetGpuClockFrequency(), scePowerGetGpuXbarClockFrequency());
 }
 static uint32_t v0[2][VS_N];  // v_us at the last line
 // Once per second, what limits the HD frames (tools/bottleneck.py reads it): the deltas of b_c, of the translator's parts
 // and of the GPU per scene type (needs gpu_timer), and the pixels per program of the sampled frames.
 static void bnLog(void) {
-  r_ma += scePowerGetBatteryElec(); r_man++;
   static uint32_t c0[B_N], g0[CN], i0, p0[2][BP_N], n0, w0[BW_N];
   uint32_t c[B_N], g[CN], t[6], p[2][BP_N], w[BW_N];
   for (int i = 0; i < B_N; i++) { c[i] = b_c[i] - c0[i]; c0[i] += c[i]; }
