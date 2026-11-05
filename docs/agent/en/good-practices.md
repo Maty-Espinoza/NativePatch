@@ -55,6 +55,7 @@ moment, the user wins; afterwards this list is updated.
   folders and no "v2" copies of a document are created: the existing one is edited.
 - New file names are in English and lowercase; documents with hyphens (`how-it-works.md`), with the same names in
   `docs/dev/en/` and `docs/dev/es/`.
+- Vita runs that explain a bottleneck go gzipped to `tests/perf/runs/`, with a line in its `INVENTORY.txt`. Nothing else from the relay is kept.
 - When finishing a task, check with `git status` that no loose files (patches, logs, tests) are left in the repo.
 
 ## 4. Relay folder (`vitabridge/`) and the Vita

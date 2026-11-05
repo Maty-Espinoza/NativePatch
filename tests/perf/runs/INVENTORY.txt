@@ -1,0 +1,26 @@
+Useful test data of NativePatch. Only what helps to understand bottlenecks is kept; other runs live in the relay until replaced.
+
+Logs of Vita runs (this folder, gzip; gunzip them into a folder and pass it to tools/run_summary.py or tools/run_compare.py)
+All are Ridge Racer (ULJS-00001): first car and track, same race, medium log.
+
+Folder                          Switches                       What it shows
+0.0.16.5_rr_cap_split           cap_split                      Capturer split into parts, without high clocks
+0.0.19_rr_gpu_vertices          -                              First stage of nd_v3: vertices moved by the GPU
+0.0.21.6_rr_hold                hold_game                      Before the rear-view mirror: bridge straight at ~20 fps, 3000 CPU vertices
+0.0.23_rr_gpu_timer             hold_game, gpu_timer           GPU per frame: surface 23-26 ms, intermediate 8.6-10 ms
+0.0.23_rr_gpu_timer_no_join     hold_game, gpu_timer, no_join  Against the one above: what joining draws gives
+0.0.23.1_rr_gpu_scenes          hold_game, gpu_timer           One frame scene by scene ("gpu scenes: one frame"). Its "per frame" lines
+                                                               are wrong: counters were not reset. Lists starting mid-frame are partial
+
+Summaries of runs (tests/perf, compare with tools/run_compare.py <reference.json> <run>)
+rr_hold_0.0.21.3.json           Crowd before joining draws (extreme log: not comparable with the others)
+rr_hold_0.0.21.6.json           Reference before the rear-view mirror
+rr_hold_0.0.22.1.json           Reference after it (its logs are in the Mac relay, stage3_0.0.22.1/rr1)
+
+Real frames for the PC bench (tools/perf/data)
+rr_2227.bin.gz                  Race, bloom chain and no mirror
+rr_2722.bin.gz                  Race, mirror and no bloom
+rr_crowd.bin.gz                 Crowd, ends in vertex_out
+
+Still only in the relays
+Mac: stage3_0.0.16.4/rr1 (run behind the capturer analysis), if it is kept there; stage3_0.0.22.1/rr1.

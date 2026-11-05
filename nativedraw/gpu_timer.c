@@ -138,7 +138,7 @@ static void cReport(uint32_t dt) {
     CTag *x = &c_t[i];
     if (fr) alog("gpu scenes: %c %06x: per frame %u.%02u scenes, %u.%u ms, %u draws, %u thousand pixels | ms per scene %u.%02u\n", kn[x->tag & 15], x->tag & ~15u,
                  x->n / fr, x->n * 100 / fr % 100, x->us / fr / 1000, x->us / fr / 100 % 10, x->dr / fr, x->px / fr, x->us / x->n / 1000, x->us / x->n / 10 % 100);
-    x->n = 0;
+    x->n = x->us = x->dr = x->px = 0;
   }
   if (c_fdone) {  // one frame, scene by scene
     char b[900]; int n = 0;
