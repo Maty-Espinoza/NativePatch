@@ -369,7 +369,7 @@ static void rgVFlush(void) {
 // area a. Value for voff; 0 if they do not fit (R_LIMIT).
 static uint32_t rgVLater(uint32_t s, uint32_t n, int gpu) {
   RFrame *f = rf[rg_w];
-  uint32_t o = (f->na + 15) & ~15u, m = (n + 15) & ~15u;
+  uint32_t o = (f->na + 15) & ~15u, m = (n + 3) & ~3u;  // (one after another: the translator joins them by indices)
   if (gpu && f->ntx + f->nvx + m <= TX_N) {
     if (vpn == VP_N) rgVFlush();
     f->nvx += m;

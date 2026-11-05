@@ -42,6 +42,8 @@ static uint32_t t_mark[RD_N / 32 + 1];  // a bit per draw not done
 static uint32_t t_prevd = ~0u, t_prev2 = ~0u;  // images shown by the last frames drawn, the latest first: t_prevd's surface is the one not being drawn
 DEV(static void failNote(RFrame *f, uint32_t i, int r);)  // dump.c
 static uint16_t *tib;        // 0, 1, 2... (indices for the GPU)
+#define TG_N (48 << 10)      // indices of the joined draws of the GPU path, per surface
+static uint16_t *tgi[2];
 // Intermediate image: a game draw to another VRAM image (not the shown one) goes to our own double-size surface
 // (1024x544); if later in the same frame a texture is at that address, it is read from that surface.
 // fb: image address in VRAM (~0u: free); fr: last frame it was used.
@@ -137,6 +139,7 @@ static int trInit(void) {
   for (int i = 0; i < 2; i++)
     if (!(tv[i] = gmem(TV_N * sizeof(TV), RD)) || !(tpal[i] = gmem(TP_B, RD))) return -1;
   if (!(tib = gmem(TV_N * 2, RD))) return -1;
+  for (int i = 0; i < 2; i++) if (!(tgi[i] = gmem(TG_N * 2, RD))) return -1;
   for (uint32_t i = 0; i < TV_N; i++) tib[i] = i;
   SceGxmShaderPatcherId iv;
   int r = sceGxmShaderPatcherRegisterProgram(pat, (const SceGxmProgram *)nd_v_gxp, &iv);
@@ -1123,10 +1126,14 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     if (!cur_rt && !has_base) { has_base = 1; nv = trBase(c, base, o, nv); spx += W * H; DEV(bpx[0][BP_BASE] += W * H;) } } while (0)
   // SURF_WAIT: the surface s is being sampled for the screen until the previous frame's scenes end, and its scene must not start before
 #define SURF_WAIT() do { if (!cur_rt) gWait(fq[0]); } while (0)
+  // GRUN: sends the pending draw of the GPU path, triangles of indices gs to gn on the vertices of the record at gb
+#define GRUN() do { if (gn > gs) { sceGxmSetVertexStream(c, 0, f->tx + gb); \
+    sceGxmDraw(c, SCE_GXM_PRIMITIVE_TRIANGLES, SCE_GXM_INDEX_FORMAT_U16, gi + gs, gn - gs); gs = gn; } } while (0)
   // RUN: sends the pending draw, the n vertices at rv in primitive rp; draws with the state already set wait in it to be joined
-#define RUN() do { if (rn) { sceGxmSetVertexStream(c, 0, o + rv); \
+#define RUN() do { GRUN(); if (rn) { sceGxmSetVertexStream(c, 0, o + rv); \
     sceGxmDraw(c, rp == 3 ? SCE_GXM_PRIMITIVE_TRIANGLES : rp == 5 ? SCE_GXM_PRIMITIVE_TRIANGLE_FAN : SCE_GXM_PRIMITIVE_TRIANGLE_STRIP, SCE_GXM_INDEX_FORMAT_U16, tib, rn); rn = 0; } } while (0)
-  uint32_t rn = 0, rv = 0, rp = 0, key = 0;
+  uint32_t rn = 0, rv = 0, rp = 0, key = 0, gn = 0, gs = 0, gb = 0, gz = 0;
+  uint16_t *gi = tgi[s];
   float wm[16];    // the scene's matrix
   int gv_cur = 0;  // the program in the context is gvp
   const RDraw *pd = 0;  // last draw whose state is set in the context, which the next one may share (t, tw, th included)
@@ -1399,8 +1406,21 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
   ready:;
     if (gv) {
       if (nu) { sceGxmReserveVertexDefaultUniformBuffer(c, &u); t3Uni(u, &t3, tw, th, wm, gl, mat); }
-      sceGxmSetVertexStream(c, 0, f->tx + (d->voff & ~VX));
-      sceGxmDraw(c, prim == 3 ? SCE_GXM_PRIMITIVE_TRIANGLES : prim == 5 ? SCE_GXM_PRIMITIVE_TRIANGLE_FAN : SCE_GXM_PRIMITIVE_TRIANGLE_STRIP, SCE_GXM_INDEX_FORMAT_U16, tib, n);
+      // Same state as the pending draw and same vertex size: its triangles are added by indices to the pending draw, on the
+      // vertices where the record has them. The base goes below the first draw because the record fills downwards
+      uint32_t vo = d->voff & ~VX, vz = gv == 1 ? 24 : gv == 2 ? 16 : 20, ix = gn > gs ? (vo - gb) / vz : 0, nt = prim == 3 ? n / 3 : n - 2;
+      if (gn > gs && (gz != vz || vo < gb || (vo - gb) % vz || ix + n > 0xFFFF)) { GRUN(); ix = 0; }
+      if (n < 3 || gn + nt * 3 > TG_N DEV(|| no_join)) {
+        GRUN();
+        sceGxmSetVertexStream(c, 0, f->tx + vo);
+        sceGxmDraw(c, prim == 3 ? SCE_GXM_PRIMITIVE_TRIANGLES : prim == 5 ? SCE_GXM_PRIMITIVE_TRIANGLE_FAN : SCE_GXM_PRIMITIVE_TRIANGLE_STRIP, SCE_GXM_INDEX_FORMAT_U16, tib, n);
+      } else {
+        if (gn == gs) { ix = vo / vz < 32000 ? vo / vz : 32000; gb = vo - ix * vz; gz = vz; }
+        for (uint32_t k = 0; k < nt; k++) {
+          uint32_t a = prim == 3 ? k * 3 : prim == 5 ? 0 : k, b = prim == 3 ? k * 3 + 1 : k + 1, m = prim == 3 ? k * 3 + 2 : k + 2;
+          gi[gn] = ix + a; gi[gn + 1] = ix + (prim == 4 && k & 1 ? m : b); gi[gn + 2] = ix + (prim == 4 && k & 1 ? b : m); gn += 3;
+        }
+      }
       pd = d; t_draws++;
       DEV(t_us[3] += now() - tb;)
       continue;
@@ -1440,6 +1460,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
 #undef OPEN
 #undef SURF_WAIT
 #undef RUN
+#undef GRUN
 #undef SCENE
   t_q[s] = gq;
   DEV(if (smp) { for (int a = 0; a < 2; a++) for (int i = 0; i < BP_N; i++) b_px[a][i] += bpx[a][i] / 1000; for (int k = 0; k < BW_N; k++) b_why[k] += bwy[k] / 1000; b_pxn++; })

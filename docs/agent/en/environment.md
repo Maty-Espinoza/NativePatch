@@ -62,6 +62,7 @@ GitHub release built by `.github/workflows/toolchain.yml` on push.
 | `windows/install.cmd`, `windows/install.sh` | Complete environment on Windows + WSL; `install.cmd` works on its own (downloads `install.sh` from the `dev` branch) |
 | `vitabridge.py`, `windows/vitabridge.cmd` | Relay with the Vita (`relay.md`) |
 | `run_summary.py <folder>` | Summary of a run: fps every 10 s, sync waits, mirror, seconds where the Vita falls short, MISMATCHES. `--check [--ref <folder>] [--target 30\|60]` judges it (fps target order: `good-practices.md` §7). It finds the lines with regular expressions: if a log's text changes, change it there too |
+| `run_compare.py <ref> <run> [--check]`, `run_compare.py <run> --save <json>` | Two runs zone by zone (race, hard, crowd, by draws per frame): fps, HD frames, capturer, translator, GXM, GPU. Medium log is enough; same switches on both sides. Reference lap: `tests/perf/rr_hold_0.0.21.3.json` (Ridge Racer, `hold_game`, extreme log: compare only with care; the fair reference is a run of the same version with `no_join`-style switches) |
 | `test_ci.sh`, `test_local.sh`, `test_link.py` | The three tests (below) |
 | `phase1_analysis.py <folder>...` | Summarizes `nativedraw_frames.log` and `nativedraw_late.log` (extreme log level): fps, slow frames and the cost of each part per frame |
 | `prof_summary.py <run> [from_s to_s]` | Ranks the `prof` lines of the extreme log level: where each frame goes, per piece (`../../dev/en/logs-and-switches.md`) |
@@ -76,7 +77,7 @@ Rules: `good-practices.md` §7. When to run them: `workflow.md` §3.
 | Test | Command | Where |
 |---|---|---|
 | Automatic: no functional regression | `sh tools/test_ci.sh` | `.github/workflows/ci.yml`, or anywhere after `setup.sh` with the apt packages `qemu-user` and `gcc-arm-linux-gnueabihf` |
-| Local: performance did not regress | `sh tools/test_local.sh <run> [ref]` (`run_summary.py --check [--ref]`) | PC, on a saved run |
+| Local: performance did not regress | `sh tools/test_local.sh <run> [ref folder or .json]` (`run_summary.py --check [--ref]`, `run_compare.py --check`) | PC, on a saved run |
 | Execution: components communicate | `python3 tools/test_link.py <run> [version.txt]` | PC, on the logs after a Vita run |
 | Performance on the PC (not one of the three: a filter before the Vita) | `sh tools/perf/bench.sh`, `sh tools/perf/iterate.sh` | PC, same packages as the capturer test; `perf-loop.md` |
 

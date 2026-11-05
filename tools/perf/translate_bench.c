@@ -114,18 +114,21 @@ static void triV(uint32_t k) {
 }
 // The triangles of a draw of n vertices in order, each with the winding it has on screen; those with two equal vertices (joined
 // strips) draw nothing and are left out
-static void triDump(SceGxmPrimitiveType t, unsigned n) {
+static void triDump(SceGxmPrimitiveType t, const uint16_t *ix, unsigned n) {
   uint32_t sz = vprog == gvp[0] ? 24 : vprog == gvp[1] ? 16 : vprog == gvp[2] ? 20 : sizeof(TV);
   for (unsigned i = 0; i + 2 < n; i += t == SCE_GXM_PRIMITIVE_TRIANGLES ? 3 : 1) {
     unsigned a = t == SCE_GXM_PRIMITIVE_TRIANGLE_FAN ? 0 : i, b = i + 1, c = i + 2;
     if (t == SCE_GXM_PRIMITIVE_TRIANGLE_STRIP && i & 1) { unsigned s = b; b = c; c = s; }
+    a = ix[a]; b = ix[b]; c = ix[c];
     const uint8_t *p = stream;
     if (!memcmp(p + a * sz, p + b * sz, sz) || !memcmp(p + b * sz, p + c * sz, sz) || !memcmp(p + a * sz, p + c * sz, sz)) continue;
     fprintf(tri, "D %08x\n", fprog); triV(a); triV(b); triV(c);
   }
 }
+static uint32_t gxm_calls;
 int sceGxmDraw(SceGxmContext *c, SceGxmPrimitiveType t, SceGxmIndexFormat f, const void *ix, unsigned n) {
-  if (tri && ix && !in_rt) triDump(t, n);
+  if (ix) gxm_calls++;
+  if (tri && ix && !in_rt) triDump(t, ix, n);
   for (int i = 0; i < 3; i++) if (vprog == gvp[i]) gn[i] += n;
   if (!dmp || !ix) return 0;  // (no ix: the presenter's quad, not the translator's)
   fprintf(dmp, "D %d %u %08x %08x", t, n, fprog, tex_w);
@@ -161,7 +164,7 @@ static void gvMark(RFrame *f) {
   for (uint32_t i = 0; i < f->nd; i++) {
     RDraw *d = &f->d[i];
     const uint32_t *e = f->e[d->st];
-    uint32_t d5 = RE(e, 0xD5), w = RE(e, 0x9D) & 0x7FF, m = (d->vlen + 15) & ~15u;
+    uint32_t d5 = RE(e, 0xD5), w = RE(e, 0x9D) & 0x7FF, m = (d->vlen + 3) & ~3u;
     if ((d->vt != 0x19F && !GVL(d->vt)) || d->ioff || d->prim < 3 || d->prim > 5 || RE(e, 0xD3) & 1 || !(RE(e, 0x50) & 1) ||
         (d->vt == 0x19F && (RE(e, 0xC0) & 3 || RE(e, 0x17) & (RE(e, 0x18) | RE(e, 0x19) | RE(e, 0x1A) | RE(e, 0x1B)) & 1)) ||
         (GVL(d->vt) && (RE(e, 0x17) & 1 ? RE(e, 0xC0) & 3 : (RE(e, 0xC0) & 0x303) != 0x301)) || RE(e, 0xD4) & 0xFFFFF || (d5 & 0x3FF) + 1 < (w < 480 ? w : 480) ||
@@ -187,6 +190,6 @@ int main(int argc, char **argv) {
     CALLGRIND_TOGGLE_COLLECT;
     if (dmp) fprintf(dmp, "F %s\n", tnames[res]);
   }
-  printf("frames=%d draws=%u result=%s gpu_vertices=%u,%u,%u\n", n, f->nd, tnames[res], gn[0] / n, gn[1] / n, gn[2] / n);
+  printf("frames=%d draws=%u result=%s gpu_vertices=%u,%u,%u gxm_draws=%u\n", n, f->nd, tnames[res], gn[0] / n, gn[1] / n, gn[2] / n, gxm_calls / n);
   return 0;
 }

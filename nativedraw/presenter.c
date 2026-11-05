@@ -34,6 +34,8 @@ static inline uint32_t now(void) { return sceKernelGetProcessTimeLow(); }
 static uint32_t thrRun(void) { SceKernelThreadInfo i; i.size = sizeof i; return sceKernelGetThreadInfo(sceKernelGetThreadId(), &i) < 0 ? 0 : (uint32_t)i.runClocks; }
 #endif
 #include "prof.h"
+#include "measures.h"
+DEV(static int no_join;)
 DEV(extern volatile SceUID nd_gfx_uid; uint32_t regState(void);
     // where Adrenaline's drawing thread is: 0 outside hookEnd, 1 its sceGxmEndScene, 2 checks, 3 the record, 4 translating
     // draw h_i, 5 sceGxmBeginScene, 6 sceGxmEndScene, 7 normal image
@@ -729,7 +731,7 @@ static int swOn(const char *p) {  // the file exists and does not start with "no
 // are needed and starts the presenter thread.
 void presStart(void) {
   draw_on = swOn("ux0:data/nativedraw/draw");
-  DEV(c_wanted = swOn("ux0:data/nativedraw/gpu_timer"); clk_on = swOn("ux0:data/nativedraw/clocks"); v_on = swOn("ux0:data/nativedraw/vert_split");)
+  DEV(MEASURES_DRAW(MEASURE_READ))
   repStart();
   dump_level = dumpLevel();  // dumps: off, screenshot, frame, sequence or auto
   if (dump_level == 4 && !draw_on) dump_level = 3;  // (auto needs the Vita drawing to compare)

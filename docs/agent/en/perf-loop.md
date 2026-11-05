@@ -67,3 +67,6 @@ mirror timing, the translator and the GPU. A KEEP here is a candidate for the Vi
 - Pushing, merging into `dev` or sending to the Vita: the user does that after reading the commits of the branch
   (`perf-loop`), and then the batch gets a test version as usual (`../../dev/en/versions.md`).
 - Spending the loop on cleanups: only changes with a measured effect.
+
+## Crowd frame
+`tools/perf/data/rr_crowd.bin.gz` is a real crowd frame of Ridge Racer (3688 draws, it ends in `vertex_out` near its last draws). `tr_gv.sh` prints `gxm_draws`, the `sceGxmDraw` calls of that frame: the CPU cost of GXM and part of the GPU cost scale with it, and `test_ci.sh` fails over 400.

@@ -313,7 +313,7 @@ int main(int argc, char **argv) {
       rgVFlush();
       RDraw dv = { .voff = v3 };
       res->srt = res->srt && v1 && v2 && *(uint32_t *)(g->a + v1 - 1) == 0x11 && *(uint32_t *)(g->a + v2 - 1) == 0x22 && !vpn;
-      res->srt = res->srt && v3 & VX && g->nvx == 16 && (v3 & ~VX) == TX_N - 16 && *(uint32_t *)RV(g, &dv) == 0x33;  // (for the GPU: end of tx)
+      res->srt = res->srt && v3 & VX && g->nvx == 4 && (v3 & ~VX) == TX_N - 4 && *(uint32_t *)RV(g, &dv) == 0x33;  // (for the GPU: end of tx)
       g->nvx = 0;
     }
 #undef NEXT

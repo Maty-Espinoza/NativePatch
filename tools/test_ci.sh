@@ -15,7 +15,9 @@ echo "== capturer"
 $(command -v qemu-arm-static || command -v qemu-arm) $B/prueba
 
 echo "== translator: GPU and CPU paths draw the same triangles"
-T=$T sh $R/tools/perf/tr_gv.sh | grep -q "lines equal" || { echo "FAIL: tr_gv"; exit 1; }
+G=$(T=$T sh $R/tools/perf/tr_gv.sh); echo "$G" | grep -q "lines equal" || { echo "FAIL: tr_gv"; exit 1; }
+# the crowd frame: draws joined by indices, thousands of draws arrive as hundreds of GXM calls
+[ "$(echo "$G" | grep 'draws=3688' | sed 's/.*gxm_draws=//' | head -1)" -lt 400 ] || { echo "FAIL: GXM draws in the crowd"; exit 1; }
 echo "== capturer bench (builds and runs one scene)"
 arm-linux-gnueabihf-gcc -static -O2 -mthumb -mfpu=neon -mfloat-abi=hard -w -I$B/inc -o $B/bench $R/tools/perf/capture_bench.c
 $(command -v qemu-arm-static || command -v qemu-arm) $B/bench rr_race | grep -q "complete=38" || { echo "FAIL: capture_bench"; exit 1; }
