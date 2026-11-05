@@ -35,6 +35,7 @@ const char *nlVersion(void) { return 0; }
 void regGpu(uint32_t q, volatile uint32_t *finish) {}
 uint32_t regState(void) { return 0; }
 static uint8_t arena[1 << 28]; static uint32_t heap_n, nblk; static void *blk[256];
+int sceKernelGetFreeMemorySize(SceKernelFreeMemorySizeInfo *i) { return -1; }
 SceUID sceKernelAllocMemBlock(const char *n, SceKernelMemBlockType t, SceSize s, SceKernelAllocMemBlockOpt *o) {
   if (nblk >= 256 || heap_n + s > sizeof arena) return -1;
   blk[nblk] = arena + heap_n; heap_n += (s + 4095) & ~4095u; return nblk++;
