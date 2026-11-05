@@ -845,6 +845,74 @@ static void recTex(uint32_t ta) {
 
 // Returns to the top level of the list (abandons the current sublist and its recording or check)
 #define UNWIND() (l->sp = 0, l->pc = l->stk[0][0], l->off = l->stk[0][1], recAbort(), chk = NULL)
+#ifdef NP_DEV
+// Extreme level, crowd analysis. op_n: commands by type. bb_*: conditional jumps by bounding box, which the capturer does
+// not take: bb_t tested, bb_o with the box outside the view (the GE would jump), bb_odd not testable, and what the capturer
+// walked inside those jumps (bb_d draws, bb_v vertices, bb_c commands). bs: registers set before the first draw of the frame.
+// e1, e2: registers at the end of the last two frames; sk_n: by register, frames that use a value left by the frame before,
+// which a frame not walked would lose (sk_f frames, sk_r registers)
+static uint32_t op_n[256], bb_t, bb_o, bb_odd, bb_d, bb_v, bb_c, bb_to, bb_sp, bb_c0, bs[8], e1[256], e2[256], sk_n[256], sk_f, sk_r;
+static inline float f24(uint32_t d) { union { uint32_t u; float f; } x; x.u = d << 8; return x.f; }
+// 1 if every vertex of the bounding box at vaddr falls outside the same plane of the view, in clip space
+static int bbOut(void) {
+  uint32_t n = reg[7] & 0xFFFF, vt = reg[0x12], fm = vt >> 7 & 3, sz = vsize(vt), ra = vtr(vaddr), o = 0x3F;
+  if (!n || n > 32 || !fm || vt & 0x800000 || sz != (fm == 3 ? 12 : fm == 2 ? 6 : 3) || !ra || ramEnd(ra) < ra + n * sz) { bb_odd++; return 0; }
+  float w[12], v[12], p[16];
+  for (int i = 0; i < 12; i++) { w[i] = f24(mtx[0][i]); v[i] = f24(mtx[1][i]); }
+  for (int i = 0; i < 16; i++) p[i] = f24(mtx[2][i]);
+  for (uint32_t i = 0; i < n; i++) {
+    uint8_t b[12];
+    for (uint32_t k = 0; k < sz; k++) b[k] = ((volatile uint8_t *)PSP(ra + i * sz))[k];
+    float x, y, z;
+    if (fm == 3) { sceClibMemcpy(&x, b, 4); sceClibMemcpy(&y, b + 4, 4); sceClibMemcpy(&z, b + 8, 4); }
+    else if (fm == 2) { int16_t s[3]; sceClibMemcpy(s, b, 6); x = s[0] / 32768.0f; y = s[1] / 32768.0f; z = s[2] / 32768.0f; }
+    else { x = (int8_t)b[0] / 128.0f; y = (int8_t)b[1] / 128.0f; z = (int8_t)b[2] / 128.0f; }
+    float a = w[0] * x + w[3] * y + w[6] * z + w[9], e = w[1] * x + w[4] * y + w[7] * z + w[10], g = w[2] * x + w[5] * y + w[8] * z + w[11];
+    float h = v[0] * a + v[3] * e + v[6] * g + v[9], j = v[1] * a + v[4] * e + v[7] * g + v[10], m = v[2] * a + v[5] * e + v[8] * g + v[11];
+    float cx = p[0] * h + p[4] * j + p[8] * m + p[12], cy = p[1] * h + p[5] * j + p[9] * m + p[13];
+    float cz = p[2] * h + p[6] * j + p[10] * m + p[14], cw = p[3] * h + p[7] * j + p[11] * m + p[15];
+    o &= (cx < -cw) | (cx > cw) << 1 | (cy < -cw) << 2 | (cy > cw) << 3 | (cz < -cw) << 4 | (cz > cw) << 5;
+    if (!o) return 0;
+  }
+  return 1;
+}
+static void bbDone(List *l) {  // the walk left the jump being followed
+  if (bb_to && l->sp <= bb_sp && l->pc >= bb_to) { bb_c += f_cmds - bb_c0; bb_to = 0; }
+}
+static void bbJump(List *l, uint32_t d) {
+  bb_t++; bbDone(l);
+  if (bb_to || !bbOut()) return;
+  uint32_t t = rel(l, d & 0xFFFFFC);
+  if (t <= l->pc) { bb_odd++; return; }
+  bb_o++; bb_to = t; bb_sp = l->sp; bb_c0 = f_cmds;
+}
+static void skipNote(void) {  // at the flip
+  if (bb_to) { bb_c += f_cmds - bb_c0; bb_to = 0; }
+  uint32_t n = 0;
+  for (int c = 0; c < 256; c++) if (e1[c] != e2[c] && !(bs[c >> 5] >> (c & 31) & 1)) { sk_n[c]++; n++; }
+  sk_f += n > 0; sk_r += n;
+  sceClibMemcpy(e2, e1, sizeof e1); sceClibMemcpy(e1, reg, sizeof e1); sceClibMemset(bs, 0, sizeof bs);
+}
+// Once per second: the 14 largest of a[], as "command:per frame"
+static void topLog(const char *t, uint32_t *a, uint32_t fr) {
+  char s[160]; int k = 0;
+  for (int i = 0; i < 14; i++) {
+    int b = 0; for (int c = 1; c < 256; c++) if (a[c] > a[b]) b = c;
+    if (!a[b]) break;
+    k += sceClibSnprintf(s + k, sizeof s - k, " %02x:%u", b, a[b] / fr); a[b] = 0;
+  }
+  s[k] = 0; clog("  %s:%s\n", t, s); sceClibMemset(a, 0, 256 * 4);
+}
+static void crowdLog(uint32_t fr) {
+  if (!fr) return;
+  topLog("commands by type (per frame)", op_n, fr);
+  clog("  bounding boxes (per frame): jumps=%u outside=%u not_testable=%u | walked inside those jumps: commands=%u draws=%u vertices=%u\n",
+       bb_t / fr, bb_o / fr, bb_odd / fr, bb_c / fr, bb_d / fr, bb_v / fr);
+  clog("  frames that need the frame before: %u of %u, registers %u\n", sk_f, fr, sk_r);
+  topLog("registers that need the frame before (per frame x1)", sk_n, 1);
+  bb_t = bb_o = bb_odd = bb_d = bb_v = bb_c = sk_f = sk_r = 0;
+}
+#endif
 // Interprets list l like the GE up to its stall or end (1: finished), with a command limit per call. Goes in
 // 64-byte lines: stall, translation (vtr), read (rdc), list limit, recLine and lo/hi are looked at once
 // per line; inside the line it continues while the walk is sequential (no jumps) and the R0 buffer stays the
@@ -878,6 +946,7 @@ static int __attribute__((noinline)) walkList(List *l) {
     for (;;) {
     uint32_t c = op >> 24, d = op & 0xFFFFFF;
     run++;
+    DEV(if (EXTREME) { op_n[c]++; if (!f_draws) bs[c >> 5] |= 1u << (c & 31); })
     if (plain[c]) {
       if (plain[c] == 2) {
         int m = c == 0x2B ? 4 : (c - 0x3B) / 2, max = m == 4 ? 96 : m == 2 ? 16 : 12;
@@ -896,7 +965,7 @@ static int __attribute__((noinline)) walkList(List *l) {
     switch (c) {
     case 0x01: vaddr = rel(l, d); vset = 1; if (rec) rec->flags |= M_VABS; break;
     case 0x02: iaddr = rel(l, d); if (rec) rec->flags |= M_IABS; break;
-    case 0x04: draw(d); break;
+    case 0x04: DEV(if (bb_to) { bbDone(l); if (bb_to) { bb_d++; bb_v += d & 0xFFFF; } }) draw(d); break;
     case 0x00: DEV(if (d == 0x4E5044) nd_dump_mark = 1;) break;
     case 0x05: case 0x06: acc.curves++; acc.draws++; f_draws++; dirty = 0; last_prim = 99; if (rec) recDraw(0, 0); if (reg_on) regCurve(); break;
     case 0x08: case 0x0A: {
@@ -929,7 +998,7 @@ static int __attribute__((noinline)) walkList(List *l) {
       l->pc = t;
       break;
     }
-    case 0x09: acc.bjumps++; break;  // conditional jump by bounding box: assumed not taken
+    case 0x09: acc.bjumps++; DEV(if (EXTREME) bbJump(l, d);) break;  // conditional jump by bounding box: assumed not taken
     case 0x0B: if (l->sp) { l->sp--; l->pc = l->stk[l->sp][0]; l->off = l->stk[l->sp][1]; if (!l->sp) { if (rec) recEnd(l); else if (chk) chkEnd(); } } break;
     case 0x0C:  // END: ends the list, except after a SIGNAL (the game continues it)
       if ((prev >> 24) == 0x0E) { acc.signals++; break; }
@@ -1266,10 +1335,10 @@ static void event(volatile uint32_t *e) {
       uint32_t cc = runClk(cap_uid), cal = SB[0x4D], fus = pfr[0] ? pfr[0] : 1;
       // PSP free CPU, per thousand
       uint32_t idle_pct = cal ? (uint32_t)((unsigned long long)pfr[5] * 1000000 / cal / fus) : 0;
-      rput(0, "%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%08x,%u,%u,%u\n", now() / 1000, pfr[0], pfr[1], pfr[2], pfr[3], pfr[4], idle_pct,
+      rput(0, "%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%08x,%u,%u,%u,%u,%u,%u\n", now() / 1000, pfr[0], pfr[1], pfr[2], pfr[3], pfr[4], idle_pct,
            pfr[7] & 0xFFFF, pfr[7] >> 16, pfr[6], f_cmds, f_draws, f_us, cc - lc, acc.memo_hit - s_memo, acc.memo_pre - s_pre,
            R0.own - s_own, R0.hits - s_hit, qt - qh, acc.pf_late - s_late, life[gen & 3].g == gen ? life[gen & 3].a[0] : 0,
-           life[gen & 3].g == gen && life[gen & 3].ntop ? (life[gen & 3].a[15] - life[gen & 3].a[0]) >> 10 : 0, tm_memo, tm_apply);
+           life[gen & 3].g == gen && life[gen & 3].ntop ? (life[gen & 3].a[15] - life[gen & 3].a[0]) >> 10 : 0, tm_memo, tm_apply, gen, reg_on ? rf[rg_w]->flags : 0, now() - p_flip);
       tm_memo = tm_apply = 0;
       lc = cc; s_own = R0.own; s_hit = R0.hits; s_memo = acc.memo_hit; s_pre = acc.memo_pre; s_late = acc.pf_late;
     }
@@ -1334,7 +1403,7 @@ static void event(volatile uint32_t *e) {
     if (f_draws > acc.draws_max) acc.draws_max = f_draws;
     if (f_us > acc.us_max) acc.us_max = f_us;
     f_cmds = f_draws = f_us = 0;
-    DEV(if (level >= 2) lifeFlip();)
+    DEV(if (level >= 2) { lifeFlip(); skipNote(); })
     lf_ord_cmds = 0;
     gen++; ntex = 0;
     DEV(for (int k = 0; k < 4; k++) smp_f[k] = 0;)
@@ -1502,7 +1571,7 @@ static void logsHead(void) {
 #ifdef NP_DEV
   if (level >= 2) rput(0, "t_ms,frame_us,gate_us,waits,no_wait,sync_GE_us,cpu_idle_x1000,mirror_us,mirror_pages,hooks_us,"
           "commands,draws,capture_us,capture_cpu_us,applied,checked_readers,own_reads,from_readers,pending_lists,late_syncs,"
-          "list_addr,list_kb,memory_us,apply_us\n");
+          "list_addr,list_kb,memory_us,apply_us,frame,record_flags,close_after_flip_us\n");
   if (level >= 2) rput(1, "t_ms,type,wait_us,list,delay_us,commands,lists_before,enqueued_ago_us,last_stall_ago_us,vita_started_after_us,"
           "vita_walked_us,work_us,own_reads,from_readers,applied,processor_us\n");
 #endif
@@ -1613,6 +1682,7 @@ static int repThread(SceSize args, void *argp) {
       clog("  vram and sync (per sec): vram_sublists=%u vram_jumps=%u lost_lists=%u aborted=%u invalid=%u signal=%u bjump=%u | drawsync=%u waited=%u (%u us each) behind_at_sync=%u behind_at_flip=%u listsync=%u resets=%u\n",
            r->vcalls, r->vjumps, r->lost, r->aborted, r->bad, r->signals, r->bjumps, r->syncs, r->syncs_waited,
            r->syncs_waited ? r->sync_wait_us / r->syncs_waited : 0, r->behind, r->flips_behind, r->lsyncs, r->resyncs);
+      DEV(if (EXTREME) crowdLog(r->frames);)
       if (!level) goto finish;
       {  // mirror: requested / valid pages (now) and the last second's figures
         static uint32_t lc, lp, lb, lv, le[8];
@@ -1871,7 +1941,7 @@ void capStart(void) {
   static const char *sw[] = { "ux0:data/nativedraw/no_gate", "ux0:data/nativedraw/no_mirror" DEV(, "ux0:data/nativedraw/no_idle", "ux0:data/nativedraw/gate_sync") };
   for (int k = 0; k < (int)(sizeof sw / sizeof *sw); k++) if (swOn(sw[k])) gp_flags |= 1u << k;
   if (swOn("ux0:data/nativedraw/mirror_wait")) gp_flags |= 32;  // the PSP flip waits for the mirror copy
-  DEV(no_capture = swOn("ux0:data/nativedraw/no_capture"); cpu_verts = swOn("ux0:data/nativedraw/cpu_verts"); cs_on = swOn("ux0:data/nativedraw/cap_split"); tn_on = swOn("ux0:data/nativedraw/thread_split");)
+  DEV(no_capture = swOn("ux0:data/nativedraw/no_capture"); cpu_verts = swOn("ux0:data/nativedraw/cpu_verts"); cs_on = swOn("ux0:data/nativedraw/cap_split"); rec_cost = swOn("ux0:data/nativedraw/rec_cost"); tn_on = swOn("ux0:data/nativedraw/thread_split");)
   DEV(pv_on = !swOn("ux0:data/nativedraw/no_lookahead");)
   DEV(p_on = level >= 2;)
   reg_on = swOn("ux0:data/nativedraw/draw");  // frame record

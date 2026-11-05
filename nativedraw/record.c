@@ -609,7 +609,7 @@ static uint32_t rgBlock(const uint32_t *src, uint32_t n, uint32_t *last) {
   f->na = o + n * 4;
   return *last = o + 1;
 }
-DEV(static int cpu_verts;)  // (switch cpu_verts: no vertices for the GPU, to compare)
+DEV(static int cpu_verts, rec_cost;)  // (switch cpu_verts: no vertices for the GPU, to compare)
 // 1 if the GPU can take the vertices of a draw as they are: no indices, triangles in a scissor that takes in the whole image (what is seen
 // of one 480 wide or more, all of a narrower one), no generated UV; for nd_v3 float position and UV, 8888 color and no lights, for
 // nd_v4 16-bit position and normal, no color and one directional light or, with no lighting, UV from the normal. The record must be free of the GPU: it reads these bytes while drawing.
@@ -629,7 +629,8 @@ static int rgVGpu(uint32_t type, uint32_t vt, uint32_t idx) {
 static void regDraw(uint32_t n, uint32_t type, uint32_t vt, uint32_t idx) {
   RFrame *f = rf[rg_w];
   f->draws_seen++;
-  if (f->flags) return;  // already incomplete: nothing more is spent on this frame
+  // already incomplete: nothing more is spent on this frame (switch rec_cost: it goes on, to measure it; the frame is not published)
+  if (f->flags DEV(&& !(rec_cost && !(f->flags & R_LIMIT) && !rgBusy(rg_w)))) return;
   if (f->nd >= RD_N) { DEV(if (p_on) pAdd(P_X_DRAWS, 0);) f->flags |= R_LIMIT; return; }
   // (reading the clock costs: the times are sampled, 1 draw in 64)
   uint32_t tm = !(f->draws_seen & 63) DEV(|| cs_on), t0 = tm ? now() : 0, t1, v[NRS];
