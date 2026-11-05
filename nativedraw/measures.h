@@ -17,7 +17,8 @@
   X(gpu_timer, c_wanted)        /* how long the GPU takes on each scene */ \
   X(clocks, clk_on)             /* CPU 444 and crossbar 166 */ \
   X(vert_split, v_on)           /* splits the vertex work of 1 HD frame in 8 */ \
-  X(no_join, no_join)           /* draws of the GPU path are not joined, to compare */
+  X(no_join, no_join)           /* draws of the GPU path are not joined, to compare */ \
+  X(keep_base, keep_base)       /* the image underneath is drawn even if the frame covers it, to compare */
 // Others that are not on/off, or that stay where they act: log_level, no_lookahead, no_idle, gate_sync, dump.
 #define MEASURE_READ(file, var) var = swOn("ux0:data/nativedraw/" #file);
 

@@ -27,7 +27,7 @@ DEV(enum { VS_STATE, VS_FAST, VS_SLOW, VS_BIG, VS_TOUCH, VS_AGAIN_F, VS_AGAIN_S,
 DEV(enum { BP_FAST, BP_MID, BP_TEX, BP_COL, BP_BASE, BP_N };
     static volatile uint32_t b_px[2][BP_N], b_pxn;
     enum { BW_FUNC, BW_DOUBLE, BW_ATEST, BW_FOG, BW_BLEND2X, BW_N };  // why a textured draw is not on the fast program
-    static volatile uint32_t b_why[BW_N];)
+    static volatile uint32_t b_why[BW_N], b_base[2];)  // b_base: frames with and without the image underneath
 static uint32_t t_seen[TN];   // times each reason was seen (the first one is logged in detail)
 typedef struct { float x, y, z, w, u, v, f; uint32_t c; } TV;  // translated vertex (32 bytes, the nd_v format); f: fog (1: none)
 static TV *tv[2];            // translated vertices, one per surface
@@ -1100,6 +1100,27 @@ static void trRegions(RFrame *f, uint32_t disp) {
   }
 }
 
+// Leaves in b the box (x0, y0, x1, y1) of the rectangles of clear d, which has only 16-bit positions. 0 if d is another kind of draw
+static int trClearBox(const RFrame *f, const RDraw *d, int *b) {
+  if (d->vt != 0x800100 || d->prim != 6 || d->ioff || !(RE(f->e[d->st], 0xD3) & 1)) return 0;
+  const int16_t *p = (const int16_t *)(f->a + d->voff - 1);  // (x, y, z)
+  b[0] = b[1] = 1 << 14; b[2] = b[3] = 0;
+  for (uint32_t k = 0; k < d->n; k++, p += 3) {
+    b[0] = p[0] < b[0] ? p[0] : b[0]; b[1] = p[1] < b[1] ? p[1] : b[1]; b[2] = p[0] > b[2] ? p[0] : b[2]; b[3] = p[1] > b[3] ? p[1] : b[3];
+  }
+  return 1;
+}
+// 1 if the first draw on the shown image of frame f is a clear of color over all of it: what goes underneath would not be seen
+static int trCovers(const RFrame *f, uint32_t disp) {
+  for (uint32_t i = 0; i < f->nd; i++) {
+    const uint32_t *e = f->e[f->d[i].st];
+    if ((RE(e, 0x9C) & 0x1FFFF0) != disp) continue;
+    int b[4];
+    return trClearBox(f, &f->d[i], b) && RE(e, 0xD3) & 0x100 && !(RE(e, 0xE8) & 0xFFFFFF) && !(RE(e, 0xD4) & 0xFFFFF) && (RE(e, 0xD5) & 0x3FF) >= 479 &&
+           (RE(e, 0xD5) >> 10 & 0x3FF) >= 271 && b[0] <= 0 && b[1] <= 0 && b[2] >= 480 && b[3] >= 272;
+  }
+  return 0;
+}
 // Looks in the first ord draws of frame f (they can be reordered) for a boxed stretch: on the shown image, behind one partial
 // scissor, a clear of color and depth that covers the box and at least one 3D draw after it. Nothing in it needs what the
 // surface holds, so it can be drawn before the surface. Only the first one in a frame.
@@ -1108,16 +1129,12 @@ static void trBoxed(RFrame *f, uint32_t disp, uint32_t ord) {
   if (!rtb.mem) return;
   for (uint32_t i = 0; i < ord; i++) {
     const RDraw *d = &f->d[i];
-    if (d->vt != 0x800100 || d->prim != 6 || d->ioff) continue;
+    int b[4];
+    if (!trClearBox(f, d, b)) continue;
     const uint32_t *e = f->e[d->st];
     uint32_t d4 = RE(e, 0xD4) & 0xFFFFF, d5 = RE(e, 0xD5) & 0xFFFFF, x0 = d4 & 0x3FF, y0 = d4 >> 10, x1 = d5 & 0x3FF, y1 = d5 >> 10, j = i + 1, n3 = 0;
     if ((RE(e, 0xD3) & 0x501) != 0x501 || (RE(e, 0x9C) & 0x1FFFF0) != disp || (!d4 && x1 >= 479 && y1 >= 271)) continue;
-    const int16_t *p = (const int16_t *)(f->a + d->voff - 1);  // (x, y, z)
-    int bx0 = 1 << 14, by0 = 1 << 14, bx1 = 0, by1 = 0;
-    for (uint32_t k = 0; k < d->n; k++, p += 3) {
-      bx0 = p[0] < bx0 ? p[0] : bx0; by0 = p[1] < by0 ? p[1] : by0; bx1 = p[0] > bx1 ? p[0] : bx1; by1 = p[1] > by1 ? p[1] : by1;
-    }
-    if (bx0 > (int)x0 || by0 > (int)y0 || bx1 <= (int)x1 || by1 <= (int)y1) continue;
+    if (b[0] > (int)x0 || b[1] > (int)y0 || b[2] <= (int)x1 || b[3] <= (int)y1) continue;
     for (; j < ord; j++) {
       const uint32_t *q = f->e[f->d[j].st];
       if ((RE(q, 0xD4) & 0xFFFFF) != d4 || (RE(q, 0xD5) & 0xFFFFF) != d5 || (RE(q, 0x9C) & 0x1FFFF0) != disp) break;
@@ -1170,6 +1187,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
   DEV(t_us[0] += now() - ta; if (p_on) pAdd(P_T_CHECK, now() - ta);)
   trRegions(f, disp);
   trBoxed(f, disp, ord);
+  int cover = trCovers(f, disp) DEV(&& !keep_base);
   // Depth lives in one scene: if the surface is drawn with depth after its scene was cut, it is stored and loaded. The other
   // scenes use the same memory without storing it, so they do not touch it
   SceGxmDepthStencilSurface dss = ds;
@@ -1191,12 +1209,12 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
 #define SCENE(surf_tex, reg) do { DEV(h_at = 5;) sceGxmBeginScene(c, 0, cur_rt ? rt_i : rt, reg, 0, t_sync, surf_tex, cur_rt ? &ds : &dss); DEV(h_at = 4;) t_zs = t_st = t_sr = t_cl = ~0u; zsSet(c, 0, 0); sceGxmSetVertexProgram(c, nvp); gv_cur = 0; \
     trWvp(wm, reg); if (cur_rt == &rtb) { wm[12] -= t_bx * wm[0]; wm[13] -= t_by * wm[5]; } sceGxmReserveVertexDefaultUniformBuffer(c, &u); sceGxmSetUniformDataF(u, n_wvp, 0, 16, wm); } while (0)
   // OPEN: closes the open scene (if any) and opens one on dst (0: surface s); the first time on the surface,
-  // puts the normal image (or black: trBase) underneath
+  // puts the normal image (or black: trBase) underneath, unless the frame covers it
 #define OPEN(dst_) do { RUN(); pd = 0; if (opened) { SURF_WAIT(); DEV(h_at = 6;) sceGxmEndScene(c, 0, gEnd()); DEV(h_at = 4; CTAG();) cNote(cur_rt ? C_INT : C_TR, &gq_n, t_draws - d0, spx / 1000, ssw); } \
     d0 = t_draws; spx = 0; ssw = 0; cur_rt = (dst_); opened = 1; \
     if (!cur_rt && has_base && zcut) sceGxmDepthStencilSurfaceSetForceLoadMode(&dss, SCE_GXM_DEPTH_STENCIL_FORCE_LOAD_ENABLED); \
     SCENE(cur_rt ? &cur_rt->cs : &cs[s], cur_rt ? &cur_rt->vr : 0); \
-    if (!cur_rt && !has_base) { has_base = 1; nv = trBase(c, base, o, nv); spx += W * H; DEV(bpx[0][BP_BASE] += W * H;) } } while (0)
+    if (!cur_rt && !has_base) { has_base = 1; DEV(b_base[cover]++;) if (!cover) { nv = trBase(c, base, o, nv); spx += W * H; DEV(bpx[0][BP_BASE] += W * H;) } } } while (0)
   // SURF_WAIT: the surface s is being sampled for the screen until the previous frame's scenes end, and its scene must not start before
 #define SURF_WAIT() do { if (!cur_rt) gWait(fq[0]); } while (0)
   // GRUN: sends the pending draw of the GPU path, triangles of indices gs to gn on the vertices of the record at gb

@@ -35,7 +35,7 @@ static uint32_t thrRun(void) { SceKernelThreadInfo i; i.size = sizeof i; return 
 #endif
 #include "prof.h"
 #include "measures.h"
-DEV(static int no_join;)
+DEV(static int no_join, keep_base;)
 DEV(extern volatile SceUID nd_gfx_uid; uint32_t regState(void);
     // where Adrenaline's drawing thread is: 0 outside hookEnd, 1 its sceGxmEndScene, 2 checks, 3 the record, 4 translating
     // draw h_i, 5 sceGxmBeginScene, 6 sceGxmEndScene, 7 normal image
@@ -303,10 +303,24 @@ static int hookTex(SceGxmContext *c, unsigned int i, const SceGxmTexture *t) {
 #include "dump.c"  // dumps (L+R+SELECT and automatic)
 #ifdef NP_DEV
 static uint32_t b_t0[6];  // t_us at the last line
+int scePowerGetBatteryElec(void), scePowerGetCaseTemp(void), scePowerGetBatteryChargingStatus(void);
+static int r_ma, r_man;  // battery current, added up every second
+// Every 10 s, what the game costs the console: tools/run_compare.py reads it. Current is the average of the last 10 s; the rest, the moment of the line
+static void resLog(void) {
+  static uint32_t g0, i0, b0[2];
+  uint32_t g = 0, id = b_idle - i0, w = b_base[0] - b0[0], wo = b_base[1] - b0[1];
+  for (int i = 0; i < CN; i++) g += b_gus[i];
+  uint32_t dg = g - g0; g0 = g; i0 += id; b0[0] += w; b0[1] += wo;
+  alog("resources: frames with image underneath %u without %u | GPU busy %u ms idle %u ms | battery %d %% %d mAh %d mV current %d charging %d temp %d case %d | MHz arm %d gpu %d xbar %d\n",
+       w, wo, dg / 1000, id / 1000, scePowerGetBatteryLifePercent(), scePowerGetBatteryRemainCapacity(), scePowerGetBatteryVolt(), r_man ? r_ma / r_man : 0,
+       scePowerGetBatteryChargingStatus(), scePowerGetBatteryTemp(), scePowerGetCaseTemp(), scePowerGetArmClockFrequency(), scePowerGetGpuClockFrequency(), scePowerGetGpuXbarClockFrequency());
+  r_ma = r_man = 0;
+}
 static uint32_t v0[2][VS_N];  // v_us at the last line
 // Once per second, what limits the HD frames (tools/bottleneck.py reads it): the deltas of b_c, of the translator's parts
 // and of the GPU per scene type (needs gpu_timer), and the pixels per program of the sampled frames.
 static void bnLog(void) {
+  r_ma += scePowerGetBatteryElec(); r_man++;
   static uint32_t c0[B_N], g0[CN], i0, p0[2][BP_N], n0, w0[BW_N];
   uint32_t c[B_N], g[CN], t[6], p[2][BP_N], w[BW_N];
   for (int i = 0; i < B_N; i++) { c[i] = b_c[i] - c0[i]; c0[i] += c[i]; }
@@ -710,7 +724,7 @@ static int presThread(SceSize args, void *argp) {
       alog("gpu: frames not sent because the GPU was behind %u, waits for the GPU %u ms | CPU in 10 s: translator %u ms, "
            "different-frame check %u ms | surface checks skipped (GPU unfinished) %u\n",
            at, wait_t / 1000, tr / 1000, rv / 1000, sl);
-      DEV(if (c_on) cReport(dt);)
+      DEV(if (c_on) cReport(dt); resLog();)
     }
     alog("presenter: %u frames in %u ms through the surface (changes %u total, %u with own copy), CPU %u us/frame (max %u) | "
          "nearly black: game %u, surface %u | checked %u, different from the normal image %u%s\n", p, dt, n_swap, nd, p ? s / p : 0, m, n_black_j, n_black_p, nr, nm,

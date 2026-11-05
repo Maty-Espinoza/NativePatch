@@ -77,6 +77,7 @@ The development measurements are listed in `nativedraw/measures.h`, one line eac
 | `cap_split` | (development) times every part of the capturer on every frame (it costs ~0.7 us per clock read and in a heavy game the capturer falls behind: graphic errors and the normal image; warn before using it): `capture split` lines by kind of frame, summed up by `tools/bottleneck.py` |
 | `crowd_log` | (development) every second in the capture log: commands by type, bounding box jumps, what a frame needs from the one before |
 | `no_join` | (development) draws of the GPU path are not joined, to compare |
+| `keep_base` | (development) the image underneath is drawn even if the frame covers it, to compare |
 | `hold_game` | (development) the game waits for the whole chain (gate up to 200 ms, the flip until the frame is walked, the capturer for the presenter and the GPU): every frame complete and in HD, and the game slower. Read when Adrenaline opens. For measuring |
 | `rec_cost` | (development) keeps recording a frame already incomplete, without publishing it, to measure what recording costs |
 | `capture_core` | (v13.13) `0`, `1` or `2` pins the capturer to that core (before v13.13 always core 1); no file or anything else: any of the 3. The `threads: capture` line of the log says which one was used; see `etapa2_ridge_racer.md` |

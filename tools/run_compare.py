@@ -42,6 +42,16 @@ def read(d):
                          gpu=round(sum(x['surf'] + x['inter'] for x in s) / hd, 1))
     return out
 
+# What the console spent while the game drew in HD: average current, mAh and temperature ('resources:' lines of 10 s)
+def res(d):
+    R = re.compile(r'resources: frames with image underneath (\d+) without (\d+) \| GPU busy (\d+) ms idle (\d+) ms \| battery -?\d+ % (-?\d+) mAh -?\d+ mV current (-?\d+) charging (-?\d+) temp (-?\d+) case (-?\d+)')
+    x = [list(map(int, m.groups())) for m in map(R.search, open(d + '/nativedraw.log', errors='replace')) if m]
+    x = [v for v in x if v[0] + v[1]]
+    if not x: return
+    n = len(x)
+    print(f"resources {d}: {n * 10} s, frames with image underneath {sum(v[0] for v in x)} without {sum(v[1] for v in x)}, GPU busy {sum(v[2] for v in x) / n / 100:.1f} %, "
+          f"current {sum(v[5] for v in x) / n:.0f}, mAh {x[0][4]} -> {x[-1][4]}, temp {x[0][7]} -> {x[-1][7]}, case {x[0][8]} -> {x[-1][8]}{', charging' if any(v[6] for v in x) else ''}")
+
 def load(p):
     return json.load(open(p)) if p.endswith('.json') else read(p)
 
@@ -51,6 +61,7 @@ if '--save' in sys.argv:
     json.dump(read(a[0]), open(p, 'w'), indent=1); print('saved', p); sys.exit(0)
 if len(a) < 2:
     for z, v in read(a[0]).items(): print(z, v)
+    res(a[0])
     sys.exit(0)
 ref, run, bad = load(a[0]), load(a[1]), 0
 for z, _, _ in ZONES:
@@ -64,4 +75,6 @@ for z, _, _ in ZONES:
         bad += worse
         print(f"  {what:42} {r:8} {n:8} {d:+6.1f} %{'  WORSE' if worse else ''}")
 print('verdict:', f'{bad} worse' if bad else 'none worse')
+for p in a[:2]:
+    if not p.endswith('.json'): res(p)
 sys.exit(1 if bad and '--check' in sys.argv else 0)
