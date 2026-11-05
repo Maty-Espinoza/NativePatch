@@ -609,7 +609,7 @@ static uint32_t rgBlock(const uint32_t *src, uint32_t n, uint32_t *last) {
   f->na = o + n * 4;
   return *last = o + 1;
 }
-DEV(static int cpu_verts, rec_cost;)  // (switch cpu_verts: no vertices for the GPU, to compare)
+DEV(static int cpu_verts, rec_cost, hold_game;)  // (switch cpu_verts: no vertices for the GPU, to compare)
 // 1 if the GPU can take the vertices of a draw as they are: no indices, triangles in a scissor that takes in the whole image (what is seen
 // of one 480 wide or more, all of a narrower one), no generated UV; for nd_v3 float position and UV, 8888 color and no lights, for
 // nd_v4 16-bit position and normal, no color and one directional light or, with no lighting, UV from the normal. The record must be free of the GPU: it reads these bytes while drawing.
@@ -776,6 +776,8 @@ static void regFlip(uint32_t fb, uint32_t fbw, uint32_t draws_counted) {
   DEV(PA(P_C_VFLUSH, tv); CSA(CS_VFL, tc);)
   RFrame *f = rf[rg_w];
   if (rg_hash[rg_w] && f->nvx) sceClibMemset(rg_hash[rg_w] + ((TX_N - f->nvx) >> 7), 0, ((f->nvx >> 7) + 1) * sizeof *rg_hash[rg_w]);  // (no sorted texture is there now)
+  // Switch hold_game: every frame is drawn, the capturer waits (100 ms at most) for the presenter and the GPU, and the game for it
+  DEV(if (hold_game) { uint32_t th = now(); while ((rg_pend >= 0 || (rg_pub >= 0 && rg_pub != rg_last)) && now() - th < 100000) { if (!rg_thr) regPend(); sceKernelDelayThread(200); } })
   int slow = rg_pend >= 0 || (rg_short && rg_pub >= 0 && rg_pub != rg_last);
   rg_short = 0;
   if (!rg_thr) regPend();
@@ -812,6 +814,7 @@ static void regFlip(uint32_t fb, uint32_t fbw, uint32_t draws_counted) {
     for (int i = 0; i < RN && w < 0; i++) if (i != rg_pub && i != rg_using && i != rg_pend && i != rg_work && i != rg_last) w = i;
     if (w < 0) for (int i = 0; i < RN && w < 0; i++) if (i != rg_pub && i != rg_using && i != rg_pend && i != rg_work) w = i;
     if (w < 0) { w = rg_pend; rg_pend = -1; ga.stomped++; while (rg_work == w) sceKernelDelayThread(100); }  // (none free: the pending one is lost)
+    DEV(if (hold_game) { uint32_t th = now(); while (rgBusy(w) && now() - th < 100000) sceKernelDelayThread(200); })
     rg_w = w; rg_gv[w] = 0; rg_seq[w] = ++rg_s;
   }
   // Only what the GE draws from now on is held in HD; any other read of those pages comes from the mirror. A sublist

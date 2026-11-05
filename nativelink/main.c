@@ -61,7 +61,7 @@ u32 (*_sceGeGetCmd)(int cmd);
 // (us), c = wait for the GE inside sceGeDrawSync/ListSync (us); e[5] = free-CPU thread spins
 // (SB[0x4D]: spins per ms = 100 %), e[6] = mirror: flip CPU (us) | pages << 16, e[7] = hooks (us in sbPost).
 // Switches NativeDraw sets in SB[0x4A]: 1 no_gate (does not wait for the Vita, only counts), 2 no
-// mirror, 4 no free-CPU thread, 8 gate always at the sync, 16 full mirror (all requested data pages on
+// mirror, 4 no free-CPU thread, 8 gate always at the sync, 64 hold_game: the gate waits up to 200 ms, 16 full mirror (all requested data pages on
 // every flip), 32 the flip waits for the mirror copy to finish.
 // SB[0x4E] = NativeDraw record level (0 minimal, 1 medium, 2 extreme): EV_FRAME and the free-CPU thread from
 // medium up; list life (EV_LIFE), the game CPU events (T4: EV_CPU, EV_CPUSUM) and EV_FRAME2 only at extreme.
@@ -170,7 +170,7 @@ static u32 sbGate(u32 ord) {
   do {
     sceKernelDelayThread(50);
     w = sceKernelGetSystemTimeLow() - t0;
-  } while ((int)(SB[3] - ord) < 0 && w < 5000);
+  } while ((int)(SB[3] - ord) < 0 && w < (DEV_SW(64) ? 200000 : 5000));
   sbs.timeouts += (int)(SB[3] - ord) < 0;
   sbs.wait_us += w;
   if (w > sbs.wait_max) sbs.wait_max = w;
