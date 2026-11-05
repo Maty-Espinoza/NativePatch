@@ -304,13 +304,13 @@ static int rtKept(uint32_t ta) {
   for (int i = 0; i < 2; i++) if (rts[i].mem && rts[i].fb == (ta & 0x1FFFF0) && (ta & 0x0F000000) == 0x04000000) return 1;
   return 0;
 }
-// Checks whether draw d of frame f can be drawn (primitive, vertices without weights, destination, blend,
+// Checks whether draw d of frame f can be drawn (primitive, vertex type, destination, blend,
 // texture format and function). T_OK if so; otherwise the reason. What depends on other draws is checked by trFrame.
 static int trCheck(RFrame *f, RDraw *d) {
   const uint32_t *e = f->e[d->st];
   uint32_t vt = d->vt, clr = RE(e, 0xD3) & 1, afn, aref;
   if (!d->prim || d->prim > 6) return T_PRIM;  // lines, line strip, triangles, strip, fan, rectangles
-  if ((vt >> 9 & 3) || (vt >> 18 & 7)) return T_VERT;  // weights or morph
+  if ((vt >> 18 & 7) || ((vt >> 9 & 3) && (vt >> 23 & 1))) return T_VERT;  // morph, or weights without transform
   if ((RE(e, 0x9D) & 0x7FF) > 512) return T_DEST;
   if (colorMask(e) == ~0u) return T_MASK;
   if (clr) return T_OK;
@@ -391,6 +391,7 @@ typedef struct {
   float f1, f2, em[4], am[4], ad[4], as[4], ac[4], sp;  // fog; emissive, ambient, diffuse, specular, scene ambient colors
   uint32_t gen, prj, ls0, ls1, upd, fog, lit, rev, nl;  // 0xC0, 0xC1, 0x53, on/off switches, lights on
   uint32_t ei[4], ai[4], lc;                            // lit with no lights: emissive (0-255) and scene ambient (0-256) per channel, color
+  float b[96];                                          // the 8 bones, 12 values each (vertices with weights)
   uint32_t kw, km, kl; const uint32_t *ke;              // what t3Set last read
   LT l[4];
 } T3;
@@ -425,6 +426,7 @@ static void t3Set(RFrame *f, RDraw *d, const uint32_t *e, T3 *t) {
     const float *b = t->wv + c * 3;
     for (int r = 0; r < 4; r++) t->m[c * 4 + r] = b[0] * p[r] + b[1] * p[4 + r] + b[2] * p[8 + r] + (c == 3 ? p[12 + r] : 0);
   }
+  if (d->vt >> 9 & 3) for (int i = 0; i < 96; i++) t->b[i] = f24(w[12 + i]);  // (behind the world matrix in the same block)
   t->kw = d->woff; t->km = d->moff;
   int ne = e != t->ke, nl = ne || d->loff != t->kl;
   t->ke = e; t->kl = d->loff;
@@ -573,14 +575,14 @@ static void t3Gen(const T3 *t, const float *x, float u0, float v0, const float *
 // matrix tr_wvp, clip z from 0 to almost 1, growing with the GE's, so the GE comparisons apply as they are.
 static int trVerts(RFrame *f, RDraw *d, TV *o, float tw, float th, uint32_t col0, const float *sc, uint32_t *nout, const T3 *t) {
   static const uint8_t s4[4] = { 0, 1, 2, 4 }, cs[8] = { 0, 0, 0, 0, 2, 2, 2, 4 };
-  uint32_t vt = d->vt, tc = vt & 3, ct = vt >> 2 & 7, nt = vt >> 5 & 3, pt = vt >> 7 & 3, sz = 0, al = 1, s;
+  uint32_t vt = d->vt, tc = vt & 3, ct = vt >> 2 & 7, nt = vt >> 5 & 3, pt = vt >> 7 & 3, wt = vt >> 9 & 3, wn = (vt >> 14 & 7) + 1, sz = 0, al = 1, s;
   static uint32_t lvt = ~0u, lsz, lt, lc, lp, ln;  // the layout of the last vertex type
-  uint32_t otc = 0, ocol = 0, opos = 0, onrm = 0;
+  uint32_t otc = 0, ocol = 0, opos = 0, onrm = 0, ow;
   if (vt == lvt) { sz = lsz; otc = lt; ocol = lc; opos = lp; onrm = ln; }
   else {
-  // FLD: n components of size bytes, aligned to size (o: offset). Order: texture, color, normal, position
+  // FLD: n components of size bytes, aligned to size (o: offset). Order: weights (at 0), texture, color, normal, position
 #define FLD(n, size, o) s = (size); if (s) { sz = (sz + s - 1) & ~(s - 1); o = sz; sz += (n) * s; if (s > al) al = s; }
-  FLD(2, s4[tc], otc); FLD(1, cs[ct], ocol); FLD(3, s4[nt], onrm); FLD(3, s4[pt], opos);
+  FLD(wn, s4[wt], ow); FLD(2, s4[tc], otc); FLD(1, cs[ct], ocol); FLD(3, s4[nt], onrm); FLD(3, s4[pt], opos);
 #undef FLD
   sz = (sz + al - 1) & ~(al - 1);
   lvt = vt; lsz = sz; lt = otc; lc = ocol; lp = opos; ln = onrm;
@@ -591,7 +593,7 @@ static int trVerts(RFrame *f, RDraw *d, TV *o, float tw, float th, uint32_t col0
   float itw = 1 / tw, ith = 1 / th;
   // The common 3D vertex: float position and texture coordinates, 8888 color, no lights on and no generated texture coordinates. The
   // four columns of the matrix and the viewport go in NEON vectors: x, y, z and w come out together, in the order of TV
-  if (t && tc == 3 && ct == 7 && !nt && pt == 3 && !t->nl && !t->gen && d->prim != 6) {
+  if (t && tc == 3 && ct == 7 && !nt && pt == 3 && !wt && !t->nl && !t->gen && d->prim != 6) {
     if (d->n > TV_N) return T_LIMIT;
     const float *m = t->m;
     float32x4_t c0 = vld1q_f32(m), c1 = vld1q_f32(m + 4), c2 = vld1q_f32(m + 8), c3 = vld1q_f32(m + 12);
@@ -632,6 +634,19 @@ static int trVerts(RFrame *f, RDraw *d, TV *o, float tw, float th, uint32_t col0
         const uint8_t *b = p + opos + a * s4[pt];
         x[a] = pt == 3 ? *(const float *)b : (pt == 2 ? *(const int16_t *)b : *(const int8_t *)b) * ks[pt];
         if (nt) { b = p + onrm + a * s4[nt]; n[a] = nt == 3 ? *(const float *)b : (nt == 2 ? *(const int16_t *)b : *(const int8_t *)b) * ks[nt]; }
+      }
+      if (wt) {  // position and normal: the sum of the bones, each by its weight
+        float sx[3] = { 0, 0, 0 }, sn[3] = { 0, 0, 0 };
+        for (uint32_t b = 0; b < wn; b++) {
+          const uint8_t *q8 = p + b * s4[wt];
+          float g = wt == 3 ? *(const float *)q8 : wt == 2 ? *(const uint16_t *)q8 * ks[2] : *q8 * ks[1];
+          const float *m = t->b + b * 12;
+          for (int r = 0; r < 3; r++) {
+            sx[r] += g * (x[0] * m[r] + x[1] * m[3 + r] + x[2] * m[6 + r] + m[9 + r]);
+            sn[r] += g * (n[0] * m[r] + n[1] * m[3 + r] + n[2] * m[6 + r]);
+          }
+        }
+        sceClibMemcpy(x, sx, 12); sceClibMemcpy(n, sn, 12);
       }
       if (tc) {
         const uint8_t *b = p + otc;

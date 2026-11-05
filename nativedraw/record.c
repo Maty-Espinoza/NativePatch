@@ -673,17 +673,23 @@ static void regDraw(uint32_t n, uint32_t type, uint32_t vt, uint32_t idx) {
   if (!(d->voff = later ? rgVLater(vaddr, d->vlen, rgVGpu(type, vt, idx)) : rgCopy(vaddr, d->vlen))) return;
   DEV(CSA(CS_RVT, tc); tc = CST();)
   d->woff = d->moff = d->loff = 0;
-  static uint32_t lw, lm, ll;  // last matrix and light blocks of this frame
+  static uint32_t lw, lwb, lm, ll;  // last matrix and light blocks of this frame (lwb: world and the 8 bones, for vertices with weights)
   if (!f->nd) lw = lm = ll = 0, rg_mchg = 1;
   if (!(vt >> 23 & 1)) {
     ga.v_all++; ga.v_list += vaddr - pub_pc + 0x40000 < 0x80000;
+    if (rg_mchg) lwb = 0;
     if (rg_mchg || !lw || !lm) {
       uint32_t vm[40];
       rg_mchg = 0;
       sceClibMemcpy(vm, mtx[1], 48); sceClibMemcpy(vm + 12, mtx[2], 64); sceClibMemcpy(vm + 28, mtx[3], 48);
       if (!rgBlock(mtx[0], 12, &lw) || !rgBlock(vm, 40, &lm)) return;
     }
-    d->woff = lw; d->moff = lm;
+    if ((vt >> 9 & 3) && !lwb) {
+      uint32_t wb[108];
+      sceClibMemcpy(wb, mtx[0], 48); sceClibMemcpy(wb + 12, mtx[4], 384);
+      if (!rgBlock(wb, 108, &lwb)) return;
+    }
+    d->woff = vt >> 9 & 3 ? lwb : lw; d->moff = lm;
     if ((reg[0x17] & 1) || (reg[0xC0] & 3) == 2) {
       if ((rg_lchg || !ll) && !rgBlock(reg + 0x53, 72, &ll)) return;
       rg_lchg = 0; d->loff = ll;
