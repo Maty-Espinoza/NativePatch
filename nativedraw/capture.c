@@ -856,12 +856,45 @@ static void recTex(uint32_t ta) {
 #define MEASURES_WALK
 #include "measures.h"
 #ifdef NP_DEV
+// Last transfers from RAM to VRAM: source and destination of the first byte, bytes, frame
+static struct { uint32_t s, t, n, gen; } xc[16];
+static uint32_t xc_n;
+// Notes transfer 0xEA (s, t: its buffers, bp: bytes per pixel) if it goes from RAM to VRAM, and logs each new one
+static void xferNote(uint32_t s, uint32_t t, uint32_t bp) {
+  if (isVram(s) || !isVram(t)) return;
+  uint32_t sw = reg[0xB3] & 0xFFFF, dw = reg[0xB5] & 0xFFFF, w = (reg[0xEE] & 0x3FF) + 1, h = (reg[0xEE] >> 10 & 0x3FF) + 1;
+  uint32_t src = s + ((reg[0xEB] >> 10 & 0x3FF) * sw + (reg[0xEB] & 0x3FF)) * bp, dst = t + ((reg[0xEC] >> 10 & 0x3FF) * dw + (reg[0xEC] & 0x3FF)) * bp;
+  uint32_t n = ((h - 1) * dw + w) * bp, i = 0;
+  if (ramEnd(src) < src + n) return;
+  while (i < 16 && (xc[i].t != dst || xc[i].s != src || xc[i].n != n)) i++;
+  if (i == 16) {
+    static int nlog;
+    i = xc_n++ & 15;
+    if (nlog < 96) { nlog++; clog("vram copy: ram %08x to %08x, %u bytes (%ux%u, widths %u/%u, frame %u)\n", src, dst, n, w, h, sw, dw, gen); }
+  }
+  xc[i].s = src; xc[i].t = dst; xc[i].n = n; xc[i].gen = gen;
+}
+// A CALL or JUMP into VRAM: if the target falls in a noted transfer, compares what the mirror holds there with the RAM source
+static void xferCall(uint32_t t) {
+  static int nfresh, nstale;
+  for (int i = 0; i < 16; i++) {
+    if (!xc[i].n || t - xc[i].t >= xc[i].n) continue;
+    volatile uint32_t *m = (volatile uint32_t *)PSP(vtr(t)), *r = (volatile uint32_t *)PSP(xc[i].s + (t - xc[i].t));
+    int same = 1;
+    for (int k = 0; k < 8; k++) same &= m[k] == r[k];
+    if (same ? nfresh++ < 32 : nstale++ < 64)
+      clog("vram copy: walked at %08x, copied %u frames ago from %08x: mirror %s the source (mirror %08x %08x, source %08x %08x, frame %u)\n",
+           t, gen - xc[i].gen, xc[i].s, same ? "equals" : "DIFFERS from", m[0], m[1], r[0], r[1], gen);
+    return;
+  }
+}
 static uint32_t vcall, vcall_n, vcall_w[4];  // last sublist called in VRAM: where, list commands walked then, its first words
 // Logs a CALL or JUMP whose target is neither RAM nor VRAM: how the address was formed and the commands before it
 static void badTarget(List *l, uint32_t pc, uint32_t op, uint32_t t) {
   static int nlog;
-  if (nlog >= 32) return;
-  nlog++;
+  static uint32_t last;
+  if (nlog >= 32 || t == last) return;
+  last = t; nlog++;
   uint32_t a = pc - 28, w[8] = { 0 }, ra = vtr(a);
   if (ra && ramEnd(ra) >= ra + 32) for (int i = 0; i < 8; i++) w[i] = ((volatile uint32_t *)PSP(ra))[i];
   clog("bad target: %08x from op %08x at pc %08x | base %06x off %08x | list %u start %08x sublevel %u return %08x | before pc: %08x %08x %08x %08x %08x %08x %08x > %08x\n",
@@ -937,6 +970,7 @@ static int __attribute__((noinline)) walkList(List *l) {
         if (!l->sp) { acc.lost++; return 1; }
         acc.v_cut++; UNWIND(); break;
       }
+      DEV(if (isVram(t)) xferCall(t);)
       if (c == 0x0A && isVram(t)) {
         acc.v_ok++;
         DEV(vcall = t; vcall_n = l->n; uint32_t vr = vtr(t); for (int i = 0; i < 4; i++) vcall_w[i] = ((volatile uint32_t *)PSP(vr))[i];)
@@ -985,6 +1019,7 @@ static int __attribute__((noinline)) walkList(List *l) {
       acc.transfers++;
       uint32_t s = (reg[0xB2] & 0xFFFFF0) | ((reg[0xB3] << 8) & 0x0F000000), t = (reg[0xB4] & 0xFFFFF0) | ((reg[0xB5] << 8) & 0x0F000000);
       if (isVram(s) || isVram(t)) acc.tr_vram++;
+      DEV(xferNote(s, t, d & 1 ? 4 : 2);)
       if (reg_on) regXfer(s, t, d & 1 ? 4 : 2);
       break;
     }
