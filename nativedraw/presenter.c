@@ -14,6 +14,7 @@
 #include <taihen.h>
 #include <psp2/compat.h>
 #include <psp2/power.h>
+#include <psp2/appmgr.h>
 #include "shaders.h"
 #include "version.h"
 #include "../installer/font.h"
@@ -57,6 +58,30 @@ static void *gmem1(uint32_t type, uint32_t size, int attr) {
 static void *gmem(uint32_t size, int attr) { return gmem1(UNC, size, attr); }  // uncached LPDDR: programs, vertices
 #ifdef NP_DEV
 // KB of type that can be reserved in chunks of step KB, adding them up: what is free even when no large block fits
+static uint32_t probeAll(uint32_t type, uint32_t step);
+// Logs the process budget and every memory block mapped in it (also Adrenaline's), with the total per type
+static void memMap(void) {
+  SceAppMgrBudgetInfo bi;
+  sceClibMemset(&bi, 0, sizeof bi); bi.size = sizeof bi;
+  int r = sceAppMgrGetBudgetInfo(&bi);
+  alog("memory budget (%08x): mode %d | user %u KB, free %u | extra allowed %d, %u KB, free %u | physical %u KB, free %u | CDRAM %u KB, free %u\n", r, bi.app_mode, bi.total_user_rw_mem >> 10,
+       bi.free_user_rw >> 10, bi.extra_mem_allowed, bi.total_extra_mem >> 10, bi.free_extra_mem >> 10, bi.total_phycont_mem >> 10, bi.free_phycont_mem >> 10, bi.total_cdram_mem >> 10, bi.free_cdram_mem >> 10);
+  static struct { uint32_t type, kb; } tot[12];
+  uint32_t nt = 0;
+  for (uint32_t a = 0x60000000; a < 0xE0000000;) {
+    SceKernelMemBlockInfo in;
+    sceClibMemset(&in, 0, sizeof in); in.size = sizeof in;
+    if (sceKernelGetMemBlockInfoByAddr((void *)a, &in) < 0 || !in.mappedSize) { a += 0x10000; continue; }
+    alog("memory map: %08x %u KB type %08x\n", (uint32_t)in.mappedBase, in.mappedSize >> 10, in.type);
+    uint32_t i = 0;
+    while (i < nt && tot[i].type != (uint32_t)in.type) i++;
+    if (i == nt && nt < 12) { tot[i].type = in.type; tot[i].kb = 0; nt++; }
+    if (i < nt) tot[i].kb += in.mappedSize >> 10;
+    uint32_t e = (uint32_t)in.mappedBase + in.mappedSize;
+    a = e > a ? e : a + 0x1000;
+  }
+  for (uint32_t i = 0; i < nt; i++) alog("memory map total: type %08x %u KB\n", tot[i].type, tot[i].kb);
+}
 static uint32_t probeAll(uint32_t type, uint32_t step) {
   static SceUID b[256];
   uint32_t n = 0;
@@ -655,6 +680,7 @@ static int presThread(SceSize args, void *argp) {
   DEV(if (t_on) failInit();)
   alog("presenter: programs %08x, target %08x (surfaces in %s and %s) | free afterwards (MB in one go): CDRAM %u, "
        "LPDDR physical %u, LPDDR %u\n", r1, r2, ty(surf[0]), ty(surf[1]), probe(CDRAM), probe(PHY), probe(UNC));
+  DEV(memMap();)
   DEV(alog("memory free in small chunks: LPDDR uncached %u KB, LPDDR cached %u KB, LPDDR physical %u KB, CDRAM %u KB\n", probeAll(UNC, 256), probeAll(SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, 256), probeAll(PHY, 1024), probeAll(CDRAM, 256));)
   if (r1 < 0 || r2 < 0) return sceKernelExitDeleteThread(0);
   volatile uint32_t *nr = sceGxmGetNotificationRegion();  // scene end: the last word Adrenaline does not use
