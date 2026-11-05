@@ -10,6 +10,13 @@ the Vita but not yet confirmed as a numbered release.
   KEEP/REVERT step (`iterate.sh`) and the unattended loop with Claude Code (`ai_loop.sh`, `docs/agent/en/perf-loop.md`).
 - `docs/dev/*/performance-plan.md`: the ordered plan towards 60 fps, from the analysis of the capturer on `stage3_0.0.16.4/rr1`.
 
+## NativeDraw 0.0.25 + NativeLink 0.0.8 (2026-11-05)
+Tests 0.0.24.1-0.0.24.8, checked on the Vita with God of War Ghost of Sparta (`hold_game`): no crash in about 3 minutes of play, cutscene in HD. The menu (~4,500 draws per frame) and play (6,000-13,000) go past the record's limit, so they still show the normal image.
+- **GE state of the previous game:** when a frame failed, the capturer went back to the state of the last clean frame, which could belong to the previous game, so a game opened after another one never reached HD. NativeLink now publishes the real BASE and the capturer repairs its copy; going back to the last clean frame keeps it.
+- **Sublists copied to VRAM during the frame:** God of War copies its lists from RAM to VRAM with GE transfers and calls them right after, while the mirror only held the last flip. The capturer now applies each RAM to VRAM transfer to the mirror, with aligned accesses (a general memcpy on that memory crashed Adrenaline with C1-2858-3) and only inside the real 2 MB of VRAM.
+- **Measurements (development):** `bad target:`, `base:`, `vram copy:` and the `capture stopped` watchdog.
+- **Test:** `capture_test` checks that a transfer reaches the mirror and that one above the real VRAM writes nothing.
+
 ## NativeDraw 0.0.24 (2026-11-05)
 Tests 0.0.23.1-0.0.23.5, checked on the Vita with Ridge Racer and `hold_game`. Against 0.0.23: normal race 29.7 -> 32.4 fps, hard stretches 27.8 -> 29.8, crowd 26.9 -> 29.1; GPU ~4 ms less per frame.
 - **Images that only blur at PSP size:** an intermediate image of half the screen or less, made only of 2D rectangles that read no record texture, is kept at PSP size. The bloom chain falls from 8.9 to 4.7 ms.

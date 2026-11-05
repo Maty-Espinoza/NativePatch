@@ -27,5 +27,7 @@ rr_2227.bin.gz                  Race, bloom chain and no mirror
 rr_2722.bin.gz                  Race, mirror and no bloom
 rr_crowd.bin.gz                 Crowd, ends in vertex_out
 
+0.0.24.8_gow_menu_play: God of War Ghost of Sparta with hold_game, menu ~4,500 draws per frame and play 6,000-13,000: capturer 65 and 100-150 ms per frame, record over its limit of draws.
+
 Still only in the relays
 Mac: stage3_0.0.16.4/rr1 (run behind the capturer analysis), if it is kept there; stage3_0.0.22.1/rr1.

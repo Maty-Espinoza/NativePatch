@@ -2,11 +2,14 @@
 
 The only list of pending work. Ordered from what comes next to what can wait. Each item says where it came from
 (a document in `docs/dev/en/`, `docs/agent/en/`, `docs/changelog/en/` or the claude.ai project). Done items are removed;
-what was done is in `CHANGELOG.md`. Updated 2026-11-05 (NativeLink 0.0.7 + NativeDraw 0.0.24 confirmed). How the work is done: `docs/agent/en/workflow.md`; stage 3 plan and results:
+what was done is in `CHANGELOG.md`. Updated 2026-11-05 (NativeLink 0.0.8 + NativeDraw 0.0.25 confirmed). How the work is done: `docs/agent/en/workflow.md`; stage 3 plan and results:
 `docs/agent/en/stage3-plan.md`.
 
 ## Next
-- [ ] **Performance work follows `docs/dev/en/performance-plan.md`** (one ordered list): next: God of War Ghost of Sparta, one run with 0.0.24: an image kept at PSP size could be something sharp there (`keep_hd` to compare); then a fog program without `discard` (C.3), for the blended layers of close cars (8-10 ms). `hold_game` stays on for now (user, 2026-11-04). The capturer in the crowd is on hold (B.3 discarded for vertices, B.9 left). Bench on the PC: `tools/perf/` (`docs/agent/en/perf-loop.md`).
+- [ ] **Performance work follows `docs/dev/en/performance-plan.md`** (one ordered list): next: God of War Ghost of Sparta, remove the record's limit of draws, then optimize the capturer with that game (100-150 ms per frame in play).
+- [ ] **God of War, still to check once the menu and play are in HD:** the gray blocks of the menu and the one-color screens (likely the background left visible by the missing lists, not proven), and whether an image kept at PSP size was something sharp (`keep_hd`). Cause of C1-2858-3 not proven: it stopped after the fixes.
+- [ ] **HD indicator:** a small square in a corner on frames drawn in HD, with a switch (the user's idea, 2026-11-05).
+- [ ] **`dump: no memory` also in `auto` level:** God of War only got peeks, no record.
 - [ ] **Crowd work left (`performance-plan.md`):** tight path for BASE/VADDR/PRIM in the capturer.
 - [ ] **Ridge Racer crowd, late lists as complete frames:** garbage state reaches the translator (`color_test_or_logic`, `vertex_out`, `mask`), 1 to 8 frames per run. Look at why they pass as complete. The user also saw something odd in the change to the normal image there: not explained.
 - [ ] **C.1, what is left:** other vertex types, more lights, indices. `0x143` has no saved frame in `tools/perf/data`: not compared by `tr_gv.sh`; a dump of car selection is missing (`dump: no memory`). Remove the `trWhy` logs when closed.

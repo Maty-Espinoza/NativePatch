@@ -110,7 +110,7 @@ static void build(int frame) {
 static uint32_t stateSum(void) { uint32_t h = 0; for (int i = 0; i < 256; i++) h = h * 31 + reg[i]; for (int m = 0; m < 5; m++) for (int i = 0; i < 96; i++) h = h * 31 + mtx[m][i]; return h * 31 + vaddr * 7 + iaddr; }
 // Result of one case, in memory shared with the process that compares them. col: columns before "|" per frame, without
 // and with state; the rest are totals of what each case must exercise.
-typedef struct { char col[8][64]; uint32_t st[8], hit, chk, bad, fail, pre, late, lines, pv, skip, whole, lost, rt1, rtr, wk, pal, tex2, tc, srt, xf, late_pr, want, sametex, ok; } Res;
+typedef struct { char col[8][64]; uint32_t st[8], hit, chk, bad, fail, pre, late, lines, pv, skip, whole, lost, rt1, rtr, wk, xm, pal, tex2, tc, srt, xf, late_pr, want, sametex, ok; } Res;
 static Res *res;
 // An image drawn on many times counts once: with the list full, anything in target pages would pass for an image
 static int rtRepeatOk(void) {
@@ -132,6 +132,21 @@ static int wantKeptOk(void) {
   CPY(1, p) = 0; ok = ok && !rgMirrored(0x0419A000, 0x1000);
   CPY(0, p) = c0; CPY(1, p) = c1; mir_on = on;
   sceClibMemset(rt_pg, 0, sizeof rt_pg); sceClibMemset(want_d, 0, sizeof want_d); sceClibMemset(want_now, 0, sizeof want_now);
+  return ok;
+}
+// A RAM to VRAM transfer reaches the mirror page by page; one aimed above the real 2 MB of VRAM writes nothing
+static int xferMirrorOk(void) {
+  volatile uint32_t *src = (volatile uint32_t *)PSP(0x08900000), *m = (volatile uint32_t *)PSP(MIRROR + 0x190000);
+  mir_u = 0; mir_ok[0][0x190 >> 5] |= 1u << (0x190 & 31);
+  for (int i = 0; i < 512; i++) src[i] = 0xCA000000u + i;
+  reg[0xB3] = reg[0xB5] = 128; reg[0xEB] = reg[0xEC] = 0; reg[0xEE] = 3 | 1 << 10;
+  xferMirror(0x08900000, 0x04190000, 4);
+  int ok = m[0] == src[0] && m[3] == src[3] && !m[4] && m[128] == src[128] && m[131] == src[131] && !m[256];
+  src[0] = 1;
+  xferMirror(0x08900000, 0x04390000, 4);
+  ok = ok && m[0] != 1;
+  for (int i = 0; i < 512; i++) m[i] = 0;
+  reg[0xB3] = reg[0xB5] = reg[0xEE] = 0; mir_ok[0][0x190 >> 5] = 0;
   return ok;
 }
 static int report(const char *name, int ok) { printf("%s %s\n", ok ? "ok  " : "FAIL", name); return !ok; }
@@ -193,6 +208,7 @@ static int checkAll(void) {
   bad += report("frame record: not recorded while the presenter does not take frames", r[REG0].late_pr);
   bad += report("repeated texture: a new record notes it again, and a new texture after an untextured draw is requested", r[REG0].sametex);
   bad += report("mirror: a texture page of an image stops being requested when no frame reads it, a list page stays", r[REG0].want);
+  bad += report("mirror: a RAM to VRAM transfer is applied to it, nothing above the real VRAM", r[REG0].xm);
   bad += report("texture copy: right by CPU and by DMA", texCopyOk(1) && texCopyOk(32));
   bad += report("an image repeated among the targets does not hide textures in its pages", r[REG0].rtr);
   bad += report("a texture page used this frame stays requested under a target; another mirror's copy counts", r[REG0].wk);
@@ -268,7 +284,7 @@ int main(int argc, char **argv) {
     markRt(0x04100000, 4096); rt_fb[0] = 0x100000; rt_nb = 1;
     res->rt1 &= rtRead(0x04100000) && !rtRead(0x04100400) && rtPage(0x04100400);
     sceClibMemset(rt_pg, 0, sizeof rt_pg); rt_nb = 0;
-    res->rtr = rtRepeatOk(); res->wk = wantKeptOk();
+    res->rtr = rtRepeatOk(); res->wk = wantKeptOk(); res->xm = xferMirrorOk();
     *W(0x08C30000) = 1; reg[0xA0] = 0xC30000; reg[0xA8] = 0x080000 | 8; reg[0xB8] = 3 << 8 | 3; reg[0xC3] = 3;  // 8x8, 8888
     pub_ord = 100; uint32_t t0 = rgTex(0, 8), t1 = rgTex(0, 8);
     pub_ord = 101; uint32_t t2 = rgTex(0, 8);

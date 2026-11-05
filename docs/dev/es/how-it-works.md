@@ -56,7 +56,7 @@ ocupa, NativeLink queda apagado. La Vita la ve en `0x68000000 + (dirección & 0x
 |---|---|
 | 0x0A000000 | Buzón (`SB`, ver abajo) |
 | 0x0A100000 | Dos listas de 8 KB del GE para las copias del espejo (alternadas) |
-| 0x0A200000 | Espejo de la VRAM 1 (`MIRROR`, 2 MB: copias pares) |
+| 0x0A200000 | Espejo de la VRAM 1 (`MIRROR`, 2 MB: copias pares; el capturador también aplica al espejo en uso cada copia de RAM a VRAM que recorre) |
 | 0x0A7FA000 | Texto del log de NativeLink (16 KB) |
 | 0x0A7FF000 | Descriptor del log: +0 "GPV1" (NativeLink), +0x20 "LOGV" (NativeDraw), +0x40 seq, done, bytes |
 | 0x0AC00000 | Espejo de la VRAM 2 (`MIRROR2`, 2 MB: copias impares) |

@@ -187,6 +187,9 @@ Juntar funciona: 3405 -> 267 llamadas GXM en el frame del público, mismos triá
 3. **Hecho en 0.0.23:** retrovisor en la GPU, en una imagen propia. **En 0.0.24:** brillo a tamaño PSP.
 4. **C.2 solo si el capturador limita después de B.3.**
 
+## God of War Ghost of Sparta como nueva vara de medir (0.0.25, `hold_game`, 2026-11-05)
+Menú ~4.500 dibujos y 66.000 órdenes por frame, juego 6.000-13.000 dibujos: el capturador tarda 65 ms en el menú y 100-150 ms jugando, 3 a 4 veces el presupuesto de 33 ms, antes de dibujar nada. Orden: quitar el tope de dibujos del registro para ver ambos en HD, aunque vayan lentos, y después optimizar el capturador con este juego.
+
 ## C. Cambios grandes (preguntar primero al usuario)
 1. **Vértices 3D en un vertex shader de GXM leyendo la RAM del PSP mapeada para la GPU** (`sceGxmMapMemory` en 0x70000000
    funciona, etapa 1). Quita la copia de vértices del capturador (~5 ms) y la transformación en CPU del traductor (16-20 ms

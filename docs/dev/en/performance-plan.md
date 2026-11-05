@@ -181,6 +181,9 @@ Joining works: 3405 -> 267 GXM draws in the crowd frame, same triangles. Vertice
 3. **Done in 0.0.23:** rear-view mirror on the GPU, in an image of its own. **In 0.0.24:** bloom at PSP size.
 4. **C.2 only if the capturer limits after B.3.**
 
+## God of War Ghost of Sparta as the new yardstick (0.0.25, `hold_game`, 2026-11-05)
+Menu ~4,500 draws and 66,000 commands per frame, play 6,000-13,000 draws: the capturer takes 65 ms in the menu and 100-150 ms in play, 3 to 4 times the 33 ms budget, before drawing anything. Order: remove the record's limit of draws to see both in HD, however slow, then optimize the capturer with this game.
+
 ## C. Large changes (ask the user first)
 1. **3D vertices in a GXM vertex shader reading the PSP RAM mapped for the GPU** (`sceGxmMapMemory` at 0x70000000 works,
    stage 1). Removes the vertex copy from the capturer (~5 ms) and the CPU transform from the translator (16-20 ms per HD

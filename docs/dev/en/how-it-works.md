@@ -56,7 +56,7 @@ occupies it, NativeLink stays off. The Vita sees it at `0x68000000 + (address & 
 |---|---|
 | 0x0A000000 | Mailbox (`SB`, see below) |
 | 0x0A100000 | Two 8 KB GE lists for the mirror copies (alternating) |
-| 0x0A200000 | VRAM mirror 1 (`MIRROR`, 2 MB: even copies) |
+| 0x0A200000 | VRAM mirror 1 (`MIRROR`, 2 MB: even copies; the capturer also applies to the mirror in use each RAM to VRAM transfer it walks) |
 | 0x0A7FA000 | NativeLink log text (16 KB) |
 | 0x0A7FF000 | Log descriptor: +0 "GPV1" (NativeLink), +0x20 "LOGV" (NativeDraw), +0x40 seq, done, bytes |
 | 0x0AC00000 | VRAM mirror 2 (`MIRROR2`, 2 MB: odd copies) |
