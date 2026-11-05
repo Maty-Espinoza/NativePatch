@@ -161,11 +161,15 @@ Joining works: 3405 -> 267 GXM draws in the crowd frame, same triangles. Vertice
 
 **Short path (0.0.21.6, `stage3_0.0.21.6/rr1`, against 0.0.21.5, same switches):** crowd 18.8 -> 25.5 fps, translator 45 -> 30 ms; hard stretches 21.9 -> 24.5 fps, 35 -> 32 ms. Normal race (without car selection, which skews the zone) 27.2 -> 28.6 fps. No normal image during the race. Bridge straight stays at ~20 fps, translator ~36 ms: vertices are 14 ms of it, and 2973 of its ~4300 CPU vertices are the rear-view mirror, kept off the GPU path only by its scissor. Fair reference for the next changes: `tests/perf/rr_hold_0.0.21.6.json`.
 
+**Rear-view mirror on the GPU (0.0.22.1, confirmed as 0.0.23, `stage3_0.0.22.1/rr1`, against 0.0.21.6, same switches):** the mirror is one stretch: a clear of color and depth that covers its scissor, then its 3D draws, with nothing read from the surface. So it goes to an image of its own (`rtb`), moved to the corner of the box, in the intermediate pass; the edge of the image clips it exactly, with no `CLP0`, `discard` or `sceGxmSetRegionClip`, and the surface scene is not cut. A paste on the surface puts it back. `scissor` in `3D vertices not moved by the GPU`: ~3000 -> 0. Hard stretches 24.5 -> 28.8 fps, translator 31.7 -> 25.8 ms; crowd 25.5 -> 28.4 fps; normal race unchanged, 29.3 fps. Vertices 4.4-5 ms. On the PC, real ARM instructions: `rr_2722` -29 %, `rr_crowd` -20 %, `rr_2227` (no mirror) +3.6 %, mostly `trFrame`, not the search. Limits: one stretch per frame; a clear with position only.
+
+**Now the GPU limits:** of the translator's 26 ms, ~9 ms are waiting for the GPU, 11-16 ms on the bridge straight (seconds at 24-26 fps) and 19-32 ms in a short stretch of 19-25 fps near the start of the race (900 draws). CPU work is ~16 ms. Reference: `tests/perf/rr_hold_0.0.22.1.json`.
+
 ## Order from here (2026-11-04)
 0. **Done in 0.0.21:** a frame is skipped only when the capturer was behind at a sync and the last frame was not taken, or when the record to write is still read by the GPU: car selection ~28 -> ~35 HD frames per second, race and crowd the same. Below ~45 because records are busy with the GPU. Never write a record the GPU reads: it froze the drawing thread and crashed the GPU. Original item: expected ~45 HD frames per second in car selection; the race and the crowd must stay the same. Verify: Vita (`frames only walked`, `gate_us`, game fps).
 1. **GPU (C.3), started first by the user:** the capturer in the crowd waits; B.3 failed and B.9 is the remaining idea there. It falls behind there: 7-10 complete frames per second, and lists read late give frames that fail in the translator (1 to 8 per run), each shown as the normal image for several game frames.
 2. **GPU (C.3):** fewer pixels (9.4 screens per frame). In the normal race translator and GPU take about the same, ~33 ms.
-3. **Rear-view mirror on the GPU:** not with `CLP0` or `discard`; `sceGxmSetRegionClip` granularity is untested.
+3. **Done in 0.0.23:** rear-view mirror on the GPU, in an image of its own.
 4. **C.2 only if the capturer limits after B.3.**
 
 ## C. Large changes (ask the user first)

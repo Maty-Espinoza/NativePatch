@@ -167,11 +167,15 @@ Juntar funciona: 3405 -> 267 llamadas GXM en el frame del público, mismos triá
 
 **Camino corto (0.0.21.6, `stage3_0.0.21.6/rr1`, contra 0.0.21.5, mismos interruptores):** público 18,8 -> 25,5 fps, traductor 45 -> 30 ms; tramos difíciles 21,9 -> 24,5 fps, 35 -> 32 ms. Carrera normal (sin la selección de autos, que distorsiona la zona) 27,2 -> 28,6 fps. Sin imagen normal en la carrera. La recta del puente sigue en ~20 fps, traductor ~36 ms: los vértices son 14 ms, y 2973 de sus ~4300 vértices en CPU son del retrovisor, fuera del camino de GPU solo por su scissor. Referencia justa para los próximos cambios: `tests/perf/rr_hold_0.0.21.6.json`.
 
+**Retrovisor en la GPU (0.0.22.1, confirmada como 0.0.23, `stage3_0.0.22.1/rr1`, contra 0.0.21.6, mismos interruptores):** el retrovisor es un solo tramo: una limpieza de color y profundidad que cubre su scissor y luego sus dibujos 3D, sin leer nada de la superficie. Por eso va a una imagen propia (`rtb`), desplazada a la esquina del recuadro, en la pasada de intermedias; el borde de la imagen lo recorta exacto, sin `CLP0`, `discard` ni `sceGxmSetRegionClip`, y la escena de la superficie no se corta. Un pegado en la superficie lo devuelve a su lugar. `scissor` en `3D vertices not moved by the GPU`: ~3000 -> 0. Tramos difíciles 24,5 -> 28,8 fps, traductor 31,7 -> 25,8 ms; público 25,5 -> 28,4 fps; carrera normal sin cambios, 29,3 fps. Vértices 4,4-5 ms. En el PC, instrucciones ARM reales: `rr_2722` -29 %, `rr_crowd` -20 %, `rr_2227` (sin retrovisor) +3,6 %, sobre todo en `trFrame`, no en la búsqueda. Límites: un tramo por frame; limpieza solo con posición.
+
+**Ahora limita la GPU:** de los 26 ms del traductor, ~9 ms son espera a la GPU, 11-16 ms en la recta del puente (segundos a 24-26 fps) y 19-32 ms en un tramo corto de 19-25 fps cerca del inicio de la carrera (900 dibujos). El trabajo de CPU es ~16 ms. Referencia: `tests/perf/rr_hold_0.0.22.1.json`.
+
 ## Orden desde aquí (2026-11-04)
 0. **Hecho en 0.0.21:** un frame se salta solo si el capturador iba atrasado en una sincronización y el último frame no fue tomado, o si la GPU aún lee el registro a escribir: selección de autos ~28 -> ~35 frames HD por segundo, carrera y público iguales. Queda bajo ~45 porque los registros están ocupados con la GPU. Nunca escribir un registro que la GPU lee: congeló el hilo de dibujo y colgó la GPU.
 1. **GPU (C.3), primero por decisión del usuario:** el capturador en el público queda en espera; B.3 falló y queda B.9 como idea. Ahí se atrasa: 7-10 frames completos por segundo, y las listas leídas tarde dan frames que fallan en el traductor (1 a 8 por corrida), cada uno visible como imagen normal durante varios frames del juego.
 2. **GPU (C.3):** menos píxeles (9,4 pantallas por frame). En carrera normal traductor y GPU tardan casi lo mismo, ~33 ms.
-3. **Retrovisor en la GPU:** sin `CLP0` ni `discard`; falta probar la granularidad de `sceGxmSetRegionClip`.
+3. **Hecho en 0.0.23:** retrovisor en la GPU, en una imagen propia.
 4. **C.2 solo si el capturador limita después de B.3.**
 
 ## C. Cambios grandes (preguntar primero al usuario)

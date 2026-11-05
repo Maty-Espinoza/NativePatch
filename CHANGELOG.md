@@ -10,6 +10,11 @@ the Vita but not yet confirmed as a numbered release.
   KEEP/REVERT step (`iterate.sh`) and the unattended loop with Claude Code (`ai_loop.sh`, `docs/agent/en/perf-loop.md`).
 - `docs/dev/*/performance-plan.md`: the ordered plan towards 60 fps, from the analysis of the capturer on `stage3_0.0.16.4/rr1`.
 
+## NativeDraw 0.0.23 (2026-11-05)
+Test 0.0.22.1, checked on the Vita with Ridge Racer and `hold_game`. Against 0.0.21.6: hard stretches 24.5 -> 28.8 fps, crowd 25.5 -> 28.4 fps, vertices 37-60 % lower. The rear-view mirror looks right.
+- **Boxed stretch (rear-view mirror) on the GPU:** a stretch behind a partial scissor that starts with a clear of color and depth covering it goes to an image of its own, moved to its corner, before the surface; the edge of that image clips it on the GPU and the result is pasted on the surface. The capturer marks those draws for the GPU. One stretch per frame.
+- **`tr_gv.sh`** now compares the triangles of that stretch too.
+
 ## NativeDraw 0.0.22 + NativeLink 0.0.7 (2026-11-04)
 Tests 0.0.21.1–0.0.21.6 and NativeLink 0.0.6.1, checked on the Vita with Ridge Racer and `hold_game`. Against 0.0.21.5: crowd 18.8 -> 25.5 fps, translator 45 -> 30 ms.
 - **`hold_game`** (development): the game waits for the whole chain, so every frame is complete and in HD. It needs NativeLink: the gate waits up to 200 ms. For measuring, and playable.
