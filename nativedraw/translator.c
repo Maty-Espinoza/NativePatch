@@ -749,6 +749,11 @@ static uint32_t trClipTri(const TV *p, const float *sc, TV *o) {
   return n;
 }
 
+// Which edges of scissor sc vertex v is beyond, one bit each; 16 if it is behind the camera
+static inline uint32_t trOut(const TV *v, const float *sc) {
+  float w = v->w;
+  return !(w > 1e-4f) ? 16 : (v->x < sc[0] * w) | (v->y < sc[1] * w) << 1 | (v->x > sc[2] * w) << 2 | (v->y > sc[3] * w) << 3;
+}
 // Triangles, strip or fan (*prim 3, 4 or 5) of *np vertices at o, room for room: if a vertex is outside the scissor or flat is
 // set (each triangle takes the color of its last vertex), rewrites them as a clipped triangle list (*prim = 3) and
 // updates *np. With w3d (3D draw) only a scissor smaller than the surface is clipped here: the GPU clips the rest. Odd
@@ -763,7 +768,10 @@ static int trTris(TV *o, uint32_t *np, uint32_t room, uint32_t *prim, const floa
     int sw = *prim == 4 && (i & 1);
     TV t[3] = { o[*prim == 5 ? 0 : sw ? i + 1 : i], o[sw ? i : i + 1], o[i + 2] };
     if (flat) t[0].c = t[1].c = t[2].c;
-    m += trClipTri(t, sc, o + n + m);
+    uint32_t oa = trOut(&t[0], sc), ob = trOut(&t[1], sc), oc = trOut(&t[2], sc);
+    if (oa & ob & oc) continue;  // (all beyond the same edge)
+    if (oa | ob | oc) m += trClipTri(t, sc, o + n + m);
+    else { sceClibMemcpy(o + n + m, t, sizeof t); m += 3; }  // (all inside)
   }
   sceClibMemmove(o, o + n, m * sizeof(TV));
   *np = m; *prim = 3;
@@ -915,7 +923,7 @@ static int trCheckFrame(RFrame *f, uint32_t *disp_p, uint32_t *ord_p) {
   // disp: image being shown; ifb, iend, ipsm: intermediate images, where their memory ends, their format
   uint32_t disp = f->fb & 0x1FFFF0, ifb[2], iend[2], ipsm[2], nif = 0, n_disp = 0;
   uint32_t ord = f->nd, rd_mask = 0;  // (rd_mask: bit per intermediate image read by a draw)
-  for (uint32_t i = 0; i < f->nd; i++) n_disp += (RE(f->e[f->d[i].st], 0x9C) & 0x1FFFF0) == disp;
+  for (uint32_t i = 0; i < f->nd && !n_disp; i++) n_disp = (RE(f->e[f->d[i].st], 0x9C) & 0x1FFFF0) == disp;
   // no draw to the shown image (game behind: the flip has the other one of the double buffer): use the last draw's one
   if (!n_disp && f->nd) disp = RE(f->e[f->d[f->nd - 1].st], 0x9C) & 0x1FFFF0;
   // From the end: a draw on an image nobody reads later is not done. What it leaves is for the PSP (say a palette the game
@@ -924,6 +932,8 @@ static int trCheckFrame(RFrame *f, uint32_t *disp_p, uint32_t *ord_p) {
   uint32_t live[8], nl = 0;
   for (uint32_t i = f->nd; i-- > 0;) {
     RDraw *d = &f->d[i];
+    // (same state as the draw after it: same answer)
+    if (i + 1 < f->nd && d[1].st == d->st && !d[1].toff == !d->toff && d[1].vt == d->vt && !(t_mark[(i + 1) >> 5] >> ((i + 1) & 31) & 1)) continue;
     const uint32_t *e = f->e[d->st];
     uint32_t fb = RE(e, 0x9C) & 0x1FFFF0, k;
     for (k = 0; k < nl && live[k] != fb; k++) {}
@@ -938,7 +948,8 @@ static int trCheckFrame(RFrame *f, uint32_t *disp_p, uint32_t *ord_p) {
   for (uint32_t i = 0; i < f->nd; i++) {
     if (t_mark[i >> 5] >> (i & 31) & 1) continue;
     const RDraw *dk = &f->d[i];  // (what trCheck looks at is usually the same as in the last draw checked)
-    int r = cd && cd->st == dk->st && cd->prim == dk->prim && cd->vt == dk->vt && !cd->toff == !dk->toff && !cd->clut == !dk->clut ? T_OK : trCheck(f, &f->d[i]);
+    if (cd && cd->st == dk->st && cd->prim == dk->prim && cd->vt == dk->vt && !cd->toff == !dk->toff && !cd->clut == !dk->clut) continue;  // (everything below would give the same)
+    int r = trCheck(f, &f->d[i]);
     cd = dk;
     const uint32_t *e0 = f->e[f->d[i].st];
     uint32_t fb = RE(e0, 0x9C) & 0x1FFFF0, k;
@@ -1091,6 +1102,28 @@ static void trRegions(RFrame *f, uint32_t disp) {
 // surface last, in a single scene: each scene reads and writes its whole surface), sets up texture, palette (to 8888 in
 // tpal), vertices (trVerts, in tv) and uniforms of each draw, and draws it. T_OK if ready; if it fails midway
 // returns the reason and the surface is not used.
+// The fields that make two draws share their state
+static inline int gSame(const RDraw *a, const RDraw *b) {
+  return a->st == b->st && a->vt == b->vt && a->prim == b->prim && a->toff == b->toff && a->clut == b->clut && a->clen == b->clen &&
+         a->woff == b->woff && a->moff == b->moff && a->loff == b->loff;
+}
+// Index of the vertex at offset vo from base gb, by vertex size vz (16, 20 or 24): 0 if it is not a whole number of vertices.
+// With no division: a multiplication by the inverse of 3 or 5 leaves a small number only if the division is exact
+static inline int gOff(uint32_t vo, uint32_t gb, uint32_t vz, uint32_t *ix) {
+  uint32_t b = vo - gb, x;
+  if (vo < gb) return 0;
+  if (vz == 16) { *ix = b >> 4; return !(b & 15); }
+  if (vz == 24) { x = (b >> 3) * 0xAAAAAAABu; *ix = x; return !(b & 7) && x <= 0x55555555u; }
+  x = (b >> 2) * 0xCCCCCCCDu; *ix = x; return !(b & 3) && x <= 0x33333333u;
+}
+// Writes the triangles of a draw of nt triangles starting at vertex ix as indices; returns how many
+static inline uint32_t gAdd(uint16_t *o, uint32_t ix, uint32_t prim, uint32_t nt) {
+  uint16_t *p = o;
+  if (prim == 3) for (uint32_t k = 0; k < nt * 3; k++) *p++ = ix + k;
+  else if (prim == 5) for (uint32_t k = 0; k < nt; k++) { p[0] = ix; p[1] = ix + k + 1; p[2] = ix + k + 2; p += 3; }
+  else for (uint32_t k = 0; k < nt; k++) { p[0] = ix + k; p[1] = ix + k + 1 + (k & 1); p[2] = ix + k + 2 - (k & 1); p += 3; }
+  return p - o;
+}
 static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base) {
   t3.ke = 0;
   DEV(uint32_t ta = now(), tb, ut[6]; sceClibMemcpy(ut, (void *)t_us, sizeof ut);
@@ -1133,7 +1166,8 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
   // RUN: sends the pending draw, the n vertices at rv in primitive rp; draws with the state already set wait in it to be joined
 #define RUN() do { GRUN(); if (rn) { sceGxmSetVertexStream(c, 0, o + rv); \
     sceGxmDraw(c, rp == 3 ? SCE_GXM_PRIMITIVE_TRIANGLES : rp == 5 ? SCE_GXM_PRIMITIVE_TRIANGLE_FAN : SCE_GXM_PRIMITIVE_TRIANGLE_STRIP, SCE_GXM_INDEX_FORMAT_U16, tib, rn); rn = 0; } } while (0)
-  uint32_t rn = 0, rv = 0, rp = 0, key = 0, gn = 0, gs = 0, gb = 0, gz = 0;
+  uint32_t rn = 0, rv = 0, rp = 0, key = 0, gn = 0, gs = 0, gb = 0, gz = 0, ix = 0;
+  const RDraw *gd = 0;  // last draw joined by indices
   uint16_t *gi = tgi[s];
   float wm[16];    // the scene's matrix
   int gv_cur = 0;  // the program in the context is gvp
@@ -1161,11 +1195,22 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
   float sc[4];  // scissor of the state set (a draw sharing it keeps it, like mat)
   uint32_t mat = 0;
   // three passes: of the first ord draws, 0 those to intermediate images and 1 those to the surface; 2 the rest, in order
-  for (uint32_t pass = 0; pass < 3 && res == T_OK; pass++)
-  for (uint32_t i = 0; i < f->nd && res == T_OK; i++) {
+  for (uint32_t pass = ord ? 0 : 2; pass < 3 && res == T_OK; pass++)
+  for (uint32_t i = pass < 2 ? 0 : ord, ne = pass < 2 ? ord : f->nd; i < ne && res == T_OK; i++) {
     DEV(h_at = 4; h_i = i;)
     RDraw *d = &f->d[i];
     if (t_mark[i >> 5] >> (i & 31) & 1) continue;
+    // Short path: same state as the draw before, already joined by indices: only its indices are added
+    if (gd && d == gd + 1 && pd == gd && i != ord && gSame(gd, d) && gn > gs) {
+      uint32_t n = d->n, nt = gd->prim == 3 ? n / 3 : n - 2, vo = d->voff & ~VX, ix;
+      if (d->voff & VX && n >= 3 && gn + nt * 3 <= TG_N && gOff(vo, gb, gz, &ix) && ix + n <= 0xFFFF) {
+        gn += gAdd(gi + gn, ix, d->prim, nt);
+        pd = gd = d; t_draws++;
+        DEV(t_c[TC_VIN] += n; t_c[TC_VOUT] += n; t_c[TC_VGPU] += n; t_c[TC_D3]++; t_c[TC_LIT] += t3.lit ? n : 0; t_c[TC_SAME]++;)
+        continue;
+      }
+    }
+    gd = 0;
     const uint32_t *e = f->e[d->st];
     uint32_t clr = RE(e, 0xD3), tex = hasTex(e, d), fb = RE(e, 0x9C) & 0x1FFFF0, w3d = !(d->vt >> 23 & 1);
     RT *dst = fb == disp ? 0 : rtOf(fb, f->frame, 1);
@@ -1409,18 +1454,16 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
       if (nu) { sceGxmReserveVertexDefaultUniformBuffer(c, &u); t3Uni(u, &t3, tw, th, wm, gl, mat); }
       // Same state as the pending draw and same vertex size: its triangles are added by indices to the pending draw, on the
       // vertices where the record has them. The base goes below the first draw because the record fills downwards
-      uint32_t vo = d->voff & ~VX, vz = gv == 1 ? 24 : gv == 2 ? 16 : 20, ix = gn > gs ? (vo - gb) / vz : 0, nt = prim == 3 ? n / 3 : n - 2;
-      if (gn > gs && (gz != vz || vo < gb || (vo - gb) % vz || ix + n > 0xFFFF)) { GRUN(); ix = 0; }
+      uint32_t vo = d->voff & ~VX, vz = gv == 1 ? 24 : gv == 2 ? 16 : 20, nt = prim == 3 ? n / 3 : n - 2;
+      if (gn > gs && (gz != vz || !gOff(vo, gb, vz, &ix) || ix + n > 0xFFFF)) GRUN();
       if (n < 3 || gn + nt * 3 > TG_N DEV(|| no_join)) {
         GRUN();
         sceGxmSetVertexStream(c, 0, f->tx + vo);
         sceGxmDraw(c, prim == 3 ? SCE_GXM_PRIMITIVE_TRIANGLES : prim == 5 ? SCE_GXM_PRIMITIVE_TRIANGLE_FAN : SCE_GXM_PRIMITIVE_TRIANGLE_STRIP, SCE_GXM_INDEX_FORMAT_U16, tib, n);
       } else {
         if (gn == gs) { ix = vo / vz < 32000 ? vo / vz : 32000; gb = vo - ix * vz; gz = vz; }
-        for (uint32_t k = 0; k < nt; k++) {
-          uint32_t a = prim == 3 ? k * 3 : prim == 5 ? 0 : k, b = prim == 3 ? k * 3 + 1 : k + 1, m = prim == 3 ? k * 3 + 2 : k + 2;
-          gi[gn] = ix + a; gi[gn + 1] = ix + (prim == 4 && k & 1 ? m : b); gi[gn + 2] = ix + (prim == 4 && k & 1 ? b : m); gn += 3;
-        }
+        gn += gAdd(gi + gn, ix, prim, nt);
+        gd = d;
       }
       pd = d; t_draws++;
       DEV(t_us[3] += now() - tb;)
