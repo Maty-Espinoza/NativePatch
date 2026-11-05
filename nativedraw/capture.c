@@ -1328,6 +1328,7 @@ static void event(volatile uint32_t *e) {
     fin_ord = sync_seen;
     DEV(uint32_t tfw = CST();)
     walk();  // what was queued before the flip is walked before closing the frame
+    DEV(if (hold_game) for (uint32_t c0 = ~0u; qh != qt && f_cmds != c0;) { c0 = f_cmds; walk(); })  // (all of it, not one turn)
     DEV(uint32_t tf = CST();)
     { uint32_t dt = now() - f_t0; acc.us += dt; f_us += dt; f_t0 = now(); }
 #ifdef NP_DEV
