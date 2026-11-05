@@ -869,8 +869,9 @@ static void xferMirror(uint32_t s, uint32_t t, uint32_t bp) {
       n = 4096 - ((dst + o) & 4095);
       if (n > w - o) n = w - o;
       uint32_t ra = vtr(dst + o);
-      DEV(if ((dst + o) >> 21 != 0x04000000u >> 21) xm_out++; else if (!ra) xm_skip++; else xm_ok++;)
-      if (!ra || (dst + o) >> 21 != 0x04000000u >> 21 || ramEnd(src + o) < src + o + n) continue;
+      int real = (dst + o) >> 24 == 4 && !((dst + o) & 0x200000);  // (0x04000000 and its plain copy 0x04400000; the others scramble addresses)
+      DEV(if (!real) xm_out++; else if (!ra) xm_skip++; else xm_ok++;)
+      if (!ra || !real || ramEnd(src + o) < src + o + n) continue;
       if ((ra | (src + o) | n) & 3) for (uint32_t i = 0; i < n; i += 2) ((volatile uint16_t *)PSP(ra))[i / 2] = ((volatile uint16_t *)PSP(src + o))[i / 2];
       else for (uint32_t i = 0; i < n; i += 4) ((volatile uint32_t *)PSP(ra))[i / 4] = ((volatile uint32_t *)PSP(src + o))[i / 4];
       for (uint32_t b = ra & ~63u; b < ra + n; b += 64) if (clOk(b)) cl_tag[clSlot(b)] = 0;
