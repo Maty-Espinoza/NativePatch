@@ -155,6 +155,8 @@ pieces, not as real speed. Compare with `draw` set to `no` to separate capturing
 | `cpu` | Processor received per second by each thread; `free0-2`: what each core has left (lowest-priority threads) |
 | `limits` | Times a fixed limit was reached: `stuck`, `queue_full`, `list_skipped`, `list_no_end`, `record_*` |
 
+`drawing stuck:` lines (development builds, `nativedraw.log`, first 30): Adrenaline finished no scene for a second. Stage (0 outside `hookEnd`, 1 its `sceGxmEndScene`, 2 checks, 3 the record, 4 translating that draw, 5 `sceGxmBeginScene`, 6 `sceGxmEndScene`, 7 normal image), scenes sent and finished, what the system says about the thread, and the records (`regState`).
+
 `stuck:` lines (first 60): a list with no progress for 50 ms and newer lists waiting. NativeLink's `stats frame` line (every 10 s) gives vblank,
 all the time in hooks, lists, GE busy.
 

@@ -10,6 +10,12 @@ the Vita but not yet confirmed as a numbered release.
   KEEP/REVERT step (`iterate.sh`) and the unattended loop with Claude Code (`ai_loop.sh`, `docs/agent/en/perf-loop.md`).
 - `docs/dev/*/performance-plan.md`: the ordered plan towards 60 fps, from the analysis of the capturer on `stage3_0.0.16.4/rr1`.
 
+## NativeDraw 0.0.21 (2026-11-04)
+Tests 0.0.20.1–0.0.20.3, checked on the Vita with Ridge Racer; NativeLink stays at 0.0.6. Car selection: ~28 -> ~35 HD frames per second; race unchanged; game at 60 fps.
+- **Frame skipping:** `regFlip` skips a frame only if the presenter did not take the last one and the capturer was behind at a sync, or if the record to write is still read by the GPU.
+- **Bug found on the way (0.0.20.1, 0.0.20.2):** with no skipping, no record was free and `regFlip` wrote one the GPU was reading: the drawing thread froze once and the GPU crashed once. `with the GPU unfinished (measured)` was 0 in the runs before and after, 1137 and 13 in those two.
+- **`drawing stuck:`** (development builds): logs where Adrenaline's drawing thread is if it finishes no scene for a second.
+
 ## NativeDraw 0.0.20 (2026-11-04)
 Tests 0.0.19.1–0.0.19.4, checked on the Vita with Ridge Racer; NativeLink stays at 0.0.6. Car selection against 0.0.19: vertices ~21 -> 2.3 ms per HD frame,
 translator ~33 -> 16.5 ms, GPU ~20 -> ~21 ms, Adrenaline's frames ~27 -> ~44 per second, HD frames ~21 -> ~27 per second. Race: no clear change; game at 60 fps.

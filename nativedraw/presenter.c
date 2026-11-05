@@ -496,7 +496,7 @@ static void stuckLog(void) {
   SceKernelThreadInfo in; sceClibMemset(&in, 0, sizeof in); in.size = sizeof in;
   int e = sceKernelGetThreadInfo(nd_gfx_uid, &in);
   uint32_t run = (uint32_t)in.runClocks; n++;
-  alog("stuck: stage %u draw %u | scene %u done %u (last frame %u, before %u) | thread info %08x status %x wait %x on %08x priority %x ran %u us | records %06x\n",
+  alog("drawing stuck: stage %u draw %u | scene %u done %u (last frame %u, before %u) | thread info %08x status %x wait %x on %08x priority %x ran %u us | records %06x\n",
        h_at, h_i, gq, gq_done ? *gq_done : 0, fq[0], fq[1], e, in.status, in.waitType, in.waitId, in.currentPriority, run - run0, regState());
   run0 = run;
 }

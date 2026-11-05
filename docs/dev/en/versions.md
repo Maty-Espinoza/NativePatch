@@ -108,3 +108,4 @@ Milestones of the old numbering (details in `../../changelog/`):
 | 0.0.6 | 0.0.18 | (commit "NativeDraw 0.0.18") | `nd_fa` (GPU 38 -> 32.5 ms per HD frame in the race), `vert_split` and `thread_split`. Tests 0.0.17.3–0.0.17.6 |
 | 0.0.6 | 0.0.19 | (commit "NativeDraw 0.0.19") | `nd_v3`: first stage of C.1, the GPU moves 54 % of the vertices of the race (vertices ~19.5 -> 13.1 ms per HD frame). Tests 0.0.18.1–0.0.18.8 |
 | 0.0.6 | 0.0.20 | (commit "NativeDraw 0.0.20") | `nd_v4`: the GPU lights the cars (car selection: translator ~33 -> 16.5 ms per HD frame). Tests 0.0.19.1–0.0.19.4 |
+| 0.0.6 | 0.0.21 | (commit "NativeDraw 0.0.21") | A frame is skipped only when the capturer is short of time or the GPU still reads the record (car selection: ~28 -> ~35 HD frames per second). Tests 0.0.20.1–0.0.20.3 |

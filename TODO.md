@@ -2,11 +2,11 @@
 
 The only list of pending work. Ordered from what comes next to what can wait. Each item says where it came from
 (a document in `docs/dev/en/`, `docs/agent/en/`, `docs/changelog/en/` or the claude.ai project). Done items are removed;
-what was done is in `CHANGELOG.md`. Updated 2026-11-04 (NativeLink 0.0.6 + NativeDraw 0.0.20 confirmed). How the work is done: `docs/agent/en/workflow.md`; stage 3 plan and results:
+what was done is in `CHANGELOG.md`. Updated 2026-11-04 (NativeLink 0.0.6 + NativeDraw 0.0.21 confirmed). How the work is done: `docs/agent/en/workflow.md`; stage 3 plan and results:
 `docs/agent/en/stage3-plan.md`.
 
 ## Next
-- [ ] **Performance work follows `docs/dev/en/performance-plan.md`** (one ordered list): next: skip frames only when the capturer is short of time (car selection, ~30 -> ~45 HD frames per second), then GPU in the race (C.3). The capturer in the crowd is on hold (B.3 discarded for vertices, B.9 left). Bench on the PC: `tools/perf/` (`docs/agent/en/perf-loop.md`).
+- [ ] **Performance work follows `docs/dev/en/performance-plan.md`** (one ordered list): next: deep measurement of the crowd, then GPU in the race (C.3). The capturer in the crowd is on hold (B.3 discarded for vertices, B.9 left). Bench on the PC: `tools/perf/` (`docs/agent/en/perf-loop.md`).
 - [ ] **Ridge Racer crowd, late lists as complete frames:** garbage state reaches the translator (`color_test_or_logic`, `vertex_out`, `mask`), 1 to 8 frames per run. Look at why they pass as complete. The user also saw something odd in the change to the normal image there: not explained.
 - [ ] **C.1, what is left:** rear-view mirror (~1500 vertices per HD frame), other vertex types, more lights, indices. `0x143` has no saved frame in `tools/perf/data`: not compared by `tr_gv.sh`; a dump of car selection is missing (`dump: no memory`). Remove the `trWhy` logs when closed.
 - [ ] **High clocks as an option of the L+R+START menu** (user, 2026-11-03): a plan B, the goal is not to need them. Today a development switch: production builds run at Adrenaline's clocks.

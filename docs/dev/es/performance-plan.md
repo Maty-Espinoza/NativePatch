@@ -140,7 +140,7 @@ Las pasadas coplanares de un modelo deben ir por el mismo camino y programa: con
 **Qué limita ahora la selección de autos:** `regFlip` se salta grabar un frame (`R_SKIP`) si el anterior aún no fue tomado. La GPU tarda ~21 ms, más que un frame del juego, así que se salta uno de cada dos: ~30 grabados y ~30 solo recorridos por segundo, un tope de ~30 frames HD aunque la cadena daría ~45. Ahí el capturador tiene tiempo de sobra.
 
 ## Orden desde aquí (2026-11-04)
-0. **Saltar un frame (`slow` en `regFlip`) solo si al capturador le falta tiempo:** se esperan ~45 frames HD por segundo en la selección; carrera y público deben seguir igual. Verificar: Vita (`frames only walked`, `gate_us`, fps del juego).
+0. **Hecho en 0.0.21:** un frame se salta solo si el capturador iba atrasado en una sincronización y el último frame no fue tomado, o si la GPU aún lee el registro a escribir: selección de autos ~28 -> ~35 frames HD por segundo, carrera y público iguales. Queda bajo ~45 porque los registros están ocupados con la GPU. Nunca escribir un registro que la GPU lee: congeló el hilo de dibujo y colgó la GPU.
 1. **GPU (C.3), primero por decisión del usuario:** el capturador en el público queda en espera; B.3 falló y queda B.9 como idea. Ahí se atrasa: 7-10 frames completos por segundo, y las listas leídas tarde dan frames que fallan en el traductor (1 a 8 por corrida), cada uno visible como imagen normal durante varios frames del juego.
 2. **GPU (C.3):** menos píxeles (9,4 pantallas por frame). En carrera normal traductor y GPU tardan casi lo mismo, ~33 ms.
 3. **Retrovisor en la GPU:** sin `CLP0` ni `discard`; falta probar la granularidad de `sceGxmSetRegionClip`.

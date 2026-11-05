@@ -155,7 +155,9 @@ piezas, no como velocidad real. Compara con `draw` en `no` para separar capturar
 | `cpu` | Procesador recibido por segundo por cada hilo; `free0-2`: lo que le queda a cada núcleo (hilos de prioridad mínima) |
 | `limits` | Veces que se alcanzó un límite fijo: `stuck`, `queue_full`, `list_skipped`, `list_no_end`, `record_*` |
 
-Líneas `stuck:` (las primeras 60): una lista sin avanzar por 50 ms con listas nuevas esperando. La línea `stats frame` de NativeLink (cada 10 s) da vblank,
+Líneas Líneas `drawing stuck:` (builds de desarrollo, `nativedraw.log`, primeras 30): Adrenaline no terminó ninguna escena en un segundo. Etapa (0 fuera de `hookEnd`, 1 su `sceGxmEndScene`, 2 revisiones, 3 el registro, 4 traduciendo ese dibujo, 5 `sceGxmBeginScene`, 6 `sceGxmEndScene`, 7 imagen normal), escenas enviadas y terminadas, lo que dice el sistema del hilo y los registros (`regState`).
+
+`stuck:` (las primeras 60): una lista sin avanzar por 50 ms con listas nuevas esperando. La línea `stats frame` de NativeLink (cada 10 s) da vblank,
 todo el tiempo en ganchos, listas y GE ocupado.
 
 ## Archivos del nivel extremo
