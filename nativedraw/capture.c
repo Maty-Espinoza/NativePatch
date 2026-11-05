@@ -1679,7 +1679,7 @@ static void memSample(void) {
   static uint32_t h0[2][256], base[2], mb[2], calls;
   if (!calls++)
     for (int k = 0; k < 2; k++)
-      for (uint32_t a = k ? 0x84000000 : 0x75000000; a < (k ? 0x88000000 : 0x7E000000); a += 0x100000) {
+      for (uint32_t a = k ? 0x84000000 : 0x74000000; a < (k ? 0x88000000 : 0x7E000000); a += 0x100000) {
         SceKernelMemBlockInfo in;
         sceClibMemset(&in, 0, sizeof in); in.size = sizeof in;
         if (sceKernelGetMemBlockInfoByAddr((void *)a, &in) < 0 || in.mappedSize < (16 << 20)) continue;

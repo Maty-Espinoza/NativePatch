@@ -201,7 +201,7 @@ static volatile int exo_lock, exo_done;
 // Looks for the block once: 30 s at most, ScePspemu maps it several seconds after this plugin starts
 static void exoFind(void) {
   for (int t = 0; t < 300 && !exo_b; t++) {
-    for (uint32_t a = 0x75000000; a < 0x7E000000; a += 0x100000) {
+    for (uint32_t a = 0x74000000; a < 0x7E000000; a += 0x100000) {
       SceKernelMemBlockInfo in;
       sceClibMemset(&in, 0, sizeof in); in.size = sizeof in;
       if (sceKernelGetMemBlockInfoByAddr((void *)a, &in) < 0 || in.mappedSize < (64 << 20) || in.type != SCE_KERNEL_MEMBLOCK_TYPE_USER_RW_UNCACHE) continue;
