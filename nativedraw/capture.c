@@ -1355,7 +1355,7 @@ static void event(volatile uint32_t *e) {
     if (reg_on) { regFlip(a, b, f_draws); reg_big = f_draws > RD_N; }
     if (behind) regLost(NR_BEHIND_NEXT, qt - qh);
     if (clean) { stSave(&st_good); st_ok = 1; }
-    else if (st_ok) { uint32_t kv = vaddr, ki = iaddr; stLoad(&st_good); vaddr = kv; iaddr = ki; }
+    else if (st_ok) { uint32_t kv = vaddr, ki = iaddr, kb = reg[0x10]; stLoad(&st_good); vaddr = kv; iaddr = ki; reg[0x10] = kb; }  // (BASE keeps what the real GE register said)
     DEV(if (tp) { PA(P_C_FLIP, tp); if ((int)(now() - p_flip) > 0) pAdd(P_L_CLOSE, now() - p_flip); pAdd(P_C_TOTAL, f_us); pAdd(P_C_DRAW, p_draw); p_draw = 0; })
     acc.frames++;
 #ifdef NP_DEV
