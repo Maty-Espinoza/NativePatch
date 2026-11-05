@@ -196,6 +196,7 @@ static Rd R0, RR[2];  // capturer and readers
 static uint32_t tm_memo, tm_apply;  // us of the frame in memoTry (all) and in applying what was saved (extreme level)
 static uint32_t runClk(SceUID t);
 static SceUID cap_uid;
+DEV(static volatile uint32_t cap_at;)  // where the capturer is, for the watchdog: 1 events, 2 walk, 3 mirror copy, 4 record transfer, 5 frame close, 6 record wait
 // Cache shared by readers and capturer: CL_N 64-byte lines (cl_data) each with a tag (cl_tag:
 // RAM line and list sequence number; CL_BUSY while a thread writes it)
 #define CL_N 8192     // 64-byte lines in the shared cache (512 KB)
@@ -861,17 +862,19 @@ static void xferMirror(uint32_t s, uint32_t t, uint32_t bp) {
   if (isVram(s) || !isVram(t)) return;
   uint32_t sw = reg[0xB3] & 0xFFFF, dw = reg[0xB5] & 0xFFFF, w = ((reg[0xEE] & 0x3FF) + 1) * bp, h = (reg[0xEE] >> 10 & 0x3FF) + 1;
   uint32_t src = s + ((reg[0xEB] >> 10 & 0x3FF) * sw + (reg[0xEB] & 0x3FF)) * bp, dst = t + ((reg[0xEC] >> 10 & 0x3FF) * dw + (reg[0xEC] & 0x3FF)) * bp;
+  DEV(uint32_t at = cap_at; cap_at = 3;)
   for (uint32_t y = 0; y < h; y++, src += sw * bp, dst += dw * bp)
     for (uint32_t o = 0, n; o < w; o += n) {
       n = 4096 - ((dst + o) & 4095);
       if (n > w - o) n = w - o;
       uint32_t ra = vtr(dst + o);
-      if (!ra || ramEnd(src + o) < src + o + n) continue;
+      if (!ra || (dst + o) >> 21 != 0x04000000u >> 21 || ramEnd(src + o) < src + o + n) continue;
       if ((ra | (src + o) | n) & 3) for (uint32_t i = 0; i < n; i += 2) ((volatile uint16_t *)PSP(ra))[i / 2] = ((volatile uint16_t *)PSP(src + o))[i / 2];
       else for (uint32_t i = 0; i < n; i += 4) ((volatile uint32_t *)PSP(ra))[i / 4] = ((volatile uint32_t *)PSP(src + o))[i / 4];
       for (uint32_t b = ra & ~63u; b < ra + n; b += 64) if (clOk(b)) cl_tag[clSlot(b)] = 0;
     }
   R0.n = 0;
+  DEV(cap_at = at;)
 }
 #define MEASURES_WALK
 #include "measures.h"
@@ -1041,7 +1044,9 @@ static int __attribute__((noinline)) walkList(List *l) {
       if (isVram(s) || isVram(t)) acc.tr_vram++;
       DEV(xferNote(s, t, d & 1 ? 4 : 2);)
       xferMirror(s, t, d & 1 ? 4 : 2);
+      DEV(cap_at = 4;)
       if (reg_on) regXfer(s, t, d & 1 ? 4 : 2);
+      DEV(cap_at = 2;)
       break;
     }
     }
@@ -1408,6 +1413,7 @@ static void event(volatile uint32_t *e) {
     static int st_ok;
     int clean = !behind && !(reg_on && rf[rg_w]->flags & R_READ);
     DEV(int cl = !reg_on || !rf[rg_w]->flags ? 1 : rf[rg_w]->flags & R_SKIP ? 0 : 2;)  // (0: not recorded, 1: complete, 2: incomplete)
+    DEV(cap_at = 5;)
     if (reg_on) { regFlip(a, b, f_draws); reg_big = f_draws > RD_N; }
     if (behind) regLost(NR_BEHIND_NEXT, qt - qh);
     if (clean) { stSave(&st_good); st_ok = 1; }
@@ -1506,17 +1512,19 @@ static int capThread(SceSize args, void *argp) {
     }
     SB[4] = ++beat;
     DEV(mirSeen();)
+    DEV(cap_at = 6;)
     if (reg_on && !rg_thr) regPend();  // VRAM textures of a frame waiting for the mirror copy of its flip
     uint32_t h = SB[2], work = 0;
     if ((int)(h - tail) < 0 || h - tail > SB_N) {  // events were lost (or NativeLink reset the mailbox)
       acc.resyncs++; tail = h; resetQueue();
     }
     f_t0 = now();
-    DEV(uint32_t te = CST();)
+    DEV(uint32_t te = CST(); cap_at = 1;)
     while (tail != h) { event(SB + 0x400 + (tail % SB_N) * 8); tail++; work = 1; }
     DEV(if (cs_on) { cs_t[CS_EV] += now() - te - cs_skip; cs_skip = 0; })
     SB[5] = tail;
     uint32_t c0 = acc.cmds;
+    DEV(cap_at = 2;)
     walk();
     if (acc.cmds != c0) work = 1;
     uint32_t dt = now() - f_t0;
@@ -1635,10 +1643,26 @@ static void profLog(const Stats *r) {
   }
 }
 #endif
+#ifdef NP_DEV
+// Logs the capturer's and record thread's state when the capture heartbeat stops for 2 s, once a second (40 times at most)
+static void capWatch(void) {
+  static uint32_t b0, t0, tl, n;
+  if (SB[4] != b0 || !t0) { b0 = SB[4]; t0 = now(); return; }
+  if (now() - t0 < 2000000 || now() - tl < 1000000 || n >= 40 || !mir_on) return;
+  tl = now(); n++;
+  SceKernelThreadInfo c, r;
+  sceClibMemset(&c, 0, sizeof c); sceClibMemset(&r, 0, sizeof r); c.size = r.size = sizeof c;
+  int e = sceKernelGetThreadInfo(cap_uid, &c), e2 = rec_uid >= 0 ? sceKernelGetThreadInfo(rec_uid, &r) : -1;
+  List *l = &q[qh & 63];
+  clog("capture stopped %u ms: at %u | capturer info %08x status %x wait %x on %08x ran %u us | record thread %08x status %x wait %x ran %u us | queue %u list %u pc %08x stall %08x sub %u commands %u | frame %u\n",
+       (now() - t0) / 1000, cap_at, e, c.status, c.waitType, c.waitId, (uint32_t)c.runClocks, e2, r.status, r.waitType, (uint32_t)r.runClocks, qt - qh, l->ord, l->pc, l->stall, l->sp, l->n, gen);
+}
+#endif
 static int repThread(SceSize args, void *argp) {
   uint32_t last_write = 0;
   for (;;) {
     sceKernelDelayThread(200000);
+    DEV(capWatch();)
     if (logs_new) {  // new game: what is pending goes to the old logs
       logWrite(); DEV(rflush(0); rflush(1);)
       logsRotate(); logsHead(); alogNew();
