@@ -29,7 +29,7 @@ DEV(enum { BP_FAST, BP_MID, BP_TEX, BP_COL, BP_BASE, BP_N };
     enum { BW_FUNC, BW_DOUBLE, BW_ATEST, BW_FOG, BW_BLEND2X, BW_N };  // why a textured draw is not on the fast program
     static volatile uint32_t b_why[BW_N], b_fr;
     // on the sampled frames, 3D on the surface by effect (bit 0 blended, 1 fog, 2 reads an intermediate image): thousands of pixels, draws
-    static volatile uint32_t b_fx[8], b_fxd[8], b_fxn;)
+    static volatile uint32_t b_fx[8], b_fxd[8], b_fxn, b_lit[3];)  // b_lit: what nd_v4 lights: pixels, draws, vertices
 static uint32_t t_seen[TN];   // times each reason was seen (the first one is logged in detail)
 typedef struct { float x, y, z, w, u, v, f; uint32_t c; } TV;  // translated vertex (32 bytes, the nd_v format); f: fog (1: none)
 static TV *tv[2];            // translated vertices, one per surface
@@ -1099,7 +1099,7 @@ static void trRegions(RFrame *f, uint32_t disp) {
     if (y > by[k]) by[k] = y;
   }
   for (int i = 0; i < 2; i++) {
-    rts[i].sh = soft[i] && bx[i] && bx[i] <= LINE / 2 && by[i] <= H / 2 DEV(&& !keep_hd);
+    rts[i].sh = soft[i] && bx[i] && bx[i] <= LINE / 2 && by[i] <= H / 2 + 8 DEV(&& !keep_hd);
     rts[i].vr.xMax = ((bx[i] > LINE ? LINE : bx[i] ? bx[i] : LINE) >> rts[i].sh) - 1; rts[i].vr.yMax = ((by[i] > H ? H : by[i] ? by[i] : H) >> rts[i].sh) - 1;
     for (int k = 0; k < 4; k++) rts[i].have[k] = rts[i].dirty[k] = k < 2 ? 1e9f : -1e9f;
   }
@@ -1521,7 +1521,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
   ready:;
     DEV(if (sfx && !dst && w3d && !(clr & 1)) {  // (the GPU path has no vertices here: they are done once more, as the CPU path)
           uint32_t z = n, cu = d->prim > 2 && prim != 6 && (RE(e, 0x1D) & 1), k = (key != 0) | (t3.fog != 0) << 1 | (tex && !d->toff) << 2;
-          if (!gv || (d->n * 22 + 8 <= sizeof ts / sizeof *ts && !trVerts(f, d, ts, tw, th, mat, sc, &z, &t3))) { b_fx[k] += trPx3(gv ? ts : w, z, prim, cu) / 1000; b_fxd[k]++; }
+          if (!gv || (d->n * 22 + 8 <= sizeof ts / sizeof *ts && !trVerts(f, d, ts, tw, th, mat, sc, &z, &t3))) { float a = trPx3(gv ? ts : w, z, prim, cu) / 1000; b_fx[k] += a; b_fxd[k]++; if (gv > 1) { b_lit[0] += a; b_lit[1]++; b_lit[2] += d->n; } }
         })
     if (gv) {
       if (nu) { sceGxmReserveVertexDefaultUniformBuffer(c, &u); t3Uni(u, &t3, tw, th, wm, gl, mat); }

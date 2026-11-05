@@ -341,10 +341,11 @@ static void bnLog(void) {
               p[0][BP_FAST] / n, p[0][BP_MID] / n, p[0][BP_TEX] / n, p[0][BP_COL] / n, p[0][BP_BASE] / n, p[1][BP_FAST] / n, p[1][BP_MID] / n, p[1][BP_TEX] / n, p[1][BP_COL] / n);
   static uint32_t fn0; uint32_t fn = b_fxn - fn0; fn0 += fn;
   if (fn) {
-    static uint32_t q0[8], d0[8]; uint32_t q[8], e[8];
+    static uint32_t q0[8], d0[8], l0[3]; uint32_t q[8], e[8], l[3];
+    for (int i = 0; i < 3; i++) { l[i] = (b_lit[i] - l0[i]) / fn; l0[i] += l[i] * fn; }
     for (int i = 0; i < 8; i++) { q[i] = (b_fx[i] - q0[i]) / fn; q0[i] += q[i] * fn; e[i] = (b_fxd[i] - d0[i]) / fn; d0[i] += e[i] * fn; }
-    alog("bottleneck effects (3D on the surface, thousands of pixels/draws per frame of %u): plain %u/%u blended %u/%u fog %u/%u fog+blended %u/%u image %u/%u image+blended %u/%u image+fog %u/%u image+fog+blended %u/%u\n",
-         fn, q[0], e[0], q[1], e[1], q[2], e[2], q[3], e[3], q[4], e[4], q[5], e[5], q[6], e[6], q[7], e[7]);
+    alog("bottleneck effects (3D on the surface, thousands of pixels/draws per frame of %u): plain %u/%u blended %u/%u fog %u/%u fog+blended %u/%u image %u/%u image+blended %u/%u image+fog %u/%u image+fog+blended %u/%u | lit by the GPU %u/%u vertices %u\n",
+         fn, q[0], e[0], q[1], e[1], q[2], e[2], q[3], e[3], q[4], e[4], q[5], e[5], q[6], e[6], q[7], e[7], l[0], l[1], l[2]);
   }
   if (n) alog("bottleneck why generic (thousands of pixels per frame, a draw can have several): function %u double %u alpha_test %u fog %u blend2x %u\n", w[BW_FUNC] / n, w[BW_DOUBLE] / n, w[BW_ATEST] / n, w[BW_FOG] / n, w[BW_BLEND2X] / n);
 }
