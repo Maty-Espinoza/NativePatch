@@ -72,6 +72,8 @@ o `auto` (se comparan 3 letras; `no` también lo apaga). Qué guarda cada uno, c
 | `vert_split` | (desarrollo) separa el trabajo de vértices de 1 frame HD de cada 8: líneas `vertex split plain` y `vertex split warm`, resumidas por `tools/bottleneck.py` |
 | `cpu_verts` | (desarrollo) ningún vértice va al programa de vértices de la GPU (`nd_v3`): todo dibujo 3D sigue por la CPU, para comparar. Se lee al abrir Adrenaline. |
 | `cap_split` | (desarrollo) mide cada parte del capturador en todos los frames (cuesta ~0,4 us por lectura del reloj): líneas `capture split` por tipo de frame, resumidas por `tools/bottleneck.py` Cuesta ~0,7 us por lectura de reloj y en un juego pesado atrasa al capturador: errores gráficos e imagen normal; avisar antes de usarlo. |
+| `hold_game` | (desarrollo) el juego espera a toda la cadena (compuerta hasta 200 ms, el flip hasta recorrer el frame, el capturador al presentador y a la GPU): todos los frames completos y en HD, y el juego más lento. Se lee al abrir Adrenaline. Para medir |
+| `rec_cost` | (desarrollo) sigue grabando un frame ya incompleto, sin publicarlo, para medir cuánto cuesta grabar |
 | `capture_core` | (v13.13) `0`, `1` o `2` fija el capturador a ese núcleo (antes de v13.13 siempre el 1); sin archivo o cualquier otra cosa: cualquiera de los 3. La línea `threads: capture` del log dice cuál se usó; ver `etapa2_ridge_racer.md` |
 
 ## Dibujo en la Vita (etapa 3, con `draw`; `nativedraw.log`, cada 10 s)

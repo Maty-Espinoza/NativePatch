@@ -133,6 +133,23 @@ Left on the CPU per HD frame: rear-view mirror ~1500 vertices (scissor 150,10 to
 Coplanar passes of a model must take the same path and program: with only the lit pass on the GPU, the GEQUAL depth test of the reflection pass failed by rounding and the reflections flickered in saw teeth.
 **What limits car selection now:** `regFlip` skips recording a frame (`R_SKIP`) when the one before was not taken yet. The GPU takes ~21 ms, longer than a game frame, so every second frame is skipped: ~30 recorded and ~30 only walked per second, a cap of ~30 HD frames although the chain could give ~45. The capturer has time to spare there.
 
+## Crowd measured clean (`hold_game`, 0.0.21.3, `stage3_0.0.21.3/rr1`, 2026-11-04)
+With `hold_game` the game waits for the whole chain: every frame complete and in HD, no list read late. CPU 333, GPU 222, extreme log; ~3600 draws, ~19,000 commands, ~19,000 vertices, 446 KB of vertices per frame. The game itself takes ~7 ms; here it runs at 15 fps (66 ms).
+
+| Stage, ms per frame | Crowd | Hard stretches (1000-2500 draws) | For 30 fps | For 60 fps |
+|---|---|---|---|---|
+| Capturer (processor) | ~32 | 17-21 | 33 | 16.7 |
+| Drawing thread (translator ~45 of it) | ~54 | ~40 | 33 | 16.7 |
+| GPU | ~34 | ~35 | 33 | 16.7 |
+
+- **The slowest stage is the drawing thread, not the capturer.** The capturer limits today only because it falls behind the game and that wrecks frames; once it fits, the HD rate is set by the drawing thread and the GPU.
+- Translator, ms: GXM 15, vertices 8, textures 4.6, check 3.8, scenes 1.4, ~12 not split. Capturer, ms: record 12.4 (vertices 7.3, state 2.6, textures 2.5), reads 3, the rest the interpreter. Record thread: 13 more for VRAM textures, on its own.
+- GPU, ms: 2 surface scenes ~25; 15 intermediate scenes of one draw, 0.6 each, ~9.
+- 92 % of the draws do not change state; the vertices come in ~220 contiguous runs. 11,000 of the 19,000 commands are BASE, VADDR and PRIM.
+- Discarded: bounding box jumps. 0 in the crowd with clean reads; the 5400 per second seen before were lists read late. The real crowd is ~16,000-19,000 commands, not 25,000.
+
+**Next, by gain:** join draws with the same state into one `sceGxmDraw` (GXM, GPU); group the intermediate scenes (GPU); a tight path for BASE, VADDR and PRIM in the interpreter (capturer); then vertices of the rear-view mirror.
+
 ## Order from here (2026-11-04)
 0. **Done in 0.0.21:** a frame is skipped only when the capturer was behind at a sync and the last frame was not taken, or when the record to write is still read by the GPU: car selection ~28 -> ~35 HD frames per second, race and crowd the same. Below ~45 because records are busy with the GPU. Never write a record the GPU reads: it froze the drawing thread and crashed the GPU. Original item: expected ~45 HD frames per second in car selection; the race and the crowd must stay the same. Verify: Vita (`frames only walked`, `gate_us`, game fps).
 1. **GPU (C.3), started first by the user:** the capturer in the crowd waits; B.3 failed and B.9 is the remaining idea there. It falls behind there: 7-10 complete frames per second, and lists read late give frames that fail in the translator (1 to 8 per run), each shown as the normal image for several game frames.

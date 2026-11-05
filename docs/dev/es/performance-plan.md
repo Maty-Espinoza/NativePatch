@@ -139,6 +139,23 @@ Quedan en CPU por frame HD: retrovisor ~1500 vértices (scissor 150,10 a 330,48)
 Las pasadas coplanares de un modelo deben ir por el mismo camino y programa: con solo la pasada de luz en la GPU, la prueba de profundidad GEQUAL del reflejo fallaba por redondeo y los reflejos parpadeaban en dientes de sierra.
 **Qué limita ahora la selección de autos:** `regFlip` se salta grabar un frame (`R_SKIP`) si el anterior aún no fue tomado. La GPU tarda ~21 ms, más que un frame del juego, así que se salta uno de cada dos: ~30 grabados y ~30 solo recorridos por segundo, un tope de ~30 frames HD aunque la cadena daría ~45. Ahí el capturador tiene tiempo de sobra.
 
+## Público medido limpio (`hold_game`, 0.0.21.3, `stage3_0.0.21.3/rr1`, 2026-11-04)
+Con `hold_game` el juego espera a toda la cadena: todos los frames completos y en HD, sin listas leídas tarde. CPU 333, GPU 222, log extremo; ~3600 dibujos, ~19.000 comandos, ~19.000 vértices y 446 KB de vértices por frame. El juego mismo toma ~7 ms; aquí corre a 15 fps (66 ms).
+
+| Etapa, ms por frame | Público | Tramos difíciles (1000-2500 dibujos) | Para 30 fps | Para 60 fps |
+|---|---|---|---|---|
+| Capturador (procesador) | ~32 | 17-21 | 33 | 16,7 |
+| Hilo de dibujo (~45 son del traductor) | ~54 | ~40 | 33 | 16,7 |
+| GPU | ~34 | ~35 | 33 | 16,7 |
+
+- **La etapa más lenta es el hilo de dibujo, no el capturador.** El capturador limita hoy solo porque se atrasa frente al juego y eso arruina frames; cuando alcance, el ritmo HD lo fijan el hilo de dibujo y la GPU.
+- Traductor, ms: GXM 15, vértices 8, texturas 4,6, revisión 3,8, escenas 1,4, ~12 sin desglosar. Capturador, ms: registro 12,4 (vértices 7,3, estado 2,6, texturas 2,5), lecturas 3, el resto el intérprete. Hilo del registro: 13 más por texturas de VRAM, aparte.
+- GPU, ms: 2 escenas de superficie ~25; 15 escenas intermedias de un dibujo, 0,6 cada una, ~9.
+- El 92 % de los dibujos no cambia el estado; los vértices vienen en ~220 tramos contiguos. 11.000 de los 19.000 comandos son BASE, VADDR y PRIM.
+- Descartado: saltos por caja envolvente. 0 en el público con lectura limpia; los 5400 por segundo de antes eran listas leídas tarde. El público real son ~16.000-19.000 comandos, no 25.000.
+
+**Lo que sigue, por ganancia:** juntar dibujos con el mismo estado en un `sceGxmDraw` (GXM, GPU); agrupar las escenas intermedias (GPU); un camino corto para BASE, VADDR y PRIM en el intérprete (capturador); luego los vértices del retrovisor.
+
 ## Orden desde aquí (2026-11-04)
 0. **Hecho en 0.0.21:** un frame se salta solo si el capturador iba atrasado en una sincronización y el último frame no fue tomado, o si la GPU aún lee el registro a escribir: selección de autos ~28 -> ~35 frames HD por segundo, carrera y público iguales. Queda bajo ~45 porque los registros están ocupados con la GPU. Nunca escribir un registro que la GPU lee: congeló el hilo de dibujo y colgó la GPU.
 1. **GPU (C.3), primero por decisión del usuario:** el capturador en el público queda en espera; B.3 falló y queda B.9 como idea. Ahí se atrasa: 7-10 frames completos por segundo, y las listas leídas tarde dan frames que fallan en el traductor (1 a 8 por corrida), cada uno visible como imagen normal durante varios frames del juego.
