@@ -10,6 +10,14 @@ the Vita but not yet confirmed as a numbered release.
   KEEP/REVERT step (`iterate.sh`) and the unattended loop with Claude Code (`ai_loop.sh`, `docs/agent/en/perf-loop.md`).
 - `docs/dev/*/performance-plan.md`: the ordered plan towards 60 fps, from the analysis of the capturer on `stage3_0.0.16.4/rr1`.
 
+## NativeDraw 0.0.22 + NativeLink 0.0.7 (2026-11-04)
+Tests 0.0.21.1–0.0.21.6 and NativeLink 0.0.6.1, checked on the Vita with Ridge Racer and `hold_game`. Against 0.0.21.5: crowd 18.8 -> 25.5 fps, translator 45 -> 30 ms.
+- **`hold_game`** (development): the game waits for the whole chain, so every frame is complete and in HD. It needs NativeLink: the gate waits up to 200 ms. For measuring, and playable.
+- **Draws joined by indices:** draws of the GPU path with the same state go in one GXM call (crowd frame 3405 -> 267). Vertices for the GPU in multiples of 48: packed without 16-byte alignment the GPU crashed.
+- **Translator short path:** a draw with the state of the one before only adds its indices; repeated checks skipped; quick scissor accept and reject.
+- **Tools:** `nativedraw/measures.h` (the measurements, one line each), `tools/run_compare.py` (runs zone by zone), `tests/perf/*.json` (reference laps), a real crowd frame in `tools/perf/data`.
+- **Found:** bounding box jumps are not in the crowd; the slowest stage there was the drawing thread. Detail in `performance-plan.md`.
+
 ## NativeDraw 0.0.21 (2026-11-04)
 Tests 0.0.20.1–0.0.20.3, checked on the Vita with Ridge Racer; NativeLink stays at 0.0.6. Car selection: ~28 -> ~35 HD frames per second; race unchanged; game at 60 fps.
 - **Frame skipping:** `regFlip` skips a frame only if the presenter did not take the last one and the capturer was behind at a sync, or if the record to write is still read by the GPU.
