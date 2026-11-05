@@ -72,7 +72,7 @@ int sceGxmShaderPatcherCreateFragmentProgram(SceGxmShaderPatcher *s, SceGxmShade
 void sceGxmSetFragmentProgram(SceGxmContext *c, const SceGxmFragmentProgram *p) { const uint32_t *x = (const void *)p; fprog = x ? x[0] << 28 ^ x[1] : 0; }
 int sceGxmSetVertexStream(SceGxmContext *c, unsigned i, const void *d) { stream = d; return 0; }
 int sceGxmTextureInitLinear(SceGxmTexture *t, const void *d, SceGxmTextureFormat f, unsigned w, unsigned h, unsigned m) { tex_w = w << 16 ^ h ^ f; cur_w = w; return 0; }
-int sceGxmBeginScene(SceGxmContext *context, unsigned int flags, const SceGxmRenderTarget *renderTarget, const SceGxmValidRegion *validRegion, SceGxmSyncObject *vertexSyncObject, SceGxmSyncObject *fragmentSyncObject, const SceGxmColorSurface *colorSurface, const SceGxmDepthStencilSurface *depthStencil) { in_rt = validRegion != 0; if (dmp) fprintf(dmp, "S\n"); return 0; }
+int sceGxmBeginScene(SceGxmContext *context, unsigned int flags, const SceGxmRenderTarget *renderTarget, const SceGxmValidRegion *validRegion, SceGxmSyncObject *vertexSyncObject, SceGxmSyncObject *fragmentSyncObject, const SceGxmColorSurface *colorSurface, const SceGxmDepthStencilSurface *depthStencil) { in_rt = validRegion && colorSurface != &rtb.cs; if (dmp) fprintf(dmp, "S\n"); return 0; }
 // Value of parameter p (by name) of the vertex program in the context
 static const float *uni(const SceGxmProgramParameter *p) { return ((typeof(&par[0]))p)->v; }
 // One vertex as the GPU's clip stage sees it: position, UV in texels, fog, color (thousandths, so a rounding of 1 passes).
@@ -161,14 +161,17 @@ static RFrame *load(const char *path) {
 }
 // Moves the vertices of the draws rgVGpu would mark to the end of tx, as the record does
 static void gvMark(RFrame *f) {
+  uint32_t b4 = 0, b5 = 0, b9 = 0;
   for (uint32_t i = 0; i < f->nd; i++) {
     RDraw *d = &f->d[i];
     const uint32_t *e = f->e[d->st];
     uint32_t d5 = RE(e, 0xD5), w = RE(e, 0x9D) & 0x7FF, m = (d->vlen + 47) / 48 * 48;
+    if (RE(e, 0xD3) & 1) { b4 = RE(e, 0xD4); b5 = d5; b9 = RE(e, 0x9C); }
     if ((d->vt != 0x19F && !GVL(d->vt)) || d->ioff || d->prim < 3 || d->prim > 5 || RE(e, 0xD3) & 1 || !(RE(e, 0x50) & 1) ||
         (d->vt == 0x19F && (RE(e, 0xC0) & 3 || RE(e, 0x17) & (RE(e, 0x18) | RE(e, 0x19) | RE(e, 0x1A) | RE(e, 0x1B)) & 1)) ||
-        (GVL(d->vt) && (RE(e, 0x17) & 1 ? RE(e, 0xC0) & 3 : (RE(e, 0xC0) & 0x303) != 0x301)) || RE(e, 0xD4) & 0xFFFFF || (d5 & 0x3FF) + 1 < (w < 480 ? w : 480) ||
-        (w >= 480 && (d5 >> 10 & 0x3FF) < 271)) continue;
+        (GVL(d->vt) && (RE(e, 0x17) & 1 ? RE(e, 0xC0) & 3 : (RE(e, 0xC0) & 0x303) != 0x301)) ||
+        ((RE(e, 0xD4) & 0xFFFFF || (d5 & 0x3FF) + 1 < (w < 480 ? w : 480) || (w >= 480 && (d5 >> 10 & 0x3FF) < 271)) &&
+         ((RE(e, 0xD4) ^ b4) & 0xFFFFF || (d5 ^ b5) & 0xFFFFF || (RE(e, 0x9C) ^ b9) & 0xFFFFF0))) continue;
     f->nvx += m;
     memcpy(f->tx + TX_N - f->nvx, f->a + d->voff - 1, d->vlen);
     d->voff = VX | (TX_N - f->nvx);

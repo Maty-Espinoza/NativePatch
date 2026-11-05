@@ -54,6 +54,11 @@ typedef struct { uint32_t fb, fr; void *mem; SceGxmColorSurface cs; SceGxmValidR
 // scene reads what the one before drew
 static SceGxmSyncObject *t_sync;
 static RT rts[2], rtc;  // rtc: copy of the part of an image that a draw reads while drawing on that same image
+// rtb: the boxed stretch of a frame (trBoxed): draws t_b0 to t_b1 - 1 go here, moved so the corner t_bx, t_by of the box is at
+// 0, 0, and vr is the box: the edge of the image clips them, on the GPU. Then the box is pasted on the surface
+static RT rtb;
+static uint32_t t_b0, t_b1;
+static float t_bx, t_by;
 // Reserves the surface of an intermediate image (alpha 255, like the main surface). Both are reserved in trInit,
 // before the dump: otherwise the dump takes the physical memory.
 static int rtMem(RT *r) {
@@ -194,7 +199,7 @@ static int trInit(void) {
   if (r2v < 0 || !ok4) gvp[2] = 0;
   if (!fragProg(0, 0, C_RGB) || !fragProg(1, 0, C_RGB)) return -3;
   for (int i = 0; i < 2; i++) rtMem(&rts[i]);
-  rtMem(&rtc);
+  rtMem(&rtc); rtMem(&rtb);
   if ((r = sceGxmSyncObjectCreate(&t_sync)) < 0) { alog("translator: sync object %08x\n", r); return r; }
   // PSP RAM (0x08000000-0x0A000000) for the GPU (fails with 0x72000000)
   int r1 = sceGxmMapMemory((void *)0x70000000, 0x2000000, RD);
@@ -1095,6 +1100,36 @@ static void trRegions(RFrame *f, uint32_t disp) {
   }
 }
 
+// Looks in the first ord draws of frame f (they can be reordered) for a boxed stretch: on the shown image, behind one partial
+// scissor, a clear of color and depth that covers the box and at least one 3D draw after it. Nothing in it needs what the
+// surface holds, so it can be drawn before the surface. Only the first one in a frame.
+static void trBoxed(RFrame *f, uint32_t disp, uint32_t ord) {
+  t_b0 = t_b1 = 0;
+  if (!rtb.mem) return;
+  for (uint32_t i = 0; i < ord; i++) {
+    const RDraw *d = &f->d[i];
+    if (d->vt != 0x800100 || d->prim != 6 || d->ioff) continue;
+    const uint32_t *e = f->e[d->st];
+    uint32_t d4 = RE(e, 0xD4) & 0xFFFFF, d5 = RE(e, 0xD5) & 0xFFFFF, x0 = d4 & 0x3FF, y0 = d4 >> 10, x1 = d5 & 0x3FF, y1 = d5 >> 10, j = i + 1, n3 = 0;
+    if ((RE(e, 0xD3) & 0x501) != 0x501 || (RE(e, 0x9C) & 0x1FFFF0) != disp || (!d4 && x1 >= 479 && y1 >= 271)) continue;
+    const int16_t *p = (const int16_t *)(f->a + d->voff - 1);  // (x, y, z)
+    int bx0 = 1 << 14, by0 = 1 << 14, bx1 = 0, by1 = 0;
+    for (uint32_t k = 0; k < d->n; k++, p += 3) {
+      bx0 = p[0] < bx0 ? p[0] : bx0; by0 = p[1] < by0 ? p[1] : by0; bx1 = p[0] > bx1 ? p[0] : bx1; by1 = p[1] > by1 ? p[1] : by1;
+    }
+    if (bx0 > (int)x0 || by0 > (int)y0 || bx1 <= (int)x1 || by1 <= (int)y1) continue;
+    for (; j < ord; j++) {
+      const uint32_t *q = f->e[f->d[j].st];
+      if ((RE(q, 0xD4) & 0xFFFFF) != d4 || (RE(q, 0xD5) & 0xFFFFF) != d5 || (RE(q, 0x9C) & 0x1FFFF0) != disp) break;
+      n3 += !(f->d[j].vt >> 23 & 1);
+    }
+    if (!n3) continue;
+    t_b0 = i; t_b1 = j; t_bx = 2.0f * x0; t_by = 2.0f * y0;
+    rtb.vr.xMax = 2 * (x1 + 1 - x0) - 1; rtb.vr.yMax = 2 * (y1 + 1 - y0) - 1;
+    return;
+  }
+}
+
 // Draws frame f of the record to surface s (cs[s]), in the Adrenaline thread. base: the normal image, which goes
 // underneath stretched (what the game does not redraw stays as on the PSP); 0: black background. First checks the frame
 // (trCheckFrame): if a draw fails, returns the reason without drawing. Then opens
@@ -1133,6 +1168,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
   if (r) return r;
   DEV(t_us[0] += now() - ta; if (p_on) pAdd(P_T_CHECK, now() - ta);)
   trRegions(f, disp);
+  trBoxed(f, disp, ord);
   // Depth lives in one scene: if the surface is drawn with depth after its scene was cut, it is stored and loaded. The other
   // scenes use the same memory without storing it, so they do not touch it
   SceGxmDepthStencilSurface dss = ds;
@@ -1150,7 +1186,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
   void *u;
   // SCENE: starts a scene on surface surf_tex with the vertex program and the matrix
 #define SCENE(surf_tex, reg) do { DEV(h_at = 5;) sceGxmBeginScene(c, 0, cur_rt ? rt_i : rt, reg, 0, t_sync, surf_tex, cur_rt ? &ds : &dss); DEV(h_at = 4;) t_zs = t_st = t_sr = t_cl = ~0u; zsSet(c, 0, 0); sceGxmSetVertexProgram(c, nvp); gv_cur = 0; \
-    trWvp(wm, reg); sceGxmReserveVertexDefaultUniformBuffer(c, &u); sceGxmSetUniformDataF(u, n_wvp, 0, 16, wm); } while (0)
+    trWvp(wm, reg); if (cur_rt == &rtb) { wm[12] -= t_bx * wm[0]; wm[13] -= t_by * wm[5]; } sceGxmReserveVertexDefaultUniformBuffer(c, &u); sceGxmSetUniformDataF(u, n_wvp, 0, 16, wm); } while (0)
   // OPEN: closes the open scene (if any) and opens one on dst (0: surface s); the first time on the surface,
   // puts the normal image (or black: trBase) underneath
 #define OPEN(dst_) do { RUN(); pd = 0; if (opened) { SURF_WAIT(); DEV(h_at = 6;) sceGxmEndScene(c, 0, gEnd()); DEV(h_at = 4;) cNote(cur_rt ? C_INT : C_TR, &gq_n, t_draws - d0, spx / 1000, ssw); } \
@@ -1213,8 +1249,24 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     gd = 0;
     const uint32_t *e = f->e[d->st];
     uint32_t clr = RE(e, 0xD3), tex = hasTex(e, d), fb = RE(e, 0x9C) & 0x1FFFF0, w3d = !(d->vt >> 23 & 1);
-    RT *dst = fb == disp ? 0 : rtOf(fb, f->frame, 1);
+    RT *dst = fb == disp ? (i >= t_b0 && i < t_b1 ? &rtb : 0) : rtOf(fb, f->frame, 1);
     if (fb != disp && !dst) { res = T_DEST; break; }
+    if (pass == 1 && i == t_b0 && t_b1) {  // the box goes on the surface where the game drew it
+      if (nv + 4 > TV_N) { res = T_LIMIT; break; }
+      if (!opened || cur_rt) OPEN(0); else RUN();
+      SceGxmTexture ts;
+      float *q = (float *)(o + nv), x1 = t_bx + rtb.vr.xMax + 1, y1 = t_by + rtb.vr.yMax + 1, u1 = (rtb.vr.xMax + 1.0f) / LINE, v1 = (rtb.vr.yMax + 1.0f) / H;
+      const float qv[20] = { t_bx, t_by, .5f, 0, 0, x1, t_by, .5f, u1, 0, t_bx, y1, .5f, 0, v1, x1, y1, .5f, u1, v1 };
+      sceClibMemcpy(q, qv, sizeof qv); nv += 4;
+      sceGxmTextureInitLinear(&ts, rtb.mem, SCE_GXM_TEXTURE_FORMAT_A8B8G8R8, LINE, H, 0);
+      zsSet(c, 0, 0); sceGxmSetCullMode(c, SCE_GXM_CULL_NONE); t_cl = SCE_GXM_CULL_NONE;
+      sceGxmSetVertexProgram(c, vp); sceGxmSetFragmentProgram(c, fp);
+      sceGxmReserveVertexDefaultUniformBuffer(c, &u); sceGxmSetUniformDataF(u, p_wvp, 0, 16, wm);
+      sceGxmSetFragmentTexture(c, 0, &ts); sceGxmSetVertexStream(c, 0, q);
+      sceGxmDraw(c, SCE_GXM_PRIMITIVE_TRIANGLE_STRIP, SCE_GXM_INDEX_FORMAT_U16, ib, 4);
+      sceGxmSetVertexProgram(c, nvp); gv_cur = 0; pd = 0;
+      sceGxmReserveVertexDefaultUniformBuffer(c, &u); sceGxmSetUniformDataF(u, n_wvp, 0, 16, wm);
+    }
     if (i < ord ? pass != (dst ? 0u : 1u) : pass != 2) continue;
     DEV(tb = now();)
     if (!opened || dst != cur_rt) OPEN(dst);
@@ -1280,6 +1332,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
         if (rx < sc[2]) sc[2] = rx;
         if (ry < sc[3]) sc[3] = ry;
       }
+      if (w3d && dst == &rtb) sc[0] = sc[1] = -1e9f, sc[2] = sc[3] = 1e9f;  // (the edge of the image is the scissor)
       if (w3d) t3Set(f, d, e, &t3);
     }
     // Vertices the GPU reads as they are: no translated vertices, and the state below uses none of them
