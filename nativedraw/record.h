@@ -22,7 +22,7 @@ static const uint8_t RI[256] __attribute__((unused)) = {
 };
 #define NRS ((int)sizeof RS)
 #define RD_N 16384        // draws per frame
-#define RE_N 4096         // states per frame
+#define RE_N 1024         // states per frame
 #define RA_N (2 << 20)    // vertices, indices and palettes per frame
 #define TN_N 256          // textures per frame
 // A draw: st = index of its state in e[]; prim, n, vt = GE type, count and vertex type; voff/vlen = vertices
