@@ -234,12 +234,12 @@ de los lectores (0,5 MB) y el pozo de sublistas. Hoy falta memoria (TODO): quiz�
 
 **Modelo de tiempos** (`tools/perf/sync_model.py`: los logs de arriba y las mediciones de la fase 0 de NativeDraw 0.0.25.21;
 la espera al GE sigue siendo estimada). fps del juego / frames HD por segundo que permite el capturador (traductor y GPU
-aparte), DMA a memoria con caché a 429 MB/s y 170 us por llamada:
+aparte), DMA a memoria con caché a 400 MB/s y 75 us por llamada (`--recent`: predicción por los últimos frames):
 
 | Juego | Hoy (compuerta antes de encolar) | `hold_game` + `gate_sync` | Retenido, copias por copia (fase 1) | Foto, DMA de la Vita |
 |---|---|---|---|---|
-| God of War, menú | 26 / 0 (copias después del sync) | 9,7 / 9,7 (medido) | 12,5 / 12,5 | 30 / 9,7 (captura 81 ms, 21 % de frames con fallo) |
-| God of War, combate | 26 / 0 | 5,9 / 5,9 (medido) | 8,6 / 8,6 | 21 / 6,7 (captura 116 ms, copia 5,7 MB) |
+| God of War, menú | 26 / 0 (copias después del sync) | 9,7 / 9,7 (medido) | 12,6 / 12,6 | 30 / 9,7 (captura 81 ms, 21 % de frames con fallo) |
+| God of War, combate | 26 / 0 | 5,9 / 5,9 (medido) | 9,0 / 9,0 | 21 / 6,7 (captura 116 ms, copia 5,7 MB) |
 | Ridge Racer, público | 46 / 31 (listas leídas tarde) | 31 / 31 | - | 34 / 34 por lista (80 % sin historia); 51 / 39 por los últimos frames |
 | Ridge Racer, carrera | 60 / 60 | 60 / 60 | - | 60 / 60 |
 
@@ -279,6 +279,13 @@ Racer; logs en
   (`PHOTO_BYLIST=0`), ningún frame espera y ninguno sale mal, si el margen cubre el salto de la propia lista (`sync_lab check`
   lo mantiene). La 0.0.25.22 mide esa variante en la Vita (`photo footprint by the last frames`, con 8 y 4 páginas de margen).
 - `photo_probe` (¿la copia frena al GE?): sin medir todavía (hace falta God of War sin `hold_game`).
+- 0.0.25.22 (logs en el relevo de Windows, `stage3_0.0.25.22/gow1`, `rr1`): por los últimos frames sea cual sea su lista, con 8
+  páginas de margen: menú de God of War 16 % y combate 15 % de frames con fallo (por lista 19-20 %), copiando un poco más (3,1 y
+  6 MB); carrera de Ridge Racer: ningún frame sin historia (por lista 63 %), pero la copia es de 740 páginas (2,9 MB) para 171
+  leídas, y 5 % de frames con fallo; con 4 páginas de margen 2,1 MB y 7 %. En la carrera la foto le costaría al juego ~4 ms
+  (modelo 48 fps, hoy 60): ahí no aporta. Una llamada DMA de 4 KB tardó esta vez 72-76 us (181 us en la 0.0.25.21): el costo
+  fijo varía. Por qué God of War sigue fallando en el 15 % de los frames todavía no se sabe: la 0.0.25.23 dice qué lecturas
+  fallan y qué tan vieja es la página.
 
 **Fases** (cada una se comprueba en la Vita antes de la siguiente; la foto es una opción hasta que pase a ser la normal):
 0. **Medir, sin cambiar nada** (versión de desarrollo): (a) tiempo de `xferMirror` por frame en `capture split`; (b) DMA de la

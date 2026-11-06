@@ -27,18 +27,22 @@ UNIT = {
 # transfers the capturer applies by word, and how many; vcopy_ms: vertex copy from uncached RAM; foot_kb: RAM pages the frame reads; photo_kb/runs: what the photo
 # copies with the prediction of fpFlip (last 4 frames of the same first list, 8 pages more each side) and its pieces;
 # miss: share of frames with a page outside the photo (dropped); nohist: share with no history (the game waits for a
-# live walk, as hold). Footprint, miss and nohist: 'photo footprint' line of 0.0.25.21 (God of War with hold_game)
+# live walk, as hold). Footprint, miss and nohist: 'photo footprint' line of 0.0.25.21-22 (with hold_game). The same
+# with a history of the last 4 frames whatever their list (r: photo_kb_r, runs_r, miss_r; no frame without history but the
+# first): 'photo footprint by the last frames' of 0.0.25.22, 8 pages of margin
 GAMES = {
     'gow_menu': dict(src='0.0.24.8_gow_menu_play; capture, footprint and transfers 0.0.25.21', tg=33.3, ge=19.0, cap=103.0, own=236, hits=7590,
-                     cmp=0.85, xfer_kb=593, xfer_n=59, vcopy_ms=0.0, foot_kb=1288, photo_kb=3336, runs=17, miss=0.21, nohist=0.0, est='ge'),
+                     cmp=0.85, xfer_kb=593, xfer_n=59, vcopy_ms=0.0, foot_kb=1340, photo_kb=3020, runs=16, miss=0.20, nohist=0.0,
+                     photo_kb_r=3170, runs_r=17, miss_r=0.16, est='ge'),
     'gow_play': dict(src='0.0.24.8_gow_menu_play; capture, footprint and transfers 0.0.25.21', tg=33.3, ge=6.0, cap=170.0, own=440, hits=6700,
-                     cmp=1.7, xfer_kb=1388, xfer_n=99, vcopy_ms=1.2, foot_kb=2044, photo_kb=5832, runs=37, miss=0.22, nohist=0.0, est='ge'),
+                     cmp=1.7, xfer_kb=1388, xfer_n=99, vcopy_ms=1.2, foot_kb=2060, photo_kb=5780, runs=36, miss=0.21, nohist=0.0,
+                     photo_kb_r=6100, runs_r=39, miss_r=0.15, est='ge'),
     'rr_crowd': dict(src='performance-plan.md, crowd measured clean (0.0.21.3)', tg=16.7, ge=5.0, cap=32.0, own=525, hits=1415,
-                     cmp=0.5, xfer_kb=0, xfer_n=0, vcopy_ms=7.3, foot_kb=560, photo_kb=1500, runs=25, miss=0.0, nohist=0.8,
-                     est='ge, foot_kb, photo_kb, runs, miss (nohist as the race)'),
+                     cmp=0.5, xfer_kb=0, xfer_n=0, vcopy_ms=7.3, foot_kb=560, photo_kb=1500, runs=25, miss=0.0, nohist=0.6,
+                     photo_kb_r=2400, runs_r=18, miss_r=0.05, est='ge, foot_kb, photo_kb, runs, miss (all as the race)'),
     'rr_race': dict(src='performance-plan.md (0.0.16.4); footprint 0.0.25.21', tg=16.7, ge=5.0, cap=7.0, own=150, hits=500,
-                    cmp=0.3, xfer_kb=0, xfer_n=0, vcopy_ms=2.0, foot_kb=640, photo_kb=1600, runs=8, miss=0.0, nohist=0.8,
-                    est='ge, own, hits, vcopy_ms, photo_kb, runs (nohist: list start moves every frame)'),
+                    cmp=0.3, xfer_kb=0, xfer_n=0, vcopy_ms=2.0, foot_kb=680, photo_kb=960, runs=5, miss=0.02, nohist=0.63,
+                    photo_kb_r=2960, runs_r=18, miss_r=0.05, est='ge, own, hits, vcopy_ms (nohist: list start moves every frame)'),
 }
 
 def copy_ms(kb, runs, mbs, call_us):
@@ -68,27 +72,30 @@ def model(g, a):
         x1 = copy_ms(g['xfer_kb'], g['xfer_n'], a.dma_mbs, a.dma_call_us)
         h1 = max(g['tg'], g['cap'] - xfer + x1 + u['latency_ms'])
         rows.append(('hold, transfers by copy (B1)', h1, 1000 / h1, f'transfers {xfer:.0f} -> {x1:.1f} ms'))
-    kb = g['photo_kb'] if a.photo_kb is None else a.photo_kb
-    for name, cost, cap in (('photo, Vita DMA', u['latency_ms'] + copy_ms(kb, g['runs'], a.dma_mbs, a.dma_call_us), cap2),
-                            ('photo, PSP GE copy', kb / 1024 * u['ge_ram_ms_mb'], cap2 + copy_ms(kb, g['runs'], a.dma_mbs, a.dma_call_us))):
+    r = '_r' if a.recent else ''
+    kb = g['photo_kb' + r] if a.photo_kb is None else a.photo_kb
+    runs, miss = g['runs' + r], g['miss' + r]
+    for name, cost, cap in (('photo, Vita DMA', u['latency_ms'] + copy_ms(kb, runs, a.dma_mbs, a.dma_call_us), cap2),
+                            ('photo, PSP GE copy', kb / 1024 * u['ge_ram_ms_mb'], cap2 + copy_ms(kb, runs, a.dma_mbs, a.dma_call_us))):
         extra = max(0, cost - ge) if 'DMA' in name else cost  # the Vita copies while the game waits for its GE; the GE copy goes after
-        nh = g['nohist'] if a.nohist is None else a.nohist
+        nh = (0 if a.recent else g['nohist']) if a.nohist is None else a.nohist
         fr = (1 - nh) * (g['tg'] + extra) + nh * hold  # frames with no history wait as with hold
-        hd = min(1000 / fr, 1000 / cap) * (1 - g['miss'])  # frames with a miss are not drawn
+        hd = min(1000 / fr, 1000 / cap) * (1 - miss)  # frames with a miss are not drawn
         rows.append((name, fr, hd, f'copy {kb / 1024:.1f} MB: {cost:.1f} ms, game pays {extra:.1f}; capture {cap:.0f} ms; '
-                                   f'{g["miss"] * 100:.0f} % missed, {nh * 100:.0f} % with no history'))
+                                   f'{miss * 100:.0f} % missed, {nh * 100:.0f} % with no history'))
     return mem, cap2, rows
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument('--dma-mbs', type=float, default=429, help='Vita DMA from PSP RAM into cached memory, MB/s (memory bench, 0.0.25.21)')
-    p.add_argument('--dma-call-us', type=float, default=170, help='fixed cost of one DMA call, us (memory bench: a 4 KB call 181 us)')
+    p.add_argument('--dma-mbs', type=float, default=400, help='Vita DMA from PSP RAM into cached memory, MB/s (memory bench: 382-429)')
+    p.add_argument('--dma-call-us', type=float, default=75, help='fixed cost of one DMA call, us (memory bench: a 4 KB call 72-181 us)')
+    p.add_argument('--recent', action='store_true', help='the photo predicted from the last frames whatever their list')
     p.add_argument('--photo-kb', type=float, default=None, help='replace what the photo copies per frame, KB (a tighter prediction)')
     p.add_argument('--nohist', type=float, default=None, help='replace the share of frames with no history (0: history by recent frames)')
     p.add_argument('--ge-overlap-ms', type=float, default=None, help='replace each game\'s GE wait at the sync')
     p.add_argument('--game', default=None)
     a = p.parse_args()
-    print(f'DMA {a.dma_mbs:.0f} MB/s, {a.dma_call_us:.0f} us per call; fps of the game, HD frames per second the capturer allows '
+    print(f'DMA {a.dma_mbs:.0f} MB/s, {a.dma_call_us:.0f} us per call, prediction {"by the last frames" if a.recent else "by list"}; fps of the game, HD frames per second the capturer allows '
           '(the translator and the GPU limit apart)')
     for k, g in GAMES.items():
         if a.game and a.game != k: continue

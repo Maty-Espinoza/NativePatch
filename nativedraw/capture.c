@@ -238,15 +238,22 @@ static void clPut(uint32_t b, uint32_t ord, const uint32_t *src) {
 #ifdef NP_DEV
 // Photo measure: pages of PSP RAM (0x08000000 to 0x0A000000) read for the frame (fp_now, marked by fpMark from the
 // capturer and the record), the start of its first list (fp_key), the pages read by the last 4 frames of up to 4 first
-// lists (fp_h, fp_hk, fp_hn: how many frames each has), those of the last 4 frames (fp_g, fp_gn) and the counts of fpFlip (fp_s; fp_r: those of the last second)
+// lists (fp_h, fp_hk, fp_hn: how many frames each has), those of the last 4 frames (fp_g, fp_gn) and the counts of fpFlip.
+// fp_kind: the same pages by what read them (FP_LIST, FP_VERT, FP_TEX, FP_XFER); fp_last: the frame (fp_fr) each page
+// was last read in, to tell how old a missed page is (fp_s; fp_r: those of the last second)
 // fp_run: the pieces fpFlip predicted last (first page, pages), copied by fpProbe with switch photo_probe
 #define FP_N 8192
-static uint32_t fp_now[FP_N / 32], fp_key, fp_hk[4], fp_hn[4], fp_h[4][4][FP_N / 32], fp_g[4][FP_N / 32], fp_gn, fp_s[17], fp_r[17], fp_run[256][2], fp_nrun;
+static uint32_t fp_now[FP_N / 32], fp_key, fp_hk[4], fp_hn[4], fp_h[4][4][FP_N / 32], fp_g[4][FP_N / 32], fp_gn, fp_s[25], fp_r[25], fp_run[256][2], fp_nrun;
 static int photo_probe;
-static void fpMark(uint32_t a, uint32_t n) {
+enum { FP_LIST, FP_VERT, FP_TEX, FP_XFER };
+static uint32_t fp_kind[4][FP_N / 32], fp_fr;
+static uint16_t fp_last[FP_N];
+static void fpMark(uint32_t a, uint32_t n, uint32_t k) {
   if (a < 0x08000000u || a >= 0x0A000000u || !n) return;
-  for (uint32_t p = (a - 0x08000000u) >> 12, e = (a + n - 1 - 0x08000000u) >> 12; p <= e && p < FP_N; p++)
+  for (uint32_t p = (a - 0x08000000u) >> 12, e = (a + n - 1 - 0x08000000u) >> 12; p <= e && p < FP_N; p++) {
     __atomic_or_fetch(&fp_now[p >> 5], 1u << (p & 31), __ATOMIC_RELAXED);
+    __atomic_or_fetch(&fp_kind[k][p >> 5], 1u << (p & 31), __ATOMIC_RELAXED);
+  }
 }
 #endif
 // Copies 64 bytes of PSP RAM (PSP address b) to dst with two NEON loads
@@ -278,7 +285,7 @@ static void neon256(uint32_t *dst, uint32_t b) {
 // or reads 256 bytes of PSP RAM (64 at the end of a range) and shares them. Leaves the line in r->buf
 static uint32_t rdc(Rd *r, uint32_t a, uint32_t ord) {
   if (a - r->a < r->n) return r->buf[(a - r->a) >> 2];
-  DEV(fpMark(a, 4);)
+  DEV(fpMark(a, 4, FP_LIST);)
   uint32_t b = a & ~63u, e = ramEnd(a);
   if (b + 64 > e) return *(volatile uint32_t *)PSP(a);  // (end of a range)
   // 1 in 8 shared cache lines, timed
@@ -891,7 +898,7 @@ static void xferMirror(uint32_t s, uint32_t t, uint32_t bp) {
       int real = (dst + o) >> 24 == 4 && !((dst + o) & 0x200000);  // (0x04000000 and its plain copy 0x04400000; the others scramble addresses)
       DEV(if (!real) xm_out++; else if (!ra) xm_skip++; else xm_ok++;)
       if (!ra || !real || ramEnd(src + o) < src + o + n) continue;
-      DEV(fpMark(src + o, n);)
+      DEV(fpMark(src + o, n, FP_XFER);)
       if ((ra | (src + o) | n) & 3) for (uint32_t i = 0; i < n; i += 2) ((volatile uint16_t *)PSP(ra))[i / 2] = ((volatile uint16_t *)PSP(src + o))[i / 2];
       else for (uint32_t i = 0; i < n; i += 4) ((volatile uint32_t *)PSP(ra))[i / 4] = ((volatile uint32_t *)PSP(src + o))[i / 4];
       for (uint32_t b = ra & ~63u; b < ra + n; b += 64) if (clOk(b)) cl_tag[clSlot(b)] = 0;
@@ -904,8 +911,10 @@ static void xferMirror(uint32_t s, uint32_t t, uint32_t bp) {
 #ifdef NP_DEV
 // What the photo would copy from the h page maps m (the pages in them, ext more on each side, in pieces joined when 4 or
 // fewer pages apart): *pred pages in *runs pieces (with run, the first 256 in fp_run) and *miss pages of the frame outside
+static uint32_t fp_pr[FP_N / 32];  // (the last prediction of fpPredict)
 static void fpPredict(uint32_t (*m)[FP_N / 32], uint32_t h, uint32_t ext, int run, uint32_t *pred, uint32_t *runs, uint32_t *miss) {
-  static uint32_t u[FP_N / 32], pr[FP_N / 32];
+  static uint32_t u[FP_N / 32];
+  uint32_t *pr = fp_pr;
   uint32_t n = 0;
   sceClibMemset(u, 0, sizeof u); sceClibMemset(pr, 0, sizeof pr);
   for (uint32_t j = 0; j < h; j++) for (uint32_t w = 0; w < FP_N / 32; w++) u[w] |= m[j][w];
@@ -926,7 +935,9 @@ static void fpPredict(uint32_t (*m)[FP_N / 32], uint32_t h, uint32_t ext, int ru
 // more on each side) and the pages it would miss; the same from the last 4 frames whatever their list (fp_g), with 8 and
 // with 4 pages more; then the frame goes into both histories. fp_s: frames, pages, pages copied, pieces, pages missed,
 // frames with a miss, frames with no history (the game would wait for a live walk); 9-16, by the last frames: copied,
-// pieces, pages missed and frames with a miss with 8 pages more, the same with 4
+// pieces, pages missed and frames with a miss with 8 pages more, the same with 4; 17-20, the pages missed by the last
+// frames with 8 more, by what read them; 21-24, the same by when they were read before: never, up to 8 frames before, up to
+// 64, longer ago. The first 40 missed pages also go to the log one by one
 static void fpFlip(void) {
   static uint32_t rr;
   uint32_t k, h, pages = 0, pred, runs, miss;
@@ -941,7 +952,20 @@ static void fpFlip(void) {
     for (uint32_t x = 0; x < 2; x++) {
       fpPredict(fp_g, h, x ? 4 : 8, 0, &pred, &runs, &miss);
       fp_s[9 + 4 * x] += pred; fp_s[10 + 4 * x] += runs; fp_s[11 + 4 * x] += miss; fp_s[12 + 4 * x] += miss > 0;
+      for (uint32_t w = 0; w < FP_N / 32 && !x && miss; w++)
+        for (uint32_t b = fp_now[w] & ~fp_pr[w]; b; b &= b - 1) {
+          static uint32_t nlog;
+          uint32_t p = w * 32 + __builtin_ctz(b), age = fp_last[p] ? (uint16_t)(fp_fr - fp_last[p]) : 0, kinds = 0;
+          for (uint32_t k = 0; k < 4; k++) if (fp_kind[k][w] >> (p & 31) & 1) { fp_s[17 + k]++; kinds |= 1u << k; }
+          fp_s[!age ? 21 : age <= 8 ? 22 : age <= 64 ? 23 : 24]++;
+          if (nlog++ < 40) clog("photo miss: frame %u page %08x read by %s%s%s%s, %s %u frames before\n", gen, 0x08000000u + (p << 12),
+                                kinds & 1 ? "list " : "", kinds & 2 ? "vertices " : "", kinds & 4 ? "texture " : "", kinds & 8 ? "transfer " : "",
+                                age ? "last read" : "never read", age);
+        }
     }
+  fp_fr++;
+  for (uint32_t p = 0; p < FP_N; p++) if (fp_now[p >> 5] >> (p & 31) & 1) fp_last[p] = fp_fr ? fp_fr : 1;
+  sceClibMemset(fp_kind, 0, sizeof fp_kind);
   sceClibMemcpy(fp_h[k][fp_hn[k]++ & 3], fp_now, sizeof fp_now);
   sceClibMemcpy(fp_g[fp_gn++ & 3], fp_now, sizeof fp_now);
   sceClibMemset(fp_now, 0, sizeof fp_now); fp_key = 0;
@@ -1978,7 +2002,9 @@ static int repThread(SceSize args, void *argp) {
         clog("  photo footprint (per frame): frames=%u pages=%u copied=%u pieces=%u missed=%u | frames with a miss %u, with no history %u | probe KB=%u us=%u\n",
              g, fp_r[1] / g, fp_r[2] / g, fp_r[3] / g, fp_r[4] / g, fp_r[5], fp_r[6], fp_r[7] / g, fp_r[8] / g);
         clog("  photo footprint by the last frames (per frame): 8 more copied=%u pieces=%u missed=%u frames with a miss %u | 4 more copied=%u pieces=%u missed=%u frames with a miss %u\n",
-             fp_r[9] / g, fp_r[10] / g, fp_r[11] / g, fp_r[12], fp_r[13] / g, fp_r[14] / g, fp_r[15] / g, fp_r[16]); }
+             fp_r[9] / g, fp_r[10] / g, fp_r[11] / g, fp_r[12], fp_r[13] / g, fp_r[14] / g, fp_r[15] / g, fp_r[16]);
+        if (fp_r[11]) clog("  photo misses (by the last frames, 8 more; pages in the second): lists %u vertices %u textures %u transfers %u | never read before %u, up to 8 frames before %u, up to 64 %u, longer ago %u\n",
+                           fp_r[17], fp_r[18], fp_r[19], fp_r[20], fp_r[21], fp_r[22], fp_r[23], fp_r[24]); }
 #endif
       if (!level) goto sync;  // (minimum: only this line and the vram and sync one)
       if (reg_on) {  // frame record
