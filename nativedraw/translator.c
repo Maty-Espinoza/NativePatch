@@ -506,9 +506,9 @@ static const LT *t3One(const T3 *t) {
   for (int i = 0; i < 4; i++) if (t->l[i].on) { if (r) return 0; r = &t->l[i]; }
   return r && !r->type && r->comp != 2 ? r : 0;
 }
-// 1 if every light on of t is directional without powered diffuse (what nd_v5 does)
+// 1 if every light on of t is directional or a point light, without powered diffuse (what nd_v5 does)
 static int t3Dl(const T3 *t) {
-  for (int i = 0; i < 4; i++) if (t->l[i].on && (t->l[i].type || t->l[i].comp == 2)) return 0;
+  for (int i = 0; i < 4; i++) if (t->l[i].on && (t->l[i].type > 1 || t->l[i].comp == 2)) return 0;
   return 1;
 }
 // Uniforms of nd_v3 (lv 0, 3 with 16-bit UV), nd_v4 (lv 1, 2: GVL) or nd_v5 (lv 4 on: skinProg) for a draw of t with texture size tw x th and material color mat, in the default buffer u; wm: the scene's matrix.
@@ -543,9 +543,9 @@ static void t3Uni(void *u, const T3 *t, float tw, float th, const float *wm, int
     sceGxmSetUniformDataF(u, g4gu, 0, 4, gu);
     return;
   }
-  if (lv >= 4) {  // (trVerts with weights: t3Flat, or t3Light with directional lights; t3Gen of an environment map. Rows of u: nd_v5.cg)
+  if (lv >= 4) {  // (trVerts with weights: t3Flat, or t3Light with directional and point lights; t3Gen of an environment map. Rows of u: nd_v5.cg)
     uint32_t fm = (lv - 4) >> 3, wn = ((lv - 4) & 7) + 1;  // (fm: 0 8-bit UV and 4444 color, 1 16-bit UV and 8888)
-    float q[220] = { 0 }, *ba = q + 24, *kc = q + 28, *md = q + 32, *ms = q + 36, s = t->rev ? -1 : 1, kt = fm ? k16 : 1 / 128.0f;
+    float q[252] = { 0 }, *ba = q + 24, *kc = q + 28, *md = q + 32, *ms = q + 36, s = t->rev ? -1 : 1, kt = fm ? k16 : 1 / 128.0f;
     sceClibMemcpy(q, m, 64); sceClibMemcpy(q + 20, fg, 16);
     q[16] = t->us * ku * kt; q[17] = t->vs * kv * kt; q[18] = t->uo * ku; q[19] = t->vo * kv;
     for (int r = 0; r < 3; r++) { q[40 + r * 4] = t->w[r] * s; q[41 + r * 4] = t->w[3 + r] * s; q[42 + r * 4] = t->w[6 + r] * s; }
@@ -555,20 +555,20 @@ static void t3Uni(void *u, const T3 *t, float tw, float th, const float *wm, int
     else if (!t->nl) for (int k = 0; k < 4; k++) { kc[k] = t->upd & 1 ? t->ai[k] / 256.0f : 0; ba[k] = (t->upd & 1 ? t->ei[k] : t->lc >> k * 8 & 255) / 255.0f; }
     else {
       int va = t->upd & 1;
-      float a[4] = { t->ac[0], t->ac[1], t->ac[2], t->ac[3] };
-      for (int i = 0; i < 4; i++) {  // (direction, half vector and power, diffuse, specular)
+      for (int i = 0; i < 4; i++) {  // (direction or position, attenuation and power, diffuse, specular; ambient)
         const LT *l = &t->l[i];
         float *z = q + 60 + i * 16;
         if (!l->on) continue;
-        for (int k = 0; k < 3; k++) { a[k] += l->ca[k]; z[k] = z[4 + k] = l->p[k]; z[8 + k] = l->cd[k]; z[12 + k] = l->comp == 1 ? l->cs[k] : 0; }
-        z[6] += 1; tnorm(z + 4); z[7] = (int)(t->sp + .5f);
+        for (int k = 0; k < 3; k++) { z[k] = l->p[k]; z[4 + k] = l->type ? l->a[k] : k == 0; z[8 + k] = l->cd[k]; z[12 + k] = l->comp == 1 ? l->cs[k] : 0; q[220 + i * 4 + k] = l->ca[k]; }
+        z[3] = l->type != 0; z[7] = (int)(t->sp + .5f);
       }
-      for (int k = 0; k < 4; k++) { ba[k] = t->em[k] + (va ? 0 : a[k] * t->am[k]); kc[k] = va ? a[k] : 0; }
+      for (int r = 0; r < 3; r++) for (int c = 0; c < 4; c++) q[236 + r * 4 + c] = t->w[c * 3 + r];
+      for (int k = 0; k < 4; k++) { ba[k] = t->em[k] + (va ? 0 : t->ac[k] * t->am[k]); kc[k] = va ? t->ac[k] : 0; q[248 + k] = k < 3 ? (va ? 0 : t->am[k]) : va; }
       for (int k = 0; k < 3; k++) { md[k] = t->upd & 2 ? 0 : t->ad[k]; ms[k] = t->upd & 4 ? 0 : t->as[k]; }
       md[3] = t->upd >> 1 & 1; ms[3] = t->upd >> 2 & 1;
     }
     for (uint32_t b = 0; b < wn; b++) for (int r = 0; r < 3; r++) for (int c = 0; c < 4; c++) q[124 + b * 12 + r * 4 + c] = t->b[b * 12 + c * 3 + r];
-    sceGxmSetUniformDataF(u, g5, 0, 220, q);
+    sceGxmSetUniformDataF(u, g5, 0, 252, q);
     return;
   }
   for (int k = 0; t->lit && k < 4; k++) {  // (lit with no lights: see t3Flat)

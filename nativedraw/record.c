@@ -675,15 +675,15 @@ static uint32_t rgBlock(const uint32_t *src, uint32_t n, uint32_t *last) {
 }
 DEV(static int cpu_verts, rec_cost, hold_game;)  // (switch cpu_verts: no vertices for the GPU, to compare)
 static uint32_t rg_box[3];  // scissor (0xD4, 0xD5) and image of the last clear: draws behind it are boxed (trBoxed), the GPU clips them
-// 1 if every light of bits on is directional without powered diffuse
+// 1 if every light of bits on is directional or a point light, without powered diffuse
 static int rgDir(uint32_t on) {
-  for (int i = 0; i < 4; i++) if (on >> i & 1 && (reg[0x5F + i] & 0x300 || (reg[0x5F + i] & 3) == 2)) return 0;
+  for (int i = 0; i < 4; i++) if (on >> i & 1 && ((reg[0x5F + i] & 0x300) > 0x100 || (reg[0x5F + i] & 3) == 2)) return 0;
   return 1;
 }
 // The vertex size if the GPU can take the vertices of a draw as they are, 0 if not: no indices, triangles in a scissor that takes in the whole
 // image (what is seen of one 480 wide or more, all of a narrower one) or in the one of the last clear; for nd_v3 the types of GV3, no lights
 // and no generated UV, for nd_v4 16-bit position and normal, no color and one directional light or, with no lighting, UV from the normal;
-// for nd_v5 the types of GVS, directional lights and no generated UV or the environment map of two directional lights. The record must be
+// for nd_v5 the types of GVS, directional and point lights and no generated UV or the environment map of two directional lights. The record must be
 // free of the GPU: it reads these bytes while drawing.
 static uint32_t rgVGpu(uint32_t type, uint32_t vt, uint32_t idx) {
   uint32_t w = reg[0x9D] & 0x7FF, on = (reg[0x18] & 1) | (reg[0x19] & 1) << 1 | (reg[0x1A] & 1) << 2 | (reg[0x1B] & 1) << 3, l = 0;

@@ -47,7 +47,7 @@ static uint32_t g_ops, g_uf;  // per-draw GXM calls of the translator (programs,
 int sceGxmReserveVertexDefaultUniformBuffer(SceGxmContext *c, void **u) { static float b[256]; *u = b; g_ops++; return 0; }
 int sceGxmReserveFragmentDefaultUniformBuffer(SceGxmContext *c, void **u) { static float b[256]; *u = b; g_ops++; return 0; }
 // What the context holds, for the dump: each program parameter (by program and name) with its last values, vertex stream, programs
-static struct { const SceGxmProgram *p; char name[8]; float v[224]; } par[64];
+static struct { const SceGxmProgram *p; char name[8]; float v[256]; } par[64];
 static const void *stream; static uint32_t fprog, tex_w;
 static FILE *dmp, *tri;
 static const SceGxmVertexProgram *vprog;
@@ -91,7 +91,7 @@ static void triS(int sk, uint32_t k, float *o, float *ou, float *ov, float *og, 
   for (int i = 0; i < 5; i++) { z = (z + fs[i] - 1) / fs[i] * fs[i]; of[i] = z; z += fn[i] * fs[i]; }
   const uint8_t *p = (const uint8_t *)stream + k * gsz[sk];
   const float *pf = (const float *)p, *x = (const float *)(p + of[4]), *q = uni(g5);
-  float w8[8] = { 0, 0, 0, 1, 0, 0, 0, 1 }, nr[3], t2[2], a[4] = { 0, 0, 0, 1 }, s3[3] = { 0, 0, 0 }, sn[3] = { 0, 0, 0 }, wv[3], d[3] = { 0, 0, 0 }, ps[3] = { 0, 0, 0 }, cv[4];
+  float w8[8] = { 0, 0, 0, 1, 0, 0, 0, 1 }, nr[3], t2[2], a[4] = { 0, 0, 0, 1 }, s3[3] = { 0, 0, 0 }, sn[3] = { 0, 0, 0 }, wv[3], d[3] = { 0, 0, 0 }, ps[3] = { 0, 0, 0 }, am[3] = { 0, 0, 0 }, cv[4], wp[3];
   for (uint32_t i = 0; i < wn && i < 4; i++) w8[i] = pf[i];
   for (uint32_t i = 0; i < (wn > 4 ? wn - 4 : 1); i++) w8[4 + i] = pf[wn > 4 ? 4 + i : i];
   for (int i = 0; i < 3; i++) nr[i] = (int8_t)p[of[3] + i];
@@ -107,17 +107,24 @@ static void triS(int sk, uint32_t k, float *o, float *ou, float *ov, float *og, 
   for (int i = 0; i < 2; i++) { h[i] = floorf(a[i] / 16); l[i] = a[i] - h[i] * 16; }
   const float c4[4] = { l[0] / 15, h[0] / 15, l[1] / 15, h[1] / 15 };
   for (int i = 0; i < 4; i++) cv[i] = q[47] > 0 ? a[i] / 255 : c4[i];
+  for (int r = 0; r < 3; r++) wp[r] = s3[0] * q[236 + r * 4] + s3[1] * q[237 + r * 4] + s3[2] * q[238 + r * 4] + q[239 + r * 4];
   for (int i = 0; i < 4; i++) {
     const float *z = q + 60 + i * 16;
-    float nl = wv[0] * z[0] + wv[1] * z[1] + wv[2] * z[2], sp = wv[0] * z[4] + wv[1] * z[5] + wv[2] * z[6], pw = nl >= 0 && sp > 0 ? pow(sp, z[7]) : 0;
-    for (int j = 0; j < 3; j++) { d[j] += (nl > 0 ? nl : 0) * z[8 + j]; ps[j] += pw * z[12 + j]; }
+    float L[3], hv[3];
+    for (int j = 0; j < 3; j++) L[j] = z[j] - z[3] * wp[j];
+    float r = L[0] * L[0] + L[1] * L[1] + L[2] * L[2]; r = r > 1e-30f ? r : 1e-30f;
+    float den = z[4] + z[5] * sqrtf(r) + z[6] * r, kk = den > 0 ? (1 / den < 1 ? 1 / den : 1) : 0, ir = 1 / sqrtf(r);
+    for (int j = 0; j < 3; j++) { L[j] *= ir; hv[j] = L[j] + (j == 2); }
+    float hh = hv[0] * hv[0] + hv[1] * hv[1] + hv[2] * hv[2], nl = wv[0] * L[0] + wv[1] * L[1] + wv[2] * L[2];
+    float sp = (wv[0] * hv[0] + wv[1] * hv[1] + wv[2] * hv[2]) / sqrtf(hh > 1e-30f ? hh : 1e-30f), pw = nl >= 0 && sp > 0 ? pow(sp, z[7]) : 0;
+    for (int j = 0; j < 3; j++) { d[j] += kk * (nl > 0 ? nl : 0) * z[8 + j]; ps[j] += kk * pw * z[12 + j]; am[j] += kk * q[220 + i * 4 + j]; }
   }
   for (int i = 0; i < 4; i++) o[i] = s3[0] * q[i] + s3[1] * q[4 + i] + s3[2] * q[8 + i] + q[12 + i];
   if (q[43] > 0) { u = ((wv[0] * q[52] + wv[1] * q[53] + wv[2] * q[54]) + 1) * .5f * q[55]; v = ((wv[0] * q[56] + wv[1] * q[57] + wv[2] * q[58]) + 1) * .5f * q[59]; }
   else { u = t2[0] * q[16] + q[18]; v = t2[1] * q[17] + q[19]; }
   g = s3[0] * q[20] + s3[1] * q[21] + s3[2] * q[22] + q[23]; g = g < 0 ? 0 : g > 1 ? 1 : g;
   for (int i = 0; i < 4; i++) {
-    float y = q[24 + i] + q[28 + i] * cv[i] + (i < 3 ? d[i] * (q[32 + i] + q[35] * cv[i]) + ps[i] * (q[36 + i] + q[39] * cv[i]) : 0);
+    float y = q[24 + i] + q[28 + i] * cv[i] + (i < 3 ? d[i] * (q[32 + i] + q[35] * cv[i]) + ps[i] * (q[36 + i] + q[39] * cv[i]) + am[i] * (q[248 + i] + q[251] * cv[i]) : 0);
     c[i] = (y < 0 ? 0 : y > 1 ? 1 : y) * 255;
   }
   *ou = u; *ov = v; *og = g;
@@ -229,7 +236,7 @@ static int gvSkin(const RFrame *f, const RDraw *d, const uint32_t *e) {
   if (!d->loff) return !(RE(e, 0xC0) & 3);
   const uint32_t *l = (const uint32_t *)(f->a + d->loff - 1) - 0x53;
   uint32_t g = RE(e, 0xC0) & 3, c1 = RE(e, 0xC1);
-  for (int i = 0; i < 4; i++) if (RE(e, 0x17) & RE(e, 0x18 + i) & 1 && (l[0x5F + i] & 0x300 || (l[0x5F + i] & 3) == 2)) return 0;
+  for (int i = 0; i < 4; i++) if (RE(e, 0x17) & RE(e, 0x18 + i) & 1 && ((l[0x5F + i] & 0x300) > 0x100 || (l[0x5F + i] & 3) == 2)) return 0;
   return !g || (g == 2 && !(l[0x5F + (c1 & 3)] & 0x300) && !(l[0x5F + (c1 >> 8 & 3)] & 0x300));
 }
 // Moves the vertices of the draws rgVGpu would mark to the end of tx, as the record does
