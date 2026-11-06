@@ -136,7 +136,8 @@ static int wantKeptOk(void) {
   sceClibMemset(rt_pg, 0, sizeof rt_pg); sceClibMemset(want_d, 0, sizeof want_d); sceClibMemset(want_now, 0, sizeof want_now);
   return ok;
 }
-// A RAM to VRAM transfer reaches the mirror page by page; one aimed above the real 2 MB of VRAM writes nothing
+// A RAM to VRAM transfer reaches the mirror page by page; one aimed above the real 2 MB of VRAM writes nothing; a block
+// over three pages, the last without a copy, fills the first two (joined into one run) and leaves the third alone
 static int xferMirrorOk(void) {
   volatile uint32_t *src = (volatile uint32_t *)PSP(0x08900000), *m = (volatile uint32_t *)PSP(MIRROR + 0x190000);
   mir_u = 0; mir_ok[0][0x190 >> 5] |= 1u << (0x190 & 31);
@@ -147,7 +148,12 @@ static int xferMirrorOk(void) {
   src[0] = 1;
   xferMirror(0x08900000, 0x04390000, 4);
   ok = ok && m[0] != 1;
-  for (int i = 0; i < 512; i++) m[i] = 0;
+  mir_ok[0][0x190 >> 5] |= 3u << (0x190 & 31);
+  for (int i = 0; i < 3072; i++) src[i] = 0xCB000000u + i;
+  reg[0xEE] = 127 | 23 << 10;
+  xferMirror(0x08900000, 0x04190000, 4);
+  ok = ok && m[0] == src[0] && m[2047] == src[2047] && !m[2048] && !m[3071];
+  for (int i = 0; i < 3072; i++) m[i] = 0;
   reg[0xB3] = reg[0xB5] = reg[0xEE] = 0; mir_ok[0][0x190 >> 5] = 0;
   return ok;
 }
@@ -210,7 +216,7 @@ static int checkAll(void) {
   bad += report("frame record: not recorded while the presenter does not take frames", r[REG0].late_pr);
   bad += report("repeated texture: a new record notes it again, and a new texture after an untextured draw is requested", r[REG0].sametex);
   bad += report("mirror: a texture page of an image stops being requested when no frame reads it, a list page stays", r[REG0].want);
-  bad += report("mirror: a RAM to VRAM transfer is applied to it, nothing above the real VRAM", r[REG0].xm);
+  bad += report("mirror: a RAM to VRAM transfer is applied to it, joined across pages with a copy, nothing above the real VRAM", r[REG0].xm);
   bad += report("texture copy: right by CPU and by DMA", texCopyOk(1) && texCopyOk(32));
   bad += report("an image repeated among the targets does not hide textures in its pages", r[REG0].rtr);
   bad += report("a texture page used this frame stays requested under a target; another mirror's copy counts", r[REG0].wk);

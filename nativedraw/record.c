@@ -326,6 +326,35 @@ static void regBench(void) {
   t0 = now(); for (uint32_t i = 0; i < n / 4; i += 4) sum += ((const uint32_t *)c)[i] + ((const uint32_t *)c)[i + 1] + ((const uint32_t *)c)[i + 2] + ((const uint32_t *)c)[i + 3]; t[1] = now() - t0;
   t0 = now(); for (uint32_t i = 0; i < 16; i++) sceDmacMemcpy(c + i * 4096, (const uint8_t *)ps + i * 4096, 4096); t[2] = (now() - t0) * 1000 / 16;
   clog("memory bench (DMA into cached): PSP RAM->cached (DMA) %u MB/s, reading it back %u MB/s, one 4 KB call %u ns\n", t[0] ? n / t[0] : 0, t[1] ? n / t[1] : 0, t[2]);
+  // PSP RAM -> mirror, as xferMirror copies: from the game's code (it does not change) to MIRROR2, where no page is
+  // requested yet (the mailbox was just found), so no reader takes these bytes as a copy of VRAM. By CPU, by DMA, word by
+  // word, and cached -> mirror (the write alone), ns per call; before each one the destination gets other bytes and after
+  // it is compared with a snapshot of the source ("bad": the bytes did not arrive). Also the memory type of both blocks
+  // (0x80 normal uncached, 0xD0 cached) and whether the source changed meanwhile (then the checks mean nothing)
+  const uint8_t *gs = (const uint8_t *)PSP(0x08804000u);
+  uint8_t *md = (uint8_t *)PSP(0x0AC00000u);
+  SceKernelMemBlockInfo bi[2];
+  for (int k = 0; k < 2; k++) { sceClibMemset(&bi[k], 0, sizeof bi[k]); bi[k].size = sizeof bi[k]; sceKernelGetMemBlockInfoByAddr(k ? (void *)md : (void *)gs, &bi[k]); }
+  sceClibMemcpy(c, gs, n);
+  for (uint32_t s = 512; s <= n; s = s < 4096 ? 4096 : s * 4) {
+    uint32_t r = s < 65536 ? 8 : 2, ok = 0;
+    int e = 0;
+    for (int m = 0; m < 4; m++) {
+      for (uint32_t i = 0; i < s / 4; i++) ((volatile uint32_t *)md)[i] = ~((const uint32_t *)c)[i];
+      t0 = now();
+      for (uint32_t k = 0; k < r; k++)
+        if (m == 0) sceClibMemcpy(md, gs, s);
+        else if (m == 1) e |= (int)sceDmacMemcpy(md, gs, s);
+        else if (m == 2) for (uint32_t i = 0; i < s / 4; i++) ((volatile uint32_t *)md)[i] = ((const volatile uint32_t *)gs)[i];
+        else sceClibMemcpy(md, c, s);
+      t[m] = (now() - t0) * 1000 / r;
+      ok |= !sceClibMemcmp(md, c, s) << m;
+    }
+    clog("memory bench (PSP RAM->mirror, %u B, ns per call): CPU %u%s, DMA %u%s (%d), words %u%s, cached->mirror %u%s\n", s, t[0], ok & 1 ? "" : " bad",
+         t[1], ok & 2 ? "" : " bad", e < 0 ? e : 0, t[2], ok & 4 ? "" : " bad", t[3], ok & 8 ? "" : " bad");
+  }
+  clog("memory bench (PSP RAM->mirror): memory types %x/%x (blocks %08x/%08x), source %s\n", bi[0].memoryType, bi[1].memoryType,
+       bi[0].type, bi[1].type, sceClibMemcmp(c, gs, n) ? "CHANGED" : "unchanged");
 #endif
 }
 #ifdef NP_DEV

@@ -887,29 +887,39 @@ static uint64_t bx_w;  // bytes xferMirror copies word by word (tools/perf/captu
 #else
 #define BXW(n) ((void)0)
 #endif
+// Copies n bytes of PSP RAM at sa into the mirror at ra and takes the destination lines out of the readers' cache: by DMA
+// from 8 KB (where the fixed cost of a call is paid back), by sceClibMemcpy below, by halfwords when not 4-aligned
+// (uncached PSP RAM may not take the unaligned accesses of a general memcpy)
+static void xferRun(uint32_t ra, uint32_t sa, uint32_t n) {
+  if ((ra | sa | n) & 3) { BXW(n); for (uint32_t i = 0; i < n; i += 2) ((volatile uint16_t *)PSP(ra))[i / 2] = ((volatile uint16_t *)PSP(sa))[i / 2]; }
+  else if (n >= 8192) sceDmacMemcpy((void *)PSP(ra), (const void *)PSP(sa), n);
+  else sceClibMemcpy((void *)PSP(ra), (const void *)PSP(sa), n);
+  for (uint32_t b = ra & ~63u; b < ra + n; b += 64) if (clOk(b)) cl_tag[clSlot(b)] = 0;
+}
 // Applies a RAM to VRAM transfer to the mirror the list is read with, row by row and page by page: the mirror is from the
 // last flip, and a game can copy sublists or data to VRAM during the frame and use them right after. Pages without a copy
-// are skipped; the lines of the destination leave the read buffer and the readers' cache. Copies by aligned words:
-// uncached PSP RAM may not take the unaligned accesses of a general memcpy.
+// are skipped; pieces that follow each other in the source and in the mirror (whole rows, consecutive pages) are copied as
+// one run by xferRun; the read buffer is emptied.
 static void xferMirror(uint32_t s, uint32_t t, uint32_t bp) {
   if (isVram(s) || !isVram(t)) return;
   uint32_t sw = reg[0xB3] & 0xFFFF, dw = reg[0xB5] & 0xFFFF, w = ((reg[0xEE] & 0x3FF) + 1) * bp, h = (reg[0xEE] >> 10 & 0x3FF) + 1;
   uint32_t src = s + ((reg[0xEB] >> 10 & 0x3FF) * sw + (reg[0xEB] & 0x3FF)) * bp, dst = t + ((reg[0xEC] >> 10 & 0x3FF) * dw + (reg[0xEC] & 0x3FF)) * bp;
   DEV(uint32_t at = cap_at; cap_at = 3; uint32_t k0 = xm_ok, k1 = xm_skip, k2 = xm_out, s0 = src, d0 = dst; xm_t[0]++; xm_t[1] += w * h;)
+  uint32_t rs = 0, rd = 0, rn = 0, re = 0;  // run being joined: source, mirror address, bytes, end of its readable range
   for (uint32_t y = 0; y < h; y++, src += sw * bp, dst += dw * bp)
-    for (uint32_t o = 0, n; o < w; o += n) {
+    for (uint32_t o = 0, n, e; o < w; o += n) {
       n = 4096 - ((dst + o) & 4095);
       if (n > w - o) n = w - o;
       uint32_t ra = vtr(dst + o);
       int real = (dst + o) >> 24 == 4 && !((dst + o) & 0x200000);  // (0x04000000 and its plain copy 0x04400000; the others scramble addresses)
       DEV(if (!real) xm_out++; else if (!ra) xm_skip++; else xm_ok++;)
-      if (!ra || !real || ramEnd(src + o) < src + o + n) continue;
+      if (!ra || !real || (e = ramEnd(src + o)) < src + o + n) continue;
       DEV(fpMark(src + o, n, FP_XFER);)
-      BXW(n);
-      if ((ra | (src + o) | n) & 3) for (uint32_t i = 0; i < n; i += 2) ((volatile uint16_t *)PSP(ra))[i / 2] = ((volatile uint16_t *)PSP(src + o))[i / 2];
-      else for (uint32_t i = 0; i < n; i += 4) ((volatile uint32_t *)PSP(ra))[i / 4] = ((volatile uint32_t *)PSP(src + o))[i / 4];
-      for (uint32_t b = ra & ~63u; b < ra + n; b += 64) if (clOk(b)) cl_tag[clSlot(b)] = 0;
+      if (rn && src + o == rs + rn && ra == rd + rn && e == re) { rn += n; continue; }
+      if (rn) xferRun(rd, rs, rn);
+      rs = src + o; rd = ra; rn = n; re = e;
     }
+  if (rn) xferRun(rd, rs, rn);
   R0.n = 0;
   DEV(cap_at = at;
       static uint32_t nlog;  // walk_log: transfers with pieces not applied (destination page without a copy, or out of the real VRAM)
