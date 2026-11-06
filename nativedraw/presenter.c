@@ -728,7 +728,7 @@ static int presThread(SceSize args, void *argp) {
     repTick();
     if (menu != m0) { m0 = menu; alog("presenter: menu %s\n", m0 ? "open" : "closed"); }
     static uint32_t tp0;
-    if (covered != tp0) { tp0 = covered; alog(tp0 ? "translator: something covers the image (not in the record, %u of 510 blocks differ): normal image\n" : "translator: the Vita drawing is back\n", cov_k); }
+    if (covered != tp0) { tp0 = covered; alog(tp0 ? "translator: something covers the image (not in the record, %u of 64 points differ): normal image\n" : "translator: the Vita drawing is back\n", cov_k); }
     if (warned < 2 && n_pres >= (warned ? 60 : 1)) alog("presenter: %s\n", warned++ ? "60 frames drawn" : "first frame drawn");
     DEV(if (!((k + 1) % 20)) bnLog();)
     if (++k < 200) continue;
