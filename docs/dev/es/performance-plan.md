@@ -286,6 +286,10 @@ Racer; logs en
   (modelo 48 fps, hoy 60): ahí no aporta. Una llamada DMA de 4 KB tardó esta vez 72-76 us (181 us en la 0.0.25.21): el costo
   fijo varía. Por qué God of War sigue fallando en el 15 % de los frames todavía no se sabe: la 0.0.25.23 dice qué lecturas
   fallan y qué tan vieja es la página.
+  fallan y qué tan vieja es la página.
+  0.0.25.23: todas las páginas que fallaron no se habían leído nunca antes en la corrida (memoria nueva: copias de vértices del
+  registro, orígenes de copias, texturas, algunas páginas de listas). Ninguna historia puede predecirlas: un frame que lee
+  memoria nueva necesita otro camino (esperar como hold, o leer en vivo y comprobar que no se escribió después del sync).
 
 **Fases** (cada una se comprueba en la Vita antes de la siguiente; la foto es una opción hasta que pase a ser la normal):
 0. **Medir, sin cambiar nada** (versión de desarrollo): (a) tiempo de `xferMirror` por frame en `capture split`; (b) DMA de la

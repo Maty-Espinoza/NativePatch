@@ -274,6 +274,9 @@ three scenes, each frame compared with the same frame captured with the game hel
   frames with a miss; with 4 pages of margin 2.1 MB and 7 %. In the race the photo would cost the game ~4 ms (model 48 fps,
   today 60): there it adds nothing. One 4 KB DMA call took 72-76 us this time (181 us in 0.0.25.21): the fixed cost varies.
   Why God of War keeps missing 15 % of frames is not known yet: 0.0.25.23 says which reads miss and how old the page is.
+  0.0.25.23: every missed page was never read before in the run (new memory: record copies of vertices, transfer sources,
+  textures, a few list pages). No history can predict those: a frame that reads new memory needs another way (wait like hold,
+  or read live and check it was not written after the sync).
 
 **Phases** (each checked on the Vita before the next; the photo is a switch until it is the default):
 0. **Measure, nothing changes** (development build): (a) `xferMirror` time per frame in `capture split`; (b) DMA from PSP RAM to
