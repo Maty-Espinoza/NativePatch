@@ -333,8 +333,14 @@ int main(int argc, char **argv) {
       RFrame *g = rf[rg_w];
       *W(0x08C34000) = 0x11; *W(0x08C33000) = 0x22; rg_ordc = 1;
       *W(0x08C32000) = 0x33;
-      uint32_t v1 = rgVLater(0x08C34000, 4, 0), v2 = rgVLater(0x08C33000, 4, 0), v3 = rgVLater(0x08C32000, 24, 24);
+      uint32_t fl = g->flags; g->flags = 0;
+      uint32_t v1 = rgVLater(0x08C34000, 4, 0, 0), v2 = rgVLater(0x08C33000, 4, 0, 0), v3 = rgVLater(0x08C32000, 24, 24, 1);
       rgVFlush();
+      res->srt = res->srt && !(g->flags & R_READ);  // (positions 0: fine)
+      *W(0x08C31000 + 16) = 0x6394bdbc;  // (a garbage position, ~5e21, for the GPU: the frame is not drawn)
+      rgVLater(0x08C31000, 24, 24, 1); rgVFlush();
+      res->srt = res->srt && g->flags & R_READ; g->flags = fl;
+      g->nvx -= 48;
       RDraw dv = { .voff = v3 };
       res->srt = res->srt && v1 && v2 && *(uint32_t *)(g->a + v1 - 1) == 0x11 && *(uint32_t *)(g->a + v2 - 1) == 0x22 && !vpn;
       res->srt = res->srt && v3 & VX && g->nvx == 48 && (v3 & ~VX) == TX_N - 48 && *(uint32_t *)RV(g, &dv) == 0x33;  // (for the GPU: end of tx)

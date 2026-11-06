@@ -25,7 +25,7 @@ static const char *nr_names[NR_N] = { "vertices", "swizzle_width", "texture", "x
 // (same, changed, new); unswizzled bytes; distinct textures
 // per frame
 static struct { uint32_t fr, ok, memo, rd_fail, limit, curve, draws, st, kb, cl, us, d3, clear, blend, atest, swz, fmt[16], us_e, us_v, us_t, us_p, t_b, us_l, stomped, n_late, gpu, o_b, us_o,
-  t_n[2], t_kb[2], t_dma[2], t_ord[2], t_calls, t_size[5], t_rb[6], v_dma, v_kb, v_runs, v_list, v_all, v_busy, v_full, t_same, t_changed, t_lines, t_tex,
+  t_n[2], t_kb[2], t_dma[2], t_ord[2], t_calls, t_size[5], t_rb[6], v_dma, v_kb, v_runs, v_list, v_all, v_busy, v_full, v_bad, t_same, t_changed, t_lines, t_tex,
   c_hit, c_fill, c_chg, c_rec, c_fail, c_us, skip DEV(, nr[NR_N]); } ga, gr;
 // RN records: with fewer, the one the GPU just read would at times be the only free one, overwriting its textures
 #define RN 4
@@ -392,10 +392,17 @@ static uint32_t rgCopy(uint32_t a, uint32_t n) {
 // Vertices of 3D draws from RAM wait here: nobody needs them before the list ends, and read together by DMA they cost a
 // fraction of many small reads. vp: where to read (s), where they go (d) and how many bytes.
 #define VP_N 1024
-static struct { uint32_t s, n; uint8_t *d; } vp[VP_N];
+static struct { uint32_t s, n, c; uint8_t *d; } vp[VP_N];  // (c: vertex size to check for the GPU, 0 none)
 static uint32_t vpn;
 // Copies what waits: a run of entries close to each other in memory (gaps under 2 KB) goes by DMA once and is then
 // handed out piece by piece; a run under 4 KB is read directly, where a DMA call costs more than the bytes
+// 1 if a float position of the n bytes of vertices of size vz at p is garbage: NaN, infinite or 2^32 or more in size. The CPU path
+// refuses such frames (vertex_out); the GPU path draws what it gets, so the record refuses them before (not_read)
+static int rgVBad(const uint8_t *p, uint32_t n, uint32_t vz) {
+  for (uint32_t o = vz - 12; o + 12 <= n; o += vz)
+    for (uint32_t k = 0; k < 12; k += 4) if ((*(const uint32_t *)(p + o + k) >> 23 & 0xFF) >= 0x9F) return 1;
+  return 0;
+}
 static void rgVFlush(void) {
   for (uint32_t i = 0, j; i < vpn; i = j) {
     uint32_t lo = vp[i].s, hi = lo + vp[i].n;
@@ -407,41 +414,50 @@ static void rgVFlush(void) {
     int dma = hi - lo >= 4096;
     DEV(for (uint32_t k = i; k < j; k++) fpMark(vp[k].s, vp[k].n, FP_VERT);)
     if (dma) { sceDmacMemcpy(rg_ord, (const void *)PSP(lo), hi - lo); ga.v_dma++; ga.v_kb += hi - lo; }
-    for (uint32_t k = i; k < j; k++) sceClibMemcpy(vp[k].d, dma ? rg_ord + vp[k].s - lo : (const uint8_t *)PSP(vp[k].s), vp[k].n);
+    for (uint32_t k = i; k < j; k++) {  // (pieces for the GPU: checked in rg_ord, cached)
+      const uint8_t *s = dma ? rg_ord + vp[k].s - lo : (const uint8_t *)PSP(vp[k].s);
+      if (vp[k].c && !dma) { sceClibMemcpy(rg_ord, s, vp[k].n); s = rg_ord; }
+      if (vp[k].c && rgVBad(s, vp[k].n, vp[k].c)) { ga.v_bad++; RG_READ(NR_VERT, vp[k].s, vp[k].n); }
+      sceClibMemcpy(vp[k].d, s, vp[k].n);
+    }
     ga.v_runs++;
   }
   vpn = 0;
 }
 static uint32_t rg_txr;  // room in tx kept for the textures of a frame: twice those of the last recorded frame
 // Reserves n bytes for the vertices at address s and queues them: with gpu (their vertex size), at the end of tx if they fit and leave
-// rg_txr for the textures, otherwise in area a. Value for voff; 0 if they do not fit (R_LIMIT).
-static uint32_t rgVLater(uint32_t s, uint32_t n, uint32_t gpu) {
+// rg_txr for the textures, otherwise in area a. chk: their positions are floats, checked by rgVBad on the way to tx. Value for voff;
+// 0 if they do not fit (R_LIMIT).
+static uint32_t rgVLater(uint32_t s, uint32_t n, uint32_t gpu, uint32_t chk) {
   RFrame *f = rf[rg_w];
   uint32_t o = (f->na + 15) & ~15u, m = gpu ? n : (n + 15) & ~15u;
   while (gpu && m & 15) m += gpu;  // (for the GPU: multiples of 16 and of the vertex size, so the translator can join them by indices)
   if (gpu && (f->ntx > rg_txr ? f->ntx : rg_txr) + f->nvx + m <= TX_N) {
     if (vpn == VP_N) rgVFlush();
     f->nvx += m;
-    vp[vpn].s = s; vp[vpn].d = f->tx + TX_N - f->nvx; vp[vpn++].n = n;
+    vp[vpn].s = s; vp[vpn].d = f->tx + TX_N - f->nvx; vp[vpn].c = chk ? gpu : 0; vp[vpn++].n = n;
     return VX | (TX_N - f->nvx);
   }
   ga.v_full += gpu;
   if (o + n > RA_N) { DEV(if (p_on) pAdd(P_X_VERT, 0);) f->flags |= R_LIMIT; return 0; }
   if (vpn == VP_N) rgVFlush();
-  vp[vpn].s = s; vp[vpn].d = f->a + o; vp[vpn++].n = n;
+  vp[vpn].s = s; vp[vpn].d = f->a + o; vp[vpn].c = 0; vp[vpn++].n = n;
   f->na = o + n;
   return o + 1;
 }
 // 3D vertices in VRAM for the GPU, of vertex size vz: copied at once from their mirror copy to the end of tx, where rgVLater puts those
-// in RAM. 0 if they have no copy in the mirror or do not fit with rg_txr left for the textures (the caller copies them as usual)
+// in RAM; with chk (float positions), through rg_ord, checked by rgVBad. 0 if they have no copy in the mirror or do not fit with rg_txr
+// left for the textures (the caller copies them as usual)
 static uint32_t rgSrc(uint32_t a, uint32_t n);
-static uint32_t rgVNow(uint32_t a, uint32_t n, uint32_t vz) {
+static uint32_t rgVNow(uint32_t a, uint32_t n, uint32_t vz, uint32_t chk) {
   RFrame *f = rf[rg_w];
   uint32_t s = rgSrc(a, n), m = n;
   while (m & 15) m += vz;
   if (!s || (f->ntx > rg_txr ? f->ntx : rg_txr) + f->nvx + m > TX_N) return 0;
   f->nvx += m;
-  sceClibMemcpy(f->tx + TX_N - f->nvx, (const void *)PSP(s), n);
+  const uint8_t *p = (const uint8_t *)PSP(s);
+  if (chk && n <= OR_N) { sceClibMemcpy(rg_ord, p, n); p = rg_ord; if (rgVBad(p, n, vz)) { ga.v_bad++; RG_READ(NR_VERT, a, n); } }
+  sceClibMemcpy(f->tx + TX_N - f->nvx, p, n);
   return VX | (TX_N - f->nvx);
 }
 int sceGxmMapMemory(void *base, SceSize size, int attr);
@@ -734,8 +750,8 @@ static void regDraw(uint32_t n, uint32_t type, uint32_t vt, uint32_t idx) {
   d->vlen = nv * vs;
   // (3D: the texture rows do not come from the vertices, so they can wait)
   int later = !(vt >> 23 & 1) && rg_ordc && !isVram(vaddr) && ramEnd(vaddr) >= vaddr + d->vlen && d->vlen <= OR_N;
-  uint32_t vz = !later && !(vt >> 23 & 1) && isVram(vaddr) ? rgVGpu(type, vt, idx) : 0, vn = vz ? rgVNow(vaddr, d->vlen, vz) : 0;
-  if (!(d->voff = vn ? vn : later ? rgVLater(vaddr, d->vlen, rgVGpu(type, vt, idx)) : rgCopy(vaddr, d->vlen))) return;
+  uint32_t fp = (vt >> 7 & 3) == 3, vz = !later && !(vt >> 23 & 1) && isVram(vaddr) ? rgVGpu(type, vt, idx) : 0, vn = vz ? rgVNow(vaddr, d->vlen, vz, fp) : 0;
+  if (!(d->voff = vn ? vn : later ? rgVLater(vaddr, d->vlen, rgVGpu(type, vt, idx), fp) : rgCopy(vaddr, d->vlen))) return;
   DEV(CSA(CS_RVT, tc); tc = CST();)
   d->woff = d->moff = d->loff = 0;
   static uint32_t lw, lwb, lm, ll;  // last matrix and light blocks of this frame (lwb: world and the 8 bones, for vertices with weights)
