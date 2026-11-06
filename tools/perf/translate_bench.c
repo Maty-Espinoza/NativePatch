@@ -75,6 +75,7 @@ int sceGxmShaderPatcherCreateFragmentProgram(SceGxmShaderPatcher *s, SceGxmShade
 void sceGxmSetFragmentProgram(SceGxmContext *c, const SceGxmFragmentProgram *p) { const uint32_t *x = (const void *)p; fprog = x ? x[0] << 28 ^ x[1] : 0; }
 int sceGxmSetVertexStream(SceGxmContext *c, unsigned i, const void *d) { stream = d; return 0; }
 int sceGxmTextureInitLinear(SceGxmTexture *t, const void *d, SceGxmTextureFormat f, unsigned w, unsigned h, unsigned m) { tex_w = w << 16 ^ h ^ f; cur_w = w; return 0; }
+int sceGxmTextureInitLinearStrided(SceGxmTexture *t, const void *d, SceGxmTextureFormat f, unsigned w, unsigned h, unsigned s) { tex_w = w << 16 ^ h ^ f; cur_w = w; return 0; }
 int sceGxmBeginScene(SceGxmContext *context, unsigned int flags, const SceGxmRenderTarget *renderTarget, const SceGxmValidRegion *validRegion, SceGxmSyncObject *vertexSyncObject, SceGxmSyncObject *fragmentSyncObject, const SceGxmColorSurface *colorSurface, const SceGxmDepthStencilSurface *depthStencil) { in_rt = validRegion && colorSurface != &rtb.cs; if (dmp) fprintf(dmp, "S\n"); return 0; }
 // Value of parameter p (by name) of the vertex program in the context
 static const float *uni(const SceGxmProgramParameter *p) { return ((typeof(&par[0]))p)->v; }

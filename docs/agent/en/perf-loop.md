@@ -69,4 +69,4 @@ mirror timing, the translator and the GPU. A KEEP here is a candidate for the Vi
 - Spending the loop on cleanups: only changes with a measured effect.
 
 ## Crowd frame
-`tools/perf/data/rr_crowd.bin.gz` is a real crowd frame of Ridge Racer (3688 draws, it ends in `vertex_out` near its last draws). `tr_gv.sh` prints `gxm_draws`, the `sceGxmDraw` calls of that frame: the CPU cost of GXM and part of the GPU cost scale with it, and `test_ci.sh` fails over 400.
+`tools/perf/data/gow_combat.bin.gz` is a God of War Ghost of Sparta combat frame (6642 draws: a shadow tile in a 1024-wide atlas, a glow chain of three images in one row, about 75K vertices); `test_ci.sh` fails if it is not drawn whole. `tools/perf/data/rr_crowd.bin.gz` is a real crowd frame of Ridge Racer (3688 draws, it ends in `vertex_out` near its last draws). `tr_gv.sh` prints `gxm_draws`, the `sceGxmDraw` calls of that frame: the CPU cost of GXM and part of the GPU cost scale with it, and `test_ci.sh` fails over 400.

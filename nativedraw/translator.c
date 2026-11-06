@@ -35,7 +35,8 @@ typedef struct { float x, y, z, w, u, v, f; uint32_t c; } TV;  // translated ver
 static TV *tv[2];            // translated vertices, one per surface
 static TV ts[1 << 12];       // a draw being translated: cached, because reading tv back is slow
 static uint32_t *tpal[2];    // translated palettes (8888), aligned to 64: 16 entries (64 bytes) or 256 (1 KB)
-#define TV_N (64 << 10)      // vertices per surface (and limit of the 16-bit indices)
+#define TV_N (96 << 10)      // vertices per surface
+#define TI_N (64 << 10)      // most vertices in one GXM draw (16-bit indices: tib holds 0 to TI_N - 1)
 #define TP_B (256 << 10)     // palette bytes per surface
 #define C_RGB (SCE_GXM_COLOR_MASK_R | SCE_GXM_COLOR_MASK_G | SCE_GXM_COLOR_MASK_B)  // alpha is never written
 // last record frame seen, whether it was drawn fine, how many times it was repeated and when one was last not drawable
@@ -46,16 +47,20 @@ DEV(static void failNote(RFrame *f, uint32_t i, int r);)  // dump.c
 static uint16_t *tib;        // 0, 1, 2... (indices for the GPU)
 #define TG_N (64 << 10)      // indices of the joined draws of the GPU path, per surface
 static uint16_t *tgi[2];
-// Intermediate image: a game draw to another VRAM image (not the shown one) goes to our own double-size surface
-// (1024x544); if later in the same frame a texture is at that address, it is read from that surface.
-// fb: image address in VRAM (~0u: free); fr: last frame it was used.
-// vr: what the frame draws on it (its scenes touch only that). sh: 1 if the image is kept at PSP size, half of its coordinates. have, dirty: for an image read while being drawn, the part
-// already in rtc and the part drawn since (x0, y0, x1, y1).
-typedef struct { uint32_t fb, fr, sh; void *mem; SceGxmColorSurface cs; SceGxmValidRegion vr; float have[4], dirty[4]; } RT;
+// Intermediate image: a game draw to another VRAM image (not the shown one) goes to a part of one of our two surfaces
+// (rsf, 1024x544, double size); if later in the same frame a texture is at that address, it is read from there. Each target
+// address is one RT (a view): its image is placed in a surface by trCheckFrame, and the view starts that far right
+// fb: target address in VRAM (~0u: free); fr: last frame it was used. mem: where the view starts in its surface sm, ox, oy
+// pixels in; x0, y0, x1, y1: its image's place there; alone: the image is the only one in its surface and the view at its
+// corner. psm: the image's format. vr: what the frame draws on the view (its scenes touch only that). sh: 1 if the image is
+// kept at PSP size, half of its coordinates. have, dirty: for an image read while being drawn, the part already in rtc and
+// the part drawn since (x0, y0, x1, y1).
+typedef struct { uint32_t fb, fr, sh, psm, sm, ox, oy, alone, x0, y0, x1, y1; void *mem; SceGxmColorSurface cs; SceGxmValidRegion vr; float have[4], dirty[4]; } RT;
 // Scenes on different render targets may run at the same time: this object keeps those of a frame in order, because a
 // scene reads what the one before drew
 static SceGxmSyncObject *t_sync;
-static RT rts[2], rtc;  // rtc: copy of the part of an image that a draw reads while drawing on that same image
+#define RT_N 12
+static RT rts[RT_N], rsf[2], rtc;  // rtc: copy of the part of an image that a draw reads while drawing on that same image
 // rtb: the boxed stretch of a frame (trBoxed): draws t_b0 to t_b1 - 1 go here, moved so the corner t_bx, t_by of the box is at
 // 0, 0, and vr is the box: the edge of the image clips them, on the GPU. Then the box is pasted on the surface
 static RT rtb;
@@ -71,19 +76,9 @@ static int rtMem(RT *r) {
   r->fb = ~0u;
   return 1;
 }
-// The intermediate image of image fb (VRAM offset), marked as used in frame. If none and create, takes one not used
-// in this frame (reserving it if needed). 0 if none.
-static RT *rtOf(uint32_t fb, uint32_t frame, int create) {
-  for (int i = 0; i < 2; i++) if (rts[i].mem && rts[i].fb == fb) { rts[i].fr = frame; return &rts[i]; }
-  if (!create) return 0;
-  for (int i = 0; i < 2; i++) {
-    RT *r = &rts[i];
-    if (r->mem && r->fr == frame) continue;  // (already used by another image of this frame)
-    if (!r->mem && !rtMem(r)) return 0;
-    if (r->fb == ~0u) alog("translator: intermediate image %d (%s) for %06x\n", i, ty(r->mem), fb);
-    r->fb = fb; r->fr = frame;
-    return r;
-  }
+// The view of target fb (VRAM offset), marked as used in frame. 0 if none.
+static RT *rtOf(uint32_t fb, uint32_t frame) {
+  for (int i = 0; i < RT_N; i++) if (rts[i].mem && rts[i].fb == fb) { rts[i].fr = frame; return &rts[i]; }
   return 0;
 }
 // Address of texture 0 of state e (GE registers 0xA0 and 0xA8)
@@ -145,10 +140,10 @@ static void trBench(void) {
 static int trInit(void) {
   for (int i = 0; i < 2; i++)
     if (!(tv[i] = gmem(TV_N * sizeof(TV), RD)) || !(tpal[i] = gmem(TP_B, RD))) return -1;
-  if (!(tib = gmem(TV_N * 2, RD))) return -1;
+  if (!(tib = gmem(TI_N * 2, RD))) return -1;
   if (!(tgi[0] = gmem(TG_N * 4, RD))) return -1;
   tgi[1] = tgi[0] + TG_N;
-  for (uint32_t i = 0; i < TV_N; i++) tib[i] = i;
+  for (uint32_t i = 0; i < TI_N; i++) tib[i] = i;
   SceGxmShaderPatcherId iv;
   int r = sceGxmShaderPatcherRegisterProgram(pat, (const SceGxmProgram *)nd_v_gxp, &iv);
   if (r >= 0) r = sceGxmShaderPatcherRegisterProgram(pat, (const SceGxmProgram *)nd_ft_gxp, &ift);
@@ -200,7 +195,8 @@ static int trInit(void) {
   if (r1v < 0 || !ok4) gvp[1] = 0;
   if (r2v < 0 || !ok4) gvp[2] = 0;
   if (!fragProg(0, 0, C_RGB) || !fragProg(1, 0, C_RGB)) return -3;
-  for (int i = 0; i < 2; i++) rtMem(&rts[i]);
+  for (int i = 0; i < 2; i++) rtMem(&rsf[i]);
+  for (int i = 0; i < RT_N; i++) rts[i].fb = ~0u;
   rtMem(&rtc); rtMem(&rtb);
   if ((r = sceGxmSyncObjectCreate(&t_sync)) < 0) { alog("translator: sync object %08x\n", r); return r; }
   // PSP RAM (0x08000000-0x0A000000) for the GPU (fails with 0x72000000)
@@ -305,7 +301,7 @@ static int hasTex(const uint32_t *e, const RDraw *d) {
 
 // 1 if image ta (in VRAM) has an intermediate image held from this or an earlier frame
 static int rtKept(uint32_t ta) {
-  for (int i = 0; i < 2; i++) if (rts[i].mem && rts[i].fb == (ta & 0x1FFFF0) && (ta & 0x0F000000) == 0x04000000) return 1;
+  for (int i = 0; i < RT_N; i++) if (rts[i].mem && rts[i].fb == (ta & 0x1FFFF0) && (ta & 0x0F000000) == 0x04000000) return 1;
   return 0;
 }
 // Checks whether draw d of frame f can be drawn (primitive, vertex type, destination, blend,
@@ -315,7 +311,6 @@ static int trCheck(RFrame *f, RDraw *d) {
   uint32_t vt = d->vt, clr = RE(e, 0xD3) & 1, afn, aref;
   if (!d->prim || d->prim > 6) return T_PRIM;  // lines, line strip, triangles, strip, fan, rectangles
   if ((vt >> 18 & 7) || ((vt >> 9 & 3) && (vt >> 23 & 1))) return T_VERT;  // morph, or weights without transform
-  if ((RE(e, 0x9D) & 0x7FF) > 512) return T_DEST;
   if (colorMask(e) == ~0u) return T_MASK;
   if (clr) return T_OK;
   if ((RE(e, 0x27) & 1 && !ctestNoop(e)) || RE(e, 0x28) & 1) return T_ODD;
@@ -332,11 +327,11 @@ static int trCheck(RFrame *f, RDraw *d) {
   return T_OK;
 }
 
-// 1 if draw d goes to an image other than the displayed one that the translator cannot draw: wider than 512, or a state with
-// no equivalent. It is left out: only what reads that image can miss it
+// 1 if draw d goes to an image other than the displayed one that the translator cannot draw: a state with no equivalent.
+// It is left out: only what reads that image can miss it
 static int trSkip(RFrame *f, RDraw *d) {
   int r = trCheck(f, d);
-  return r == T_DEST || r == T_ODD || r == T_MASK || r == T_BLEND;
+  return r == T_ODD || r == T_MASK || r == T_BLEND;
 }
 // Color of a vertex at p with GE color type ct (4 5650, 5 5551, 6 4444, 7 8888) -> 0xAABBGGRR
 static uint32_t col8888(const uint8_t *p, uint32_t ct) {
@@ -953,47 +948,149 @@ static void zsSet(SceGxmContext *c, const uint32_t *e, uint32_t sv) {
   if (r != t_sr) { t_sr = r; sceGxmSetFrontStencilRef(c, r); }
 }
 
-// Checks whether frame f can be drawn: every draw (trCheck), the destinations (at most 2 intermediate images that do
-// not share memory) and the textures with no copy: the shown image read while drawing an intermediate one, or an
-// intermediate image in its format, of this frame (it may be the one being drawn) or kept from an earlier one. T_OK or
+// Images of the frame being checked. An image is memory in rows of S bytes from base; a target in its first row is the
+// image moved right (a tile of an atlas). psm: its format (fill: so far only solid fills, which may come in another
+// format); xb, y1: bytes and rows its draws reach; d0, d1: its first draw and the last draw that uses it; soft: only 16-bit
+// rectangles reading no record texture. sm, ox, oy, w, h, sh: its place in the surfaces (tiPlace). tv*: the targets
+// (views) with their image and the box their draws reach from the target (tvx in bytes, tvy in rows)
+typedef struct { uint32_t base, S, psm, fill, xb, y1, d0, d1, soft, sm, ox, oy, w, h, sh; } TI;
+static TI ti[8];
+static uint32_t nti, tvf[RT_N], tvi[RT_N], tvx[RT_N], tvy[RT_N], ntv;
+#define BPP(psm) ((psm) == 3 ? 4u : 2u)
+// Pixels from its target's corner that draw d of state e reaches (*x1, *y1, exclusive): its vertices if it is in through
+// mode (a corner of a rectangle or triangle is already its end; points and lines also cover the pixel there), the scissor otherwise
+static void trBox(const RFrame *f, const RDraw *d, const uint32_t *e, uint32_t *x1, uint32_t *y1) {
+  static const uint8_t s4[4] = { 0, 1, 2, 4 }, cs[8] = { 0, 0, 0, 0, 2, 2, 2, 4 };
+  uint32_t vt = d->vt, d5 = RE(e, 0xD5), tc = s4[vt & 3], ct = cs[vt >> 2 & 7], nt = s4[vt >> 5 & 3], pt = s4[vt >> 7 & 3], ix = vt >> 11 & 3;
+  *x1 = d5 & 0xFFFFF ? (d5 & 0x3FF) + 1 : 480; *y1 = d5 & 0xFFFFF ? (d5 >> 10 & 0x3FF) + 1 : 272;
+  if (!(vt >> 23 & 1) || !pt) return;
+  // (vertex layout: UV, color, normal, position, each aligned to its own size)
+  uint32_t o = 2 * tc, al = tc ? tc : 1, po, sz, mx = 0, my = 0;
+  if (ct) { o = ((o + ct - 1) & ~(ct - 1)) + ct; al = ct > al ? ct : al; }
+  if (nt) { o = ((o + nt - 1) & ~(nt - 1)) + 3 * nt; al = nt > al ? nt : al; }
+  po = (o + pt - 1) & ~(pt - 1); al = pt > al ? pt : al; sz = (po + 3 * pt + al - 1) & ~(al - 1);
+  const uint8_t *a = RV(f, d), *ib = d->ioff && ix ? f->a + d->ioff - 1 : 0;
+  for (uint32_t j = 0; j < d->n; j++) {
+    uint32_t k = !ib ? j : ix == 1 ? ib[j] : ix == 2 ? ((const uint16_t *)ib)[j] : ((const uint32_t *)ib)[j];
+    const uint8_t *p = a + k * sz + po;
+    int x = pt == 1 ? (int8_t)p[0] : pt == 2 ? ((const int16_t *)p)[0] : (int)(((const float *)p)[0] + 0.999f);
+    int y = pt == 1 ? (int8_t)p[1] : pt == 2 ? ((const int16_t *)p)[1] : (int)(((const float *)p)[1] + 0.999f);
+    if (x > (int)mx) mx = x;
+    if (y > (int)my) my = y;
+  }
+  mx += d->prim < 3; my += d->prim < 3;
+  if (mx < *x1) *x1 = mx;
+  if (my < *y1) *y1 = my;
+}
+// Adds draw i (d, state e, target fb) to its image and its view: creates them if new, grows what they reach. Its image
+// index in *k. T_DEST if there is no room in the tables or its format clashes with the image's (only solid fills may differ)
+static int tiAdd(const RFrame *f, const RDraw *d, const uint32_t *e, uint32_t i, uint32_t fb, int *k) {
+  uint32_t psm = RE(e, 0xD2) & 3, S = (RE(e, 0x9D) & 0x7FF) * BPP(psm), base = fb - fb % (S ? S : 1), x1, y1, v, n;
+  int fill = d->prim == 6 && d->vt >> 23 & 1 && !(d->vt >> 2 & 7) && !hasTex(e, d);
+  for (n = 0; n < nti && (ti[n].base != base || ti[n].S != S); n++) {}
+  if (n == nti) {
+    if (nti == 8 || !S) return T_DEST;
+    TI *t = &ti[nti++]; sceClibMemset(t, 0, sizeof *t);
+    t->base = base; t->S = S; t->psm = psm; t->fill = fill; t->d0 = i; t->soft = 1;
+  }
+  TI *t = &ti[n];
+  if (psm != t->psm) {
+    if (t->fill && !fill) { t->psm = psm; t->fill = 0; }
+    else if (!fill) return T_DEST;
+  } else t->fill &= fill;
+  for (v = 0; v < ntv && tvf[v] != fb; v++) {}
+  if (v == ntv) { if (ntv == RT_N) return T_DEST; tvf[ntv] = fb; tvi[ntv] = n; tvx[ntv] = tvy[ntv] = 0; ntv++; }
+  trBox(f, d, e, &x1, &y1);
+  x1 *= BPP(psm);
+  if (x1 > tvx[v]) tvx[v] = x1;
+  if (y1 > tvy[v]) tvy[v] = y1;
+  if (fb - base + x1 > t->xb) t->xb = fb - base + x1;
+  if (y1 > t->y1) t->y1 = y1;
+  uint32_t tc = d->vt & 3;
+  t->soft &= d->prim == 6 && !d->ioff && d->vt >> 23 & 1 && (d->vt >> 7 & 3) == 2 && !(d->vt >> 2 & 7) && !(d->vt >> 5 & 3) && (tc == 0 || tc == 2) && d->n == 2 && !d->toff;
+  t->d1 = i; *k = n;
+  return T_OK;
+}
+// Checks that the images of the frame can share memory (only one after the other: the first one is no longer used when
+// the next one starts) and places them in the two surfaces, the biggest first: each one at the corner of an empty
+// surface if there is one, otherwise in a row of the free part. An image of half the screen or less made only of
+// rectangles, reading no texture of the record, only shrinks and blurs what is on screen: it stays at PSP size, and so
+// does one too wide for double size. T_DEST if they clash or do not fit.
+static int tiPlace(void) {
+  uint32_t ord[8], cx[2] = { 0, 0 }, cy[2] = { 0, 0 }, rh[2] = { 0, 0 }, used[2] = { 0, 0 };
+  for (uint32_t a = 0; a < nti; a++)
+    for (uint32_t b = a + 1; b < nti; b++)
+      if (ti[a].base < ti[b].base + ti[b].S * ti[b].y1 && ti[b].base < ti[a].base + ti[a].S * ti[a].y1 && ti[a].d1 >= ti[b].d0 && ti[b].d1 >= ti[a].d0) return T_DEST;
+  for (uint32_t a = 0; a < nti; a++) {
+    TI *t = &ti[a];
+    uint32_t px = (t->xb + BPP(t->psm) - 1) / BPP(t->psm) + 1, py = t->y1 + 1;  // (one pixel more: what the filter reads around the edge)
+    if (px > t->S / BPP(t->psm)) px = t->S / BPP(t->psm);
+    if (py > H / 2 && t->y1 <= H / 2) py = H / 2;
+    t->sh = (t->soft && 2 * px <= LINE / 2 && 2 * py <= H / 2 + 8 DEV(&& !keep_hd)) || 2 * px > LINE || 2 * py > H;
+    t->w = ((px << !t->sh) + 3) & ~3u; t->h = py << !t->sh;
+    if (t->w > LINE || t->h > H) return T_DEST;
+    uint32_t j = a;
+    while (j > 0 && ti[ord[j - 1]].w * ti[ord[j - 1]].h < t->w * t->h) { ord[j] = ord[j - 1]; j--; }
+    ord[j] = a;
+  }
+  for (uint32_t j = 0; j < nti; j++) {
+    TI *t = &ti[ord[j]];
+    int s = !used[0] ? 0 : !used[1] ? 1 : -1;
+    for (int q = 0; q < 2 && s < 0; q++) {
+      if (cx[q] + t->w > LINE) { cx[q] = 0; cy[q] += rh[q]; rh[q] = 0; }
+      if (cy[q] + t->h <= H) s = q;
+    }
+    if (s < 0) return T_DEST;
+    t->sm = s; t->ox = cx[s]; t->oy = cy[s]; used[s]++;
+    cx[s] += t->w; if (t->h > rh[s]) rh[s] = t->h;
+  }
+  return T_OK;
+}
+
+// Checks whether frame f can be drawn: every draw (trCheck), the destinations (intermediate images that fit in the two
+// surfaces and only share memory one after the other, tiAdd and tiPlace) and the textures with no copy: the shown image
+// read while drawing an intermediate one, or an intermediate image in its format, of this frame (it may be the one being
+// drawn) or kept from an earlier one. T_OK or
 // the reason, logging the first draw with each reason. Leaves in *disp_p the image being shown and in *ord_p how many
 // draws from the start can be reordered, intermediate images first and the surface after them in a single scene: up to
 // the first that needs the game's order (reads the surface, or draws on an image already read). Without that order a
 // surface scene would end right after its clear, and its depth does not survive to the next.
 static int trCheckFrame(RFrame *f, uint32_t *disp_p, uint32_t *ord_p) {
-  // disp: image being shown; ifb, iend, ipsm: intermediate images, where their memory ends, their format
-  uint32_t disp = f->fb & 0x1FFFF0, ifb[2], iend[2], ipsm[2], nif = 0, n_disp = 0;
+  uint32_t disp = f->fb & 0x1FFFF0, n_disp = 0;  // (disp: image being shown)
   uint32_t ord = f->nd, rd_mask = 0;  // (rd_mask: bit per intermediate image read by a draw)
   for (uint32_t i = 0; i < f->nd && !n_disp; i++) n_disp = (RE(f->e[f->d[i].st], 0x9C) & 0x1FFFF0) == disp;
   // no draw to the shown image (game behind: the flip has the other one of the double buffer): use the last draw's one
   if (!n_disp && f->nd) disp = RE(f->e[f->d[f->nd - 1].st], 0x9C) & 0x1FFFF0;
   // From the end: a draw on an image nobody reads later is not done. What it leaves is for the PSP (say a palette the game
-  // builds with the GE), and the Vita gets that from the mirror
+  // builds with the GE), and the Vita gets that from the mirror. live: the images read (start of their row, bytes per row)
   sceClibMemset(t_mark, 0, sizeof t_mark);
-  uint32_t live[8], nl = 0;
+  uint32_t live[8], lrow[8], nl = 0;
   for (uint32_t i = f->nd; i-- > 0;) {
     RDraw *d = &f->d[i];
     // (same state as the draw after it: same answer)
     if (i + 1 < f->nd && d[1].st == d->st && !d[1].toff == !d->toff && d[1].vt == d->vt && !(t_mark[(i + 1) >> 5] >> ((i + 1) & 31) & 1)) continue;
     const uint32_t *e = f->e[d->st];
-    uint32_t fb = RE(e, 0x9C) & 0x1FFFF0, k;
-    for (k = 0; k < nl && live[k] != fb; k++) {}
+    uint32_t fb = RE(e, 0x9C) & 0x1FFFF0, S = (RE(e, 0x9D) & 0x7FF) * BPP(RE(e, 0xD2) & 3), k;
+    for (k = 0; k < nl && (lrow[k] != S || live[k] != fb - fb % (S ? S : 1)); k++) {}
     if (fb != disp && k == nl && nl < 8) { t_mark[i >> 5] |= 1u << (i & 31); continue; }
-    uint32_t ta = texAddr(e);
+    uint32_t ta = texAddr(e) & 0x0F1FFFF0, St = (RE(e, 0xA8) & 0x7FF) * BPP(RE(e, 0xC3) & 15);
     if (hasTex(e, d) && !d->toff && (ta & 0x0F000000) == 0x04000000 && (ta & 0x1FFFF0) != disp) {
-      for (k = 0; k < nl && live[k] != (ta & 0x1FFFF0); k++) {}
-      if (k == nl && nl < 8) live[nl++] = ta & 0x1FFFF0;
+      ta = (ta & 0x1FFFF0) - (ta & 0x1FFFF0) % (St ? St : 1);
+      for (k = 0; k < nl && (lrow[k] != St || live[k] != ta); k++) {}
+      if (k == nl && nl < 8) { lrow[nl] = St; live[nl++] = ta; }
     }
   }
   const RDraw *cd = 0;
+  nti = ntv = 0;
   for (uint32_t i = 0; i < f->nd; i++) {
     if (t_mark[i >> 5] >> (i & 31) & 1) continue;
-    const RDraw *dk = &f->d[i];  // (what trCheck looks at is usually the same as in the last draw checked)
-    if (cd && cd->st == dk->st && cd->prim == dk->prim && cd->vt == dk->vt && !cd->toff == !dk->toff && !cd->clut == !dk->clut) continue;  // (everything below would give the same)
+    const RDraw *dk = &f->d[i];
+    const uint32_t *e0 = f->e[dk->st];
+    uint32_t fb = RE(e0, 0x9C) & 0x1FFFF0;
+    // (what trCheck looks at is usually the same as in the last draw checked; draws on an image or reading one are all looked at)
+    if (fb == disp && (dk->toff || !hasTex(e0, dk)) && cd && cd->st == dk->st && cd->prim == dk->prim && cd->vt == dk->vt && !cd->toff == !dk->toff && !cd->clut == !dk->clut) continue;
     int r = trCheck(f, &f->d[i]);
     cd = dk;
-    const uint32_t *e0 = f->e[f->d[i].st];
-    uint32_t fb = RE(e0, 0x9C) & 0x1FFFF0, k;
     int kd = -1;  // destination intermediate image (-1: the surface)
     if (fb != disp && trSkip(f, &f->d[i])) {
       // (the first draw of each image left out and why, 32 images at most)
@@ -1003,26 +1100,20 @@ static int trCheckFrame(RFrame *f, uint32_t *disp_p, uint32_t *ord_p) {
       continue;
     }
     if (!r && fb != disp) {
-      for (k = 0; k < nif && ifb[k] != fb; k++) {}
-      if (k == nif) {
-        uint32_t end = fb + (RE(e0, 0x9D) & 0x7FF) * ((RE(e0, 0xD2) & 3) == 3 ? 4 : 2) * ((RE(e0, 0xD5) >> 10 & 0x3FF) + 1);
-        // images sharing memory: each surface would miss what is drawn on the other
-        for (uint32_t j = 0; j < nif; j++) if (fb < iend[j] && ifb[j] < end) r = T_DEST;
-        if (nif < 2) { ipsm[nif] = RE(e0, 0xD2) & 3; iend[nif] = end; ifb[nif++] = fb; } else r = T_DEST;
-      }
-      kd = k;
-      if (rd_mask >> k & 1 && i < ord) ord = i;
+      r = tiAdd(f, dk, e0, i, fb, &kd);
+      if (!r && rd_mask >> kd & 1 && i < ord) ord = i;
     }
     if (!r && hasTex(e0, &f->d[i]) && !f->d[i].toff) {  // texture with no copy
       uint32_t ta = texAddr(e0), vr = (ta & 0x0F000000) == 0x04000000, old = 0;
       if (vr && (ta & 0x1FFFF0) == disp && (RE(e0, 0xC3) & 15) == (f->fbw >> 16 & 3) && kd >= 0) { if (i < ord) ord = i; }  // (cuts the surface's scene)
       else if (vr && ((ta & 0x1FFFF0) == t_prevd || (ta & 0x1FFFF0) == t_prev2) && (RE(e0, 0xC3) & 15) == (f->fbw >> 16 & 3)) {}  // (an image of a frame before)
       else {
-        for (k = 0; k < nif && !(vr && (ta & 0x1FFFF0) == ifb[k]); k++) {}
-        if (k == nif) for (int j = 0; j < 2; j++) old |= vr && rts[j].mem && rts[j].fb == (ta & 0x1FFFF0);
+        uint32_t v;
+        for (v = 0; v < ntv && !(vr && (ta & 0x1FFFF0) == tvf[v]); v++) {}
+        if (v == ntv) for (int j = 0; j < RT_N; j++) old |= vr && rts[j].mem && rts[j].fb == (ta & 0x1FFFF0);
         // not read in another format: its bytes are not in the surface
-        if (!old && (k == nif || (RE(e0, 0xC3) & 15) != ipsm[k])) r = T_TEX;
-        else if (!old) { rd_mask |= 1u << k; if (kd >= 0 && i < ord) ord = i; }
+        if (!old && (v == ntv || (RE(e0, 0xC3) & 15) != ti[tvi[v]].psm)) r = T_TEX;
+        else if (!old) { ti[tvi[v]].d1 = i; rd_mask |= 1u << tvi[v]; if (kd >= 0 && i < ord) ord = i; }
       }
     }
     if (r) {
@@ -1037,6 +1128,14 @@ static int trCheckFrame(RFrame *f, uint32_t *disp_p, uint32_t *ord_p) {
       }
       return r;
     }
+  }
+  if (tiPlace()) {
+    if (!t_seen[T_DEST]++) {
+      char b[300]; int n = 0;
+      for (uint32_t k = 0; k < nti; k++) n += sceClibSnprintf(b + n, sizeof b - n, " %06x/%u fmt %u %ux%u draws %u..%u", ti[k].base, ti[k].S, ti[k].psm, ti[k].w, ti[k].h, ti[k].d0, ti[k].d1);
+      alog("translator: first frame with 'other_target': the images do not fit in the surfaces or share memory at the same time (frame %u):%s\n", f->frame, b);
+    }
+    return T_DEST;
   }
   *disp_p = disp; *ord_p = ord;
   return T_OK;
@@ -1181,33 +1280,33 @@ static void trImages(RFrame *f) {
 }
 #endif
 
-// Leaves in each intermediate image of frame f the region its draws touch, so its scenes do not load and store the whole
-// surface: the corners of rectangles with 16-bit positions, the whole image for the rest. An image of half the screen or less made
-// only of those rectangles, reading no texture of the record, only shrinks and blurs what is on screen: it stays at PSP size
-static void trRegions(RFrame *f, uint32_t disp) {
-  uint32_t bx[2] = { 0, 0 }, by[2] = { 0, 0 }, soft[2] = { 1, 1 };
-  for (uint32_t i = 0; i < f->nd; i++) {
-    RDraw *d = &f->d[i];
-    const uint32_t *e = f->e[d->st];
-    uint32_t fb = RE(e, 0x9C) & 0x1FFFF0, vt = d->vt, x = 2 * (RE(e, 0x9D) & 0x7FF), y = 2 * ((RE(e, 0xD5) >> 10 & 0x3FF) + 1), tc = vt & 3, k;
-    if (fb == disp || t_mark[i >> 5] >> (i & 31) & 1) continue;
-    RT *r = rtOf(fb, f->frame, 1);
-    if (!r) continue;
-    k = r - rts;
-    if (d->prim == 6 && !d->ioff && vt >> 23 & 1 && (vt >> 7 & 3) == 2 && !(vt >> 2 & 7) && !(vt >> 5 & 3) && (tc == 0 || tc == 2) && d->n == 2) {
-      const int16_t *p = (const int16_t *)(f->a + d->voff - 1) + (tc ? 2 : 0);
-      uint32_t st = tc ? 5 : 3, w = p[0] > p[st] ? p[0] : p[st], h = p[1] > p[st + 1] ? p[1] : p[st + 1];
-      if (2 * w + 2 < x) x = 2 * w + 2;
-      if (2 * h + 2 < y) y = 2 * h + 2;
-      if (d->toff) soft[k] = 0;
-    } else soft[k] = 0;
-    if (x > bx[k]) bx[k] = x;
-    if (y > by[k]) by[k] = y;
+// Gives each target of frame f (tv, from trCheckFrame) its view: where it starts in its image's place in the surfaces (moved
+// right by its offset in the image) and the region its draws touch, so its scenes do not load and store the whole surface.
+// Views of earlier frames whose place is now taken by an image of this frame are forgotten
+static void trRegions(RFrame *f) {
+  uint32_t nsm[2] = { 0, 0 }, v;
+  for (uint32_t k = 0; k < nti; k++) nsm[ti[k].sm]++;
+  for (int i = 0; i < RT_N; i++) {
+    RT *r = &rts[i];
+    for (v = 0; v < ntv && tvf[v] != r->fb; v++) {}
+    for (uint32_t k = 0; k < nti && r->fb != ~0u && v == ntv; k++)
+      if (r->sm == ti[k].sm && r->x0 < ti[k].ox + ti[k].w && ti[k].ox < r->x1 && r->y0 < ti[k].oy + ti[k].h && ti[k].oy < r->y1) r->fb = ~0u;
   }
-  for (int i = 0; i < 2; i++) {
-    rts[i].sh = soft[i] && bx[i] && bx[i] <= LINE / 2 && by[i] <= H / 2 + 8 DEV(&& !keep_hd);
-    rts[i].vr.xMax = ((bx[i] > LINE ? LINE : bx[i] ? bx[i] : LINE) >> rts[i].sh) - 1; rts[i].vr.yMax = ((by[i] > H ? H : by[i] ? by[i] : H) >> rts[i].sh) - 1;
-    for (int k = 0; k < 4; k++) rts[i].have[k] = rts[i].dirty[k] = k < 2 ? 1e9f : -1e9f;
+  for (v = 0; v < ntv; v++) {
+    RT *r = 0;
+    for (int i = 0; i < RT_N && !r; i++) if (rts[i].fb == tvf[v]) r = &rts[i];
+    for (int i = 0; i < RT_N && !r; i++) if (rts[i].fb == ~0u) r = &rts[i];
+    for (int i = 0; i < RT_N && !r; i++) if (rts[i].fr != f->frame) r = &rts[i];
+    if (!r) continue;  // (the draws on it fail: no view)
+    TI *t = &ti[tvi[v]];
+    uint32_t sc = 2 >> t->sh, xo = (tvf[v] - t->base) / BPP(t->psm) * sc, w = (tvx[v] + BPP(t->psm) - 1) / BPP(t->psm) * sc, h = tvy[v] * sc;
+    r->fb = tvf[v]; r->fr = f->frame; r->sh = t->sh; r->psm = t->psm; r->sm = t->sm; r->ox = t->ox + xo; r->oy = t->oy;
+    r->x0 = t->ox; r->y0 = t->oy; r->x1 = t->ox + t->w; r->y1 = t->oy + t->h; r->alone = !r->ox && !r->oy && nsm[t->sm] == 1;
+    r->mem = (uint32_t *)rsf[t->sm].mem + r->oy * LINE + r->ox;
+    sceGxmColorSurfaceInit(&r->cs, SCE_GXM_COLOR_FORMAT_A8B8G8R8, SCE_GXM_COLOR_SURFACE_LINEAR, SCE_GXM_COLOR_SURFACE_SCALE_NONE,
+                           SCE_GXM_OUTPUT_REGISTER_SIZE_32BIT, LINE, H, LINE, r->mem);
+    r->vr.xMax = (w < r->x1 - r->ox ? w : r->x1 - r->ox) - 1; r->vr.yMax = (h < t->h ? h : t->h) - 1;
+    for (int k = 0; k < 4; k++) r->have[k] = r->dirty[k] = k < 2 ? 1e9f : -1e9f;
   }
 }
 
@@ -1286,7 +1385,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
   int r = trCheckFrame(f, &disp, &ord);
   if (r) return r;
   DEV(t_us[0] += now() - ta; if (p_on) pAdd(P_T_CHECK, now() - ta);)
-  trRegions(f, disp);
+  trRegions(f);
   trBoxed(f, disp, ord);
   // Depth lives in one scene: if the surface is drawn with depth after its scene was cut, it is stored and loaded. The other
   // scenes use the same memory without storing it, so they do not touch it
@@ -1371,7 +1470,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     const uint32_t *e = f->e[d->st];
     uint32_t clr = RE(e, 0xD3), tex = hasTex(e, d), fb = RE(e, 0x9C) & 0x1FFFF0, w3d = !(d->vt >> 23 & 1);
     if (fb != disp && trSkip(f, d)) continue;
-    RT *dst = fb == disp ? (i >= t_b0 && i < t_b1 ? &rtb : 0) : rtOf(fb, f->frame, 1);
+    RT *dst = fb == disp ? (i >= t_b0 && i < t_b1 ? &rtb : 0) : rtOf(fb, f->frame);
     if (fb != disp && !dst) { res = T_DEST; break; }
     if (pass == 1 && i == t_b0 && t_b1) {  // the box goes on the surface where the game drew it
       if (nv + 4 > TV_N) { res = T_LIMIT; break; }
@@ -1404,11 +1503,21 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
       th = 1u << (b8 >> 8 & 15); tw = tbw;
       uint32_t tv = texAddr(e) & 0x0F1FFFF0;
       int shown = !d->toff && tv == (0x04000000 | disp), prev = !d->toff && (tv == (0x04000000 | t_prevd) || tv == (0x04000000 | t_prev2)) && !rtKept(tv);
-      RT *src = (d->toff && !(key && grayFix(e))) || shown || prev ? 0 : rtOf(texAddr(e) & 0x1FFFF0, f->frame, 0);
+      RT *src = (d->toff && !(key && grayFix(e))) || shown || prev ? 0 : rtOf(texAddr(e) & 0x1FFFF0, f->frame);
       if (src || shown || prev) {  // intermediate or shown image: its double-size surface (512 x 272 of the PSP -> 1024 x 544)
         self = src && src == dst;
+        if (self && !src->alone) { res = T_TEX; break; }  // (the image itself when it shares its surface: not done)
         if (sceGxmTextureInitLinear(&t, shown ? surf[s] : prev ? surf[s ^ 1] : src->mem, SCE_GXM_TEXTURE_FORMAT_A8B8G8R8, LINE, H, 0) < 0) { res = T_TEX; break; }
         tw = src && src->sh ? LINE : LINE / 2; th = src && src->sh ? H : H / 2; fmt = 3;
+        if (src && !src->alone) {  // (an image sharing its surface: only the texture's part, so wrap and clamp stop at its edge)
+          uint32_t sc = 2 >> src->sh, wp = (1u << (b8 & 15)) * sc, hp = (1u << (b8 >> 8 & 15)) * sc;
+          wp = wp < LINE - src->ox ? wp : LINE - src->ox; hp = hp < H - src->oy ? hp : H - src->oy;
+          if (sceGxmTextureInitLinearStrided(&t, src->mem, SCE_GXM_TEXTURE_FORMAT_A8B8G8R8, wp, hp, LINE * 4) < 0) { res = T_TEX; break; }
+          tw = wp / sc; th = hp / sc;
+        }
+        // another view of the image being drawn: only if what it reads is not where it draws
+        if (src && dst && dst != &rtb && !self && src->sm == dst->sm && src->x0 == dst->x0 && src->y0 == dst->y0 && src->ox < dst->ox + dst->vr.xMax + 1 &&
+            dst->ox < src->ox + tw * (2 >> src->sh) && src->oy < dst->oy + dst->vr.yMax + 1 && dst->oy < src->oy + th * (2 >> src->sh)) { res = T_TEX; break; }
       } else if (!d->toff || sceGxmTextureInitLinear(&t, f->tx + d->toff - 1, gf[fmt], tbw, (uint32_t)th, 0) < 0) { res = T_TEX; break; }
       if (fmt >= 4) {  // palette: to 8888, with shift, mask and start (0xC5)
         uint32_t c5 = RE(e, 0xC5), cf = c5 & 3, sh = c5 >> 2 & 31, mk = c5 >> 8 & 0xFF, st = (c5 >> 16 & 31) << 4;
@@ -1493,7 +1602,11 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
         t_c[TC_SCIS] += w3d && (sc[0] > 0 || sc[1] > 0 || sc[2] < W || sc[3] < H); t_c[TC_FLAT] += !(clr & 1) && !(RE(e, 0x50) & 1);
         uint32_t nb = n;)
     if (nv + n > TV_N) { res = T_LIMIT; break; }
-    if (dst && !w3d && !(clr & 1)) for (uint32_t j = 0; j < n; j++) if (w[j].y > H) res = T_DEST;  // (past the surface's rows)
+    if (dst && !w3d && !(clr & 1)) for (uint32_t j = 0; j < n; j++) if (w[j].y > H - dst->oy) res = T_DEST;  // (past the surface's rows)
+    if (dst && dst != &rtb && (RE(e, 0xD2) & 3) != dst->psm) {  // (a solid fill in another format: same bytes, other width in pixels)
+      float xs = (float)BPP(RE(e, 0xD2) & 3) / BPP(dst->psm);
+      for (uint32_t j = 0; j < n; j++) w[j].x *= xs;
+    }
     DEV(if (res) failNote(f, i, res);)
     if (res) break;
     if (prim < 3 && (res = trLines(w, &n, room, prim == 2))) break;
@@ -1654,8 +1767,8 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     // Joined to the pending draw when it can be: a triangle strip needs repeated vertices in between (which draw nothing) and to
     // start on an even vertex, so its winding does not flip
     uint32_t pad = 0;
-    if (nv + n + 3 > TV_N) { res = T_LIMIT; break; }
-    if (same && rn && rp == prim && prim != 5 && w == ts) {
+    if (nv + n + 3 > TV_N || n > TI_N) { res = T_LIMIT; break; }
+    if (same && rn && rp == prim && prim != 5 && w == ts && rn + n + 3 <= TI_N) {
       if (prim == 4) { pad = 2 + (rn & 1); o[nv] = tl; o[nv + 1] = w[0]; o[nv + 2] = w[0]; }
     } else { RUN(); rv = nv; rp = prim; }
     DEV(if (vm) vc = now();)

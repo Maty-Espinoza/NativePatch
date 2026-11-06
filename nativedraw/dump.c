@@ -29,7 +29,7 @@ int dumpLevel(void) {
 }
 // Memory of each captured frame: dump_hd Vita surface, dump_ps PSP image, dump_tx its line, dump_ok whether there was a
 // surface. dump_w: cached memory for writing (192 KB). dump_last: the line of the last frame made (paired with the
-// next one Adrenaline shows). dump_rt: intermediate image 0 in f0 (dump_rtfb: its address; ~0u: none).
+// next one Adrenaline shows). dump_rt: a surface of intermediate images in f0 (dump_rtfb: the address of a target in it; ~0u: none).
 static uint8_t *dump_hd[VN], *dump_ps[VN], *dump_w;
 static char dump_tx[VN][VL], dump_last[VL];
 static uint32_t dump_ok[VN], dump_lastn, dump_mem, dump_rtfb;
@@ -223,9 +223,10 @@ static void dumpFrame(SceGxmContext *c, const void *pj, int has_surf) {
   dump_ok[k] = has_surf;
   if (has_surf) { sceDmacMemcpy(dump_hd[k], surf[cur], LINE * H * 4); sceClibMemcpy(dump_tx[k], dump_last, VL); }
   if (k == 0) {  // (the second one if there is one: it is drawn last in the frame)
-    RT *ri = rts[1].mem && rts[1].fb != ~0u ? &rts[1] : &rts[0];
-    dump_rtfb = dump_rt && ri->mem && ri->fb != ~0u ? ri->fb : ~0u;
-    if (dump_rtfb != ~0u) sceDmacMemcpy(dump_rt, ri->mem, LINE * H * 4);
+    RT *ri = 0;
+    for (int j = 0; j < RT_N; j++) if (rts[j].fb != ~0u && (!ri || rts[j].sm > ri->sm)) ri = &rts[j];
+    dump_rtfb = dump_rt && ri ? ri->fb : ~0u;
+    if (dump_rtfb != ~0u) sceDmacMemcpy(dump_rt, rsf[ri->sm].mem, LINE * H * 4);
   }
   else { sceClibSnprintf(dump_tx[k], VL, "surface: not used in this frame (Adrenaline showed the normal image)\n"); dump_bf[k] = VN; }
   if (k == 0 && dump_dif) sceClibSnprintf(dump_tx[0] + sceClibStrnlen(dump_tx[0], VL - 80), 80, "automatic dump: %u blocks that do not resemble any PSP image\n", dump_dif);
@@ -302,7 +303,7 @@ static void rtPeek(void) {
   dump_w = row; n++;
   sceClibSnprintf(p, sizeof p, "ux0:data/nativedraw/peek%u_surface.bmp", n); bmp(p, surf[cur], W, H, LINE);
   sceClibSnprintf(p, sizeof p, "ux0:data/nativedraw/peek%u_psp.bmp", n); bmp(p, sceGxmTextureGetData(&itex[ki]), 480, 272, 512);
-  for (int i = 0; i < 2; i++) if (rts[i].mem && rts[i].fb != ~0u) { sceClibSnprintf(p, sizeof p, "ux0:data/nativedraw/peek%u_rt_%06x.bmp", n, rts[i].fb); bmp(p, rts[i].mem, 480, 272, LINE); }
+  for (int i = 0; i < RT_N; i++) if (rts[i].fb != ~0u) { sceClibSnprintf(p, sizeof p, "ux0:data/nativedraw/peek%u_rt_%06x.bmp", n, rts[i].fb); bmp(p, rts[i].mem, LINE - rts[i].ox < 480 ? LINE - rts[i].ox : 480, H - rts[i].oy < 272 ? H - rts[i].oy : 272, LINE); }
   dump_w = w; rt_hold = 0;
   alog("dump: peek %u saved\n", n);
 }

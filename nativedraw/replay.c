@@ -7,7 +7,7 @@
 static char rep_path[128];
 // rep_on: 0 nothing, 1 to load, 2 loaded (drawn by the Adrenaline thread), 3 drawn (to write)
 static volatile uint32_t rep_on;
-// rep_f: the loaded frame; rep_hd and rep_rt: copies of the surface and of intermediate image 0 after drawing it
+// rep_f: the loaded frame; rep_hd and rep_rt: copies of the surface and of the first surface of intermediate images after drawing it
 static RFrame *rep_f;
 static uint8_t *rep_hd, *rep_rt;
 static SceUID rep_blk[2];
@@ -61,13 +61,13 @@ static void repLoad(void) {
 }
 
 // In the Adrenaline thread, instead of the game frame: draws the loaded frame to surface s (base: the normal image,
-// underneath), waits for the GPU and copies the surface and intermediate image 0. 1 if drawn (rep_on = 3).
+// underneath), waits for the GPU and copies the surface and the first surface of intermediate images. 1 if drawn (rep_on = 3).
 static int repDraw(SceGxmContext *c, int s, const SceGxmTexture *base) {
   if (rep_on != 2) return 0;
   int r = trFrame(c, rep_f, s, base);
   sceGxmFinish(c);
   sceDmacMemcpy(rep_hd, surf[s], LINE * H * 4);
-  if (rts[0].mem) sceDmacMemcpy(rep_rt, rts[0].mem, LINE * H * 4);
+  if (rsf[0].mem) sceDmacMemcpy(rep_rt, rsf[0].mem, LINE * H * 4);
   alog("replay: drawn (translator result: %s)\n", tnames[r]);
   rep_on = 3;
   return 1;
