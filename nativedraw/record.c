@@ -856,7 +856,7 @@ static void regFlip(uint32_t fb, uint32_t fbw, uint32_t draws_counted) {
   rgVFlush();
   DEV(PA(P_C_VFLUSH, tv); CSA(CS_VFL, tc);)
   RFrame *f = rf[rg_w];
-  if (rg_hash[rg_w] && f->nvx) sceClibMemset(rg_hash[rg_w] + ((TX_N - f->nvx) >> 7), 0, ((f->nvx >> 7) + 1) * sizeof *rg_hash[rg_w]);  // (no sorted texture is there now)
+  if (rg_hash[rg_w] && f->nvx) sceClibMemset(rg_hash[rg_w] + ((TX_N - f->nvx) >> 7), 0, (RH_N - ((TX_N - f->nvx) >> 7)) * sizeof *rg_hash[rg_w]);  // (no sorted texture is there now)
   // Switch hold_game: every frame is drawn, the capturer waits (100 ms at most) for the presenter and the GPU, and the game for it
   DEV(if (hold_game) { uint32_t th = now(); while ((rg_pend >= 0 || (rg_pub >= 0 && rg_pub != rg_last)) && now() - th < 100000) { if (!rg_thr) regPend(); sceKernelDelayThread(200); } })
   int slow = rg_pend >= 0 || (rg_short && rg_pub >= 0 && rg_pub != rg_last);
