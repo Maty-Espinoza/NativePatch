@@ -197,6 +197,8 @@ static uint32_t tm_memo, tm_apply;  // us of the frame in memoTry (all) and in a
 static uint32_t runClk(SceUID t);
 static SceUID cap_uid;
 DEV(static volatile uint32_t cap_at;)  // where the capturer is, for the watchdog: 1 events, 2 walk, 3 mirror copy, 4 record transfer, 5 frame close, 6 record wait
+DEV(static int wlog;)  // switch walk_log: the walk diagnostics log up to 4000 lines each instead of a few dozen
+#define WCAP(n) (wlog ? 4000 : (n))
 // Cache shared by readers and capturer: CL_N 64-byte lines (cl_data) each with a tag (cl_tag:
 // RAM line and list sequence number; CL_BUSY while a thread writes it)
 #define CL_N 8192     // 64-byte lines in the shared cache (512 KB)
@@ -634,7 +636,7 @@ static void recEnd(List *l) {
 // Logs a change of the capture's BASE: who made it, at which list position, old and new value
 static void baseLog(const char *who, uint32_t pc, uint32_t d) {
   static int nlog;
-  if (nlog < 48 && reg[0x10] != d) { nlog++; clog("base: %s at pc %08x changes %06x to %06x (frame %u)\n", who, pc, reg[0x10], d, gen); }
+  if (nlog < WCAP(48) && reg[0x10] != d) { nlog++; clog("base: %s at pc %08x changes %06x to %06x (frame %u)\n", who, pc, reg[0x10], d, gen); }
 }
 #endif
 // Leaves the GE state as if sublist e had been walked
@@ -863,7 +865,7 @@ static void xferMirror(uint32_t s, uint32_t t, uint32_t bp) {
   if (isVram(s) || !isVram(t)) return;
   uint32_t sw = reg[0xB3] & 0xFFFF, dw = reg[0xB5] & 0xFFFF, w = ((reg[0xEE] & 0x3FF) + 1) * bp, h = (reg[0xEE] >> 10 & 0x3FF) + 1;
   uint32_t src = s + ((reg[0xEB] >> 10 & 0x3FF) * sw + (reg[0xEB] & 0x3FF)) * bp, dst = t + ((reg[0xEC] >> 10 & 0x3FF) * dw + (reg[0xEC] & 0x3FF)) * bp;
-  DEV(uint32_t at = cap_at; cap_at = 3;)
+  DEV(uint32_t at = cap_at; cap_at = 3; uint32_t k0 = xm_ok, k1 = xm_skip, k2 = xm_out, s0 = src, d0 = dst;)
   for (uint32_t y = 0; y < h; y++, src += sw * bp, dst += dw * bp)
     for (uint32_t o = 0, n; o < w; o += n) {
       n = 4096 - ((dst + o) & 4095);
@@ -877,7 +879,9 @@ static void xferMirror(uint32_t s, uint32_t t, uint32_t bp) {
       for (uint32_t b = ra & ~63u; b < ra + n; b += 64) if (clOk(b)) cl_tag[clSlot(b)] = 0;
     }
   R0.n = 0;
-  DEV(cap_at = at;)
+  DEV(cap_at = at;
+      static uint32_t nlog;  // walk_log: transfers with pieces not applied (destination page without a copy, or out of the real VRAM)
+      if (wlog && (xm_skip != k1 || xm_out != k2) && nlog < 4000) { nlog++; clog("vram copy applied: ram %08x to %08x, %ux%u x%u: pieces applied %u, without a copy %u, outside VRAM %u (frame %u)\n", s0, d0, w / bp, h, bp, xm_ok - k0, xm_skip - k1, xm_out - k2, gen); })
 }
 #define MEASURES_WALK
 #include "measures.h"
@@ -896,7 +900,7 @@ static void xferNote(uint32_t s, uint32_t t, uint32_t bp) {
   if (i == 16) {
     static int nlog;
     i = xc_n++ & 15;
-    if (nlog < 96) { nlog++; clog("vram copy: ram %08x to %08x, %u bytes (%ux%u, widths %u/%u, frame %u)\n", src, dst, n, w, h, sw, dw, gen); }
+    if (nlog < WCAP(96)) { nlog++; clog("vram copy: ram %08x to %08x, %u bytes (%ux%u, widths %u/%u, frame %u)\n", src, dst, n, w, h, sw, dw, gen); }
   }
   xc[i].s = src; xc[i].t = dst; xc[i].n = n; xc[i].gen = gen;
 }
@@ -908,18 +912,25 @@ static void xferCall(uint32_t t) {
     volatile uint32_t *m = (volatile uint32_t *)PSP(vtr(t)), *r = (volatile uint32_t *)PSP(xc[i].s + (t - xc[i].t));
     int same = 1;
     for (int k = 0; k < 8; k++) same &= m[k] == r[k];
-    if (xc_more ? xc_more-- : same ? nfresh++ < 32 : nstale++ < 64)
+    if (xc_more ? xc_more-- : same ? nfresh++ < WCAP(32) : nstale++ < WCAP(64))
       clog("vram copy: walked at %08x, copied %u frames ago from %08x: mirror %s the source (mirror %08x %08x, source %08x %08x, frame %u)\n",
            t, gen - xc[i].gen, xc[i].s, same ? "equals" : "DIFFERS from", m[0], m[1], r[0], r[1], gen);
     return;
   }
+  // walk_log: the first time a target outside every noted transfer is walked (512 remembered), with its first words
+  static uint32_t seen[512], nnew;
+  uint32_t h = (t >> 2) * 2654435761u >> 23;
+  if (!wlog || seen[h] == t || nnew >= 4000) return;
+  seen[h] = t; nnew++;
+  volatile uint32_t *m = (volatile uint32_t *)PSP(vtr(t));
+  clog("vram sublist: %08x not in a noted transfer, base %06x, first words %08x %08x %08x %08x (frame %u)\n", t, reg[0x10], m[0], m[1], m[2], m[3], gen);
 }
 static uint32_t vcall, vcall_n, vcall_w[4];  // last sublist called in VRAM: where, list commands walked then, its first words
 // Many registers differ from the real GE, so the walk went through something that is not a list: logs the last VRAM sublist,
 // the transfers noted, how the mirror copies went, and lets the next jumps into transfers reach the log
 static void xferSuspect(uint32_t n) {
   static int nlog;
-  if (nlog++ >= 8) return;
+  if (nlog++ >= WCAP(8)) return;
   clog("walk suspect: %u registers differ (frame %u) | mirror pages applied %u, without a copy %u, outside VRAM %u | last VRAM sublist %08x began %08x %08x %08x %08x\n", n, gen, xm_ok, xm_skip, xm_out, vcall, vcall_w[0], vcall_w[1], vcall_w[2], vcall_w[3]);
   for (int i = 0; i < 16; i++) if (xc[i].n && gen - xc[i].gen < 4) clog("  transfer %08x to %08x, %u bytes, %u frames ago\n", xc[i].s, xc[i].t, xc[i].n, gen - xc[i].gen);
   xc_more = 16;
@@ -928,7 +939,7 @@ static void xferSuspect(uint32_t n) {
 static void badTarget(List *l, uint32_t pc, uint32_t op, uint32_t t) {
   static int nlog;
   static uint32_t last;
-  if (nlog >= 32 || t == last) return;
+  if (nlog >= WCAP(32) || t == last) return;
   last = t; nlog++;
   uint32_t a = pc - 28, w[8] = { 0 }, ra = vtr(a);
   if (ra && ramEnd(ra) >= ra + 32) for (int i = 0; i < 8; i++) w[i] = ((volatile uint32_t *)PSP(ra))[i];
@@ -960,7 +971,12 @@ static int __attribute__((noinline)) walkList(List *l) {
     // consecutive commands left in the line (1: single word)
     uint32_t k = ra - ba < bn ? (64 - (pc & 63)) >> 2 : 1;
     if (l->stall && l->stall - pc < k * 4) k = (l->stall - pc) >> 2;  // (the stall inside the line)
-    if (l->n + k > LIST_MAX) { acc.aborted++; regLost(NR_LIST_MAX, pc); return 1; }
+    if (l->n + k > LIST_MAX) {
+      acc.aborted++; regLost(NR_LIST_MAX, pc);
+      DEV(static uint32_t nlm; if (nlm < WCAP(16)) { nlm++; clog("list limit: list %u start %08x at pc %08x sublevel %u return %08x | base %06x off %08x | last VRAM sublist %08x, %u commands ago, began %08x %08x %08x %08x (frame %u)\n",
+          l->ord, l->lo, pc, l->sp, l->sp ? l->stk[l->sp - 1][0] : 0, reg[0x10], l->off, vcall, l->n - vcall_n, vcall_w[0], vcall_w[1], vcall_w[2], vcall_w[3], gen); })
+      return 1;
+    }
     if (rec && (pc & ~63u) != rec_last) recLine(pc & ~63u, ra & ~63u);
     uint32_t sp0 = l->sp, top = !sp0 && !isVram(pc);  // top level in RAM: lo/hi range for the list lifetime
     if (top && pc < l->lo) l->lo = pc;
@@ -1362,7 +1378,15 @@ static void event(volatile uint32_t *e) {
     fin_ord = sync_seen;
     DEV(uint32_t tfw = CST();)
     walk();  // what was queued before the flip is walked before closing the frame
-    DEV(if (hold_game) for (uint32_t c0 = ~0u; qh != qt && f_cmds != c0;) { c0 = f_cmds; walk(); })  // (all of it, not one turn)
+    // (all of it, not one turn; at most 150 ms, so a walk through something that is not a list cannot hold the core)
+    DEV(if (hold_game) {
+      uint32_t th = now(), np = 0;
+      for (uint32_t c0 = ~0u; qh != qt && f_cmds != c0 && now() - th < 150000; np++) { c0 = f_cmds; walk(); }
+      static uint32_t nhl;
+      if ((now() - th >= 150000 || (wlog && now() - th >= 50000)) && nhl < WCAP(40)) { nhl++; List *l = &q[qh & 63];
+        clog("hold: flip walk %s after %u ms, %u passes, %u commands this frame | queue %u list %u pc %08x sublevel %u commands %u (frame %u)\n",
+             now() - th >= 150000 ? "CUT" : "slow", (now() - th) / 1000, np, f_cmds, qt - qh, l->ord, l->pc, l->sp, l->n, gen); }
+    })
     DEV(uint32_t tf = CST();)
     { uint32_t dt = now() - f_t0; acc.us += dt; f_us += dt; f_t0 = now(); }
 #ifdef NP_DEV
@@ -1391,7 +1415,7 @@ static void event(volatile uint32_t *e) {
       for (int i = 0; i < NRS; i++) {
         uint32_t v = SB[0x100 + RS[i]] & 0xFFFFFF;
         if (v == snr[i] && reg[RS[i]] != v) {
-          DEV(static uint32_t nsn; if (nsn < 40) { nsn++; clog("register %02x: capture %06x real %06x (frame %u)\n", RS[i], reg[RS[i]], v, gen); })
+          DEV(static uint32_t nsn; if (nsn < WCAP(40)) { nsn++; clog("register %02x: capture %06x real %06x (frame %u)\n", RS[i], reg[RS[i]], v, gen); })
           reg[RS[i]] = v; rg_chg = 1; DEV(nsus++;)
         }
         snr[i] = v;
@@ -1401,7 +1425,7 @@ static void event(volatile uint32_t *e) {
       static uint32_t snb;
       uint32_t vb = SB[0x110] & 0xFFFFFF;
       if (vb == snb && reg[0x10] != vb) {
-        DEV(static uint32_t nsb; if (nsb < 40) { nsb++; clog("register 10: capture %06x real %06x (frame %u)\n", reg[0x10], vb, gen); })
+        DEV(static uint32_t nsb; if (nsb < WCAP(40)) { nsb++; clog("register 10: capture %06x real %06x (frame %u)\n", reg[0x10], vb, gen); })
         reg[0x10] = vb;
       }
       snb = vb;
@@ -1409,7 +1433,7 @@ static void event(volatile uint32_t *e) {
       for (int i = 0; i < 72; i++) {
         uint32_t v = SB[0x153 + i] & 0xFFFFFF;
         if (v == snl[i] && reg[0x53 + i] != v) {
-          DEV(static uint32_t nsl; if (nsl < 60) { nsl++; clog("register %02x: capture %06x real %06x (frame %u)\n", 0x53 + i, reg[0x53 + i], v, gen); })
+          DEV(static uint32_t nsl; if (nsl < WCAP(60)) { nsl++; clog("register %02x: capture %06x real %06x (frame %u)\n", 0x53 + i, reg[0x53 + i], v, gen); })
           reg[0x53 + i] = v; rg_lchg = 1;
         }
         snl[i] = v;
@@ -1484,6 +1508,7 @@ static void event(volatile uint32_t *e) {
 }
 
 void alogNew(void);  // nativedraw.c
+DEV(void alog(const char *fmt, ...);)  // nativedraw.c
 static volatile int logs_new;  // the capturer asks the log thread for new logs (a new game) and waits for it
 // Capturer thread: waits for the NativeLink mailbox, gives the heartbeat (SB[4]), processes new ring events
 // (SB[2] head, own tail; SB[5] processed), walks the lists and sleeps briefly if there is no work
@@ -1550,8 +1575,9 @@ static int capThread(SceSize args, void *argp) {
 }
 
 // --- Log (separate thread: writing to the card is slow) ---
-static char lbuf[8192];
+static char lbuf[DEV(4 *) 8192];
 static volatile uint32_t lpos;
+DEV(static volatile uint32_t ldrop;)  // lines dropped because lbuf was full
 // Appends a line with the time (ms) to the nativedraw_capture.log buffer; dropped if it does not fit
 static void clog(const char *fmt, ...) {
   char b[1024];
@@ -1559,7 +1585,7 @@ static void clog(const char *fmt, ...) {
   int n = sceClibSnprintf(b, 16, "%7u ", now() / 1000);
   n += sceClibVsnprintf(b + n, sizeof b - n, fmt, ap); va_end(ap);
   if (n > (int)sizeof b - 1) { n = sizeof b - 1; b[n - 1] = '\n'; }  // (cut: the newline is kept)
-  if (lpos + n > sizeof lbuf) return;
+  if (lpos + n > sizeof lbuf) { DEV(ldrop++;) return; }
   sceClibMemcpy(lbuf + lpos, b, n); lpos += n;
 }
 #ifdef NP_DEV
@@ -1673,6 +1699,28 @@ static void capWatch(void) {
 }
 #endif
 #ifdef NP_DEV
+static SceUID log_uid = -1;
+// Called every second by the presenter thread, which keeps running when the capturer's threads stop: if the capture
+// heartbeat (SB[4]) or the PSP's events (SB[2]) stopped for 1 s, or always with walk_log, logs to nativedraw.log the state
+// of the capturer, record, log and reader threads, where the capturer is and the PSP's progress (300 lines at most)
+void capHealth(void) {
+  static uint32_t b0, e0, n;
+  uint32_t b = SB[4], e = SB[2], bs = b == b0, es = e == e0;
+  b0 = b; e0 = e;
+  if (!mir_on || n >= 300 || !(bs || es || wlog)) return;
+  n++;
+  SceUID u[5] = { cap_uid, rec_uid, log_uid, rdr_uid[0], rdr_uid[1] };
+  char t[300]; int k = 0;
+  for (int i = 0; i < 5; i++) {
+    SceKernelThreadInfo in; sceClibMemset(&in, 0, sizeof in); in.size = sizeof in;
+    int r = u[i] < 0 ? -1 : sceKernelGetThreadInfo(u[i], &in);
+    k += sceClibSnprintf(t + k, sizeof t - k, " %s %x/%x/%u", (const char *[]){ "capture", "record", "log", "reader0", "reader1" }[i],
+                         r < 0 ? 0xFFFFu : in.status, in.waitType, (uint32_t)in.runClocks / 1000);
+  }
+  List *l = &q[qh & 63];
+  alog("capture health: beat %s, PSP events %s (head %u done %u captured %u) | at %u frame %u queue %u list %u pc %08x sublevel %u commands %u | log pending %u dropped %u | threads (status/wait/ms):%s\n",
+       bs ? "STOPPED" : "ok", es ? "STOPPED" : "ok", e, SB[5], SB[3], cap_at, gen, qt - qh, l->ord, l->pc, l->sp, l->n, lpos, ldrop, t);
+}
 // Samples the blocks of 16 MB or more that are not PSP RAM, MB by MB: which hold data and which changed since the last
 // call (a hash of 256 words spread over each MB), to see which of them the process really uses
 static void memSample(void) {
@@ -2021,6 +2069,7 @@ void capStart(void) {
   SceIoStat st;
   logsRotate();
   SceUID r = sceKernelCreateThread("nativedraw_capture_log", repThread, 0xB0, 0x2000, 0, 0, NULL);  // first: so the
+  DEV(log_uid = r;)
   if (r >= 0) sceKernelStartThread(r, 0, NULL);                                                      // log survives
   {  // log level
     char b[8] = { 0 };

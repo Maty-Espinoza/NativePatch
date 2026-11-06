@@ -917,6 +917,15 @@ static uint32_t trBase(SceGxmContext *c, const SceGxmTexture *base, TV *o, uint3
   return nv + 4;
 }
 
+// Draws the HD mark (green circle, ktex) blended over the top right corner of the open surface scene
+static void trMark(SceGxmContext *c) {
+  void *u;
+  sceGxmSetVertexProgram(c, vp); sceGxmSetFragmentProgram(c, fpb);
+  sceGxmReserveVertexDefaultUniformBuffer(c, &u); sceGxmSetUniformDataF(u, p_wvp, 0, 16, tr_wvp);
+  sceGxmSetFragmentTexture(c, 0, &ktex); sceGxmSetVertexStream(c, 0, vb + 40);
+  sceGxmDraw(c, SCE_GXM_PRIMITIVE_TRIANGLE_STRIP, SCE_GXM_INDEX_FORMAT_U16, ib, 4);
+}
+
 // GE comparison (0-7) -> GXM depth function >> 22, which is also its stencil function >> 25
 static const uint8_t gcmp[8] = { 0, 7, 2, 5, 1, 3, 4, 6 };
 static uint32_t t_zs, t_st, t_sr, t_cl;  // depth state, stencil state, stencil reference and cull in the context; ~0u: unknown
@@ -1591,6 +1600,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     sceGxmSetFrontDepthFunc(c, SCE_GXM_DEPTH_FUNC_ALWAYS);  // the context is Adrenaline's: its defaults back
     sceGxmSetFrontDepthWriteEnable(c, SCE_GXM_DEPTH_WRITE_ENABLED);
     sceGxmSetFrontStencilFunc(c, SCE_GXM_STENCIL_FUNC_ALWAYS, SCE_GXM_STENCIL_OP_KEEP, SCE_GXM_STENCIL_OP_KEEP, SCE_GXM_STENCIL_OP_KEEP, 0, 0);
+    if (hd_mark && res == T_OK && !cur_rt) trMark(c);
     SURF_WAIT();
     DEV(tb = PT();)
     DEV(h_at = 6;)

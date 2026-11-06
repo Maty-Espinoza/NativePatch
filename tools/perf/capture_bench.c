@@ -47,6 +47,7 @@ int sceIoClose(SceUID fd) { return 0; }
 int sceIoRemove(const char *p) { return 0; }
 int sceIoRename(const char *a, const char *b) { return 0; }
 void alogNew(void) {}
+void alog(const char *fmt, ...) {}
 int sceIoGetstat(const char *p, SceIoStat *s) { return -1; }
 SceUID sceKernelCreateThread(const char *n, SceKernelThreadEntry e, int p, SceSize s, SceUInt a, int c, const SceKernelThreadOptParam *o) { return -1; }
 int sceKernelStartThread(SceUID t, SceSize a, void *p) { return 0; }

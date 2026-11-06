@@ -37,7 +37,7 @@ static uint32_t thrRun(void) { SceKernelThreadInfo i; i.size = sizeof i; return 
 #include "prof.h"
 #include "measures.h"
 DEV(static int no_join, keep_hd, fx_log;)
-DEV(extern volatile SceUID nd_gfx_uid; uint32_t regState(void);
+DEV(extern volatile SceUID nd_gfx_uid; uint32_t regState(void); void capHealth(void);
     // where Adrenaline's drawing thread is: 0 outside hookEnd, 1 its sceGxmEndScene, 2 checks, 3 the record, 4 translating
     // draw h_i, 5 sceGxmBeginScene, 6 sceGxmEndScene, 7 normal image
     static volatile uint32_t h_at, h_i;)
@@ -175,6 +175,9 @@ static float *vb;  // full-screen quad: x, y, z, u, v (and from vb + 20 the menu
 static uint32_t *mpix;
 static SceGxmTexture mtex;
 static uint16_t *ib;
+#define KS 32      // HD mark: green circle in a 32x32 texture, drawn at 24x24 in the top right corner (switch hd_mark)
+static int hd_mark;
+static SceGxmTexture ktex;
 
 // --- Scene end on the GPU ---
 // Each scene of ours, when its pixels are done, writes its number (gq) to a free word of the GXM notification region
@@ -242,13 +245,23 @@ static int initDest(void) {
   if (!(mpix = gmem(MW * MH * 4, RD))) return -7;
   sceGxmTextureInitLinear(&mtex, mpix, SCE_GXM_TEXTURE_FORMAT_A8B8G8R8, MW, MH, 0);  // (point filter: sharp letters)
   sceGxmTextureSetMinFilter(&mtex, SCE_GXM_TEXTURE_FILTER_POINT); sceGxmTextureSetMagFilter(&mtex, SCE_GXM_TEXTURE_FILTER_POINT);
-  if (!(vb = gmem(8 * 20, RD)) || !(ib = gmem(8, RD))) return -5;
+  uint32_t *kp = gmem(KS * KS * 4, RD);
+  if (!kp) return -8;
+  for (int y = 0; y < KS; y++)
+    for (int x = 0; x < KS; x++) {  // alpha falls from 255 to 0 over the last pixel of the radius (smooth edge)
+      float dx = x + .5f - KS / 2, dy = y + .5f - KS / 2, a = (KS / 2 - 1 - __builtin_sqrtf(dx * dx + dy * dy)) * 255;
+      kp[y * KS + x] = (uint32_t)(a < 0 ? 0 : a > 255 ? 255 : a) << 24 | 0xD000;  // (A8B8G8R8: green)
+    }
+  sceGxmTextureInitLinear(&ktex, kp, SCE_GXM_TEXTURE_FORMAT_A8B8G8R8, KS, KS, 0);
+  if (!(vb = gmem(12 * 20, RD)) || !(ib = gmem(8, RD))) return -5;
   // full screen: the 480 visible columns of the PSP image (of 512) to 960x544; then the centered menu
   const float u1 = 480.0f / 512.0f, z = 0.5f, q[20] = { 0, 0, z, 0, 0, W, 0, z, u1, 0, 0, H, z, 0, 1, W, H, z, u1, 1 };
   sceClibMemcpy(vb, q, sizeof q);
   const float x0 = (W - 2 * MW) / 2, y0 = (H - 2 * MH) / 2, x1 = x0 + 2 * MW, y1 = y0 + 2 * MH,
               m[20] = { x0, y0, z, 0, 0, x1, y0, z, 1, 0, x0, y1, z, 0, 1, x1, y1, z, 1, 1 };
   sceClibMemcpy(vb + 20, m, sizeof m);
+  const float k[20] = { W - 40, 16, z, 0, 0, W - 16, 16, z, 1, 0, W - 40, 40, z, 0, 1, W - 16, 40, z, 1, 1 };
+  sceClibMemcpy(vb + 40, k, sizeof k);
   for (int i = 0; i < 4; i++) ib[i] = i;
   return 0;
 }
@@ -699,7 +712,7 @@ static int presThread(SceSize args, void *argp) {
   for (uint32_t t = now(), seen = 0, k = 0, warned = 0, m0 = 0;;) {  // every 10 s: how many frames and what they cost
     sceKernelDelayThread(50000);
     if (menu && !painted) { paintMenu(); __sync_synchronize(); painted = 1; }
-    if (!(k % 20)) { screenLog(); DEV(stuckLog();) }
+    if (!(k % 20)) { screenLog(); DEV(stuckLog(); capHealth();) }
     notifs(nr);
 #ifdef NP_DEV
     static uint32_t ln0;  // slow scenes already logged
@@ -790,6 +803,7 @@ static int swOn(const char *p) {  // the file exists and does not start with "no
 // are needed and starts the presenter thread.
 void presStart(void) {
   draw_on = swOn("ux0:data/nativedraw/draw");
+  hd_mark = swOn("ux0:data/nativedraw/hd_mark");
   DEV(MEASURES_DRAW(MEASURE_READ))
   repStart();
   dump_level = dumpLevel();  // dumps: off, screenshot, frame, sequence or auto
@@ -798,6 +812,7 @@ void presStart(void) {
   alog("dump: level %s (ux0:data/nativedraw/dump: off, screenshot, frame, sequence or auto)\n", dump_names[dump_level]);
   alog("presenter: %s; menu with L+R+START\n", draw_on ? "always replaces the image (draw)" :
        "replaces the image only with the menu open (create ux0:data/nativedraw/draw for always)");
+  alog("hd mark: %s (ux0:data/nativedraw/hd_mark: green circle on frames drawn in HD)\n", hd_mark ? "on" : "off");
   SceUID th = sceKernelCreateThread("nativedraw_presenter", presThread, 0xA0, 0x2000, 0, 0, 0);
   if (th >= 0) sceKernelStartThread(th, 0, 0);
 }

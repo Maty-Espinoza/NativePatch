@@ -34,6 +34,7 @@ PStage P[PN]; volatile uint32_t p_on, nd_exact_until, nd_dump_mark;
 const char *nlVersion(void) { return 0; }
 void regGpu(uint32_t q, volatile uint32_t *finish) {}
 uint32_t regState(void) { return 0; }
+void capHealth(void) {}
 static uint8_t arena[1 << 28]; static uint32_t heap_n, nblk; static void *blk[256];
 int sceKernelGetFreeMemorySize(SceKernelFreeMemorySizeInfo *i) { return -1; }
 int sceAppMgrGetBudgetInfo(SceAppMgrBudgetInfo *i) { return -1; }
