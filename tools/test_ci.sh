@@ -23,6 +23,8 @@ echo "$G" | grep 'draws=6642' | grep -q 'result=ok' || { echo "FAIL: God of War 
 [ "$(echo "$G" | grep 'draws=6642' | sed 's/.*gpu_vertices=[0-9]*,[0-9]*,[0-9]*,\([0-9]*\).*/\1/')" -gt 50000 ] || { echo "FAIL: God of War type 0x1BE not on the GPU"; exit 1; }
 # God of War with enemies: skinned vertices with a point light and lit 0x1BE on the GPU (nd_v5)
 [ "$(echo "$G" | grep 'draws=8429' | sed 's/.*cpu_vertices=\([0-9]*\).*/\1/')" -lt 10000 ] || { echo "FAIL: God of War lit vertices not on the GPU"; exit 1; }
+# God of War's glow: the scene goes to 162000 times a colored fixed blend color (3f5343), carried by the vertex color
+TR_LOG=1 $(command -v qemu-arm-static || command -v qemu-arm) $R/build/perf/tr_gv $R/build/perf/gow_combat.bin 1 2>&1 | grep -q "left out.*'blend'" && { echo "FAIL: God of War glow (colored fixed blend) left out"; exit 1; }
 echo "== capturer bench (builds and runs one scene)"
 arm-linux-gnueabihf-gcc -static -O2 -mthumb -mfpu=neon -mfloat-abi=hard -w -I$B/inc -o $B/bench $R/tools/perf/capture_bench.c
 $(command -v qemu-arm-static || command -v qemu-arm) $B/bench rr_race | grep -q "complete=38" || { echo "FAIL: capture_bench"; exit 1; }

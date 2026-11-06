@@ -253,13 +253,13 @@ static uint32_t pal8888(uint32_t c, uint32_t f) {
   return (a * 17) << 24 | (b * 17) << 16 | (g * 17) << 8 | r * 17;
 }
 
-// Grays of a blend src * gray A + dst * gray B (fixed colors 0xE0 and 0xE1 gray, not both 0 or white): A | B << 8 | 1 << 16, 0
-// if it is not one. GXM has no fixed factors: the vertex color carries them, A in rgb for the source and B in alpha for the
+// Fixed colors of a blend src * A + dst * gray B (0xE0 any color, 0xE1 gray; not both 0 or white): A | B << 24, 0 if it is not
+// one. GXM has no fixed factors: the vertex color carries them, A channel by channel in rgb for the source and B in alpha for the
 // destination (see trCheck).
-static uint32_t grayFix(const uint32_t *e) {
-  uint32_t df = RE(e, 0xDF), fa = RE(e, 0xE0) & 0xFFFFFF, fb = RE(e, 0xE1) & 0xFFFFFF, a = fa & 255, b = fb & 255;
-  if ((df & 0xFFF) != 0xAA || fa != a * 0x10101 || fb != b * 0x10101 || ((a == 0 || a == 255) && (b == 0 || b == 255))) return 0;
-  return a | b << 8 | 1 << 16;
+static uint32_t fixBlend(const uint32_t *e) {
+  uint32_t df = RE(e, 0xDF), fa = RE(e, 0xE0) & 0xFFFFFF, fb = RE(e, 0xE1) & 0xFFFFFF, b = fb & 255;
+  if ((df & 0xFFF) != 0xAA || fb != b * 0x10101 || ((fa == 0 || fa == 0xFFFFFF) && (b == 0 || b == 255))) return 0;
+  return fa | b << 24;
 }
 // 1 if color test of state e changes nothing: it rejects black, and black added to the destination leaves it the same
 static int ctestNoop(const uint32_t *e) {
@@ -282,7 +282,7 @@ static uint32_t blendKey(const uint32_t *e) {
                        fo[5] = { SCE_GXM_BLEND_FUNC_ADD, SCE_GXM_BLEND_FUNC_SUBTRACT, SCE_GXM_BLEND_FUNC_REVERSE_SUBTRACT,
                                  SCE_GXM_BLEND_FUNC_MIN, SCE_GXM_BLEND_FUNC_MAX };
   uint32_t gs, gd, fa = RE(e, 0xE0) & 0xFFFFFF, fb = RE(e, 0xE1) & 0xFFFFFF;
-  if (grayFix(e)) { gs = SCE_GXM_BLEND_FACTOR_ONE; gd = SCE_GXM_BLEND_FACTOR_SRC_ALPHA; goto ready; }
+  if (fixBlend(e)) { gs = SCE_GXM_BLEND_FACTOR_ONE; gd = SCE_GXM_BLEND_FACTOR_SRC_ALPHA; goto ready; }
   if (fa <= 0x010101) fa = 0;  // (1 of 255 at most: nothing, there is no factor for it)
   if (fb <= 0x010101) fb = 0;
   if (op == 3 || op == 4) gs = SCE_GXM_BLEND_FACTOR_ONE; else if (s < 4 || s == 6 || s == 7) gs = fs[s]; else if (s == 10 && (fa == 0 || fa == 0xFFFFFF)) gs = fa ? SCE_GXM_BLEND_FACTOR_ONE : SCE_GXM_BLEND_FACTOR_ZERO; else return ~0u;
@@ -353,7 +353,7 @@ static int trCheck(RFrame *f, RDraw *d) {
   if ((RE(e, 0x22) & 1) && !alphaFn(e, &afn, &aref)) return T_MASK;
   if (blendKey(e) == ~0u) return T_BLEND;
   // (the gray blend uses the vertex alpha: the source's alpha must be 1, as in intermediate images, and modulated)
-  if (grayFix(e) && hasTex(e, d) && ((d->toff && !rtKept(texAddr(e))) || (RE(e, 0xC9) & 7))) return T_BLEND;
+  if (fixBlend(e) && hasTex(e, d) && ((d->toff && !rtKept(texAddr(e))) || (RE(e, 0xC9) & 7))) return T_BLEND;
   if (hasTex(e, d)) {
     uint32_t fmt = RE(e, 0xC3) & 15, tf = RE(e, 0xC9) & 7;
     if (fmt > 5 || (fmt >= 4 && !d->clut)) return T_FMT;
@@ -1573,7 +1573,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
       th = 1u << (b8 >> 8 & 15); tw = tbw;
       uint32_t tv = texAddr(e) & 0x0F1FFFF0;
       int shown = !d->toff && tv == (0x04000000 | disp), prev = !d->toff && (tv == (0x04000000 | t_prevd) || tv == (0x04000000 | t_prev2)) && !rtKept(tv);
-      RT *src = (d->toff && !(key && grayFix(e))) || shown || prev ? 0 : rtOf(texAddr(e) & 0x1FFFF0, f->frame);
+      RT *src = (d->toff && !(key && fixBlend(e))) || shown || prev ? 0 : rtOf(texAddr(e) & 0x1FFFF0, f->frame);
       if (src || shown || prev) {  // intermediate or shown image: its double-size surface (512 x 272 of the PSP -> 1024 x 544)
         self = src && src == dst;
         if (self && !src->alone) { res = T_TEX; break; }  // (the image itself when it shares its surface: not done)
@@ -1640,7 +1640,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     int cov = sc[0] <= 0 && sc[1] <= 0 && sc[2] >= (dst ? dst->vr.xMax + 1 : W) && sc[3] >= (dst ? dst->vr.yMax + 1 : H);  // (nothing for the scissor to clip)
     int gl = GVL(d->vt), sk = GVS(d->vt) && !(GV3(d->vt) && !(t3.lit && t3.nl)), gp = gl ? gl : sk ? skinProg(d->vt) : d->vt == 0x1BE ? 3 : 0, gnr = gl && !t3.lit && t3.gen == 1 && t3.prj == 3;
     int lok = gl ? gnr || (t3.lit && t3One(&t3)) : sk ? !t3.lit || t3Dl(&t3) : !(t3.lit && t3.nl), gok = !t3.gen || gnr || (sk && t3.gen == 2 && !t3.l[t3.ls0].type && !t3.l[t3.ls1].type);  // (lights and UV are what its program does)
-    int gv = d->voff & VX && gvp[gp] && w3d && !self && cov && gok && lok && !grayFix(e) ? gp + 1 : 0;  // (gv: its program + 1)
+    int gv = d->voff & VX && gvp[gp] && w3d && !self && cov && gok && lok && !fixBlend(e) ? gp + 1 : 0;  // (gv: its program + 1)
     uint32_t prim = d->prim;
     TV *w = ts;
     float ar = 0;
@@ -1692,10 +1692,11 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
       if (k == ~0u) { res = T_LIMIT; break; }
       np += k; keep = !k; same = same && !k;  // (narrowed: the texture in the context is no longer this one)
     }
-    uint32_t gy = clr & 1 ? 0 : grayFix(e), gya = gy & 255, gyb = gy >> 8 & 255;
+    uint32_t gy = clr & 1 ? 0 : fixBlend(e);
     if (gy) for (uint32_t j = 0; j < n; j++) {
       uint32_t k = w[j].c;
-      w[j].c = gyb << 24 | ((k >> 16 & 255) * gya / 255) << 16 | ((k >> 8 & 255) * gya / 255) << 8 | (k & 255) * gya / 255;
+      w[j].c = (gy >> 24) << 24 | ((k >> 16 & 255) * (gy >> 16 & 255) / 255) << 16 | ((k >> 8 & 255) * (gy >> 8 & 255) / 255) << 8 |
+               (k & 255) * (gy & 255) / 255;
     }
     if (self) {  // read from rtc: copied there, in a scene of its own, unless it already holds this part as it is now
       float b[4] = { 1e9f, 1e9f, -1e9f, -1e9f }, *hv = dst->have, *dy = dst->dirty;

@@ -1,3 +1,4 @@
+#include <stdarg.h>
 // translate_bench.c: performance bench of the translator (nativedraw/translator.c) on the PC: runs the real trFrame on real
 // frame records saved by the Vita, with GXM replaced by functions that do nothing, under Callgrind (instructions per frame) on
 // an x86 build. It says how much CPU work the translator does per frame, not what the GPU does. Usage: tools/perf/instr.sh
@@ -29,7 +30,10 @@ void *sceClibMemcpy(void *d, const void *s, SceSize n) { return memcpy(d, s, n);
 void *sceClibMemmove(void *d, const void *s, SceSize n) { return memmove(d, s, n); }
 int sceClibMemcmp(const void *a, const void *b, SceSize n) { return memcmp(a, b, n); }
 int sceClibSnprintf(char *b, SceSize n, const char *f, ...) { va_list ap; va_start(ap, f); int r = vsnprintf(b, n, f, ap); va_end(ap); return r; }
-void alog(const char *f, ...) { (void)f; }
+void alog(const char *f, ...) {  // the translator's log, to stderr with TR_LOG=1
+  if (!getenv("TR_LOG")) return;
+  va_list a; va_start(a, f); vfprintf(stderr, f, a); va_end(a);
+}
 PStage P[PN]; volatile uint32_t p_on, nd_exact_until, nd_dump_mark;
 const char *nlVersion(void) { return 0; }
 void regGpu(uint32_t q, volatile uint32_t *finish) {}

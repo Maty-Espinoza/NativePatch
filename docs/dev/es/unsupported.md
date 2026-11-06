@@ -29,7 +29,7 @@ Todo el frame se muestra a la resolución del PSP (o se deja fuera un dibujo a u
 | Funciones de textura sin equivalente | `texture_function` | `decal`, `tfxBlend`, `tfxAdd` | - |
 | Prueba de color que cambia la imagen | `color_test_or_logic` | `colorTest` | Ridge Racer (`fails/003`) |
 | Operaciones lógicas | `color_test_or_logic` | `logicOp` | - |
-| Colores fijos de mezcla que no son 0, blanco o un par de grises | `blend` | `fixGray` | God of War (cadena del brillo, `162000`, color fijo `b2b265`) |
+| Colores fijos de mezcla con un color de destino (0xE1) que no es gris, o con una textura que no se modula o se copia de memoria | `blend` | `fixGray` | - |
 | Mezcla ABSDIFF | `blend` | `blendAbs` | Dragon Ball Z: Tenkaichi Tag Team |
 | Alfa de destino en la mezcla | `blend` | `blendDst` | Wipeout, God Eater |
 | Alfa doblado mezclado con factores de alfa normales | `blend` | `blend2x` | - |
