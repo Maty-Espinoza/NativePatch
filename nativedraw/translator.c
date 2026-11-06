@@ -221,11 +221,13 @@ static uint32_t pal8888(uint32_t c, uint32_t f) {
   return (a * 17) << 24 | (b * 17) << 16 | (g * 17) << 8 | r * 17;
 }
 
-// Gray of a blend src * gray + dst * gray (fixed colors 0xE0 and 0xE1 equal, not 0 or white), 0 if it is not one. GXM has no
-// fixed factors: the vertex color carries it, gray in rgb for the source and in alpha for the destination (see trCheck).
+// Grays of a blend src * gray A + dst * gray B (fixed colors 0xE0 and 0xE1 gray, not both 0 or white): A | B << 8 | 1 << 16, 0
+// if it is not one. GXM has no fixed factors: the vertex color carries them, A in rgb for the source and B in alpha for the
+// destination (see trCheck).
 static uint32_t grayFix(const uint32_t *e) {
-  uint32_t df = RE(e, 0xDF), fa = RE(e, 0xE0) & 0xFFFFFF, g = fa & 255;
-  return (df & 0xFFF) == 0xAA && fa == (RE(e, 0xE1) & 0xFFFFFF) && fa == g * 0x10101 && g && g != 255 ? g : 0;
+  uint32_t df = RE(e, 0xDF), fa = RE(e, 0xE0) & 0xFFFFFF, fb = RE(e, 0xE1) & 0xFFFFFF, a = fa & 255, b = fb & 255;
+  if ((df & 0xFFF) != 0xAA || fa != a * 0x10101 || fb != b * 0x10101 || ((a == 0 || a == 255) && (b == 0 || b == 255))) return 0;
+  return a | b << 8 | 1 << 16;
 }
 // 1 if color test of state e changes nothing: it rejects black, and black added to the destination leaves it the same
 static int ctestNoop(const uint32_t *e) {
@@ -993,7 +995,13 @@ static int trCheckFrame(RFrame *f, uint32_t *disp_p, uint32_t *ord_p) {
     const uint32_t *e0 = f->e[f->d[i].st];
     uint32_t fb = RE(e0, 0x9C) & 0x1FFFF0, k;
     int kd = -1;  // destination intermediate image (-1: the surface)
-    if (fb != disp && trSkip(f, &f->d[i])) { DEV(static int once; if (!once++) alog("translator: draws to image %06x/%u are left out, it cannot be drawn\n", fb, RE(e0, 0x9D) & 0x7FF);) continue; }
+    if (fb != disp && trSkip(f, &f->d[i])) {
+      // (the first draw of each image left out and why, 32 images at most)
+      DEV(static uint32_t seen[32], ns; uint32_t j = 0; while (j < ns && seen[j] != fb) j++;
+          if (j == ns && ns < 32) { seen[ns++] = fb; alog("translator: draws to image %06x/%u are left out, it cannot be drawn: '%s' at draw %u of frame %u (blend %d %04x %06x %06x, mask %06x, color test %d, logic %d)\n",
+            fb, RE(e0, 0x9D) & 0x7FF, tnames[r], i, f->frame, RE(e0, 0x21) & 1, RE(e0, 0xDF) & 0xFFFF, RE(e0, 0xE0) & 0xFFFFFF, RE(e0, 0xE1) & 0xFFFFFF, RE(e0, 0xE8) & 0xFFFFFF, RE(e0, 0x27) & 1, RE(e0, 0x28) & 1); })
+      continue;
+    }
     if (!r && fb != disp) {
       for (k = 0; k < nif && ifb[k] != fb; k++) {}
       if (k == nif) {
@@ -1435,10 +1443,10 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
       if (k == ~0u) { res = T_LIMIT; break; }
       np += k; keep = !k; same = same && !k;  // (narrowed: the texture in the context is no longer this one)
     }
-    uint32_t gy = clr & 1 ? 0 : grayFix(e);
+    uint32_t gy = clr & 1 ? 0 : grayFix(e), gya = gy & 255, gyb = gy >> 8 & 255;
     if (gy) for (uint32_t j = 0; j < n; j++) {
       uint32_t k = w[j].c;
-      w[j].c = gy << 24 | ((k >> 16 & 255) * gy / 255) << 16 | ((k >> 8 & 255) * gy / 255) << 8 | (k & 255) * gy / 255;
+      w[j].c = gyb << 24 | ((k >> 16 & 255) * gya / 255) << 16 | ((k >> 8 & 255) * gya / 255) << 8 | (k & 255) * gya / 255;
     }
     if (self) {  // read from rtc: copied there, in a scene of its own, unless it already holds this part as it is now
       float b[4] = { 1e9f, 1e9f, -1e9f, -1e9f }, *hv = dst->have, *dy = dst->dirty;
