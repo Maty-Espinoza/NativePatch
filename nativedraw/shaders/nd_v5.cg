@@ -1,0 +1,39 @@
+// Skinned 3D vertices of the record as the game wrote them: float weights (up to 8, in aW0 and aW1) and position, 8-bit normal,
+// UV and color as integers. What the GE does to them: position and normal are the sum of the bones by their weights; then
+// directional lights or the lit color with no lights, UV scaled or from the normal (environment map), fog. Uniforms u, by rows:
+// 0-3 m, model -> surface clip space; 4 UV scale (xy) and offset (zw); 5 fog factor, dot(position, xyz) + w, 0 to 1; 6, 7 color =
+// 6 + 7 * vertex color + diffuse + specular; 8, 9 diffuse and specular material, rgb + w * vertex color; 10-12 model -> world for
+// the normal (w of 10: 1 UV from the normal, w of 11: 1 8888 color, 0 4444 color in two bytes); 13, 14 directions of the UV from
+// the normal, w its scale; 15-30 four lights: direction, half vector and specular power, diffuse color, specular color; 31-54 the
+// 8 bones, 3 rows each (zero those with no weight).
+void main(float4 aW0, float4 aW1, float3 aPosition, float3 aNormal, float2 aTexcoord, float4 aColor, uniform float4 u[55],
+          float4 out vPosition : POSITION, float3 out vTexcoord : TEXCOORD0, float4 out vColor : COLOR)
+{
+  float4 x = float4(aPosition, 1), n = float4(aNormal, 0);
+  float3 s = 0, sn = 0;
+  for (int b = 0; b < 4; b++) {
+    float4 r0 = u[31 + b * 3], r1 = u[32 + b * 3], r2 = u[33 + b * 3];
+    s += aW0[b] * float3(dot(x, r0), dot(x, r1), dot(x, r2));
+    sn += aW0[b] * float3(dot(n, r0), dot(n, r1), dot(n, r2));
+  }
+  for (int b = 0; b < 4; b++) {
+    float4 r0 = u[43 + b * 3], r1 = u[44 + b * 3], r2 = u[45 + b * 3];
+    s += aW1[b] * float3(dot(x, r0), dot(x, r1), dot(x, r2));
+    sn += aW1[b] * float3(dot(n, r0), dot(n, r1), dot(n, r2));
+  }
+  float3 w = float3(dot(sn, u[10].xyz), dot(sn, u[11].xyz), dot(sn, u[12].xyz));
+  w *= rsqrt(max(dot(w, w), 1e-30));
+  float2 h = floor(aColor.xy / 16), l = aColor.xy - h * 16;
+  float4 c = u[11].w > 0 ? aColor / 255 : float4(l.x, h.x, l.y, h.y) / 15;
+  float3 d = 0, p = 0;
+  for (int i = 0; i < 4; i++) {
+    float4 ld = u[15 + i * 4], hv = u[16 + i * 4];
+    float nl = dot(w, ld.xyz), sp = dot(w, hv.xyz);
+    d += max(nl, 0) * u[17 + i * 4].rgb;
+    p += (nl >= 0 && sp > 0 ? pow(sp, hv.w) : 0) * u[18 + i * 4].rgb;
+  }
+  vPosition = s.x * u[0] + s.y * u[1] + s.z * u[2] + u[3];
+  float2 e = (float2(dot(w, u[13].xyz), dot(w, u[14].xyz)) + 1) * 0.5 * float2(u[13].w, u[14].w);
+  vTexcoord = float3(u[10].w > 0 ? e : aTexcoord * u[4].xy + u[4].zw, saturate(dot(s, u[5].xyz) + u[5].w));
+  vColor = saturate(u[6] + u[7] * c + float4(d * (u[8].rgb + u[8].w * c.rgb) + p * (u[9].rgb + u[9].w * c.rgb), 0));
+}

@@ -412,11 +412,12 @@ static void rgVFlush(void) {
   }
   vpn = 0;
 }
-// Reserves n bytes for the vertices at address s and queues them: with gpu, at the end of tx if they fit, otherwise in
-// area a. Value for voff; 0 if they do not fit (R_LIMIT).
-static uint32_t rgVLater(uint32_t s, uint32_t n, int gpu) {
+// Reserves n bytes for the vertices at address s and queues them: with gpu (their vertex size), at the end of tx if they fit, otherwise
+// in area a. Value for voff; 0 if they do not fit (R_LIMIT).
+static uint32_t rgVLater(uint32_t s, uint32_t n, uint32_t gpu) {
   RFrame *f = rf[rg_w];
-  uint32_t o = (f->na + 15) & ~15u, m = gpu ? (n + 47) / 48 * 48 : (n + 15) & ~15u;  // (for the GPU: multiples of 16 and of the sizes 16 and 24, so the translator can join them by indices)
+  uint32_t o = (f->na + 15) & ~15u, m = gpu ? n : (n + 15) & ~15u;
+  while (gpu && m & 15) m += gpu;  // (for the GPU: multiples of 16 and of the vertex size, so the translator can join them by indices)
   if (gpu && f->ntx + f->nvx + m <= TX_N) {
     if (vpn == VP_N) rgVFlush();
     f->nvx += m;
@@ -430,12 +431,13 @@ static uint32_t rgVLater(uint32_t s, uint32_t n, int gpu) {
   f->na = o + n;
   return o + 1;
 }
-// 3D vertices in VRAM for the GPU: copied at once from their mirror copy to the end of tx, where rgVLater puts those in RAM.
-// 0 if they have no copy in the mirror or do not fit (the caller copies them as usual)
+// 3D vertices in VRAM for the GPU, of vertex size vz: copied at once from their mirror copy to the end of tx, where rgVLater puts those
+// in RAM. 0 if they have no copy in the mirror or do not fit (the caller copies them as usual)
 static uint32_t rgSrc(uint32_t a, uint32_t n);
-static uint32_t rgVNow(uint32_t a, uint32_t n) {
+static uint32_t rgVNow(uint32_t a, uint32_t n, uint32_t vz) {
   RFrame *f = rf[rg_w];
-  uint32_t s = rgSrc(a, n), m = (n + 47) / 48 * 48;
+  uint32_t s = rgSrc(a, n), m = n;
+  while (m & 15) m += vz;
   if (!s || f->ntx + f->nvx + m > TX_N) return 0;
   f->nvx += m;
   sceClibMemcpy(f->tx + TX_N - f->nvx, (const void *)PSP(s), n);
@@ -672,18 +674,26 @@ static uint32_t rgBlock(const uint32_t *src, uint32_t n, uint32_t *last) {
 }
 DEV(static int cpu_verts, rec_cost, hold_game;)  // (switch cpu_verts: no vertices for the GPU, to compare)
 static uint32_t rg_box[3];  // scissor (0xD4, 0xD5) and image of the last clear: draws behind it are boxed (trBoxed), the GPU clips them
-// 1 if the GPU can take the vertices of a draw as they are: no indices, triangles in a scissor that takes in the whole image (what is seen
-// of one 480 wide or more, all of a narrower one) or in the one of the last clear, no generated UV; for nd_v3 the types of GV3 and no lights, for
-// nd_v4 16-bit position and normal, no color and one directional light or, with no lighting, UV from the normal. The record must be free of the GPU: it reads these bytes while drawing.
-static int rgVGpu(uint32_t type, uint32_t vt, uint32_t idx) {
+// 1 if every light of bits on is directional without powered diffuse
+static int rgDir(uint32_t on) {
+  for (int i = 0; i < 4; i++) if (on >> i & 1 && (reg[0x5F + i] & 0x300 || (reg[0x5F + i] & 3) == 2)) return 0;
+  return 1;
+}
+// The vertex size if the GPU can take the vertices of a draw as they are, 0 if not: no indices, triangles in a scissor that takes in the whole
+// image (what is seen of one 480 wide or more, all of a narrower one) or in the one of the last clear; for nd_v3 the types of GV3, no lights
+// and no generated UV, for nd_v4 16-bit position and normal, no color and one directional light or, with no lighting, UV from the normal;
+// for nd_v5 the types of GVS, directional lights and no generated UV or the environment map of two directional lights. The record must be
+// free of the GPU: it reads these bytes while drawing.
+static uint32_t rgVGpu(uint32_t type, uint32_t vt, uint32_t idx) {
   uint32_t w = reg[0x9D] & 0x7FF, on = (reg[0x18] & 1) | (reg[0x19] & 1) << 1 | (reg[0x1A] & 1) << 2 | (reg[0x1B] & 1) << 3, l = 0;
   while (on >> l > 1) l++;  // (the last light on)
   uint32_t lt = reg[0x5F + l], lit = reg[0x17] & 1 && on;
-  if (!(DEV(!cpu_verts &&) (GV3(vt) ? !lit && !(reg[0xC0] & 3) : GVL(vt) && (reg[0x17] & 1 ? on && !(on & (on - 1)) && !(lt >> 8 & 3) && (lt & 3) != 2 && !(reg[0xC0] & 3) : (reg[0xC0] & 0x303) == 0x301)) && !idx && type >= 3 && type <= 5 && !(reg[0xD3] & 1) && (reg[0x50] & 1) &&
+  if (!(DEV(!cpu_verts &&) (GV3(vt) ? !lit && !(reg[0xC0] & 3) : GVL(vt) ? (reg[0x17] & 1 ? on && !(on & (on - 1)) && !(lt >> 8 & 3) && (lt & 3) != 2 && !(reg[0xC0] & 3) : (reg[0xC0] & 0x303) == 0x301) :
+        GVS(vt) && (!lit || rgDir(on)) && (!(reg[0xC0] & 3) || ((reg[0xC0] & 3) == 2 && !(reg[0x5F + (reg[0xC1] & 3)] & 0x300) && !(reg[0x5F + (reg[0xC1] >> 8 & 3)] & 0x300)))) && !idx && type >= 3 && type <= 5 && !(reg[0xD3] & 1) && (reg[0x50] & 1) &&
         ((!(reg[0xD4] & 0xFFFFF) && (reg[0xD5] & 0x3FF) + 1 >= (w < 480 ? w : 480) && (w < 480 || (reg[0xD5] >> 10 & 0x3FF) >= 271)) ||
          (!((reg[0xD4] ^ rg_box[0]) & 0xFFFFF) && !((reg[0xD5] ^ rg_box[1]) & 0xFFFFF) && !((reg[0x9C] ^ rg_box[2]) & 0xFFFFF0))))) return 0;
   ga.v_busy += rgBusy(rg_w);
-  return !rgBusy(rg_w);
+  return rgBusy(rg_w) ? 0 : vs_sz;
 }
 // (capturer, on each draw, before vaddr/iaddr advance) Adds the draw to the frame: the state (RS) if changed, the
 // indices and vertices up to the highest index, and the texture (only the rows the vertices use). If something does
@@ -723,7 +733,7 @@ static void regDraw(uint32_t n, uint32_t type, uint32_t vt, uint32_t idx) {
   d->vlen = nv * vs;
   // (3D: the texture rows do not come from the vertices, so they can wait)
   int later = !(vt >> 23 & 1) && rg_ordc && !isVram(vaddr) && ramEnd(vaddr) >= vaddr + d->vlen && d->vlen <= OR_N;
-  uint32_t vn = !later && !(vt >> 23 & 1) && isVram(vaddr) && rgVGpu(type, vt, idx) ? rgVNow(vaddr, d->vlen) : 0;
+  uint32_t vz = !later && !(vt >> 23 & 1) && isVram(vaddr) ? rgVGpu(type, vt, idx) : 0, vn = vz ? rgVNow(vaddr, d->vlen, vz) : 0;
   if (!(d->voff = vn ? vn : later ? rgVLater(vaddr, d->vlen, rgVGpu(type, vt, idx)) : rgCopy(vaddr, d->vlen))) return;
   DEV(CSA(CS_RVT, tc); tc = CST();)
   d->woff = d->moff = d->loff = 0;

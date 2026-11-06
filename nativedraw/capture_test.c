@@ -333,7 +333,7 @@ int main(int argc, char **argv) {
       RFrame *g = rf[rg_w];
       *W(0x08C34000) = 0x11; *W(0x08C33000) = 0x22; rg_ordc = 1;
       *W(0x08C32000) = 0x33;
-      uint32_t v1 = rgVLater(0x08C34000, 4, 0), v2 = rgVLater(0x08C33000, 4, 0), v3 = rgVLater(0x08C32000, 4, 1);
+      uint32_t v1 = rgVLater(0x08C34000, 4, 0), v2 = rgVLater(0x08C33000, 4, 0), v3 = rgVLater(0x08C32000, 24, 24);
       rgVFlush();
       RDraw dv = { .voff = v3 };
       res->srt = res->srt && v1 && v2 && *(uint32_t *)(g->a + v1 - 1) == 0x11 && *(uint32_t *)(g->a + v2 - 1) == 0x22 && !vpn;
