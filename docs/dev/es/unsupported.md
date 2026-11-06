@@ -47,21 +47,21 @@ Lado del capturador (el frame se descarta antes del traductor): un salto condici
 (`bboxJump`, Tekken); una sublista de VRAM con basura después de una pelea de God of War (`list_too_long`, `TODO.md`).
 
 ## 2. Se dibuja, pero la CPU hace el trabajo de vértices
-El trabajo de vértices del GE (transformación, luces, UV) lo hace la CPU cuando el camino de GPU (`nd_v3`, `nd_v4`,
+El trabajo de vértices del GE (transformación, luces, UV) lo hace la CPU cuando el camino de GPU (`nd_v3`, `nd_v4`, `nd_v5`,
 `rgVGpu` en `record.c`) no toma el dibujo. Queda bien, pero lento: en el combate de God of War los vértices en la CPU cuestan
 ~250 ms por frame HD (0.0.25.23). El camino de GPU hoy: tipos `0x19F` y `0x1BE` sin luces (`nd_v3`), `0x142` y `0x143` con una
-luz direccional o UV desde la normal (`nd_v4`); vértices en RAM (`rgVLater`) o en VRAM con copia en el espejo (`rgVNow`);
+luz direccional o UV desde la normal (`nd_v4`), `0x7B9` y `0x7BE` con 1 a 8 pesos y `0x1B9` y `0x1BE` (con luz) con luces
+direccionales y puntuales, el color con luz sin luces o el mapa de entorno (`nd_v5`); vértices en RAM (`rgVLater`) o en VRAM con copia en el espejo (`rgVNow`);
 sin índices, solo triángulos, un scissor que abarca toda la imagen, sombreado suave.
 
 | Técnica | Vértices por frame | Prueba |
 |---|---|---|
-| Huesos (pesos 1 a 4, matrices de huesos): `0x7BE`, `0xC7BE`, `0x87BE`, `0x87B9`, `0x47B9`, `0x7B9` | Combate de God of War ~31.000 (la mitad del frame) | frame guardado `gow_combat`; falta una escena 3D |
-| Más de una luz, luces puntuales y de foco | Vértices con huesos de God of War con 3 luces direccionales ~5.000 | falta una escena 3D (`cube3d` tiene una luz) |
+| Luces de foco, difuso con potencia | - | falta una escena 3D (`cube3d` tiene una luz) |
 | Color de vértice con luces (`nd_v4` no tiene color) | - | falta una escena 3D |
-| Otros tipos de vértice: `0x102`, `0x100`, `0x11E`, `0x19D`, `0x183` | Ridge Racer ~700 | frames guardados `rr_*` |
+| Otros tipos de vértice: `0x102`, `0x100`, `0x11E`, `0x19D`, `0x183` | Ridge Racer ~700; God of War `0x183` ~1.000 | frames guardados `rr_*`, `gow_enemies` |
 | Dibujos con índices | - | `prims` (2D); falta una escena 3D |
 | UV generada por proyección desde la posición | Sombras en el suelo de God of War (`0xC0` = 1) | frame guardado `gow_combat` |
-| Un scissor que corta la imagen, sombreado plano | Ridge Racer: sombras y la zona del retrovisor | frames guardados `rr_*` |
+| Un scissor que corta la imagen, sombreado plano | Ridge Racer: sombras y la zona del retrovisor; God of War: la familia `0x780` (solo pesos y posición) en imágenes intermedias, ~1.100 a 2.700 | frames guardados `rr_*`, `gow_*` |
 
 ## 3. Estado sin código (se ignora: la imagen puede diferir)
 De NPTEST, escenas sin código detrás: nivel de mip forzado (`mipLevel`, Tactics Ogre guarda ahí una fuente), desplazamiento y
