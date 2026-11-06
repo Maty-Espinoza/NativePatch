@@ -8,7 +8,7 @@ what was done is in `CHANGELOG.md`. Updated 2026-11-05 (NativeLink 0.0.8 + Nativ
 ## Next
 - [ ] **Performance work follows `docs/dev/en/performance-plan.md`** (one ordered list): next: God of War Ghost of Sparta, remove the record's limit of draws, then optimize the capturer with that game (100-150 ms per frame in play).
 - [ ] **God of War, still to check once the menu and play are in HD:** the gray blocks of the menu and the one-color screens (likely the background left visible by the missing lists, not proven), and whether an image kept at PSP size was something sharp (`keep_hd`). Cause of C1-2858-3 not proven: it stopped after the fixes.
-- [ ] **HD indicator:** a small square in a corner on frames drawn in HD, with a switch (the user's idea, 2026-11-05).
+- [ ] **PSP jingle when Adrenaline opens sounds slow** (user, 2026-11-05, with NativeDraw 0.0.25.14): not looked at. Possibly related to the memory work of 0.0.25.1-0.0.25.10 (spare block, `no_memo`); check with NativeDraw off.
 - [ ] **`dump: no memory` also in `auto` level:** God of War only got peeks, no record.
 - [ ] **Crowd work left (`performance-plan.md`):** tight path for BASE/VADDR/PRIM in the capturer.
 - [ ] **Ridge Racer crowd, late lists as complete frames:** garbage state reaches the translator (`color_test_or_logic`, `vertex_out`, `mask`), 1 to 8 frames per run. Look at why they pass as complete. The user also saw something odd in the change to the normal image there: not explained.
