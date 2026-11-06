@@ -51,8 +51,8 @@ Capture side (the frame is dropped before the translator): a conditional jump by
 The GE's vertex work (transform, lights, UV) is done by the CPU when the GPU path (`nd_v3`, `nd_v4`, `rgVGpu` in
 `record.c`) does not take the draw. It is right but slow: in God of War combat the CPU vertices cost ~250 ms per HD frame
 (0.0.25.23). The GPU path today: types `0x19F` and `0x1BE` with no lights (`nd_v3`), `0x142` and `0x143` with one
-directional light or UV from the normal (`nd_v4`); no indices, triangles only, a scissor that takes the whole image,
-smooth shading.
+directional light or UV from the normal (`nd_v4`); vertices in RAM (`rgVLater`) or in VRAM with a mirror copy (`rgVNow`);
+no indices, triangles only, a scissor that takes the whole image, smooth shading.
 
 | Technique | Vertices per frame | Test |
 |---|---|---|

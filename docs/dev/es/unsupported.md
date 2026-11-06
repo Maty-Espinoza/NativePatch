@@ -50,8 +50,8 @@ Lado del capturador (el frame se descarta antes del traductor): un salto condici
 El trabajo de vértices del GE (transformación, luces, UV) lo hace la CPU cuando el camino de GPU (`nd_v3`, `nd_v4`,
 `rgVGpu` en `record.c`) no toma el dibujo. Queda bien, pero lento: en el combate de God of War los vértices en la CPU cuestan
 ~250 ms por frame HD (0.0.25.23). El camino de GPU hoy: tipos `0x19F` y `0x1BE` sin luces (`nd_v3`), `0x142` y `0x143` con una
-luz direccional o UV desde la normal (`nd_v4`); sin índices, solo triángulos, un scissor que abarca toda la imagen,
-sombreado suave.
+luz direccional o UV desde la normal (`nd_v4`); vértices en RAM (`rgVLater`) o en VRAM con copia en el espejo (`rgVNow`);
+sin índices, solo triángulos, un scissor que abarca toda la imagen, sombreado suave.
 
 | Técnica | Vértices por frame | Prueba |
 |---|---|---|
