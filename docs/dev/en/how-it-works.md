@@ -140,6 +140,12 @@ unused: `SB[0x47]`, bits 4 and 8 of 0x4A and events 7, 8, 9, 10 and 12.
   next one). To verify this in any game, NativeLink redoes the hashes the Vita left: if the list changed
   before enqueuing the next one, the wait goes back to the sync (60 clean checks to go back).
 - The wait is up to 5 ms; if the Vita does not respond (heartbeat stopped for 0.5 s), it does not wait.
+- **Limit found with God of War:** the game builds pieces of list in RAM, copies them to VRAM with TRANSFER and calls them
+  there, and rewrites those RAM pieces for its next frame right after the sync. The self-check only covers the list lines,
+  not those sources, so the gate goes before the enqueue and the capturer, applying the copies to its mirror late, mixes two
+  frames: wrong registers and, from there, garbage (BASE, transfer positions). Waiting at the sync (`gate_sync`) long
+  enough (`hold_game`) keeps it right, at the capturer's speed. The capturer also drops the rest of a list when it meets a
+  RAM to VRAM transfer after the list's sync, and repairs the transfer registers from the GE snapshot.
 
 ## Vita side: drawing
 - **Frame record** (`record.c`): 4 records that take turns (one is being written, another stays published and the ones the

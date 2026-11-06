@@ -184,6 +184,11 @@ Joining works: 3405 -> 267 GXM draws in the crowd frame, same triangles. Vertice
 ## God of War Ghost of Sparta as the new yardstick (0.0.25, `hold_game`, 2026-11-05)
 Menu ~4,500 draws and 66,000 commands per frame, play 6,000-13,000 draws: the capturer takes 65 ms in the menu and 100-150 ms in play, 3 to 4 times the 33 ms budget, before drawing anything. Order: remove the record's limit of draws to see both in HD, however slow, then optimize the capturer with this game.
 
+Update (0.0.25.18, `hold_game` + `gate_sync`): the record gives complete frames (menu 9 of 9 per second, play 7 of 7) but the
+game runs at the capturer's speed: menu ~9 fps (4,500 draws), play 5-7 fps (6,500-9,000 draws). No HD yet: the translator
+leaves out a 1024-wide shadow atlas (`161800`, `181800`, tiles drawn by moving the target 64 pixels) and an image at `162000`
+with an alpha test mask it cannot convert.
+
 ## C. Large changes (ask the user first)
 1. **3D vertices in a GXM vertex shader reading the PSP RAM mapped for the GPU** (`sceGxmMapMemory` at 0x70000000 works,
    stage 1). Removes the vertex copy from the capturer (~5 ms) and the CPU transform from the translator (16-20 ms per HD

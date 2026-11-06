@@ -140,6 +140,13 @@ quedan sin usar: `SB[0x47]`, los bits 4 y 8 de 0x4A y los eventos 7, 8, 9, 10 y 
   siguiente). Para comprobarlo en cualquier juego, NativeLink rehace las huellas que dejó la Vita: si la lista cambió
   antes de encolar la siguiente, la espera vuelve al sync (60 comprobaciones limpias para volver).
 - La espera es de hasta 5 ms; si la Vita no responde (latido parado 0,5 s), no se espera.
+- **Límite encontrado con God of War:** el juego arma pedazos de lista en RAM, los copia a VRAM con TRANSFER y los llama
+  ahí, y reescribe esos pedazos de RAM para su frame siguiente justo después del sync. La autocomprobación solo cubre las
+  líneas de la lista, no esos orígenes, así que la compuerta pasa a antes de encolar y el capturador, al aplicar tarde las
+  copias a su espejo, mezcla dos frames: registros mal y, desde ahí, basura (BASE, posiciones de copia). Esperar en el sync
+  (`gate_sync`) lo suficiente (`hold_game`) lo deja bien, a la velocidad del capturador. El capturador además deja el resto
+  de una lista si encuentra una copia de RAM a VRAM después del sync de esa lista, y corrige los registros de copia con la
+  foto del GE.
 
 ## Lado Vita: dibujo
 - **Registro del frame** (`record.c`): 4 registros que se turnan (uno se escribe, otro queda publicado y los que la

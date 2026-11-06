@@ -2,12 +2,16 @@
 
 The only list of pending work. Ordered from what comes next to what can wait. Each item says where it came from
 (a document in `docs/dev/en/`, `docs/agent/en/`, `docs/changelog/en/` or the claude.ai project). Done items are removed;
-what was done is in `CHANGELOG.md`. Updated 2026-11-05 (NativeLink 0.0.8 + NativeDraw 0.0.25 confirmed). How the work is done: `docs/agent/en/workflow.md`; stage 3 plan and results:
+what was done is in `CHANGELOG.md`. Updated 2026-11-05 (NativeLink 0.0.8 + NativeDraw 0.0.25 confirmed; tests up to NativeDraw 0.0.25.18). How the work is done: `docs/agent/en/workflow.md`; stage 3 plan and results:
 `docs/agent/en/stage3-plan.md`.
 
 ## Next
-- [ ] **Performance work follows `docs/dev/en/performance-plan.md`** (one ordered list): next: God of War Ghost of Sparta, remove the record's limit of draws, then optimize the capturer with that game (100-150 ms per frame in play).
-- [ ] **God of War, still to check once the menu and play are in HD:** the gray blocks of the menu and the one-color screens (likely the background left visible by the missing lists, not proven), and whether an image kept at PSP size was something sharp (`keep_hd`). Cause of C1-2858-3 not proven: it stopped after the fixes.
+- [ ] **God of War, 1024-wide shadow atlas** (0.0.25.18): the game draws 64x64 tiles into a 1024-wide image (`161800`, `181800`) by moving the target 64 pixels each time (`161880`, `161900`...). The translator refuses targets over 512 wide and sees each position as an image of its own (only 2 per frame): left out, and what reads it gives `bad_texture` (all of play). Plan: one intermediate image at PSP size for the whole strip (1024 fits the surfaces), each position an offset inside it.
+- [ ] **God of War menu, image `162000` left out for `mask`:** an alpha test the translator cannot convert (`alphaFn`); what reads that image gives `other_target`. Log the alpha test register (0xDB) of that draw first.
+- [ ] **PSP-Vita frame sync for games that copy sublists to VRAM** (user's idea, 2026-11-05): `hold_game` + `gate_sync` keeps God of War's capture right (garbage gone) but the game runs at the capturer's speed (menu ~9 fps, play 5-7). To do: wait at the sync only when the Vita sees RAM to VRAM sublists (a mailbox flag), extend the gate's self-check to the transfer sources, and make the capturer fast enough (then optimize it with this game, `performance-plan.md`).
+- [ ] **God of War closes (C1-2858-3) with `hold_game`:** twice, the PSP stopped first (`capture health:` the capturer was idle); not with `hold_game` off; not seen with `gate_sync`. Suspected: frames of 200+ ms the game does not tolerate. Not proven.
+- [ ] **God of War, still to check once the menu and play are in HD:** the gray blocks of the menu (dumps 287-289: 9 draws with garbage state, from the mixed-frame captures; check again with the sync) and whether an image kept at PSP size was something sharp (`keep_hd`).
+- [ ] **Diagnostics added for God of War, remove when closed:** `walk_log`, `walk_trace` (flight recorder), `capture health:`, the `hold: flip walk` lines.
 - [ ] **PSP jingle when Adrenaline opens sounds slow** (user, 2026-11-05, with NativeDraw 0.0.25.14): not looked at. Possibly related to the memory work of 0.0.25.1-0.0.25.10 (spare block, `no_memo`); check with NativeDraw off.
 - [ ] **`dump: no memory` also in `auto` level:** God of War only got peeks, no record.
 - [ ] **Crowd work left (`performance-plan.md`):** tight path for BASE/VADDR/PRIM in the capturer.
