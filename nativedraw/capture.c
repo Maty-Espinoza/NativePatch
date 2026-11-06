@@ -881,6 +881,12 @@ static void recTex(uint32_t ta) {
 #define UNWIND() (l->sp = 0, l->pc = l->stk[0][0], l->off = l->stk[0][1], recAbort(), chk = NULL)
 DEV(static uint32_t xm_ok, xm_skip, xm_out, xc_more;)  // pages applied to the mirror, without a copy, out of the real VRAM; extra log lines allowed
 DEV(static uint32_t xm_t[3], xm_r[3];)  // RAM to VRAM transfers applied to the mirror: calls, bytes, us (xm_r: those of the last second)
+#ifdef NP_BENCH
+static uint64_t bx_w;  // bytes xferMirror copies word by word (tools/perf/capture_bench.c prices them)
+#define BXW(n) (bx_w += (n))
+#else
+#define BXW(n) ((void)0)
+#endif
 // Applies a RAM to VRAM transfer to the mirror the list is read with, row by row and page by page: the mirror is from the
 // last flip, and a game can copy sublists or data to VRAM during the frame and use them right after. Pages without a copy
 // are skipped; the lines of the destination leave the read buffer and the readers' cache. Copies by aligned words:
@@ -899,6 +905,7 @@ static void xferMirror(uint32_t s, uint32_t t, uint32_t bp) {
       DEV(if (!real) xm_out++; else if (!ra) xm_skip++; else xm_ok++;)
       if (!ra || !real || ramEnd(src + o) < src + o + n) continue;
       DEV(fpMark(src + o, n, FP_XFER);)
+      BXW(n);
       if ((ra | (src + o) | n) & 3) for (uint32_t i = 0; i < n; i += 2) ((volatile uint16_t *)PSP(ra))[i / 2] = ((volatile uint16_t *)PSP(src + o))[i / 2];
       else for (uint32_t i = 0; i < n; i += 4) ((volatile uint32_t *)PSP(ra))[i / 4] = ((volatile uint32_t *)PSP(src + o))[i / 4];
       for (uint32_t b = ra & ~63u; b < ra + n; b += 64) if (clOk(b)) cl_tag[clSlot(b)] = 0;

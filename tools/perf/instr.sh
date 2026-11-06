@@ -12,7 +12,7 @@ for d in $VH/include/psp2* $VH/include/vitasdk*; do [ -e $B/inc/$(basename $d) ]
 [ -e $B/inc/taihen.h ] || ln -s $T/taipkg/include/taihen.h $B/inc/
 gcc -m32 -g -O2 -w -I$P/host -I$B/inc -o $W/bench $S/tools/perf/capture_bench.c
 : > $W/out
-for s in rr_crowd rr_crowd_late rr_race rr_race_late sprites2d sublists images; do
+for s in rr_crowd rr_crowd_late rr_race rr_race_late sprites2d sublists images gow_menu_xfer gow_play_xfer; do
   (cd $W && valgrind --tool=callgrind --collect-atstart=no --callgrind-out-file=cg.$s.%p ./bench $s >/dev/null 2>&1)
   f=$(wc -c $W/cg.$s.* | sort -n | tail -2 | head -1 | awk '{print $2}')
   n=$(sed -n 's/^summary: *//p; s/^totals: *//p' $f | head -1)

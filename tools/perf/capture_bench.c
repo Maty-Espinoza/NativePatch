@@ -29,15 +29,15 @@
 #endif
 
 // --- Counters of what the Vita pays for (filled by the stubs below) ---
-static struct { uint64_t ucp, ucmp, dma_b; uint32_t dma_n, clock; } M;
+static struct { uint64_t ucp, ucmp, ucw, dma_b; uint32_t dma_n, clock; } M;
 #define RAM_LO 0x70000000u  // the fake PSP RAM (mmap at the Vita addresses) and its zone and mirrors
 static int inRam(const void *p) { uint32_t a = (uint32_t)p; return a - RAM_LO < 0x2000000u || a - 0x72000000u < 0x400000u || a - 0x72C00000u < 0x200000u; }
 
 // --- Vita functions replaced (same as nativedraw/capture_test.c, with counters) ---
 SceUInt32 sceKernelGetProcessTimeLow(void) { struct timespec t; M.clock++; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec * 1000000 + t.tv_nsec / 1000; }
 void *sceClibMemset(void *d, int c, SceSize n) { return memset(d, c, n); }
-void *sceClibMemcpy(void *d, const void *s, SceSize n) { if (inRam(s)) M.ucp += n; return memcpy(d, s, n); }
-void *sceClibMemmove(void *d, const void *s, SceSize n) { if (inRam(s)) M.ucp += n; return memmove(d, s, n); }
+void *sceClibMemcpy(void *d, const void *s, SceSize n) { if (inRam(s)) M.ucp += n; if (inRam(d)) M.ucw += n; return memcpy(d, s, n); }
+void *sceClibMemmove(void *d, const void *s, SceSize n) { if (inRam(s)) M.ucp += n; if (inRam(d)) M.ucw += n; return memmove(d, s, n); }
 int sceClibMemcmp(const void *a, const void *b, SceSize n) { if (inRam(a) || inRam(b)) M.ucmp += n; return memcmp(a, b, n); }
 int sceClibVsnprintf(char *b, SceSize n, const char *f, va_list ap) { return vsnprintf(b, n, f, ap); }
 int sceClibSnprintf(char *b, SceSize n, const char *f, ...) { va_list ap; va_start(ap, f); int r = vsnprintf(b, n, f, ap); va_end(ap); return r; }
@@ -64,7 +64,8 @@ int sceKernelGetMemBlockInfoByAddr(void *a, SceKernelMemBlockInfo *i) { return -
 SceUID emu_th[EMU_N]; int emu_aff[EMU_N], emu_n;
 
 // --- Unit costs measured on the Vita, in ns (findings.md: "memory bench" line of the capture log, stage 2 reads) ---
-enum { C_READ256 = 2800, C_HIT = 300, C_UCP_B = 11, C_DMA_CALL = 100000, C_DMA_B = 2, C_CLOCK = 405 };
+// C_UCW_B: a CPU copy writing into PSP RAM, on top of its read; C_XW_B: a byte of xferMirror's copy word by word (read and write)
+enum { C_READ256 = 2800, C_HIT = 300, C_UCP_B = 11, C_UCW_B = 3, C_XW_B = 51, C_DMA_CALL = 100000, C_DMA_B = 2, C_CLOCK = 405 };
 
 // --- List generator ---
 static uint32_t *W(uint32_t a) { return (uint32_t *)PSP(isVram(a) ? MIRROR + (a & 0x1FFFFF) : a); }
@@ -182,6 +183,41 @@ static void images(int f, int n) {
   E(0x0F, 0); E(0x0C, 0);
 }
 
+// Scene 5: RAM to VRAM transfers (TRANSFER, 0xEA) like God of War Ghost of Sparta: the 59 transfers of a menu frame as the
+// Vita logged them ("vram copy" lines, frame 1452 of the 0.0.25.25 run), rows of 128 pixels of 4 bytes, source and
+// destination of the same width, many into the same VRAM slot; after each one a 3D draw takes its vertices from the
+// destination, as the game's pieces do (the record copies them from the mirror). n = 97 is the play frame of that run (97
+// transfers, 1.35 MB): its shapes were not logged, so it repeats the menu list with copies 1.38 times taller.
+static const uint32_t XF[59][3] = {  // source, destination, rows of 512 bytes
+  { 0x098ac400, 0x041ec000, 1 }, { 0x095a7b50, 0x0418a000, 129 }, { 0x08559c40, 0x0419a200, 1 }, { 0x0989f5c0, 0x0419a400, 2 },
+  { 0x0989fa60, 0x0419a800, 4 }, { 0x0957aa80, 0x0418a000, 34 }, { 0x098b73d0, 0x0418e400, 2 }, { 0x09571090, 0x0418a000, 11 },
+  { 0x098b6db0, 0x0418b600, 1 }, { 0x0955f720, 0x0418a000, 135 }, { 0x098b6700, 0x0419ae00, 4 }, { 0x09556c70, 0x0418a000, 23 },
+  { 0x098b6250, 0x0418ce00, 1 }, { 0x0986d3c0, 0x0418a000, 301 }, { 0x08559cc0, 0x041afa00, 1 }, { 0x098a2b90, 0x041afc00, 3 },
+  { 0x098a3020, 0x041b0200, 2 }, { 0x0955a0b0, 0x0418a000, 40 }, { 0x098b6440, 0x0418f000, 1 }, { 0x098b6630, 0x0418f200, 1 },
+  { 0x08557940, 0x0418a000, 16 }, { 0x0989a2c0, 0x0418c000, 35 }, { 0x0989e850, 0x04190600, 3 }, { 0x094ceef0, 0x0418a000, 9 },
+  { 0x098b5d20, 0x0418b200, 1 }, { 0x098b5d60, 0x0418b400, 1 }, { 0x094cc3e0, 0x0418a000, 19 }, { 0x098b5bc0, 0x0418c600, 1 },
+  { 0x098b5c50, 0x0418c800, 1 }, { 0x095534d0, 0x0418a000, 10 }, { 0x098b6040, 0x0418b400, 1 }, { 0x098b60a0, 0x0418b600, 1 },
+  { 0x094c7ff0, 0x0418a000, 31 }, { 0x098b5980, 0x0418de00, 1 }, { 0x098b5af0, 0x0418e000, 1 }, { 0x094c6920, 0x0418a000, 9 },
+  { 0x098b5880, 0x0418b200, 1 }, { 0x098b58d0, 0x0418b400, 1 }, { 0x094d05b0, 0x0418a000, 8 }, { 0x098b5e30, 0x0418b000, 1 },
+  { 0x098b5e70, 0x0418b200, 1 }, { 0x094d1a70, 0x0418a000, 6 }, { 0x098b5f40, 0x0418ac00, 1 }, { 0x098b5f70, 0x0418ae00, 1 },
+  { 0x097758c0, 0x0418a000, 198 }, { 0x085597c0, 0x041a2c00, 3 }, { 0x098a1420, 0x041a3200, 7 }, { 0x098a2130, 0x041a4000, 3 },
+  { 0x09572c00, 0x0418a000, 2 }, { 0x098b6ed0, 0x0418a400, 1 }, { 0x098b6f00, 0x0418a600, 1 }, { 0x095734b0, 0x0418a000, 34 },
+  { 0x098b6fc0, 0x0418e400, 1 }, { 0x098b7190, 0x0418e600, 1 }, { 0x09554db0, 0x0418a000, 13 }, { 0x098b6140, 0x0418ba00, 1 },
+  { 0x098b6180, 0x0418bc00, 1 }, { 0x085ef050, 0x0418a000, 8 }, { 0x0868f060, 0x0418b000, 4 }
+};
+static void xfers(int f, int n) {
+  rnd_s = 1; pc_ = MAIN; head(0x15E); E(0x1E, 0);
+  for (int i = 0; i < n; i++) {
+    uint32_t s = XF[i % 59][0], d = XF[i % 59][1], h = n == 59 ? XF[i][2] : (XF[i % 59][2] * 138 + 50) / 100;
+    if (h > 1024) h = 1024;
+    if (!f) { uint8_t *p = (uint8_t *)W(s); for (uint32_t k = 0; k < h * 512; k++) p[k] = rnd2(256); want(d, h * 512, 1); }  // (a game already running: its pages are in the mirror)
+    E(0xB2, s & 0xFFFFF0); E(0xB3, (s >> 8 & 0x0F0000) | 128); E(0xB4, d & 0xFFFFF0); E(0xB5, (d >> 8 & 0x0F0000) | 128);
+    E(0xEB, 0); E(0xEC, 0); E(0xEE, 127 | (h - 1) << 10); E(0xEA, 1);
+    E(0x10, d >> 8 & 0x0F0000); E(0x01, d & 0xFFFFFF); E(0x04, 4 << 16 | h * 512 / 20);
+  }
+  E(0x0F, 0); E(0x0C, 0);
+}
+
 // late: the presenter takes one frame in three, as on the Vita, so the others are walked without recording
 typedef struct { const char *name; void (*build)(int, int); int n, record, memo, readers, vram, late; } Scene;
 static const Scene S[] = {
@@ -192,10 +228,12 @@ static const Scene S[] = {
   { "sprites2d", sprites, 300, 1, 0, 0, 0, 0 },
   { "sublists", sublists, 40, 0, 1, 1, 0, 0 },
   { "images", images, 30, 1, 0, 0, 1, 0 },
+  { "gow_menu_xfer", xfers, 59, 1, 0, 0, 1, 0 },
+  { "gow_play_xfer", xfers, 97, 1, 0, 0, 1, 0 },
 };
 #define SN (int)(sizeof S / sizeof *S)
 #define FRAMES 40
-typedef struct { uint32_t cmds, draws, verts, own, hits, complete; uint64_t ucp, ucmp, dma_b; uint32_t dma_n, clock, qemu_us, qemu_min, ok, want; } Out;
+typedef struct { uint32_t cmds, draws, verts, own, hits, complete; uint64_t ucp, ucmp, ucw, xw, dma_b; uint32_t dma_n, clock, qemu_us, qemu_min, ok, want; } Out;
 
 static uint32_t cpuUs(void) { struct timespec t; clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &t); return t.tv_sec * 1000000 + t.tv_nsec / 1000; }
 // Runs scene s for FRAMES frames through the real event path (enqueue, drawsync, flip) and adds up the counters of all
@@ -214,7 +252,7 @@ static void run(const Scene *s, Out *o) {
     s->build(f, s->n);
     SB[0x40] = f; SB[0x44] = f + 1;  // copies finished / requested at this flip
     sec_t0 = now();  // (the per-second statistics reset never lands inside the frame)
-    M.clock = 0; M.ucp = M.ucmp = M.dma_b = 0; M.dma_n = 0;
+    M.clock = 0; M.ucp = M.ucmp = M.ucw = M.dma_b = 0; M.dma_n = 0; uint64_t xw0 = bx_w;
     uint32_t own0 = R0.own, hit0 = R0.hits, t0 = cpuUs(), ts = now();
     CALLGRIND_TOGGLE_COLLECT;
     uint32_t enq[8] = { EV_ENQ, MAIN, 0, 1, ts, f + 1, 0, 0 };
@@ -234,7 +272,7 @@ static void run(const Scene *s, Out *o) {
     CALLGRIND_TOGGLE_COLLECT;
     uint32_t dt = cpuUs() - t0;  // (the fastest frame after the first: least disturbed by the host)
     o->qemu_us += dt; if (f && (!o->qemu_min || dt < o->qemu_min)) o->qemu_min = dt;
-    o->own += R0.own - own0; o->hits += R0.hits - hit0; o->ucp += M.ucp; o->ucmp += M.ucmp; o->dma_b += M.dma_b; o->dma_n += M.dma_n; o->clock += M.clock;
+    o->own += R0.own - own0; o->hits += R0.hits - hit0; o->ucp += M.ucp; o->ucmp += M.ucmp; o->ucw += M.ucw; o->xw += bx_w - xw0; o->dma_b += M.dma_b; o->dma_n += M.dma_n; o->clock += M.clock;
     o->cmds += acc.cmds; o->draws += acc.draws; o->verts += acc.verts;
     if (reg_on) { o->complete += rg_pub >= 0 && rf[rg_pub]->frame == gen - 1 && !rf[rg_pub]->flags; if (!s->late || !(f % 3)) rg_last = rg_pub; }
     o->want = 0; for (int w = 0; w < 16; w++) o->want += __builtin_popcount(want_l[w] | want_d[w]);
@@ -251,11 +289,11 @@ int main(int argc, char **argv) {
     Out *o = r + i;
     if (!WIFEXITED(st)) { printf("scene=%s FAILED\n", S[i].name); continue; }
     double f = FRAMES;
-    double mem = (o->own * (double)C_READ256 + o->hits * (double)C_HIT + (o->ucp + o->ucmp) * (double)C_UCP_B +
+    double mem = (o->own * (double)C_READ256 + o->hits * (double)C_HIT + (o->ucp + o->ucmp) * (double)C_UCP_B + o->ucw * (double)C_UCW_B + o->xw * (double)C_XW_B +
                   o->dma_n * (double)C_DMA_CALL + o->dma_b * (double)C_DMA_B + o->clock * (double)C_CLOCK) / 1000 / f;
-    printf("scene=%s frames=%d cmds/f=%u draws/f=%u verts/f=%u own256/f=%u hits/f=%u ucp_kb/f=%.1f ucmp_kb/f=%.1f dma/f=%.1f dma_kb/f=%.1f clock/f=%u complete=%u want=%u mem_us/f=%.0f qemu_us/f=%.0f qemu_min_us=%u\n",
+    printf("scene=%s frames=%d cmds/f=%u draws/f=%u verts/f=%u own256/f=%u hits/f=%u ucp_kb/f=%.1f ucmp_kb/f=%.1f ucw_kb/f=%.1f xw_kb/f=%.1f dma/f=%.1f dma_kb/f=%.1f clock/f=%u complete=%u want=%u mem_us/f=%.0f qemu_us/f=%.0f qemu_min_us=%u\n",
            S[i].name, FRAMES, (unsigned)(o->cmds / f), (unsigned)(o->draws / f), (unsigned)(o->verts / f), (unsigned)(o->own / f), (unsigned)(o->hits / f),
-           o->ucp / 1024 / f, o->ucmp / 1024 / f, o->dma_n / f, o->dma_b / 1024 / f, (unsigned)(o->clock / f), o->complete, o->want, mem, o->qemu_us / f, o->qemu_min);
+           o->ucp / 1024 / f, o->ucmp / 1024 / f, o->ucw / 1024 / f, o->xw / 1024 / f, o->dma_n / f, o->dma_b / 1024 / f, (unsigned)(o->clock / f), o->complete, o->want, mem, o->qemu_us / f, o->qemu_min);
   }
   return 0;
 }

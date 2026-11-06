@@ -16,7 +16,7 @@ def parse(path):
     out = {}
     for s, all_ in runs.items():
         rs = [r for r in all_ if 'frames' in r] or all_[:1]  # (instr.sh adds a line with only the instructions; the translator has nothing else)
-        for k in ('cmds/f', 'draws/f', 'verts/f', 'own256/f', 'hits/f', 'ucp_kb/f', 'ucmp_kb/f', 'dma/f', 'dma_kb/f', 'clock/f', 'complete', 'want', 'mem_us/f', 'qemu_us/f', 'qemu_min_us'): rs[0].setdefault(k, 0)
+        for k in ('cmds/f', 'draws/f', 'verts/f', 'own256/f', 'hits/f', 'ucp_kb/f', 'ucmp_kb/f', 'ucw_kb/f', 'xw_kb/f', 'dma/f', 'dma_kb/f', 'clock/f', 'complete', 'want', 'mem_us/f', 'qemu_us/f', 'qemu_min_us'): rs[0].setdefault(k, 0)
         o = dict(rs[0]); o.update(next((r for r in all_ if 'ir_k/f' in r), {})); o['qemu_us/f'] = min(r['qemu_us/f'] for r in rs); o['qemu_min_us'] = min(r['qemu_min_us'] for r in rs); o['runs'] = len(rs)
         for r in rs:
             for k in r:
@@ -26,7 +26,7 @@ def parse(path):
 
 def compare(last, ref, tol):
     bad = 0
-    cols = ['mem_us/f', 'ir_k/f', 'want', 'qemu_min_us', 'qemu_us/f', 'own256/f', 'hits/f', 'ucp_kb/f', 'ucmp_kb/f', 'dma/f', 'dma_kb/f', 'clock/f', 'complete']
+    cols = ['mem_us/f', 'ir_k/f', 'want', 'qemu_min_us', 'qemu_us/f', 'own256/f', 'hits/f', 'ucp_kb/f', 'ucmp_kb/f', 'ucw_kb/f', 'xw_kb/f', 'dma/f', 'dma_kb/f', 'clock/f', 'complete']
     print(f'{"scene":<10}' + ''.join(f'{c:>22}' for c in cols))
     for s, o in last.items():
         r = ref.get(s)
