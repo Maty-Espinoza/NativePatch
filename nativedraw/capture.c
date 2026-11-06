@@ -465,6 +465,7 @@ static void draw(uint32_t d) {
 typedef struct { uint32_t pc, stall, qid, ord, off, sp, stk[32][2], prev, n, ncall, t_enq, t_stall, t_start, work, own0, hit0, memo0, ahead, lo, hi, nsub, subs[16], cpu0; } List;
 #define LIST_MAX 400000  // commands: more than that is a list the game already rewrote (the Vita was behind)
 static List q[64];
+static uint32_t sync_seen;  // (defined with the sync handling below)
 static uint32_t qh, qt;  // the first unfinished one and the next free one
 // Absolute address of a jump/CALL/VADDR/IADDR: BASE (reg 0x10) + d + list OFFSET
 static inline uint32_t rel(List *l, uint32_t d) { return ((((reg[0x10] & 0x0F0000) << 8) | d) + l->off) & 0x0FFFFFFF; }
@@ -1160,6 +1161,14 @@ static int __attribute__((noinline)) walkList(List *l) {
       acc.transfers++;
       uint32_t s = (reg[0xB2] & 0xFFFFF0) | ((reg[0xB3] << 8) & 0x0F000000), t = (reg[0xB4] & 0xFFFFF0) | ((reg[0xB5] << 8) & 0x0F000000);
       if (isVram(s) || isVram(t)) acc.tr_vram++;
+      // RAM to VRAM after the game went past this list's sync: the game may already have rewritten the source for its
+      // next frame, and the mirror would get a mix of two frames. The rest of the list is dropped (its state comes back
+      // with the snapshot of the real GE registers) and the frame is not drawn.
+      if (!isVram(s) && isVram(t) && (int)(sync_seen - l->ord) >= 0) {
+        acc.aborted++; regLost(NR_X_LATE, pc);
+        DEV(static uint32_t nxl; if (nxl < WCAP(40)) { nxl++; clog("transfer after the sync: list %u at pc %08x sublevel %u, ram %08x to %08x, sync seen %u (frame %u): rest of the list dropped\n", l->ord, pc, l->sp, s, t, sync_seen, gen); })
+        return 1;
+      }
       DEV(xferNote(s, t, d & 1 ? 4 : 2); uint32_t xa = xm_ok, xb = xm_skip, xo = xm_out;)
       xferMirror(s, t, d & 1 ? 4 : 2);
       DEV(trXfer(l, pc, s, t, d & 1 ? 4 : 2, xm_ok - xa, xm_skip - xb, xm_out - xo);)
@@ -1521,6 +1530,17 @@ static void event(volatile uint32_t *e) {
         reg[0x10] = vb;
       }
       snb = vb;
+      // the same with the transfer registers: a wrong position or width sends every later transfer to the wrong place
+      static const uint8_t xr[7] = { 0xB2, 0xB3, 0xB4, 0xB5, 0xEB, 0xEC, 0xEE };
+      static uint32_t snx[7];
+      for (int i = 0; i < 7; i++) {
+        uint32_t v = SB[0x100 + xr[i]] & 0xFFFFFF;
+        if (v == snx[i] && reg[xr[i]] != v) {
+          DEV(static uint32_t nsx; if (nsx < WCAP(40)) { nsx++; clog("register %02x: capture %06x real %06x (frame %u)\n", xr[i], reg[xr[i]], v, gen); })
+          reg[xr[i]] = v;
+        }
+        snx[i] = v;
+      }
       static uint32_t snl[72];  // the same with the lights and materials block (0x53-0x9A)
       for (int i = 0; i < 72; i++) {
         uint32_t v = SB[0x153 + i] & 0xFFFFFF;

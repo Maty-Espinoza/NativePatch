@@ -13,9 +13,9 @@ static void clog(const char *fmt, ...);
 enum { R_MEMO = 1, R_READ = 2, R_LIMIT = 4, R_CURVE = 8, R_SKIP = 16 };
 #ifdef NP_DEV
 // Why a frame stayed not_read (the first cause of each frame): names for the "record not_read:" log line
-enum { NR_VERT, NR_SWZ, NR_TEX, NR_X_USED, NR_X_FORM, NR_X_TEX, NR_COUNT, NR_LIST_PC, NR_LIST_MAX, NR_CALL, NR_DEPTH, NR_LATE, NR_NO_END, NR_RESET, NR_BEHIND, NR_BEHIND_NEXT, NR_N };
+enum { NR_VERT, NR_SWZ, NR_TEX, NR_X_USED, NR_X_FORM, NR_X_TEX, NR_COUNT, NR_LIST_PC, NR_LIST_MAX, NR_CALL, NR_DEPTH, NR_LATE, NR_NO_END, NR_RESET, NR_BEHIND, NR_BEHIND_NEXT, NR_X_LATE, NR_N };
 static const char *nr_names[NR_N] = { "vertices", "swizzle_width", "texture", "xfer_over_texture", "xfer_form", "xfer_source", "draws_missed", "list_unreadable",
-  "list_too_long", "call_no_copy", "call_too_deep", "list_late", "list_no_end", "queue_reset", "behind", "after_behind" };
+  "list_too_long", "call_no_copy", "call_too_deep", "list_late", "list_no_end", "queue_reset", "behind", "after_behind", "xfer_after_sync" };
 #endif
 // Per-second statistics for the "record:" log line (ga accumulates, gr is the copy being written; us_*: time for
 // states, vertices, textures, palettes and DMA copies; gpu: textures written to a record the GPU could be reading;
@@ -26,7 +26,7 @@ static const char *nr_names[NR_N] = { "vertices", "swizzle_width", "texture", "x
 // per frame
 static struct { uint32_t fr, ok, memo, rd_fail, limit, curve, draws, st, kb, cl, us, d3, clear, blend, atest, swz, fmt[16], us_e, us_v, us_t, us_p, t_b, us_l, stomped, n_late, gpu, o_b, us_o,
   t_n[2], t_kb[2], t_dma[2], t_ord[2], t_calls, t_size[5], t_rb[6], v_dma, v_kb, v_runs, v_list, v_all, v_busy, v_full, t_same, t_changed, t_lines, t_tex,
-  c_hit, c_fill, c_chg, c_rec, c_fail, c_us, skip DEV(, nr[16]); } ga, gr;
+  c_hit, c_fill, c_chg, c_rec, c_fail, c_us, skip DEV(, nr[NR_N]); } ga, gr;
 // RN records: with fewer, the one the GPU just read would at times be the only free one, overwriting its textures
 #define RN 4
 static RFrame *rf[RN];                       // (cached LPDDR + uncached textures: ~2.4 MB each)
