@@ -43,8 +43,9 @@ SceUID sceKernelAllocMemBlock(const char *n, SceKernelMemBlockType t, SceSize s,
   blk[nblk] = arena + heap_n; heap_n += (s + 4095) & ~4095u; return nblk++;
 }
 int sceKernelGetMemBlockBase(SceUID u, void **b) { if (u < 0 || (uint32_t)u >= nblk) return -1; *b = blk[u]; return 0; }
-int sceGxmReserveVertexDefaultUniformBuffer(SceGxmContext *c, void **u) { static float b[256]; *u = b; return 0; }
-int sceGxmReserveFragmentDefaultUniformBuffer(SceGxmContext *c, void **u) { static float b[256]; *u = b; return 0; }
+static uint32_t g_ops, g_uf;  // per-draw GXM calls of the translator (programs, uniforms, textures, streams, draws) and uniform floats written
+int sceGxmReserveVertexDefaultUniformBuffer(SceGxmContext *c, void **u) { static float b[256]; *u = b; g_ops++; return 0; }
+int sceGxmReserveFragmentDefaultUniformBuffer(SceGxmContext *c, void **u) { static float b[256]; *u = b; g_ops++; return 0; }
 // What the context holds, for the dump: each program parameter (by program and name) with its last values, vertex stream, programs
 static struct { const SceGxmProgram *p; char name[8]; float v[16]; } par[64];
 static const void *stream; static uint32_t fprog, tex_w;
@@ -53,9 +54,9 @@ static const SceGxmVertexProgram *vprog;
 static uint32_t gn[4];  // vertices drawn by each GPU vertex program
 static uint32_t cur_w, set_w, in_rt;  // (in_rt: an intermediate image: the CPU path clips there, nd_v3 leaves it to the GPU, so its triangles differ)
 volatile SceUID nd_gfx_uid;
-void sceGxmSetVertexProgram(SceGxmContext *c, const SceGxmVertexProgram *p) { vprog = p; }
+void sceGxmSetVertexProgram(SceGxmContext *c, const SceGxmVertexProgram *p) { vprog = p; g_ops++; }
 int sceGxmTextureSetWidth(SceGxmTexture *t, unsigned w) { cur_w = w; return 0; }
-int sceGxmSetFragmentTexture(SceGxmContext *c, unsigned i, const SceGxmTexture *t) { set_w = cur_w; return 0; }  // (width in the context: draws wait to be joined)
+int sceGxmSetFragmentTexture(SceGxmContext *c, unsigned i, const SceGxmTexture *t) { set_w = cur_w; g_ops++; return 0; }  // (width in the context: draws wait to be joined)
 const SceGxmProgramParameter *sceGxmProgramFindParameterByName(const SceGxmProgram *p, const char *n) {
   for (int i = 0; i < 64; i++) {
     if (par[i].p == p && !strcmp(par[i].name, n)) return (void *)&par[i];
@@ -63,7 +64,7 @@ const SceGxmProgramParameter *sceGxmProgramFindParameterByName(const SceGxmProgr
   }
   return 0;
 }
-int sceGxmSetUniformDataF(void *u, const SceGxmProgramParameter *q, unsigned o, unsigned n, const float *d) { if (q) memcpy(((typeof(&par[0]))q)->v + o, d, n * 4); return 0; }
+int sceGxmSetUniformDataF(void *u, const SceGxmProgramParameter *q, unsigned o, unsigned n, const float *d) { g_ops++; g_uf += n; if (q) memcpy(((typeof(&par[0]))q)->v + o, d, n * 4); return 0; }
 int sceGxmShaderPatcherRegisterProgram(SceGxmShaderPatcher *s, const SceGxmProgram *p, SceGxmShaderPatcherId *i) { static uint32_t n; *i = (SceGxmShaderPatcherId)++n; return 0; }
 const SceGxmProgram *sceGxmShaderPatcherGetProgramFromId(SceGxmShaderPatcherId i) { return (const SceGxmProgram *)i; }
 // A fragment program is its shader, blend and mask
@@ -72,8 +73,8 @@ int sceGxmShaderPatcherCreateFragmentProgram(SceGxmShaderPatcher *s, SceGxmShade
   static uint32_t x[128][2], n;
   x[n][0] = (uint32_t)i; memcpy(&x[n][1], b, 4); *o = (void *)x[n++]; return 0;
 }
-void sceGxmSetFragmentProgram(SceGxmContext *c, const SceGxmFragmentProgram *p) { const uint32_t *x = (const void *)p; fprog = x ? x[0] << 28 ^ x[1] : 0; }
-int sceGxmSetVertexStream(SceGxmContext *c, unsigned i, const void *d) { stream = d; return 0; }
+void sceGxmSetFragmentProgram(SceGxmContext *c, const SceGxmFragmentProgram *p) { g_ops++; const uint32_t *x = (const void *)p; fprog = x ? x[0] << 28 ^ x[1] : 0; }
+int sceGxmSetVertexStream(SceGxmContext *c, unsigned i, const void *d) { stream = d; g_ops++; return 0; }
 int sceGxmTextureInitLinear(SceGxmTexture *t, const void *d, SceGxmTextureFormat f, unsigned w, unsigned h, unsigned m) { tex_w = w << 16 ^ h ^ f; cur_w = w; return 0; }
 int sceGxmTextureInitLinearStrided(SceGxmTexture *t, const void *d, SceGxmTextureFormat f, unsigned w, unsigned h, unsigned s) { tex_w = w << 16 ^ h ^ f; cur_w = w; return 0; }
 int sceGxmBeginScene(SceGxmContext *context, unsigned int flags, const SceGxmRenderTarget *renderTarget, const SceGxmValidRegion *validRegion, SceGxmSyncObject *vertexSyncObject, SceGxmSyncObject *fragmentSyncObject, const SceGxmColorSurface *colorSurface, const SceGxmDepthStencilSurface *depthStencil) { in_rt = validRegion && colorSurface != &rtb.cs; if (dmp) fprintf(dmp, "S\n"); return 0; }
@@ -134,7 +135,7 @@ static void triDump(SceGxmPrimitiveType t, const uint16_t *ix, unsigned n) {
 }
 static uint32_t gxm_calls;
 int sceGxmDraw(SceGxmContext *c, SceGxmPrimitiveType t, SceGxmIndexFormat f, const void *ix, unsigned n) {
-  if (ix) gxm_calls++;
+  if (ix) gxm_calls++, g_ops++;
   if (tri && ix && !in_rt) triDump(t, ix, n);
   for (int i = 0; i < 4; i++) if (vprog == gvp[i]) gn[i] += n;
   if (!dmp || !ix) return 0;  // (no ix: the presenter's quad, not the translator's)
@@ -184,9 +185,49 @@ static void gvMark(RFrame *f) {
     d->voff = VX | (TX_N - f->nvx);
   }
 }
+// (TR_STATS=1) What the 3D draws of the frame need from a GPU vertex program, per vertex type: draws, vertices, weights,
+// indices, lights on (directional/point/spot, with specular, powered diffuse), generated UV; and how many runs of draws
+// would join if only their bone matrices differ (same state, view/projection and lights)
+static void stats(RFrame *f) {
+  struct { uint32_t vt, d, v, ix, l[5], pt, sp, pw, gen[3], rev; } s[64] = {{0}};
+  uint32_t ns = 0, bones = 0, runs = 0, inrun = 0, ub = 0, pw = ~0u, pm = ~0u, pl = ~0u, pst = ~0u, pvt = ~0u, run = 0;
+  for (uint32_t i = 0; i < f->nd; i++) {
+    RDraw *d = &f->d[i];
+    const uint32_t *e = f->e[d->st];
+    if (d->vt >> 23 & 1 || RE(e, 0xD3) & 1) { pst = ~0u; continue; }  // (through mode or clear)
+    uint32_t k = 0;
+    while (k < ns && s[k].vt != d->vt) k++;
+    if (k == ns && ns < 64) s[ns++].vt = d->vt;
+    if (k == 64) continue;
+    s[k].d++; s[k].v += d->n; s[k].ix += d->ioff != 0; s[k].gen[(RE(e, 0xC0) & 3) > 1 ? 2 : RE(e, 0xC0) & 3]++;
+    uint32_t nl = 0;
+    if (RE(e, 0x17) & 1 && d->loff) {
+      const uint32_t *l = (const uint32_t *)(f->a + d->loff - 1) - 0x53;
+      for (int j = 0; j < 4; j++) if (RE(e, 0x18 + j) & 1) {
+        nl++; s[k].pt += (l[0x5F + j] >> 8 & 3) == 1 ? d->n : 0; s[k].sp += (l[0x5F + j] >> 8 & 3) == 2 ? d->n : 0;
+        s[k].pw += (l[0x5F + j] & 3) == 2 ? d->n : 0;
+      }
+      s[k].rev += RE(e, 0x51) & 1;
+    }
+    s[k].l[RE(e, 0x17) & 1 ? nl + 1 : 0] += d->n;
+    if (d->vt >> 9 & 3) {
+      bones += d->woff != pw;
+      ub += ((d->vt >> 14 & 7) + 1) * 48;  // (bytes of bone matrices its draw would set: 3 vec4 per weight)
+      int join = d->st == pst && d->vt == pvt && d->moff == pm && d->loff == pl && d->woff != pw;
+      if (join) { if (!run) runs++, inrun++; run = 1; inrun++; } else run = 0;
+    } else run = 0;
+    pw = d->woff; pm = d->moff; pl = d->loff; pst = d->st; pvt = d->vt;
+  }
+  printf("vt      draws  verts  v/draw indexed | lit: off  0L    1L    2L    3L    4L    | point spot powdiff | gen0 gen1 gen2 | rev\n");
+  for (uint32_t k = 0; k < ns; k++)
+    printf("%06x %6u %6u %6.1f %7u | %5u %5u %5u %5u %5u %5u | %5u %5u %5u | %4u %4u %4u | %u\n", s[k].vt, s[k].d, s[k].v, (float)s[k].v / s[k].d, s[k].ix,
+           s[k].l[0], s[k].l[1], s[k].l[2], s[k].l[3], s[k].l[4], s[k].l[5], s[k].pt, s[k].sp, s[k].pw, s[k].gen[0], s[k].gen[1], s[k].gen[2], s[k].rev);
+  printf("skinned: bone sets %u, bone bytes per frame %u | runs of draws differing only in bones %u, draws in them %u\n", bones, ub, runs, inrun);
+}
 int main(int argc, char **argv) {
   if (argc < 2) return 1;
   RFrame *f = load(argv[1]);
+  if (getenv("TR_STATS")) { stats(f); return 0; }
   if (getenv("TR_GV")) gvMark(f);
   if (getenv("TR_TRI")) tri = fopen(getenv("TR_TRI"), "w");
   int n = argc > 2 ? atoi(argv[2]) : 20, res = 0;
@@ -200,6 +241,7 @@ int main(int argc, char **argv) {
     CALLGRIND_TOGGLE_COLLECT;
     if (dmp) fprintf(dmp, "F %s\n", tnames[res]);
   }
-  printf("frames=%d draws=%u result=%s gpu_vertices=%u,%u,%u,%u gxm_draws=%u\n", n, f->nd, tnames[res], gn[0] / n, gn[1] / n, gn[2] / n, gn[3] / n, gxm_calls / n);
+  printf("frames=%d draws=%u result=%s gpu_vertices=%u,%u,%u,%u gxm_draws=%u gxm_ops=%u uniform_floats=%u vertices_in=%u cpu_vertices=%u\n", n, f->nd, tnames[res],
+         gn[0] / n, gn[1] / n, gn[2] / n, gn[3] / n, gxm_calls / n, g_ops / n, g_uf / n, t_c[TC_VIN] / n, (t_c[TC_VIN] - t_c[TC_VGPU]) / n);
   return 0;
 }

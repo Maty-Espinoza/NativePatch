@@ -77,3 +77,20 @@ frame by frame against a held capture, and a timing model per design.
 
 ## Crowd frame
 `tools/perf/data/gow_combat.bin.gz` is a God of War Ghost of Sparta combat frame (6642 draws: a shadow tile in a 1024-wide atlas, a glow chain of three images in one row, about 75K vertices); `test_ci.sh` fails if it is not drawn whole. `tools/perf/data/rr_crowd.bin.gz` is a real crowd frame of Ridge Racer (3688 draws, it ends in `vertex_out` near its last draws). `tr_gv.sh` prints `gxm_draws`, the `sceGxmDraw` calls of that frame: the CPU cost of GXM and part of the GPU cost scale with it, and `test_ci.sh` fails over 400.
+
+## Translator loop
+`sh tools/perf/tr_iterate.sh [--keep] [--fast] [--check <commit>]` judges a change to the translator (or to the GPU path: its
+programs in `nativedraw/shaders/`, `rgVGpu` in `record.c` and its copy `gvMark` in `translate_bench.c`) on the real frames:
+- **Correct first:** on every frame the GPU path sends the same triangles as the CPU path (`tr_gv`, with the GPU programs done in C
+  in `triV` of `translate_bench.c`: a new program needs its C copy there), the combat frame is drawn whole, the Ridge Racer crowd
+  stays under 400 GXM draws; `--check <commit>` also runs `tr_check` (the CPU path draws the same as that commit).
+- **Cost of `gow_combat` with the GPU path on** (as on the Vita): `arm_k` (thousands of real ARM instructions per frame, qemu,
+  ~3 min; `--fast` reuses the reference's), `gxm_ops` (per-draw GXM calls: programs, uniform buffers and data, textures, streams,
+  draws), `uniform_floats`, `gxm_draws`, `cpu_vertices`. `est_ms` = `arm_k` x 7.5 ns + `gxm_ops` x 5.4 us: the unit costs come from
+  NativeDraw 0.0.26 on the Vita (`tests/perf/runs/0.0.25.26_gow_cap_split`, combat, per HD frame: translator 230.9 ms, of them GXM
+  20.8 ms; the bench frame has the same shape: 60.5K vertices in, 32.4K on the CPU, against 56.6K and 34.9K there), so the
+  reference gives ~231 ms. GPU time is not modeled: in that run the GPU was idle ~90 % of the time.
+- Verdict against `tools/perf/tr_baseline.json`: KEEP (`est_ms` down over 1 %, all correct), NO CHANGE, REVERT.
+- `TR_STATS=1 build/perf/tr_it <frame.bin>` prints, per vertex type of the frame's 3D draws, what a GPU program needs (draws,
+  vertices per draw, indices, lights on and their kind, generated UV) and how many draws differ only in their bone matrices.
+- Shaders: `SHACC=<vita-shaders folder> sh nativedraw/shaders/build.sh` (`environment.md`); a new program is added to its list.
