@@ -12,7 +12,9 @@
 // Modes: hold (the game waits at the sync until its list is captured: the reference), stream:N (today's gate before
 // the enqueue: the capturer has walked N % of the list when the game reaches the sync, then the game rewrites what its
 // scene rewrites after a sync), photo (photo at the sync; env PHOTO_K frames of history, PHOTO_GAP pages joined into
-// one copy).
+// one copy, PHOTO_EXT pages added around each, PHOTO_LISTS list buffers the game rotates through (Ridge Racer moves
+// its list start every frame), PHOTO_SLOTS lists the history remembers, as the 4 of fpFlip in capture.c, PHOTO_BYLIST=0
+// the history of the last frames whatever their list).
 // Scenes: pieces (God of War: sublist pieces built in RAM, copied to VRAM with TRANSFER and called there, 8 VRAM slots
 // reused 3 times per frame, the RAM pieces rewritten right after the sync), pieces2 (the same with the pieces in two
 // buffers: nothing rewritten before the capture), ring (vertices in a ring buffer that moves every frame).
@@ -87,7 +89,7 @@ static void onFault(int s, siginfo_t *si, void *u) {
 #define SLOT 0x04100000u  // 8 VRAM slots of 512 bytes
 #define NP 24             // pieces (draws) per frame
 #define VT 0x80011Cu      // through mode, 8888 color, 16-bit position: 12 bytes per vertex
-static int scene, frames;
+static int scene, frames, nlists = 2;
 static uint32_t pc_, xs[NP], xd[NP], nx;  // writing position; transfers of the frame (source, slot) for the GE
 static void E(uint32_t c, uint32_t d) { *G(pc_) = c << 24 | (d & 0xFFFFFF); pc_ += 4; }
 static uint32_t stg(int f, int k) { return STG + (scene == 1 ? (f & 1) * 0x10000 : 0) + k * 512; }
@@ -109,7 +111,7 @@ static void build(int f) {
   nx = 0;
   for (int k = 0; k < NP; k++) verts(f, k, scene == 2 ? 48 : 4);
   if (scene != 2 && (f == 0 || scene == 1)) pieces(f);  // (pieces: after frame 0, written right after each sync)
-  pc_ = LST + (f & 1) * 0x4000;
+  pc_ = LST + (f % nlists) * 0x4000;
   E(0x12, VT); E(0x1E, 0); E(0x9C, 0); E(0x9D, 512); E(0xD2, 3); E(0xD5, 479 | 271 << 10);
   for (int k = 0; k < NP; k++) {
     if (scene == 2) { E(0x10, 0x080000); E(0x01, vtx(f, k) & 0xFFFFFF); E(0x55, f << 8 | k); E(0x04, 4 << 16 | 48); continue; }
@@ -121,7 +123,7 @@ static void build(int f) {
   }
   E(0x0F, 0); E(0x0C, 0);
 }
-static uint32_t listLen(int f) { return pc_ - (LST + (f & 1) * 0x4000); }
+static uint32_t listLen(int f) { return pc_ - (LST + (f % nlists) * 0x4000); }
 // What the GE does with the frame's list: its transfers, in order, into the real VRAM
 static void geRun(void) { for (uint32_t i = 0; i < nx; i++) memcpy(vram + (xd[i] & 0x1FFFFF), G(xs[i]), 512); }
 // The mirror copy NativeLink queues: the requested VRAM pages into copy c (mirror c & 1)
@@ -151,12 +153,18 @@ static uint32_t print(RFrame *f) {
 #define FN 40
 typedef struct { uint32_t fp[FN], pub[FN], miss[FN], held[FN], pages, runs, kb, touched, nf; } Run;
 static Run *out;
-static uint8_t hist[2][16][NPG];  // pages touched by the last walks of each list buffer
+static uint8_t hist[16][16][NPG];  // pages touched by the last walks of each list remembered (hk: its buffer, hn: walks)
+static int hk[16], hn[16];
 static void run(int s, int m, int arg) {
   scene = s; frames = s == 2 ? FN : 16; photo = m == 2;
   int K = getenv("PHOTO_K") ? atoi(getenv("PHOTO_K")) : 4, GAP = getenv("PHOTO_GAP") ? atoi(getenv("PHOTO_GAP")) : 4,
-      EXT = getenv("PHOTO_EXT") ? atoi(getenv("PHOTO_EXT")) : 8;
+      EXT = getenv("PHOTO_EXT") ? atoi(getenv("PHOTO_EXT")) : 8, SL = getenv("PHOTO_SLOTS") ? atoi(getenv("PHOTO_SLOTS")) : 16, sl = 0, rr = 0,
+      BY = getenv("PHOTO_BYLIST") ? atoi(getenv("PHOTO_BYLIST")) : 1;
+  nlists = getenv("PHOTO_LISTS") ? atoi(getenv("PHOTO_LISTS")) : 2;
   if (K > 16) K = 16;
+  if (SL < 1 || SL > 16) SL = 16;
+  if (nlists < 1 || nlists > 64) nlists = 2;
+  for (int k = 0; k < 16; k++) hk[k] = -1;
   if (photo) {
     live = calloc(1, NPG * 4096);
     struct sigaction sa = { 0 }; sa.sa_sigaction = onFault; sa.sa_flags = SA_SIGINFO | SA_NODEFER; sigaction(SIGSEGV, &sa, NULL);
@@ -164,7 +172,7 @@ static void run(int s, int m, int arg) {
   level = 1; reg_on = 1; regInit(); mir_on = 1; SB[0] = SB_MAGIC; SB[1] = 5;
   int last = -1;
   for (int f = 0; f < frames; f++) {
-    uint32_t ord = f + 1, lst = LST + (f & 1) * 0x4000;
+    uint32_t ord = f + 1, lst = LST + (f % nlists) * 0x4000;
     build(f);
     uint32_t n = listLen(f), stall = m == 1 && arg < 100 ? lst + (n * arg / 100 & ~3u) : 0;
     ev(EV_ENQ, lst, stall, 7, ord);
@@ -175,7 +183,9 @@ static void run(int s, int m, int arg) {
       static uint8_t u[NPG];
       int any = 0;
       memset(u, 0, sizeof u); memset(inph, 0, sizeof inph); memset(touch, 0, sizeof touch); nmiss = ntouch = 0;
-      for (int k = 0; k < K; k++) for (uint32_t p = 0; p < NPG; p++) u[p] |= hist[f & 1][k][p];
+      for (sl = 0; sl < SL && hk[sl] != (BY ? f % nlists : 0); sl++) {}
+      if (sl == SL) { sl = rr++ % SL; hk[sl] = BY ? f % nlists : 0; hn[sl] = 0; }  // (a list not remembered: it takes the oldest place)
+      for (int k = 0; k < K && k < hn[sl]; k++) for (uint32_t p = 0; p < NPG; p++) u[p] |= hist[sl][k][p];
       for (uint32_t p = 0; p < NPG; p++)  // each touched page with EXT pages around it (buffers that move)
         if (u[p]) { any = 1; for (int q = (int)p - EXT; q <= (int)p + EXT; q++) if (q >= 0 && q < (int)NPG) inph[q] = 1; }
       held = !any;  // a list buffer never walked: the game waits at the sync (as hold)
@@ -202,7 +212,7 @@ static void run(int s, int m, int arg) {
     ev(EV_FLIP, 0x04000000, 512, 0, 0);
     if (photo) {
       mprotect(VIEW, NPG * 4096, PROT_READ | PROT_WRITE);
-      memcpy(hist[f & 1][(f >> 1) % K], touch, NPG);
+      memcpy(hist[sl][hn[sl]++ % K], touch, NPG);
       out->miss[f] = held ? 0 : nmiss; out->touched += ntouch;  // (held: the live RAM is the frame's own)
     }
     out->held[f] = held;
@@ -262,7 +272,18 @@ static int check(void) {
     printf("%s %s: stream:0 %s (right %d, wrong %d, dropped %d)\n", ok ? "ok  " : "FAIL", SCN[s], s == 2 ? "is right" : "drops every frame", t.right, t.wrong, t.dropped);
     bad += !ok;
   }
-  return bad;
+  // Ridge Racer moves its list start every frame: with 8 list buffers and 4 lists remembered, a history by list leaves
+  // every frame waiting for a live walk; the history of the last frames, whatever their list, leaves none and draws
+  // nothing wrong
+  setenv("PHOTO_LISTS", "8", 1); setenv("PHOTO_SLOTS", "4", 1);
+  Run *ref = fork1(0, 0, 100), *bl = fork1(0, 2, 0);
+  setenv("PHOTO_BYLIST", "0", 1);
+  Run *rc = fork1(0, 2, 0);
+  unsetenv("PHOTO_LISTS"); unsetenv("PHOTO_SLOTS"); unsetenv("PHOTO_BYLIST");
+  Sum a = judge(bl, ref), c = judge(rc, ref);
+  int n = ref->nf - 2, ok = a.held == n && !c.held && !c.wrong && c.right >= n - 2;
+  printf("%s pieces, 8 lists: by list %d of %d wait; by recent frames none waits (right %d, wrong %d)\n", ok ? "ok  " : "FAIL", a.held, n, c.right, c.wrong);
+  return bad + !ok;
 }
 int main(int argc, char **argv) {
   setvbuf(stdout, NULL, _IONBF, 0);

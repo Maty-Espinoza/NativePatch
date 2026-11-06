@@ -224,16 +224,18 @@ drops, the data life samples. Sublist memory can stay (it saves interpreting) wi
 Memory: a photo is ~0.5-2 MB of RAM pages plus ~0.6 MB of VRAM pages; two take ~3-5 MB. The readers' cache (0.5 MB) and the
 sublist pool go back. Memory is short today (TODO): it may have to start with one photo.
 
-**Timing model** (`tools/perf/sync_model.py`: the logs above, measured unit costs; the GE wait, the footprint and the God of
-War play transfers are estimates until phase 0). Game fps / HD frames per second the capturer allows (translator and GPU
-apart), Vita DMA at 512 MB/s:
+**Timing model** (`tools/perf/sync_model.py`: the logs above and the phase 0 measures of NativeDraw 0.0.25.21; the GE wait
+is still an estimate). Game fps / HD frames per second the capturer allows (translator and GPU apart), DMA into cached memory
+at 429 MB/s and 170 us per call:
 
-| Game | Today (gate before enqueue) | `hold_game` + `gate_sync` | Photo, Vita DMA |
-|---|---|---|---|
-| God of War menu | 26 / 0 (transfers after the sync) | 15 / 15 | 30 / 27 |
-| God of War play | 26 / 0 | 8 / 8 | 25 / 12 (interpreting limits: 83 ms) |
-| Ridge Racer crowd | 46 / 31 (lists read late) | 31 / 31 | 60 / 41 |
-| Ridge Racer race | 60 / 60 | 60 / 60 | 60 / 60 |
+| Game | Today (gate before enqueue) | `hold_game` + `gate_sync` | Hold, transfers by copy (phase 1) | Photo, Vita DMA |
+|---|---|---|---|---|
+| God of War menu | 26 / 0 (transfers after the sync) | 9.7 / 9.7 (measured) | 12.5 / 12.5 | 30 / 9.7 (capture 81 ms, 21 % of frames with a miss) |
+| God of War play | 26 / 0 | 5.9 / 5.9 (measured) | 8.6 / 8.6 | 21 / 6.7 (capture 116 ms, copy 5.7 MB) |
+| Ridge Racer crowd | 46 / 31 (lists read late) | 31 / 31 | - | 34 / 34 by list (80 % no history); 51 / 39 by the last frames |
+| Ridge Racer race | 60 / 60 | 60 / 60 | - | 60 / 60 |
+
+In God of War the photo frees the game but the HD stays at the capturer's speed: interpreting is the limit (phase 4).
 
 The `memory bench` line every run writes at start measures DMA from PSP RAM into the Vita's **uncached** memory at 480-570 MB/s, but the CPU reads that memory at only ~100 MB/s: the photo has to land in cached memory, and DMA into cached memory (with the cache invalidated) is not measured yet (phase 0). With DMA at 139 MB/s (KBENCH, 1 MB) God of War play drops to 22 fps and the crowd to 55: the copy no longer fits in the GE wait.
 A photo by the PSP's GE into the shared zone (VPROBE: 4.8 ms per MB) costs the game the whole copy, because it runs after
@@ -247,6 +249,25 @@ three scenes, each frame compared with the same frame captured with the game hel
 | `pieces` (God of War: pieces built in RAM, copied to 8 reused VRAM slots, rewritten after the sync) | all dropped | 13 right, 1 dropped (warm-up miss), 0 wrong; 182 KB and 2.5 copies per frame |
 | `pieces2` (the same, pieces in two buffers) | all dropped | 13 right, 1 dropped, 0 wrong |
 | `ring` (vertices in a ring that moves every frame) | all right | 34 right, 4 dropped (misses at each wrap of the ring), 0 wrong |
+| `pieces`, 8 list buffers in turn and 4 lists remembered (Ridge Racer) | - | by list: all 14 wait for a live walk; by the last frames: 13 right, 1 dropped, 0 wrong |
+
+**Phase 0 results** (NativeDraw 0.0.25.21, God of War menu and play with `hold_game` + `gate_sync`, Ridge Racer race; logs in
+`tests/perf/runs/0.0.25.21_phase0`):
+- `xferMirror`: 19.5 MB/s in every scene. Menu 59 transfers, 593 KB, **30 ms** per frame (the deduced 34 ms holds); play 99
+  transfers, 1,388 KB, **70 ms** per frame (about 40 % of the 170 ms frame). Ridge Racer: one transfer every two frames, its
+  pages mostly without a copy (0.15 ms).
+- `memory bench (DMA into cached)`: DMA from PSP RAM into cached memory 429 MB/s; reading it back 213 MB/s (twice the uncached
+  ~100); **one 4 KB call 181 us**: a fixed cost of ~170 us per call, so DMA beats the CPU copy (91 MB/s) only from ~20 KB, and
+  beats `xferMirror`'s word by word from ~3.5 KB. There is no user call to invalidate the cache: the DMA call keeps it right.
+- Footprint (pages of 4 KB read per frame) and what the photo would copy with the lab's prediction: God of War menu 322 pages
+  (1.3 MB), copy 834 pages (3.3 MB) in 17 pieces; play 511 pages (2 MB), copy 1,458 pages (5.7 MB) in 37 pieces. The 8 pages
+  of margin almost triple the copy. **21-22 % of the frames had a miss** (5-13 pages): those would not be drawn.
+- Ridge Racer race: ~150-170 pages per frame, but **70-90 % of the frames had no history**: its list start moves every
+  frame among more than the 4 lists remembered, so a history by list start never fills. The lab (`PHOTO_LISTS=8`,
+  `PHOTO_SLOTS=4`) does the same; with the history of the last frames whatever their list (`PHOTO_BYLIST=0`) no frame waits
+  and none is wrong, if the margin covers the list's own jump (`sync_lab check` keeps it). 0.0.25.22 measures that variant on
+  the Vita (`photo footprint by the last frames`, with 8 and 4 pages of margin).
+- `photo_probe` (does the copy slow the GE?): not measured yet (needs God of War without `hold_game`).
 
 **Phases** (each checked on the Vita before the next; the photo is a switch until it is the default):
 0. **Measure, nothing changes** (development build): (a) `xferMirror` time per frame in `capture split`; (b) DMA from PSP RAM to

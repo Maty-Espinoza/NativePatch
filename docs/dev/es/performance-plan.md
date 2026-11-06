@@ -232,16 +232,18 @@ quedar (ahorra interpretar), con comprobaciones que ahora son baratas.
 Memoria: una foto son ~0,5-2 MB de páginas de RAM más ~0,6 MB de páginas de VRAM; dos ocupan ~3-5 MB. Se recuperan la caché
 de los lectores (0,5 MB) y el pozo de sublistas. Hoy falta memoria (TODO): quizás haya que empezar con una sola foto.
 
-**Modelo de tiempos** (`tools/perf/sync_model.py`: los logs de arriba y costos unitarios medidos; la espera al GE, la huella y
-las copias del combate de God of War son estimaciones hasta la fase 0). fps del juego / frames HD por segundo que permite el
-capturador (traductor y GPU aparte), DMA de la Vita a 512 MB/s:
+**Modelo de tiempos** (`tools/perf/sync_model.py`: los logs de arriba y las mediciones de la fase 0 de NativeDraw 0.0.25.21;
+la espera al GE sigue siendo estimada). fps del juego / frames HD por segundo que permite el capturador (traductor y GPU
+aparte), DMA a memoria con caché a 429 MB/s y 170 us por llamada:
 
-| Juego | Hoy (compuerta antes de encolar) | `hold_game` + `gate_sync` | Foto, DMA de la Vita |
-|---|---|---|---|
-| God of War, menú | 26 / 0 (copias después del sync) | 15 / 15 | 30 / 27 |
-| God of War, combate | 26 / 0 | 8 / 8 | 25 / 12 (limita interpretar: 83 ms) |
-| Ridge Racer, público | 46 / 31 (listas leídas tarde) | 31 / 31 | 60 / 41 |
-| Ridge Racer, carrera | 60 / 60 | 60 / 60 | 60 / 60 |
+| Juego | Hoy (compuerta antes de encolar) | `hold_game` + `gate_sync` | Retenido, copias por copia (fase 1) | Foto, DMA de la Vita |
+|---|---|---|---|---|
+| God of War, menú | 26 / 0 (copias después del sync) | 9,7 / 9,7 (medido) | 12,5 / 12,5 | 30 / 9,7 (captura 81 ms, 21 % de frames con fallo) |
+| God of War, combate | 26 / 0 | 5,9 / 5,9 (medido) | 8,6 / 8,6 | 21 / 6,7 (captura 116 ms, copia 5,7 MB) |
+| Ridge Racer, público | 46 / 31 (listas leídas tarde) | 31 / 31 | - | 34 / 34 por lista (80 % sin historia); 51 / 39 por los últimos frames |
+| Ridge Racer, carrera | 60 / 60 | 60 / 60 | - | 60 / 60 |
+
+En God of War la foto libera al juego pero el HD sigue a la velocidad del capturador: el límite es interpretar (fase 4).
 
 La línea `memory bench` que cada corrida escribe al arrancar mide el DMA de la RAM del PSP a la memoria **sin caché** de la Vita en 480-570 MB/s, pero la CPU lee esa memoria a solo ~100 MB/s: la foto tiene que quedar en memoria con caché, y el DMA a memoria con caché (invalidando la caché) todavía no está medido (fase 0). Con el DMA a 139 MB/s (KBENCH, 1 MB) el combate de God of War baja a 22 fps y el público a 55: la copia ya no cabe en la
 espera al GE. Una foto hecha por el GE del PSP en la zona compartida (VPROBE: 4,8 ms por MB) le cuesta al juego la copia
@@ -255,6 +257,28 @@ guionado en tres escenas; cada frame se compara con el mismo frame capturado con
 | `pieces` (God of War: pedazos armados en RAM, copiados a 8 lugares de VRAM reutilizados, reescritos después del sync) | todos fuera | 13 bien, 1 fuera (fallo al arrancar), 0 mal; 182 KB y 2,5 copias por frame |
 | `pieces2` (lo mismo, pedazos en dos búferes) | todos fuera | 13 bien, 1 fuera, 0 mal |
 | `ring` (vértices en un anillo que avanza cada frame) | todos bien | 34 bien, 4 fuera (fallos en cada vuelta del anillo), 0 mal |
+| `pieces`, 8 búferes de lista por turno y 4 listas recordadas (Ridge Racer) | - | por lista: los 14 esperan un recorrido en vivo; por los últimos frames: 13 bien, 1 fuera, 0 mal |
+
+**Resultados de la fase 0** (NativeDraw 0.0.25.21, God of War menú y combate con `hold_game` + `gate_sync`, carrera de Ridge
+Racer; logs en
+`tests/perf/runs/0.0.25.21_phase0`):
+- `xferMirror`: 19,5 MB/s en todas las escenas. Menú 59 copias, 593 KB, **30 ms** por frame (se cumplen los 34 ms deducidos);
+  combate 99 copias, 1.388 KB, **70 ms** por frame (cerca del 40 % del frame de 170 ms). Ridge Racer: una copia cada dos
+  frames, con sus páginas casi todas sin copia (0,15 ms).
+- `memory bench (DMA into cached)`: DMA de RAM del PSP a memoria con caché 429 MB/s; leerla de vuelta 213 MB/s (el doble que la
+  sin caché, ~100); **una llamada de 4 KB 181 us**: un costo fijo de ~170 us por llamada, así que el DMA le gana a la copia de la
+  CPU (91 MB/s) recién desde ~20 KB, y a la copia palabra por palabra de `xferMirror` desde ~3,5 KB. No hay función de usuario
+  para invalidar la caché: la llamada de DMA la deja bien.
+- Huella (páginas de 4 KB leídas por frame) y lo que copiaría la foto con la predicción del laboratorio: menú de God of War 322
+  páginas (1,3 MB), copia 834 páginas (3,3 MB) en 17 pedazos; combate 511 páginas (2 MB), copia 1.458 páginas (5,7 MB) en 37
+  pedazos. El margen de 8 páginas casi triplica la copia. **El 21-22 % de los frames tuvo un fallo** (5-13 páginas): esos no
+  se dibujarían.
+- Carrera de Ridge Racer: ~150-170 páginas por frame, pero **el 70-90 % de los frames no tenía historia**: el inicio de su lista
+  cambia cada frame entre más de las 4 listas que se recuerdan, así que una historia por inicio de lista nunca se llena. El
+  laboratorio (`PHOTO_LISTS=8`, `PHOTO_SLOTS=4`) hace lo mismo; con la historia de los últimos frames, sea cual sea su lista
+  (`PHOTO_BYLIST=0`), ningún frame espera y ninguno sale mal, si el margen cubre el salto de la propia lista (`sync_lab check`
+  lo mantiene). La 0.0.25.22 mide esa variante en la Vita (`photo footprint by the last frames`, con 8 y 4 páginas de margen).
+- `photo_probe` (¿la copia frena al GE?): sin medir todavía (hace falta God of War sin `hold_game`).
 
 **Fases** (cada una se comprueba en la Vita antes de la siguiente; la foto es una opción hasta que pase a ser la normal):
 0. **Medir, sin cambiar nada** (versión de desarrollo): (a) tiempo de `xferMirror` por frame en `capture split`; (b) DMA de la

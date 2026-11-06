@@ -238,10 +238,10 @@ static void clPut(uint32_t b, uint32_t ord, const uint32_t *src) {
 #ifdef NP_DEV
 // Photo measure: pages of PSP RAM (0x08000000 to 0x0A000000) read for the frame (fp_now, marked by fpMark from the
 // capturer and the record), the start of its first list (fp_key), the pages read by the last 4 frames of up to 4 first
-// lists (fp_h, fp_hk, fp_hn: how many frames each has) and the counts of fpFlip (fp_s; fp_r: those of the last second)
+// lists (fp_h, fp_hk, fp_hn: how many frames each has), those of the last 4 frames (fp_g, fp_gn) and the counts of fpFlip (fp_s; fp_r: those of the last second)
 // fp_run: the pieces fpFlip predicted last (first page, pages), copied by fpProbe with switch photo_probe
 #define FP_N 8192
-static uint32_t fp_now[FP_N / 32], fp_key, fp_hk[4], fp_hn[4], fp_h[4][4][FP_N / 32], fp_s[9], fp_r[9], fp_run[256][2], fp_nrun;
+static uint32_t fp_now[FP_N / 32], fp_key, fp_hk[4], fp_hn[4], fp_h[4][4][FP_N / 32], fp_g[4][FP_N / 32], fp_gn, fp_s[17], fp_r[17], fp_run[256][2], fp_nrun;
 static int photo_probe;
 static void fpMark(uint32_t a, uint32_t n) {
   if (a < 0x08000000u || a >= 0x0A000000u || !n) return;
@@ -902,34 +902,48 @@ static void xferMirror(uint32_t s, uint32_t t, uint32_t bp) {
       if (wlog && (xm_skip != k1 || xm_out != k2) && nlog < 4000) { nlog++; clog("vram copy applied: ram %08x to %08x, %ux%u x%u: pieces applied %u, without a copy %u, outside VRAM %u (frame %u)\n", s0, d0, w / bp, h, bp, xm_ok - k0, xm_skip - k1, xm_out - k2, gen); })
 }
 #ifdef NP_DEV
+// What the photo would copy from the h page maps m (the pages in them, ext more on each side, in pieces joined when 4 or
+// fewer pages apart): *pred pages in *runs pieces (with run, the first 256 in fp_run) and *miss pages of the frame outside
+static void fpPredict(uint32_t (*m)[FP_N / 32], uint32_t h, uint32_t ext, int run, uint32_t *pred, uint32_t *runs, uint32_t *miss) {
+  static uint32_t u[FP_N / 32], pr[FP_N / 32];
+  uint32_t n = 0;
+  sceClibMemset(u, 0, sizeof u); sceClibMemset(pr, 0, sizeof pr);
+  for (uint32_t j = 0; j < h; j++) for (uint32_t w = 0; w < FP_N / 32; w++) u[w] |= m[j][w];
+  for (uint32_t p = 0; p < FP_N; p++)
+    if (u[p >> 5] >> (p & 31) & 1) for (uint32_t q = p < ext ? 0 : p - ext; q <= p + ext && q < FP_N; q++) pr[q >> 5] |= 1u << (q & 31);
+  for (uint32_t p = 0, e = 0; p < FP_N; p++) {
+    if (!(pr[p >> 5] >> (p & 31) & 1)) continue;
+    if (!e || p - e > 4) { if (run && n < 256) { fp_run[n][0] = p; fp_run[n][1] = 0; } n++; }
+    else for (; e < p; e++) { pr[e >> 5] |= 1u << (e & 31); if (run && n <= 256) fp_run[n - 1][1]++; }
+    if (run && n <= 256) fp_run[n - 1][1]++;
+    e = p + 1;
+  }
+  if (run) fp_nrun = n < 256 ? n : 256;
+  *pred = *miss = 0; *runs = n;
+  for (uint32_t w = 0; w < FP_N / 32; w++) { *pred += __builtin_popcount(pr[w]); *miss += __builtin_popcount(fp_now[w] & ~pr[w]); }
+}
 // At the flip: the frame's pages, what the photo would copy (the pages of the last 4 frames with the same first list, 8
-// more on each side, in pieces joined when 4 or fewer pages apart) and the pages it would miss; then the frame goes into
-// the history of its first list. fp_s: frames, pages, pages copied, pieces, pages missed, frames with a miss, frames with
-// no history (the game would wait for a live walk)
+// more on each side) and the pages it would miss; the same from the last 4 frames whatever their list (fp_g), with 8 and
+// with 4 pages more; then the frame goes into both histories. fp_s: frames, pages, pages copied, pieces, pages missed,
+// frames with a miss, frames with no history (the game would wait for a live walk); 9-16, by the last frames: copied,
+// pieces, pages missed and frames with a miss with 8 pages more, the same with 4
 static void fpFlip(void) {
-  static uint32_t u[FP_N / 32], pr[FP_N / 32], rr;
-  uint32_t k, h, pages = 0, pred = 0, runs = 0, miss = 0;
+  static uint32_t rr;
+  uint32_t k, h, pages = 0, pred, runs, miss;
   for (k = 0; k < 4 && fp_hk[k] != fp_key; k++) {}
   if (k == 4) { k = rr++ & 3; fp_hk[k] = fp_key; fp_hn[k] = 0; }
   h = fp_hn[k] < 4 ? fp_hn[k] : 4;
-  sceClibMemset(u, 0, sizeof u); sceClibMemset(pr, 0, sizeof pr);
-  for (uint32_t j = 0; j < h; j++) for (uint32_t w = 0; w < FP_N / 32; w++) u[w] |= fp_h[k][j][w];
-  for (uint32_t p = 0; p < FP_N; p++)
-    if (u[p >> 5] >> (p & 31) & 1) for (uint32_t q = p < 8 ? 0 : p - 8; q <= p + 8 && q < FP_N; q++) pr[q >> 5] |= 1u << (q & 31);
-  for (uint32_t p = 0, e = 0; p < FP_N; p++) {
-    if (!(pr[p >> 5] >> (p & 31) & 1)) continue;
-    if (!e || p - e > 4) { if (runs < 256) { fp_run[runs][0] = p; fp_run[runs][1] = 0; } runs++; }
-    else for (; e < p; e++) { pr[e >> 5] |= 1u << (e & 31); if (runs <= 256) fp_run[runs - 1][1]++; }
-    if (runs <= 256) fp_run[runs - 1][1]++;
-    e = p + 1;
-  }
-  fp_nrun = runs < 256 ? runs : 256;
-  for (uint32_t w = 0; w < FP_N / 32; w++) {
-    pages += __builtin_popcount(fp_now[w]); pred += __builtin_popcount(pr[w]); miss += __builtin_popcount(fp_now[w] & ~pr[w]);
-  }
+  fpPredict(fp_h[k], h, 8, 1, &pred, &runs, &miss);
+  for (uint32_t w = 0; w < FP_N / 32; w++) pages += __builtin_popcount(fp_now[w]);
   fp_s[0]++; fp_s[1] += pages; fp_s[2] += pred; fp_s[3] += runs;
   if (h) { fp_s[4] += miss; fp_s[5] += miss > 0; } else fp_s[6]++;
+  if ((h = fp_gn < 4 ? fp_gn : 4))
+    for (uint32_t x = 0; x < 2; x++) {
+      fpPredict(fp_g, h, x ? 4 : 8, 0, &pred, &runs, &miss);
+      fp_s[9 + 4 * x] += pred; fp_s[10 + 4 * x] += runs; fp_s[11 + 4 * x] += miss; fp_s[12 + 4 * x] += miss > 0;
+    }
   sceClibMemcpy(fp_h[k][fp_hn[k]++ & 3], fp_now, sizeof fp_now);
+  sceClibMemcpy(fp_g[fp_gn++ & 3], fp_now, sizeof fp_now);
   sceClibMemset(fp_now, 0, sizeof fp_now); fp_key = 0;
 }
 // Switch photo_probe, at each sync the capturer handles: copies by DMA the pieces of the last prediction into a buffer
@@ -1962,7 +1976,9 @@ static int repThread(SceSize args, void *argp) {
       if (xm_r[0]) clog("  vram copies (per frame): calls=%u KB=%u us=%u\n", xm_r[0] / f, xm_r[1] / f >> 10, xm_r[2] / f);
       if (fp_r[0]) { uint32_t g = fp_r[0];
         clog("  photo footprint (per frame): frames=%u pages=%u copied=%u pieces=%u missed=%u | frames with a miss %u, with no history %u | probe KB=%u us=%u\n",
-             g, fp_r[1] / g, fp_r[2] / g, fp_r[3] / g, fp_r[4] / g, fp_r[5], fp_r[6], fp_r[7] / g, fp_r[8] / g); }
+             g, fp_r[1] / g, fp_r[2] / g, fp_r[3] / g, fp_r[4] / g, fp_r[5], fp_r[6], fp_r[7] / g, fp_r[8] / g);
+        clog("  photo footprint by the last frames (per frame): 8 more copied=%u pieces=%u missed=%u frames with a miss %u | 4 more copied=%u pieces=%u missed=%u frames with a miss %u\n",
+             fp_r[9] / g, fp_r[10] / g, fp_r[11] / g, fp_r[12], fp_r[13] / g, fp_r[14] / g, fp_r[15] / g, fp_r[16]); }
 #endif
       if (!level) goto sync;  // (minimum: only this line and the vram and sync one)
       if (reg_on) {  // frame record
