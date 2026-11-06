@@ -84,7 +84,8 @@ programs in `nativedraw/shaders/`, `rgVGpu` in `record.c` and its copy `gvMark` 
 - **Correct first:** on every frame the GPU path sends the same triangles as the CPU path (`tr_gv`, with the GPU programs done in C
   in `triV` of `translate_bench.c`: a new program needs its C copy there), the combat frame is drawn whole, the Ridge Racer crowd
   stays under 400 GXM draws; `--check <commit>` also runs `tr_check` (the CPU path draws the same as that commit).
-- **Cost of `gow_combat` with the GPU path on** (as on the Vita): `arm_k` (thousands of real ARM instructions per frame, qemu,
+- **Cost of `gow_combat` and `gow_enemies` with the GPU path on** (as on the Vita; `est_ms` is their sum, each frame's numbers are
+  printed too; `gow_enemies` is a heavier combat frame, 8429 draws, with a point light and lit 0x1BE vertices): `arm_k` (thousands of real ARM instructions per frame, qemu,
   ~3 min; `--fast` reuses the reference's), `gxm_ops` (per-draw GXM calls: programs, uniform buffers and data, textures, streams,
   draws), `uniform_floats`, `gxm_draws`, `cpu_vertices`. `est_ms` = `arm_k` x 7.5 ns + `gxm_ops` x 5.4 us: the unit costs come from
   NativeDraw 0.0.26 on the Vita (`tests/perf/runs/0.0.25.26_gow_cap_split`, combat, per HD frame: translator 230.9 ms, of them GXM
