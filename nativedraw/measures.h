@@ -12,7 +12,8 @@
   X(cpu_verts, cpu_verts)       /* no vertices for the GPU, to compare */ \
   X(no_capture, no_capture)     /* the Vita walks nothing and marks the lists captured */ \
   X(ge_timing, probe_ge)        /* how long the GE works and how long the game waits for it */ \
-  X(walk_log, wlog)             /* walk diagnostics: VRAM sublists, transfers, BASE, list limit, up to 4000 lines each */
+  X(walk_log, wlog)             /* walk diagnostics: VRAM sublists, transfers, BASE, list limit, up to 4000 lines each */ \
+  X(walk_trace, wtrace)         /* everything the walk does around VRAM sublists for 600 frames: nativedraw_trace.log */
 // Drawing side
 #define MEASURES_DRAW(X) \
   X(gpu_timer, c_wanted)        /* how long the GPU takes on each scene */ \

@@ -904,6 +904,88 @@ static void xferNote(uint32_t s, uint32_t t, uint32_t bp) {
   }
   xc[i].s = src; xc[i].t = dst; xc[i].n = n; xc[i].gen = gen;
 }
+// --- Walk trace (switch walk_trace): ux0:pspemu/nativedraw_trace.log ---
+// Everything the walk does around VRAM sublists, from the first RAM to VRAM transfer for TR_FRAMES frames, in a 16 MB
+// buffer of the spare block that the log thread writes out (nothing is dropped until it is full). Outside the window only
+// the suspicious events: a BASE or transfer register changed inside a VRAM sublist, a transfer that is not to the real VRAM.
+#define TR_FRAMES 600
+static int wtrace;
+static char *tb;
+static volatile uint32_t tb_w;
+static uint32_t tb_n, tb_r, tb_drop, t_g0 = ~0u, t_seq, t_ctx;
+static struct { uint32_t s, t, n, q; } tx[64];  // last transfers to VRAM in order (q), to find the latest one covering an address
+#define TR_ON (tb && t_g0 != ~0u && gen - t_g0 < TR_FRAMES)
+static void tlog(const char *fmt, ...) {
+  if (!tb) return;
+  char b[600];
+  int n = sceClibSnprintf(b, 24, "%u %u ", now() / 1000, gen);
+  va_list ap; va_start(ap, fmt);
+  n += sceClibVsnprintf(b + n, sizeof b - n, fmt, ap); va_end(ap);
+  if (n > (int)sizeof b - 1) { n = sizeof b - 1; b[n - 1] = '\n'; }
+  if (tb_w + n > tb_n) { tb_drop++; return; }
+  sceClibMemcpy(tb + tb_w, b, n);
+  __sync_synchronize();
+  tb_w += n;
+}
+// Latest transfer that covers address a: its index in tx, or -1
+static int txFind(uint32_t a) {
+  int k = -1;
+  for (int i = 0; i < 64; i++) if (tx[i].n && a - tx[i].t < tx[i].n && (k < 0 || tx[i].q > tx[k].q)) k = i;
+  return k;
+}
+// 'why' at pc of list l: the CALL stack and 16 words from pc - 32 as the mirror holds them and as the RAM source of the
+// latest transfer covering pc holds them now (1000 times at most)
+static void trCtx(const char *why, List *l, uint32_t pc) {
+  if (!tb || t_ctx >= 1000) return;
+  t_ctx++;
+  uint32_t a = pc - 32, m[16] = { 0 }, r[16] = { 0 }, ra = vtr(a);
+  int k = txFind(pc);
+  if (ra) for (int i = 0; i < 16; i++) m[i] = ((volatile uint32_t *)PSP(ra))[i];
+  if (k >= 0 && a >= tx[k].t && ramEnd(tx[k].s + (a - tx[k].t)) >= tx[k].s + (a - tx[k].t) + 64)
+    for (int i = 0; i < 16; i++) r[i] = ((volatile uint32_t *)PSP(tx[k].s + (a - tx[k].t)))[i];
+  tlog("CONTEXT %s at %08x | list %u start %08x sublevel %u stack %08x %08x %08x %08x | base %06x off %08x | latest transfer %08x to %08x %u bytes, %u transfers ago\n",
+       why, pc, l->ord, l->lo, l->sp, l->stk[0][0], l->stk[1][0], l->stk[2][0], l->stk[3][0], reg[0x10], l->off,
+       k >= 0 ? tx[k].s : 0, k >= 0 ? tx[k].t : 0, k >= 0 ? tx[k].n : 0, k >= 0 ? t_seq - tx[k].q : 0);
+  tlog("  mirror %08x %08x %08x %08x %08x %08x %08x %08x > %08x %08x %08x %08x %08x %08x %08x %08x\n",
+       m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9], m[10], m[11], m[12], m[13], m[14], m[15]);
+  tlog("  ram    %08x %08x %08x %08x %08x %08x %08x %08x > %08x %08x %08x %08x %08x %08x %08x %08x\n",
+       r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9], r[10], r[11], r[12], r[13], r[14], r[15]);
+}
+// A transfer (0xEA) at pc of list l: its registers, where it goes and how much of it reached the mirror (a, b, o: pieces
+// applied, without a copy, outside the real VRAM). Opens the window at the first one from RAM to VRAM.
+static void trXfer(List *l, uint32_t pc, uint32_t s, uint32_t t, uint32_t bp, uint32_t a, uint32_t b, uint32_t o) {
+  if (!wtrace) return;
+  if (!tb) { static int tried; if (tried++) return; tb = ndExoGet ? ndExoGet(16 << 20) : 0; tb_n = tb ? 16 << 20 : 0; clog("walk trace: %s\n", tb ? "16 MB buffer, ux0:pspemu/nativedraw_trace.log" : "no memory"); if (!tb) return; }
+  if (isVram(s) || !isVram(t)) return;
+  uint32_t sw = reg[0xB3] & 0xFFFF, dw = reg[0xB5] & 0xFFFF, w = (reg[0xEE] & 0x3FF) + 1, h = (reg[0xEE] >> 10 & 0x3FF) + 1;
+  uint32_t src = s + ((reg[0xEB] >> 10 & 0x3FF) * sw + (reg[0xEB] & 0x3FF)) * bp, dst = t + ((reg[0xEC] >> 10 & 0x3FF) * dw + (reg[0xEC] & 0x3FF)) * bp;
+  uint32_t n = ((h - 1) * dw + w) * bp;
+  tx[t_seq & 63].s = src; tx[t_seq & 63].t = dst; tx[t_seq & 63].n = n; tx[t_seq & 63].q = t_seq; t_seq++;
+  if (t_g0 == ~0u) { t_g0 = gen; tlog("window: %u frames from here\n", TR_FRAMES); }
+  int odd = o || reg[0xEB] || reg[0xEC] || dst >> 24 != 4;
+  if (TR_ON || odd)
+    tlog("%s %08x to %08x %u bytes | at %08x list %u sublevel %u | b2 %06x b3 %06x b4 %06x b5 %06x eb %06x ec %06x ee %06x | pieces applied %u without a copy %u outside %u\n",
+         odd ? "XFER ODD" : "xfer", src, dst, n, pc, l->ord, l->sp, reg[0xB2], reg[0xB3], reg[0xB4], reg[0xB5], reg[0xEB], reg[0xEC], reg[0xEE], a, b, o);
+}
+// A CALL (0x0A) or JUMP (0x08) at pc to VRAM target t that the mirror has (ok) or not: the latest transfer covering t and whether
+// the mirror still equals its RAM source there
+static void trCall(List *l, uint32_t pc, uint32_t c, uint32_t t, int ok) {
+  if (!TR_ON) return;
+  int k = txFind(t), same = -1;
+  uint32_t m0 = 0, m1 = 0;
+  if (ok) {
+    volatile uint32_t *m = (volatile uint32_t *)PSP(vtr(t));
+    m0 = m[0]; m1 = m[1];
+    if (k >= 0 && ramEnd(tx[k].s + (t - tx[k].t)) >= tx[k].s + (t - tx[k].t) + 32) {
+      volatile uint32_t *r = (volatile uint32_t *)PSP(tx[k].s + (t - tx[k].t));
+      same = 1; for (int i = 0; i < 8; i++) same &= m[i] == r[i];
+    }
+  }
+  tlog("%s %08x at %08x list %u sublevel %u base %06x | %s | latest transfer %s%08x, %u transfers ago | mirror %s, first %08x %08x\n",
+       c == 0x0A ? "call" : "jump", t, pc, l->ord, l->sp, reg[0x10], ok ? "in the mirror" : "NO COPY: skipped",
+       k >= 0 ? "from " : "none ", k >= 0 ? tx[k].s : 0, k >= 0 ? t_seq - tx[k].q : 0,
+       same < 0 ? "not compared" : same ? "= ram" : "DIFFERS from ram", m0, m1);
+}
 // A CALL or JUMP into VRAM: if the target falls in a noted transfer, compares what the mirror holds there with the RAM source
 static void xferCall(uint32_t t) {
   static int nfresh, nstale;
@@ -965,6 +1047,7 @@ static int __attribute__((noinline)) walkList(List *l) {
       if (!isVram(pc)) { acc.bad++; return 1; }
       want(pc, 4, 1);
       if (!l->sp) { acc.lost++; return 1; }
+      DEV(if (TR_ON) tlog("cut at %08x list %u sublevel %u: page without a copy, back to the top level\n", pc, l->ord, l->sp);)
       acc.v_cut++; UNWIND(); continue;  // sublist continuing into a page without copy: back to the top level
     }
     uint32_t op = rdc(&R0, ra, l->ord), ba = R0.a, bn = R0.n, i = (ra - ba) >> 2;
@@ -994,7 +1077,8 @@ static int __attribute__((noinline)) walkList(List *l) {
         if (mi[m] < (uint32_t)max) { if (mtx[m][mi[m]] != d) { mtx[m][mi[m]] = d; dirty |= C_MTX; rg_mchg = 1; } mi[m]++; }
       } else {
         if (cls[c] && reg[c] != d) { rg_chg = rg_lchg = 1; rg_tchg |= cls[c] & C_TEX; dirty |= cls[c]; if (cls[c] & (C_OTHER | C_TL)) acc.chg[c]++; }
-        DEV(if (c == 0x10) baseLog("list", pc, d);)
+        DEV(if (c == 0x10) baseLog("list", pc, d);
+            if (tb && isVram(pc) && reg[c] != d && (c == 0x10 || c == 0xEB || c == 0xEC)) { char w[24]; sceClibSnprintf(w, sizeof w, "register %02x %06x>%06x", c, reg[c], d); trCtx(w, l, pc); })
         reg[c] = d; TOUCH(c);
       }
       if (--k) { pc += 4; op = R0.buf[++i]; continue; }
@@ -1013,7 +1097,8 @@ static int __attribute__((noinline)) walkList(List *l) {
       uint32_t t = rel(l, d & 0xFFFFFC);
       if (!vtr(t)) {  // in VRAM without copy in the mirror (yet) or invalid
         regLost(NR_CALL, t);
-        DEV(if (!isVram(t)) badTarget(l, pc, op, t);)
+        DEV(if (!isVram(t)) badTarget(l, pc, op, t); else trCall(l, pc, c, t, 0);)
+        DEV(if (!isVram(t) && tb) trCtx("bad target", l, pc);)
         if (!isVram(t)) { acc.bad++; return 1; }
         want(t, 4096, 1);  // its page and the next: from the next frame on it is walked from the mirror
         if (c == 0x0A) { acc.vcalls++; break; }  // skipped
@@ -1021,7 +1106,7 @@ static int __attribute__((noinline)) walkList(List *l) {
         if (!l->sp) { acc.lost++; return 1; }
         acc.v_cut++; UNWIND(); break;
       }
-      DEV(if (isVram(t)) xferCall(t);)
+      DEV(if (isVram(t)) { xferCall(t); trCall(l, pc, c, t, 1); })
       if (c == 0x0A && isVram(t)) {
         acc.v_ok++;
         DEV(vcall = t; vcall_n = l->n; uint32_t vr = vtr(t); for (int i = 0; i < 4; i++) vcall_w[i] = ((volatile uint32_t *)PSP(vr))[i];)
@@ -1045,7 +1130,7 @@ static int __attribute__((noinline)) walkList(List *l) {
       break;
     }
     case 0x09: acc.bjumps++; DEV(if (crowd_on) bbJump(l, d);) break;  // conditional jump by bounding box: assumed not taken
-    case 0x0B: if (l->sp) { l->sp--; l->pc = l->stk[l->sp][0]; l->off = l->stk[l->sp][1]; if (!l->sp) { if (rec) recEnd(l); else if (chk) chkEnd(); } } break;
+    case 0x0B: DEV(if (TR_ON && isVram(pc) && l->sp) tlog("ret %08x to %08x sublevel %u\n", pc, l->stk[l->sp - 1][0], l->sp);) if (l->sp) { l->sp--; l->pc = l->stk[l->sp][0]; l->off = l->stk[l->sp][1]; if (!l->sp) { if (rec) recEnd(l); else if (chk) chkEnd(); } } break;
     case 0x0C:  // END: ends the list, except after a SIGNAL (the game continues it)
       if ((prev >> 24) == 0x0E) { acc.signals++; break; }
       return 1;
@@ -1070,8 +1155,9 @@ static int __attribute__((noinline)) walkList(List *l) {
       acc.transfers++;
       uint32_t s = (reg[0xB2] & 0xFFFFF0) | ((reg[0xB3] << 8) & 0x0F000000), t = (reg[0xB4] & 0xFFFFF0) | ((reg[0xB5] << 8) & 0x0F000000);
       if (isVram(s) || isVram(t)) acc.tr_vram++;
-      DEV(xferNote(s, t, d & 1 ? 4 : 2);)
+      DEV(xferNote(s, t, d & 1 ? 4 : 2); uint32_t xa = xm_ok, xb = xm_skip, xo = xm_out;)
       xferMirror(s, t, d & 1 ? 4 : 2);
+      DEV(trXfer(l, pc, s, t, d & 1 ? 4 : 2, xm_ok - xa, xm_skip - xb, xm_out - xo);)
       DEV(cap_at = 4;)
       if (reg_on) regXfer(s, t, d & 1 ? 4 : 2);
       DEV(cap_at = 2;)
@@ -1248,7 +1334,7 @@ static void walk(void) {
     List *l = &q[qh & 63];
     R0.n = 0;  // what was read past the previous stall may have changed
     // the readers start this list (and what was left half done of the previous one)
-    if (l->ord != pub_ord) { pubList(l); recAbort(); chk = NULL; }
+    if (l->ord != pub_ord) { pubList(l); recAbort(); chk = NULL; DEV(if (TR_ON) tlog("list %u at %08x stall %08x base %06x\n", l->ord, l->pc, l->stall, reg[0x10]);) }
     DEV(if (!l->t_start) { l->t_start = now() | 1; l->own0 = R0.own; l->hit0 = R0.hits; l->memo0 = acc.memo_hit; l->cpu0 = level >= 2 ? runClk(cap_uid) : 0; })
     DEV(uint32_t tw = now();)
     // The game went past the sync of this list: at 2 frames behind its memory is being reused, so the rest is dropped; at
@@ -1376,6 +1462,7 @@ static void event(volatile uint32_t *e) {
   } else if (t == EV_FLIP) {
     DEV(p_flip = e[4] + off;)
     fin_ord = sync_seen;
+    DEV(if (TR_ON) tlog("flip\n");)
     DEV(uint32_t tfw = CST();)
     walk();  // what was queued before the flip is walked before closing the frame
     // (all of it, not one turn; at most 150 ms, so a walk through something that is not a list cannot hold the core)
@@ -1628,11 +1715,20 @@ static void logWrite(void) {
   uint32_t n = lpos;
   if (fd >= 0) { sceIoWrite(fd, lbuf, n); sceIoClose(fd); }
   lpos = 0;  // (what arrives during the write may be lost: it is statistics)
+#ifdef NP_DEV
+  uint32_t w = tb_w;  // walk trace: what the capturer added since the last write; once full, how many lines were dropped
+  if (tb && w > tb_r && (fd = sceIoOpen("ux0:pspemu/nativedraw_trace.log", SCE_O_WRONLY | SCE_O_CREAT | SCE_O_APPEND, 0666)) >= 0) {
+    sceIoWrite(fd, tb + tb_r, w - tb_r); tb_r = w;
+    if (tb_drop) { char b[64]; sceIoWrite(fd, b, sceClibSnprintf(b, sizeof b, "trace full: %u lines dropped\n", tb_drop)); tb_drop = 0; }
+    sceIoClose(fd);
+  }
+#endif
 }
 // The current capturer logs become *_prev.log
 static void logsRotate(void) {
   sceIoRemove("ux0:pspemu/nativedraw_capture_prev.log");
   sceIoRename(LOGC, "ux0:pspemu/nativedraw_capture_prev.log");
+  DEV(sceIoRemove("ux0:pspemu/nativedraw_trace_prev.log"); sceIoRename("ux0:pspemu/nativedraw_trace.log", "ux0:pspemu/nativedraw_trace_prev.log");)
 #ifdef NP_DEV
   static const char *rot[2][2] = { { "ux0:pspemu/nativedraw_frames.log", "ux0:pspemu/nativedraw_frames_prev.log" },
                                    { "ux0:pspemu/nativedraw_late.log", "ux0:pspemu/nativedraw_late_prev.log" } };
@@ -1893,7 +1989,7 @@ static int repThread(SceSize args, void *argp) {
     static uint32_t rg_t;  // the rings: every 2 s or at half full
     if (RG[0].w - RG[0].r > RG[0].n / 2 || RG[1].w - RG[1].r > RG[1].n / 2 || now() - rg_t > 2000000) { rflush(0); rflush(1); rg_t = now(); }
 #endif
-    if (lpos && (now() - last_write > 5000000 || lpos > sizeof lbuf / 2)) {
+    if ((lpos && (now() - last_write > 5000000 || lpos > sizeof lbuf / 2)) DEV(|| (tb && tb_w - tb_r > (1u << 20)))) {
       logWrite();
       last_write = now();
     }
