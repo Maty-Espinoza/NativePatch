@@ -59,7 +59,7 @@ static inline uint32_t RE(const uint32_t *e, uint32_t r) {  // value of register
 static inline const uint8_t *RV(const RFrame *f, const RDraw *d) {  // vertices of draw d
   return d->voff & VX ? f->tx + (d->voff & ~VX) : f->a + d->voff - 1;
 }
-#define TX_N (7 << 18)  // texture bytes per frame, and at its end the vertices the GPU reads (1.75 MB; rg_hash covers 2 MB)
+#define TX_N (3 << 20)  // texture bytes per frame, and at its end the vertices the GPU reads (3 MB)
 // record.c functions used by the presenter
 RFrame *regTake(void);  // reserves the last complete frame (0 if none)
 int regMapGpu(void);  // (with GXM initialized) maps the copied textures for the GPU

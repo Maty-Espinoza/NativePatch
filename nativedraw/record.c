@@ -85,7 +85,7 @@ static int rg_ordc;
 // Sorting only what changed: each record remembers, per 128 bytes of its tx, the PSP address and hash of the sorted group
 // that starts there. If the same group arrives at the same place with the same hash, the rows are already there. A place
 // handed to another texture (rg_lay, rgLayout) forgets its groups.
-#define RH_N 16384
+#define RH_N (TX_N >> 7)
 static struct { uint32_t a, h; } *rg_hash[RN];
 static uint32_t rg_lay[RN][TN_N][3];
 // (entry i of record k was just placed at offset o of tx, n bytes) If it is not what the record had there, forgets the area
@@ -288,10 +288,10 @@ static void regInit(void) {
   b = sceKernelAllocMemBlock("nativedraw_order2", rg_ordc ? SCE_KERNEL_MEMBLOCK_TYPE_USER_RW : SCE_KERNEL_MEMBLOCK_TYPE_USER_RW_UNCACHE, OR_N, 0);
   if (b < 0 || sceKernelGetMemBlockBase(b, &p) < 0) { reg_on = 0; clog("frame record: no memory to sort textures (%08x)\n", b); return; }
   rg_ord2 = p;
-  b = sceKernelAllocMemBlock("nativedraw_hashes", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, RN * 0x20000, 0);  // (RH_N x 8 bytes each)
+  b = sceKernelAllocMemBlock("nativedraw_hashes", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, RN * RH_N * 8, 0);
   if (b >= 0 && sceKernelGetMemBlockBase(b, &p) >= 0) {
-    sceClibMemset(p, 0, RN * 0x20000);
-    for (int i = 0; i < RN; i++) rg_hash[i] = (void *)((uint8_t *)p + i * 0x20000);
+    sceClibMemset(p, 0, RN * RH_N * 8);
+    for (int i = 0; i < RN; i++) rg_hash[i] = (void *)((uint8_t *)p + i * RH_N * 8);
   }
   void *q = 0;
   p = rgUnc("nativedraw_tex_cache", RC_N);
@@ -412,13 +412,14 @@ static void rgVFlush(void) {
   }
   vpn = 0;
 }
-// Reserves n bytes for the vertices at address s and queues them: with gpu (their vertex size), at the end of tx if they fit, otherwise
-// in area a. Value for voff; 0 if they do not fit (R_LIMIT).
+static uint32_t rg_txr;  // room in tx kept for the textures of a frame: twice those of the last recorded frame
+// Reserves n bytes for the vertices at address s and queues them: with gpu (their vertex size), at the end of tx if they fit and leave
+// rg_txr for the textures, otherwise in area a. Value for voff; 0 if they do not fit (R_LIMIT).
 static uint32_t rgVLater(uint32_t s, uint32_t n, uint32_t gpu) {
   RFrame *f = rf[rg_w];
   uint32_t o = (f->na + 15) & ~15u, m = gpu ? n : (n + 15) & ~15u;
   while (gpu && m & 15) m += gpu;  // (for the GPU: multiples of 16 and of the vertex size, so the translator can join them by indices)
-  if (gpu && f->ntx + f->nvx + m <= TX_N) {
+  if (gpu && (f->ntx > rg_txr ? f->ntx : rg_txr) + f->nvx + m <= TX_N) {
     if (vpn == VP_N) rgVFlush();
     f->nvx += m;
     vp[vpn].s = s; vp[vpn].d = f->tx + TX_N - f->nvx; vp[vpn++].n = n;
@@ -432,13 +433,13 @@ static uint32_t rgVLater(uint32_t s, uint32_t n, uint32_t gpu) {
   return o + 1;
 }
 // 3D vertices in VRAM for the GPU, of vertex size vz: copied at once from their mirror copy to the end of tx, where rgVLater puts those
-// in RAM. 0 if they have no copy in the mirror or do not fit (the caller copies them as usual)
+// in RAM. 0 if they have no copy in the mirror or do not fit with rg_txr left for the textures (the caller copies them as usual)
 static uint32_t rgSrc(uint32_t a, uint32_t n);
 static uint32_t rgVNow(uint32_t a, uint32_t n, uint32_t vz) {
   RFrame *f = rf[rg_w];
   uint32_t s = rgSrc(a, n), m = n;
   while (m & 15) m += vz;
-  if (!s || f->ntx + f->nvx + m > TX_N) return 0;
+  if (!s || (f->ntx > rg_txr ? f->ntx : rg_txr) + f->nvx + m > TX_N) return 0;
   f->nvx += m;
   sceClibMemcpy(f->tx + TX_N - f->nvx, (const void *)PSP(s), n);
   return VX | (TX_N - f->nvx);
@@ -901,6 +902,7 @@ static void regFlip(uint32_t fb, uint32_t fbw, uint32_t draws_counted) {
   // the memory applied did not go through draw(): its marks stay
   if (!(f->flags & R_MEMO)) { sceClibMemset(rt_pg, 0, sizeof rt_pg); sceClibMemset(want_now, 0, sizeof want_now); wantExpire(); rt_nb = 0; last_fb = ~0u; }
   const uint8_t *pal = rg_clut ? f->a + rg_clut - 1 : 0;
+  if (!(f->flags & R_SKIP)) rg_txr = 2 * f->ntx;
   f = rf[rg_w];
   f->nd = f->ne = f->na = f->flags = f->draws_seen = f->nt = f->ntx = f->nvx = f->dv = f->nimg = 0;
   tx_lo = 0;
