@@ -12,6 +12,7 @@ Para entender NativePatch sin saber nada de antemano. Versión en inglés: `../e
 | — | `logs-and-switches.md` | Qué escribe cada log, línea por línea, e interruptores de `ux0:data/nativedraw/` |
 | — | `dumps.md` | Volcados de frames: niveles, archivos, cómo leerlos con `tools/dump.py`, reproducción en la Vita |
 | — | `nptest.md` | La batería sintética 2D: escenas, técnicas raras, cómo correrla en la Vita y en el PC |
+| — | `unsupported.md` | Las técnicas de dibujo que todavía no se dibujan o se dibujan lento, con la prueba que cubre cada una: la lista desde donde diseñar el soporte |
 | — | `adrenaline.md` | Lo que hay que saber de Adrenaline: carga de plugins, cómo dibuja, mapa de memoria, canal PSP–ARM |
 | — | `performance-plan.md` | La única lista de trabajo de rendimiento hacia los 60 fps, en orden, con cómo se verifica cada punto (bench en el PC o la Vita) |
 | — | `versions.md` | Reglas de versiones, historial de commits y equivalencia con los nombres viejos (GePatch, gepresent) |

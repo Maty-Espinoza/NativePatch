@@ -20,6 +20,7 @@ G=$(T=$T sh $R/tools/perf/tr_gv.sh); echo "$G" | grep -q "lines equal" || { echo
 [ "$(echo "$G" | grep 'draws=3688' | sed 's/.*gxm_draws=//' | head -1)" -lt 400 ] || { echo "FAIL: GXM draws in the crowd"; exit 1; }
 # God of War combat: a shadow atlas 1024 wide, a glow chain in one row and more than 64K vertices, all in the two surfaces
 echo "$G" | grep 'draws=6642' | grep -q 'result=ok' || { echo "FAIL: God of War combat frame not drawn"; exit 1; }
+[ "$(echo "$G" | grep 'draws=6642' | sed 's/.*gpu_vertices=[0-9]*,[0-9]*,[0-9]*,\([0-9]*\).*/\1/')" -gt 50000 ] || { echo "FAIL: God of War type 0x1BE not on the GPU"; exit 1; }
 echo "== capturer bench (builds and runs one scene)"
 arm-linux-gnueabihf-gcc -static -O2 -mthumb -mfpu=neon -mfloat-abi=hard -w -I$B/inc -o $B/bench $R/tools/perf/capture_bench.c
 $(command -v qemu-arm-static || command -v qemu-arm) $B/bench rr_race | grep -q "complete=38" || { echo "FAIL: capture_bench"; exit 1; }

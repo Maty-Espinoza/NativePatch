@@ -50,7 +50,7 @@ static struct { const SceGxmProgram *p; char name[8]; float v[16]; } par[64];
 static const void *stream; static uint32_t fprog, tex_w;
 static FILE *dmp, *tri;
 static const SceGxmVertexProgram *vprog;
-static uint32_t gn[3];  // vertices drawn by each GPU vertex program
+static uint32_t gn[4];  // vertices drawn by each GPU vertex program
 static uint32_t cur_w, set_w, in_rt;  // (in_rt: an intermediate image: the CPU path clips there, nd_v3 leaves it to the GPU, so its triangles differ)
 volatile SceUID nd_gfx_uid;
 void sceGxmSetVertexProgram(SceGxmContext *c, const SceGxmVertexProgram *p) { vprog = p; }
@@ -100,9 +100,12 @@ static void triV(uint32_t k) {
     g = X * fg[0] + Y * fg[1] + Z * fg[2] + fg[3]; g = g < 0 ? 0 : g > 1 ? 1 : g;
     float nl = n[0] * ld[0] + n[1] * ld[1] + n[2] * ld[2], sd = n[0] * hv[0] + n[1] * hv[1] + n[2] * hv[2], s = nl >= 0 && sd > 0 ? pow(sd, hv[3]) : 0;
     for (int i = 0; i < 4; i++) { float q = i < 3 ? ba[i] + (nl > 0 ? nl : 0) * cd[i] + s * cs[i] : ba[3]; c[i] = (q < 0 ? 0 : q > 1 ? 1 : q) * 255; }
-  } else if (vprog == gvp[0]) {
+  } else if (vprog == gvp[0] || vprog == gvp[3]) {  // (gvp[3]: 16-bit UV, color at 4)
     const uint8_t *p = (const uint8_t *)stream + k * 24;
-    const float *x = (const float *)(p + 12), *uv = (const float *)p, *m = uni(g_m), *tu = uni(g_tu), *fg = uni(g_fg), *cm = uni(g_cm), *ca = uni(g_ca);
+    int h = vprog == gvp[3];
+    const float *x = (const float *)(p + 12), *m = uni(g_m), *tu = uni(g_tu), *fg = uni(g_fg), *cm = uni(g_cm), *ca = uni(g_ca);
+    float uv[2] = { h ? ((const uint16_t *)p)[0] : ((const float *)p)[0], h ? ((const uint16_t *)p)[1] : ((const float *)p)[1] };
+    p += h ? -4 : 0;  // (the color, at 8 or 4)
     for (int i = 0; i < 4; i++) o[i] = x[0] * m[i] + x[1] * m[4 + i] + x[2] * m[8 + i] + m[12 + i];
     u = uv[0] * tu[0] + tu[2]; v = uv[1] * tu[1] + tu[3]; g = x[0] * fg[0] + x[1] * fg[1] + x[2] * fg[2] + fg[3]; g = g < 0 ? 0 : g > 1 ? 1 : g;
     for (int i = 0; i < 4; i++) { c[i] = p[8 + i] * cm[i] + ca[i] * 255; c[i] = c[i] > 255 ? 255 : c[i]; }
@@ -119,7 +122,7 @@ static void triV(uint32_t k) {
 // The triangles of a draw of n vertices in order, each with the winding it has on screen; those with two equal vertices (joined
 // strips) draw nothing and are left out
 static void triDump(SceGxmPrimitiveType t, const uint16_t *ix, unsigned n) {
-  uint32_t sz = vprog == gvp[0] ? 24 : vprog == gvp[1] ? 16 : vprog == gvp[2] ? 20 : sizeof(TV);
+  uint32_t sz = vprog == gvp[0] || vprog == gvp[3] ? 24 : vprog == gvp[1] ? 16 : vprog == gvp[2] ? 20 : sizeof(TV);
   for (unsigned i = 0; i + 2 < n; i += t == SCE_GXM_PRIMITIVE_TRIANGLES ? 3 : 1) {
     unsigned a = t == SCE_GXM_PRIMITIVE_TRIANGLE_FAN ? 0 : i, b = i + 1, c = i + 2;
     if (t == SCE_GXM_PRIMITIVE_TRIANGLE_STRIP && i & 1) { unsigned s = b; b = c; c = s; }
@@ -133,7 +136,7 @@ static uint32_t gxm_calls;
 int sceGxmDraw(SceGxmContext *c, SceGxmPrimitiveType t, SceGxmIndexFormat f, const void *ix, unsigned n) {
   if (ix) gxm_calls++;
   if (tri && ix && !in_rt) triDump(t, ix, n);
-  for (int i = 0; i < 3; i++) if (vprog == gvp[i]) gn[i] += n;
+  for (int i = 0; i < 4; i++) if (vprog == gvp[i]) gn[i] += n;
   if (!dmp || !ix) return 0;  // (no ix: the presenter's quad, not the translator's)
   fprintf(dmp, "D %d %u %08x %08x", t, n, fprog, tex_w);
   for (int i = 0; i < 64 && par[i].p; i++) if (strcmp(par[i].name, "wvp")) for (int k = 0; k < 4; k++) fprintf(dmp, " %.5g", par[i].v[k]);
@@ -145,7 +148,7 @@ int sceGxmDraw(SceGxmContext *c, SceGxmPrimitiveType t, SceGxmIndexFormat f, con
   return 0;
 }
 int sceGxmShaderPatcherCreateVertexProgram(SceGxmShaderPatcher *s, SceGxmShaderPatcherId i, const SceGxmVertexAttribute *a, unsigned na, const SceGxmVertexStream *st,
-    unsigned ns, SceGxmVertexProgram **o) { static int x[4], n; *o = (void *)&x[n++ & 3]; return 0; }
+    unsigned ns, SceGxmVertexProgram **o) { static int x[8], n; *o = (void *)&x[n++ & 7]; return 0; }
 
 // Reads a dump's record like repLoad, into plain memory
 static RFrame *load(const char *path) {
@@ -171,8 +174,8 @@ static void gvMark(RFrame *f) {
     const uint32_t *e = f->e[d->st];
     uint32_t d5 = RE(e, 0xD5), w = RE(e, 0x9D) & 0x7FF, m = (d->vlen + 47) / 48 * 48;
     if (RE(e, 0xD3) & 1) { b4 = RE(e, 0xD4); b5 = d5; b9 = RE(e, 0x9C); }
-    if ((d->vt != 0x19F && !GVL(d->vt)) || d->ioff || d->prim < 3 || d->prim > 5 || RE(e, 0xD3) & 1 || !(RE(e, 0x50) & 1) ||
-        (d->vt == 0x19F && (RE(e, 0xC0) & 3 || RE(e, 0x17) & (RE(e, 0x18) | RE(e, 0x19) | RE(e, 0x1A) | RE(e, 0x1B)) & 1)) ||
+    if ((!GV3(d->vt) && !GVL(d->vt)) || d->ioff || d->prim < 3 || d->prim > 5 || RE(e, 0xD3) & 1 || !(RE(e, 0x50) & 1) ||
+        (GV3(d->vt) && (RE(e, 0xC0) & 3 || RE(e, 0x17) & (RE(e, 0x18) | RE(e, 0x19) | RE(e, 0x1A) | RE(e, 0x1B)) & 1)) ||
         (GVL(d->vt) && (RE(e, 0x17) & 1 ? RE(e, 0xC0) & 3 : (RE(e, 0xC0) & 0x303) != 0x301)) ||
         ((RE(e, 0xD4) & 0xFFFFF || (d5 & 0x3FF) + 1 < (w < 480 ? w : 480) || (w >= 480 && (d5 >> 10 & 0x3FF) < 271)) &&
          ((RE(e, 0xD4) ^ b4) & 0xFFFFF || (d5 ^ b5) & 0xFFFFF || (RE(e, 0x9C) ^ b9) & 0xFFFFF0))) continue;
@@ -197,6 +200,6 @@ int main(int argc, char **argv) {
     CALLGRIND_TOGGLE_COLLECT;
     if (dmp) fprintf(dmp, "F %s\n", tnames[res]);
   }
-  printf("frames=%d draws=%u result=%s gpu_vertices=%u,%u,%u gxm_draws=%u\n", n, f->nd, tnames[res], gn[0] / n, gn[1] / n, gn[2] / n, gxm_calls / n);
+  printf("frames=%d draws=%u result=%s gpu_vertices=%u,%u,%u,%u gxm_draws=%u\n", n, f->nd, tnames[res], gn[0] / n, gn[1] / n, gn[2] / n, gn[3] / n, gxm_calls / n);
   return 0;
 }

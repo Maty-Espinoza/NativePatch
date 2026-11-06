@@ -51,6 +51,7 @@ static inline uint32_t RE(const uint32_t *e, uint32_t r) {  // value of register
   return RI[r] ? e[RI[r] - 1] : 0;
 }
 #define GVL(vt) ((vt) == 0x142 ? 1 : (vt) == 0x143 ? 2 : 0)  // lit vertices nd_v4 reads: 1 16-bit UV, 2 float UV
+#define GV3(vt) ((vt) == 0x19F || (vt) == 0x1BE)  // vertices nd_v3 reads: float position, 8888 color, float UV (0x19F) or 16-bit UV and a normal it skips (0x1BE)
 #define VX 0x80000000u  // (RDraw.voff) the vertices are in tx
 static inline const uint8_t *RV(const RFrame *f, const RDraw *d) {  // vertices of draw d
   return d->voff & VX ? f->tx + (d->voff & ~VX) : f->a + d->voff - 1;

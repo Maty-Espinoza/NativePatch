@@ -158,7 +158,7 @@ quedan sin usar: `SB[0x47]`, los bits 4 y 8 de 0x4A y los eventos 7, 8, 9, 10 y 
   Las texturas de la RAM quedan entre frames en un caché que lee la GPU (`RC` en `record.c`): cada frame se compara una
   muestra de cada grupo de 8 filas con la memoria del juego, y solo se vuelve a copiar lo que cambió.
   Los vértices que la GPU puede tomar tal cual (`rgVGpu`) van al final de `tx`, que la GPU lee, en vez de al área `a`.
-- **Traductor** (`translator.c`): 2D en modo "through" y 3D (el trabajo de vértices del GE en la CPU, o en la GPU con `nd_v3` para los vértices comunes y `nd_v4` para vértices de 16 bits con una luz direccional o UV desde la normal): líneas, rectángulos, triángulos, tiras y abanicos;
+- **Traductor** (`translator.c`): 2D en modo "through" y 3D (el trabajo de vértices del GE en la CPU, o en la GPU con `nd_v3` para los vértices comunes (posición y color, UV float o de 16 bits, sin luces) y `nd_v4` para vértices de 16 bits con una luz direccional o UV desde la normal): líneas, rectángulos, triángulos, tiras y abanicos;
   texturas 5650/5551/4444/8888 y paletas de 4 y 8 bits; borrados; color por vértice o del material; funciones de textura
   modular y reemplazar; alfa test; mezcla (las combinaciones que GXM tiene); scissor en los rectángulos; **imágenes
   intermedias** (un juego dibuja en una imagen escondida de la VRAM y después la estira: cada una va a una superficie

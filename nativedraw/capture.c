@@ -955,7 +955,7 @@ static void fpFlip(void) {
       for (uint32_t w = 0; w < FP_N / 32 && !x && miss; w++)
         for (uint32_t b = fp_now[w] & ~fp_pr[w]; b; b &= b - 1) {
           static uint32_t nlog;
-          uint32_t p = w * 32 + __builtin_ctz(b), age = fp_last[p] ? (uint16_t)(fp_fr - fp_last[p]) : 0, kinds = 0;
+          uint32_t p = w * 32 + __builtin_ctz(b), age = fp_last[p] ? (uint16_t)(fp_fr + 1 - fp_last[p]) : 0, kinds = 0;
           for (uint32_t k = 0; k < 4; k++) if (fp_kind[k][w] >> (p & 31) & 1) { fp_s[17 + k]++; kinds |= 1u << k; }
           fp_s[!age ? 21 : age <= 8 ? 22 : age <= 64 ? 23 : 24]++;
           if (nlog++ < 40) clog("photo miss: frame %u page %08x read by %s%s%s%s, %s %u frames before\n", gen, 0x08000000u + (p << 12),
