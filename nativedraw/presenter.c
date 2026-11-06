@@ -447,8 +447,8 @@ static int hookEnd(SceGxmContext *c, const SceGxmNotification *v, const SceGxmNo
     const uint32_t *pj = sceGxmTextureGetData(src);
     DEV(if (rt_hold) { drawn = fr + 1; goto finish; })
     // GPU behind: two frames unfinished. With one, the next can be prepared meanwhile: trFrame holds its surface scene until it ends
-    if (gBusy(fq[1]) && drawn == fr && dump_on != 1) { g_behind++; DEV(b_c[B_BEHIND]++; if (p_on) pAdd(P_F_BEHIND, 0);) drawn = fr + 1; goto finish; }
-    if (dump_on == 1 || dump_on == 3) {  // dump: only of a surface the GPU finished
+    if (gBusy(fq[1]) && drawn == fr && dump_on != DUMP_TAKING) { g_behind++; DEV(b_c[B_BEHIND]++; if (p_on) pAdd(P_F_BEHIND, 0);) drawn = fr + 1; goto finish; }
+    if (dump_on == DUMP_TAKING || dump_on == DUMP_ARMED) {  // dump: only of a surface the GPU finished
       for (int i = 0; i < 100 && gBusy(fq[0]); i++) sceKernelDelayThread(5000);
       dumpFrame(c, pj, drawn == fr && !(covered && copy_fr == fr));
     }
@@ -473,7 +473,7 @@ static int hookEnd(SceGxmContext *c, const SceGxmNotification *v, const SceGxmNo
     }
     DEV(if (p_on) pAdd(P_A_PRE, now() - t0);)
     int s = cur ^ 1, hd = 0;
-    if (draw_on && t_on && !menu && rep_on == 2 && repDraw(c, s, src)) { hd = 1; t_frame = ~0u; }  // playback
+    if (draw_on && t_on && !menu && rep_on == REP_READY && repDraw(c, s, src)) { hd = 1; t_frame = ~0u; }  // playback
     else if (draw_on && t_on && !menu) {  // the last complete frame of the record, drawn by the Vita
       DEV(h_at = 3;)
       RFrame *rg = regTake();
@@ -499,10 +499,10 @@ static int hookEnd(SceGxmContext *c, const SceGxmNotification *v, const SceGxmNo
         DEV(b_c[r ? B_NORMAL : B_DRAWN]++; b_c[B_TR] += now() - t1; trReason(rg->frame, r); if (p_on) pAdd(r ? P_F_NORMAL : P_F_DRAWN, 0);)
         if (!r) regGpu(gq, gq_done);  // the scene that reads this record's textures
       }
-      if (dump_on == 1 || dump_on == 3) dumpText(rg, hd == 2 ? "repeats the Vita drawing of the previous frame" : hd ? "Vita drawing" :
+      if (dump_on == DUMP_TAKING || dump_on == DUMP_ARMED) dumpText(rg, hd == 2 ? "repeats the Vita drawing of the previous frame" : hd ? "Vita drawing" :
                                 "normal image (copy of the PSP image)", cause);
       regRelease();
-    } else if (dump_on == 1 || dump_on == 3) dumpText(0, menu ? "normal image with the menu" : "normal image (no draw or no translator)", -1);
+    } else if (dump_on == DUMP_TAKING || dump_on == DUMP_ARMED) dumpText(0, menu ? "normal image with the menu" : "normal image (no draw or no translator)", -1);
     // hd: 2 keeps the previous surface, 1 drawn by the translator, 0 the PSP image at double size (below)
     if (hd == 2) { drawn = fr + 1; t_hd++; goto finish; }
     if (hd) { t_hd++; cur_hd = 1; goto ready_hd; }
@@ -631,7 +631,7 @@ static int hookCtrl(SceCtrlDataPsp *p) {
   if (p && ready) {
     static uint32_t cv0;  // L+R+SELECT (0x301): dump
     uint32_t cv = (p->Buttons & 0x301) == 0x301;
-    if (cv && !cv0 && (!dump_on || dump_on == 3) && !dump_req) dump_req = 1;
+    if (cv && !cv0 && (dump_on == DUMP_OFF || dump_on == DUMP_ARMED) && !dump_req) dump_req = 1;
     cv0 = cv;
     if (cv) { p->Buttons = 0; p->Lx = p->Ly = p->Rx = p->Ry = 128; }
     uint32_t combo = (p->Buttons & 0x308) == 0x308;  // L (0x100) + R (0x200) + START (0x8)

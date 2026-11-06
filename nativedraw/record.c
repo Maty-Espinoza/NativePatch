@@ -230,6 +230,7 @@ static int rcCheck(RC *e, uint32_t g0, uint32_t g1) {
   uint32_t t0 = now(), k = e - rc, r = 0;
   for (uint32_t g = g0; g < g1 && !r; g++) {
     const uint8_t *p = (const uint8_t *)PSP(e->a + g * e->gb);
+    DEV(fpMark(e->a + g * e->gb, rcLen(e, g));)
     if (e->d >> g & 1) r = 1;
     else if ((e->m >> g & 1) && !((g + k + gen) & 3) && (rcSample(p, rcLen(e, g), e->gb / 8) != e->s[g] || (!((g + k + gen) & 15) && rcHash(p, rcLen(e, g)) != e->h[g]))) {
       e->m &= ~(1ull << g); e->d |= 1ull << g; ga.c_chg++; r = 1;
@@ -318,6 +319,14 @@ static void regBench(void) {
   for (int i = 0; i < 6; i++) t[i] = t[i] ? n / t[i] : 0;
   clog("memory bench (MB/s): PSP RAM->cached %u, PSP RAM->uncached (DMA) %u, cached->uncached %u, "
        "uncached->cached %u, uncached->uncached (DMA) %u, cached->cached %u\n", t[0], t[1], t[2], t[3], t[4], t[5]);
+#ifdef NP_DEV
+  // DMA into cached memory (the call keeps the cache right), reading what it left, and the fixed cost of a 4 KB call
+  volatile uint32_t sum = 0;
+  t0 = now(); sceDmacMemcpy(c, ps, n); t[0] = now() - t0;
+  t0 = now(); for (uint32_t i = 0; i < n / 4; i += 4) sum += ((const uint32_t *)c)[i] + ((const uint32_t *)c)[i + 1] + ((const uint32_t *)c)[i + 2] + ((const uint32_t *)c)[i + 3]; t[1] = now() - t0;
+  t0 = now(); for (uint32_t i = 0; i < 16; i++) sceDmacMemcpy(c + i * 4096, (const uint8_t *)ps + i * 4096, 4096); t[2] = (now() - t0) * 1000 / 16;
+  clog("memory bench (DMA into cached): PSP RAM->cached (DMA) %u MB/s, reading it back %u MB/s, one 4 KB call %u ns\n", t[0] ? n / t[0] : 0, t[1] ? n / t[1] : 0, t[2]);
+#endif
 }
 #ifdef NP_DEV
 static void clog(const char *fmt, ...);
@@ -345,6 +354,7 @@ static uint32_t rgCopy(uint32_t a, uint32_t n) {
       RG_READ(NR_VERT, a + k, m); return 0;
     }
     sceClibMemcpy(f->a + o + k, (const void *)PSP(s), m);
+    DEV(fpMark(s, m);)
     k += m;
   }
   f->na = o + n;
@@ -366,6 +376,7 @@ static void rgVFlush(void) {
       lo = a; hi = b;
     }
     int dma = hi - lo >= 4096;
+    DEV(for (uint32_t k = i; k < j; k++) fpMark(vp[k].s, vp[k].n);)
     if (dma) { sceDmacMemcpy(rg_ord, (const void *)PSP(lo), hi - lo); ga.v_dma++; ga.v_kb += hi - lo; }
     for (uint32_t k = i; k < j; k++) sceClibMemcpy(vp[k].d, dma ? rg_ord + vp[k].s - lo : (const uint8_t *)PSP(vp[k].s), vp[k].n);
     ga.v_runs++;
@@ -434,6 +445,7 @@ static int rgStale(RFrame *f, uint32_t i, uint32_t g0, uint32_t g1) {
     if (!(f->tm[i] >> g & 1) || rg_tc[i] >> g & 1 || (o = g * gb) >= n) continue;
     rg_tc[i] |= 1ull << g;
     if (ramEnd(f->ta[i] + o) < f->ta[i] + o + (n - o < gb ? n - o : gb)) continue;
+    DEV(fpMark(f->ta[i] + o, n - o < gb ? n - o : gb);)
     if (sceClibMemcmp((const void *)PSP(f->ta[i] + o), f->tx + f->to[i] + o, n - o < gb ? n - o : gb)) return 1;
   }
   return 0;
@@ -506,6 +518,7 @@ static uint32_t rgTex(uint32_t r0, uint32_t r1) {
       uint32_t sa = rgSrc(ta + o, m), t0 = now();
       if (!e) rgGpu(rg_w, "from RAM");
       if (!sa) { RG_READ(NR_TEX, ta + o, m); return 0; }
+      DEV(fpMark(sa, m);)
       rgTexCopy(f->tx + f->to[i] + o, (const void *)PSP(sa), m, swz ? rb : 0, ta + o, e ? -1 : rg_w, rg_ord);
       if (e) rcNote(e, g, h);
       ga.t_b += m; ga.us_l += now() - t0;

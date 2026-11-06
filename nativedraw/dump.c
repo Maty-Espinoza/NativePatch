@@ -8,7 +8,8 @@ void *sceDmacMemcpy(void *dst, const void *src, SceSize size);
 #define VN 3            // frames per dump (at most)
 #define VL 256          // line of each frame (how the surface was made)
 #define VB_N (6 << 20)  // record per frame
-// dump_req: L+R+SELECT request; dump_on: 0 nothing, 3 armed (auto), 1 capturing, 2 to write; dump_k: frames ready
+// dump_req: L+R+SELECT request; dump_on: what the dump is doing; dump_k: frames ready
+enum { DUMP_OFF, DUMP_TAKING, DUMP_WRITE, DUMP_ARMED };  // (nothing, capturing, to write, armed in automatic)
 static volatile uint32_t dump_req, dump_on, dump_k;
 extern volatile uint32_t nd_exact_until;  // (capture.c) until when the record carries the exact PSP image
 DEV(extern volatile uint32_t nd_dump_mark;)  // (capture.c) the running program asked for a dump
@@ -190,7 +191,7 @@ static int dumpBad(const uint32_t *ps, int *best_p) {
 // In the Adrenaline thread, after preparing the surface: notes how it was made (how, and the translator reason if it
 // failed; -1 without translator), copies record f (dumpBin) and, if it carries the exact PSP image, keeps it in dump_nat.
 static void dumpText(RFrame *f, const char *how, int reason) {
-  if ((dump_on != 1 && dump_on != 3) || !dump_mem) return;
+  if ((dump_on != DUMP_TAKING && dump_on != DUMP_ARMED) || !dump_mem) return;
   dump_lastn = sceClibSnprintf(dump_last, VL, "surface: %s%s%s | covered=%u\n", how, reason > 0 ? ", reason: " : "", reason > 0 ? tnames[reason] : "", covered);
   dumpBin(f);
   if (f && f->nimg && dump_nat && reason <= 0) {  // (compared in the coming frame)
@@ -202,15 +203,15 @@ static void dumpText(RFrame *f, const char *how, int reason) {
 // In the Adrenaline thread, at the start of its hookEnd, with the surface to be shown (surf[cur], if has_surf) and the
 // PSP image pj. Armed (auto): 1 of every 2 frames, 1 s after the last dump, if 6 or more blocks (and fewer than
 // 255: a dialog on top) do not resemble the PSP image, starts capturing. Capturing: copies by DMA both
-// images and the frame line (and in f0 intermediate image 0) until it has dump_nf frames; then dump_on = 2.
+// images and the frame line (and in f0 intermediate image 0) until it has dump_nf frames; then dump_on = DUMP_WRITE.
 static void dumpFrame(SceGxmContext *c, const void *pj, int has_surf) {
-  if (dump_on == 3 && has_surf && cur_hd && !covered && (fr & 1)) {
+  if (dump_on == DUMP_ARMED && has_surf && cur_hd && !covered && (fr & 1)) {
     int n = now() - dump_t > 1000000 ? dumpBad(surf[cur], 0) : 0;
     // confirmed with the GPU finished: otherwise it may read the surface half drawn
     if (n >= 6 && n < 255) { sceGxmFinish(c); n = dumpBad(surf[cur], 0); }
-    if (n >= 6 && n < 255) { dump_dif = n; dump_k = 0; dump_on = 1; }
+    if (n >= 6 && n < 255) { dump_dif = n; dump_k = 0; dump_on = DUMP_TAKING; }
   }
-  if (dump_on != 1 || dump_k >= dump_nf || !dump_lastn) return;  // (without the frame line yet: from the next one)
+  if (dump_on != DUMP_TAKING || dump_k >= dump_nf || !dump_lastn) return;  // (without the frame line yet: from the next one)
   // (L+R+SELECT waits for the exact image, up to 0.5 s)
   if (!dump_k && !dump_dif && dump_level >= 2 && !dump_natok && now() - dump_t0 < 500000) return;
   uint32_t k = dump_k;
@@ -230,7 +231,7 @@ static void dumpFrame(SceGxmContext *c, const void *pj, int has_surf) {
   }
   else { sceClibSnprintf(dump_tx[k], VL, "surface: not used in this frame (Adrenaline showed the normal image)\n"); dump_bf[k] = VN; }
   if (k == 0 && dump_dif) sceClibSnprintf(dump_tx[0] + sceClibStrnlen(dump_tx[0], VL - 80), 80, "automatic dump: %u blocks that do not resemble any PSP image\n", dump_dif);
-  if (++dump_k == dump_nf) dump_on = 2;
+  if (++dump_k == dump_nf) dump_on = DUMP_WRITE;
 }
 
 // Writes to p a 32-bit top-down BMP with w x h RGBA pixels from px (stride: pixels per row).
@@ -365,30 +366,30 @@ static void dumpFree(void) {  // frees all the dump memory
   dump_rtblk = 0; dump_rt = 0; dump_mem = 0;
   DEV(fl_lent = 0;)
 }
-// In the presenter thread (every 50 ms): in automatic it arms the dump (dump_on = 3, at most 10 per game); with an
-// L+R+SELECT request it takes the memory and starts capturing; when capture ends (dump_on = 2) it writes the
+// In the presenter thread (every 50 ms): in automatic it arms the dump (dump_on = DUMP_ARMED, at most 10 per game); with an
+// L+R+SELECT request it takes the memory and starts capturing; when capture ends (dump_on = DUMP_WRITE) it writes the
 // files to the first free dumps/NNN folder and frees the memory (except in automatic).
 static void dumpTick(void) {
   DEV(failTick();)
-  DEV(if (nd_dump_mark) { nd_dump_mark = 0; if (!dump_on || dump_on == 3) dump_req = 1; })
-  if (dump_auto && !dump_on && dump_n < 10) {  // automatic: armed (the memory stays taken)
+  DEV(if (nd_dump_mark) { nd_dump_mark = 0; if (dump_on == DUMP_OFF || dump_on == DUMP_ARMED) dump_req = 1; })
+  if (dump_auto && dump_on == DUMP_OFF && dump_n < 10) {  // automatic: armed (the memory stays taken)
     if (!dump_mem && !dumpAlloc()) { dump_auto = 0; return; }
-    dump_k = 0; dump_dif = 0; dump_lastn = 0; dump_on = 3;
+    dump_k = 0; dump_dif = 0; dump_lastn = 0; dump_on = DUMP_ARMED;
     return;
   }
   // request (L+R+SELECT): memory (freed at the end, except in automatic)
-  if (dump_req && (!dump_on || dump_on == 3)) {
+  if (dump_req && (dump_on == DUMP_OFF || dump_on == DUMP_ARMED)) {
     dump_req = 0;
     if (!dump_level) return;
     // for 1.5 s each record frame carries its exact PSP image
     if (dump_level >= 2) nd_exact_until = now() + 1500000;
     dump_t0 = now();
     if (!dump_mem && !dumpAlloc()) { DEV(rtPeek();) return; }
-    dump_k = 0; dump_dif = 0; dump_lastn = 0; dump_on = 1;
+    dump_k = 0; dump_dif = 0; dump_lastn = 0; dump_on = DUMP_TAKING;
     alog("dump: capturing %u frame(s), level %s\n", dump_nf, dump_names[dump_level]);
     return;
   }
-  if (dump_on != 2) return;
+  if (dump_on != DUMP_WRITE) return;
   char d[64], p[96];
   sceIoMkdir("ux0:data/nativedraw/dumps", 0777);
   int n = 0;
@@ -409,6 +410,6 @@ static void dumpTick(void) {
   for (int i = 0; i < VN; i++) dump_bf[i] = VN;
   dump_n++; dump_t = now();
   if (!dump_auto || dump_n >= 10) dumpFree();  // (in automatic the memory stays for the next one)
-  dump_on = 0;
+  dump_on = DUMP_OFF;
   alog("dump: done in %s%s\n", d, dump_dif ? " (automatic)" : "");
 }

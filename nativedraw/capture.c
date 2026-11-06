@@ -76,7 +76,7 @@ static uint32_t f_cmds, f_draws, f_us, f_t0;  // of the current frame; f_t0: sta
 // Exact split of the capturer's time (switch cap_split; the clock costs ~0.4 us per read), per kind of frame: cs_t adds up the
 // current frame, cs_s the second by kind, cs_r is what the log thread prints. The five extra slots: frames, commands, draws, us and
 // processor us.
-enum { CS_EV, CS_FLIP, CS_WALK, CS_HIT, CS_OWN, CS_DRAW, CS_REG, CS_RST, CS_RIX, CS_RVT, CS_RBK, CS_RRW, CS_RTX, CS_VFL, CS_N };
+enum { CS_EV, CS_FLIP, CS_WALK, CS_HIT, CS_OWN, CS_DRAW, CS_REG, CS_RST, CS_RIX, CS_RVT, CS_RBK, CS_RRW, CS_RTX, CS_VFL, CS_XFER, CS_N };
 static uint32_t cs_on, cs_skip, cs_t[CS_N], cs_s[3][CS_N + 5], cs_r[3][CS_N + 5];  // cs_skip: what events did that has its own column
 #ifdef NP_BENCH  // (tools/perf judges the capturer, not this measurement)
 #define CST() 0
@@ -235,6 +235,20 @@ static void clPut(uint32_t b, uint32_t ord, const uint32_t *src) {
   __sync_synchronize();
   cl_tag[i] = clTag(b, ord);
 }
+#ifdef NP_DEV
+// Photo measure: pages of PSP RAM (0x08000000 to 0x0A000000) read for the frame (fp_now, marked by fpMark from the
+// capturer and the record), the start of its first list (fp_key), the pages read by the last 4 frames of up to 4 first
+// lists (fp_h, fp_hk, fp_hn: how many frames each has) and the counts of fpFlip (fp_s; fp_r: those of the last second)
+// fp_run: the pieces fpFlip predicted last (first page, pages), copied by fpProbe with switch photo_probe
+#define FP_N 8192
+static uint32_t fp_now[FP_N / 32], fp_key, fp_hk[4], fp_hn[4], fp_h[4][4][FP_N / 32], fp_s[9], fp_r[9], fp_run[256][2], fp_nrun;
+static int photo_probe;
+static void fpMark(uint32_t a, uint32_t n) {
+  if (a < 0x08000000u || a >= 0x0A000000u || !n) return;
+  for (uint32_t p = (a - 0x08000000u) >> 12, e = (a + n - 1 - 0x08000000u) >> 12; p <= e && p < FP_N; p++)
+    __atomic_or_fetch(&fp_now[p >> 5], 1u << (p & 31), __ATOMIC_RELAXED);
+}
+#endif
 // Copies 64 bytes of PSP RAM (PSP address b) to dst with two NEON loads
 static void neon64(uint32_t *dst, uint32_t b) {
   const void *src = (const void *)PSP(b);
@@ -264,6 +278,7 @@ static void neon256(uint32_t *dst, uint32_t b) {
 // or reads 256 bytes of PSP RAM (64 at the end of a range) and shares them. Leaves the line in r->buf
 static uint32_t rdc(Rd *r, uint32_t a, uint32_t ord) {
   if (a - r->a < r->n) return r->buf[(a - r->a) >> 2];
+  DEV(fpMark(a, 4);)
   uint32_t b = a & ~63u, e = ramEnd(a);
   if (b + 64 > e) return *(volatile uint32_t *)PSP(a);  // (end of a range)
   // 1 in 8 shared cache lines, timed
@@ -858,6 +873,7 @@ static void recTex(uint32_t ta) {
 // Returns to the top level of the list (abandons the current sublist and its recording or check)
 #define UNWIND() (l->sp = 0, l->pc = l->stk[0][0], l->off = l->stk[0][1], recAbort(), chk = NULL)
 DEV(static uint32_t xm_ok, xm_skip, xm_out, xc_more;)  // pages applied to the mirror, without a copy, out of the real VRAM; extra log lines allowed
+DEV(static uint32_t xm_t[3], xm_r[3];)  // RAM to VRAM transfers applied to the mirror: calls, bytes, us (xm_r: those of the last second)
 // Applies a RAM to VRAM transfer to the mirror the list is read with, row by row and page by page: the mirror is from the
 // last flip, and a game can copy sublists or data to VRAM during the frame and use them right after. Pages without a copy
 // are skipped; the lines of the destination leave the read buffer and the readers' cache. Copies by aligned words:
@@ -866,7 +882,7 @@ static void xferMirror(uint32_t s, uint32_t t, uint32_t bp) {
   if (isVram(s) || !isVram(t)) return;
   uint32_t sw = reg[0xB3] & 0xFFFF, dw = reg[0xB5] & 0xFFFF, w = ((reg[0xEE] & 0x3FF) + 1) * bp, h = (reg[0xEE] >> 10 & 0x3FF) + 1;
   uint32_t src = s + ((reg[0xEB] >> 10 & 0x3FF) * sw + (reg[0xEB] & 0x3FF)) * bp, dst = t + ((reg[0xEC] >> 10 & 0x3FF) * dw + (reg[0xEC] & 0x3FF)) * bp;
-  DEV(uint32_t at = cap_at; cap_at = 3; uint32_t k0 = xm_ok, k1 = xm_skip, k2 = xm_out, s0 = src, d0 = dst;)
+  DEV(uint32_t at = cap_at; cap_at = 3; uint32_t k0 = xm_ok, k1 = xm_skip, k2 = xm_out, s0 = src, d0 = dst; xm_t[0]++; xm_t[1] += w * h;)
   for (uint32_t y = 0; y < h; y++, src += sw * bp, dst += dw * bp)
     for (uint32_t o = 0, n; o < w; o += n) {
       n = 4096 - ((dst + o) & 4095);
@@ -875,6 +891,7 @@ static void xferMirror(uint32_t s, uint32_t t, uint32_t bp) {
       int real = (dst + o) >> 24 == 4 && !((dst + o) & 0x200000);  // (0x04000000 and its plain copy 0x04400000; the others scramble addresses)
       DEV(if (!real) xm_out++; else if (!ra) xm_skip++; else xm_ok++;)
       if (!ra || !real || ramEnd(src + o) < src + o + n) continue;
+      DEV(fpMark(src + o, n);)
       if ((ra | (src + o) | n) & 3) for (uint32_t i = 0; i < n; i += 2) ((volatile uint16_t *)PSP(ra))[i / 2] = ((volatile uint16_t *)PSP(src + o))[i / 2];
       else for (uint32_t i = 0; i < n; i += 4) ((volatile uint32_t *)PSP(ra))[i / 4] = ((volatile uint32_t *)PSP(src + o))[i / 4];
       for (uint32_t b = ra & ~63u; b < ra + n; b += 64) if (clOk(b)) cl_tag[clSlot(b)] = 0;
@@ -884,6 +901,52 @@ static void xferMirror(uint32_t s, uint32_t t, uint32_t bp) {
       static uint32_t nlog;  // walk_log: transfers with pieces not applied (destination page without a copy, or out of the real VRAM)
       if (wlog && (xm_skip != k1 || xm_out != k2) && nlog < 4000) { nlog++; clog("vram copy applied: ram %08x to %08x, %ux%u x%u: pieces applied %u, without a copy %u, outside VRAM %u (frame %u)\n", s0, d0, w / bp, h, bp, xm_ok - k0, xm_skip - k1, xm_out - k2, gen); })
 }
+#ifdef NP_DEV
+// At the flip: the frame's pages, what the photo would copy (the pages of the last 4 frames with the same first list, 8
+// more on each side, in pieces joined when 4 or fewer pages apart) and the pages it would miss; then the frame goes into
+// the history of its first list. fp_s: frames, pages, pages copied, pieces, pages missed, frames with a miss, frames with
+// no history (the game would wait for a live walk)
+static void fpFlip(void) {
+  static uint32_t u[FP_N / 32], pr[FP_N / 32], rr;
+  uint32_t k, h, pages = 0, pred = 0, runs = 0, miss = 0;
+  for (k = 0; k < 4 && fp_hk[k] != fp_key; k++) {}
+  if (k == 4) { k = rr++ & 3; fp_hk[k] = fp_key; fp_hn[k] = 0; }
+  h = fp_hn[k] < 4 ? fp_hn[k] : 4;
+  sceClibMemset(u, 0, sizeof u); sceClibMemset(pr, 0, sizeof pr);
+  for (uint32_t j = 0; j < h; j++) for (uint32_t w = 0; w < FP_N / 32; w++) u[w] |= fp_h[k][j][w];
+  for (uint32_t p = 0; p < FP_N; p++)
+    if (u[p >> 5] >> (p & 31) & 1) for (uint32_t q = p < 8 ? 0 : p - 8; q <= p + 8 && q < FP_N; q++) pr[q >> 5] |= 1u << (q & 31);
+  for (uint32_t p = 0, e = 0; p < FP_N; p++) {
+    if (!(pr[p >> 5] >> (p & 31) & 1)) continue;
+    if (!e || p - e > 4) { if (runs < 256) { fp_run[runs][0] = p; fp_run[runs][1] = 0; } runs++; }
+    else for (; e < p; e++) { pr[e >> 5] |= 1u << (e & 31); if (runs <= 256) fp_run[runs - 1][1]++; }
+    if (runs <= 256) fp_run[runs - 1][1]++;
+    e = p + 1;
+  }
+  fp_nrun = runs < 256 ? runs : 256;
+  for (uint32_t w = 0; w < FP_N / 32; w++) {
+    pages += __builtin_popcount(fp_now[w]); pred += __builtin_popcount(pr[w]); miss += __builtin_popcount(fp_now[w] & ~pr[w]);
+  }
+  fp_s[0]++; fp_s[1] += pages; fp_s[2] += pred; fp_s[3] += runs;
+  if (h) { fp_s[4] += miss; fp_s[5] += miss > 0; } else fp_s[6]++;
+  sceClibMemcpy(fp_h[k][fp_hn[k]++ & 3], fp_now, sizeof fp_now);
+  sceClibMemset(fp_now, 0, sizeof fp_now); fp_key = 0;
+}
+// Switch photo_probe, at each sync the capturer handles: copies by DMA the pieces of the last prediction into a buffer
+// that is thrown away, 64 KB at a time, to see whether the copy slows the PSP's GE (it runs when the capturer gets to the
+// sync, not at the game's own sync). fp_s[7], fp_s[8]: KB and us
+static void fpProbe(void) {
+  static uint8_t buf[64 << 10] __attribute__((aligned(64)));
+  uint32_t t0 = now(), kb = 0;
+  for (uint32_t r = 0; r < fp_nrun; r++)
+    for (uint32_t a = 0x08000000u + (fp_run[r][0] << 12), e = a + (fp_run[r][1] << 12), n; a < e; a += n) {
+      n = e - a < sizeof buf ? e - a : sizeof buf;
+      if (ramEnd(a) < a + n) break;
+      sceDmacMemcpy(buf, (const void *)PSP(a), n); kb += n >> 10;
+    }
+  fp_s[7] += kb; fp_s[8] += now() - t0;
+}
+#endif
 #define MEASURES_WALK
 #include "measures.h"
 #ifdef NP_DEV
@@ -1169,8 +1232,9 @@ static int __attribute__((noinline)) walkList(List *l) {
         DEV(static uint32_t nxl; if (nxl < WCAP(40)) { nxl++; clog("transfer after the sync: list %u at pc %08x sublevel %u, ram %08x to %08x, sync seen %u (frame %u): rest of the list dropped\n", l->ord, pc, l->sp, s, t, sync_seen, gen); })
         return 1;
       }
-      DEV(xferNote(s, t, d & 1 ? 4 : 2); uint32_t xa = xm_ok, xb = xm_skip, xo = xm_out;)
+      DEV(xferNote(s, t, d & 1 ? 4 : 2); uint32_t xa = xm_ok, xb = xm_skip, xo = xm_out, tx = now();)
       xferMirror(s, t, d & 1 ? 4 : 2);
+      DEV(xm_t[2] += now() - tx; CSA(CS_XFER, tx);)
       DEV(trXfer(l, pc, s, t, d & 1 ? 4 : 2, xm_ok - xa, xm_skip - xb, xm_out - xo);)
       DEV(cap_at = 4;)
       if (reg_on) regXfer(s, t, d & 1 ? 4 : 2);
@@ -1421,6 +1485,7 @@ static void event(volatile uint32_t *e) {
     sceClibMemset(l, 0, sizeof *l);
     l->pc = a & 0x0FFFFFFC; l->stall = b & 0x0FFFFFFF; l->qid = c; l->ord = e[5];
     l->t_enq = l->t_stall = e[4]; l->ahead = qt - qh - 1; l->lo = ~0u;
+    DEV(if (!fp_key) fp_key = l->pc;)
     uint32_t w = e[0] >> 8 & ~1u;  // what the game waited at the gate before queueing this list
     if (e[0] >> 8) { acc.eg_n++; acc.eg_us += w; DEV(syncSeen(sync_ord_v, e[4] - w, w, 'e');) }
     DEV(if (gap.t_sync) { uint32_t g = e[4] - gap.t_sync; if (g < 100000) { gap.n++; gap.sum += g; if (g > gap.max) gap.max = g; } gap.t_sync = 0; })
@@ -1432,6 +1497,7 @@ static void event(volatile uint32_t *e) {
         break;
       }
   } else if (t == EV_DSYNC) {
+    DEV(if (photo_probe) fpProbe();)
     sync_seen = c;
     DEV(syncSeen(c, e[4] - (a & ~1u), a & ~1u, 'd'); sync_ord_v = c;)
     DEV(gap.t_sync = e[4];)  // c: the last queued list; e[4]: after the gate (the GE wait comes later)
@@ -1439,6 +1505,7 @@ static void event(volatile uint32_t *e) {
     if (a) { acc.syncs_waited++; acc.sync_wait_us += a & ~1u; }
     if (qh != qt) { acc.behind++; rg_short = 1; }
   } else if (t == EV_LSYNC) {
+    DEV(if (photo_probe) fpProbe();)
     for (uint32_t i = qt; i != qh; i--) if (q[(i - 1) & 63].qid == a) { sync_seen = q[(i - 1) & 63].ord; break; }
     DEV(syncSeen(lastOrdOf(a), e[4] - (b & ~1u), b & ~1u, 'l'); sync_ord_v = lastOrdOf(a);)
     acc.lsyncs++;
@@ -1587,6 +1654,7 @@ static void event(volatile uint32_t *e) {
     f_cmds = f_draws = f_us = 0;
     DEV(if (level >= 2) lifeFlip(); if (crowd_on) skipNote();)
     lf_ord_cmds = 0;
+    DEV(fpFlip();)
     gen++; ntex = 0;
     DEV(for (int k = 0; k < 4; k++) smp_f[k] = 0;)
     DEV(ltFlip();)
@@ -1604,7 +1672,7 @@ static void event(volatile uint32_t *e) {
       acc.t0 = n - sec_t0;
       if (level) cpuSample();
       DEV(if (off_min != ~0u) { off = off_min; off_min = ~0u; })  // clock: the minimum of the last second
-      if (!rep_ready) { DEV(sceClibMemcpy(cs_r, cs_s, sizeof cs_r); sceClibMemset(cs_s, 0, sizeof cs_s);) rep = acc; gr = ga; rep_ready = 1; }
+      if (!rep_ready) { DEV(sceClibMemcpy(cs_r, cs_s, sizeof cs_r); sceClibMemset(cs_s, 0, sizeof cs_s); sceClibMemcpy(xm_r, xm_t, sizeof xm_r); sceClibMemset(xm_t, 0, sizeof xm_t); sceClibMemcpy(fp_r, fp_s, sizeof fp_r); sceClibMemset(fp_s, 0, sizeof fp_s);) rep = acc; gr = ga; rep_ready = 1; }
       // the record yields complete 2D frames (drawn by the Vita): NativeLink copies all requested VRAM at each flip
       if (reg_on) {
         if ((ga.ok + ga.skip) * 2 > ga.fr && ga.d3 * 10 < (ga.draws ? ga.draws : 1)) gp_flags |= 16; else gp_flags &= ~16u;
@@ -1888,9 +1956,13 @@ static int repThread(SceSize args, void *argp) {
       static const char *cn[3] = { "not_recorded", "complete", "incomplete" };
       for (int c = 0; c < 3; c++) if (cs_r[c][CS_N]) {
         const uint32_t *x = cs_r[c], n = x[CS_N];
-        clog("  capture split %s: frames=%u commands=%u draws=%u | us/f: total=%u cpu=%u events=%u flip=%u walk=%u hit=%u own=%u draw=%u record=%u state=%u index=%u vertices=%u blocks=%u rows=%u textures=%u vflush=%u\n", cn[c], n,
-             x[CS_N + 1] / n, x[CS_N + 2] / n, x[CS_N + 3] / n, x[CS_N + 4] / n, x[CS_EV] / n, x[CS_FLIP] / n, x[CS_WALK] / n, x[CS_HIT] / n, x[CS_OWN] / n, x[CS_DRAW] / n, x[CS_REG] / n, x[CS_RST] / n, x[CS_RIX] / n, x[CS_RVT] / n, x[CS_RBK] / n, x[CS_RRW] / n, x[CS_RTX] / n, x[CS_VFL] / n);
+        clog("  capture split %s: frames=%u commands=%u draws=%u | us/f: total=%u cpu=%u events=%u flip=%u walk=%u hit=%u own=%u draw=%u record=%u state=%u index=%u vertices=%u blocks=%u rows=%u textures=%u vflush=%u xfer=%u\n", cn[c], n,
+             x[CS_N + 1] / n, x[CS_N + 2] / n, x[CS_N + 3] / n, x[CS_N + 4] / n, x[CS_EV] / n, x[CS_FLIP] / n, x[CS_WALK] / n, x[CS_HIT] / n, x[CS_OWN] / n, x[CS_DRAW] / n, x[CS_REG] / n, x[CS_RST] / n, x[CS_RIX] / n, x[CS_RVT] / n, x[CS_RBK] / n, x[CS_RRW] / n, x[CS_RTX] / n, x[CS_VFL] / n, x[CS_XFER] / n);
       }
+      if (xm_r[0]) clog("  vram copies (per frame): calls=%u KB=%u us=%u\n", xm_r[0] / f, xm_r[1] / f >> 10, xm_r[2] / f);
+      if (fp_r[0]) { uint32_t g = fp_r[0];
+        clog("  photo footprint (per frame): frames=%u pages=%u copied=%u pieces=%u missed=%u | frames with a miss %u, with no history %u | probe KB=%u us=%u\n",
+             g, fp_r[1] / g, fp_r[2] / g, fp_r[3] / g, fp_r[4] / g, fp_r[5], fp_r[6], fp_r[7] / g, fp_r[8] / g); }
 #endif
       if (!level) goto sync;  // (minimum: only this line and the vram and sync one)
       if (reg_on) {  // frame record
