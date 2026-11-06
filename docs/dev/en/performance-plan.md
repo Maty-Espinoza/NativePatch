@@ -189,6 +189,83 @@ game runs at the capturer's speed: menu ~9 fps (4,500 draws), play 5-7 fps (6,50
 leaves out a 1024-wide shadow atlas (`161800`, `181800`, tiles drawn by moving the target 64 pixels) and an image at `162000`
 with an alpha test mask it cannot convert.
 
+## D. Reading PSP memory: photo at the sync (proposal, 2026-11-06)
+**Why.** Three facts, all from the logs:
+- Reading the PSP RAM from the Vita is the slow part: ~2 us per uncached 64-byte line. KBENCH, 1 MB: 34.6 ms uncached,
+  15.9 ms with memcpy, 7.2 ms by DMA; texture copies by DMA reach ~512 MB/s with ~100 us per call (`findings.md`).
+- God of War copies ~580 KB per menu frame from RAM to VRAM with TRANSFER (59 copies, `tests/perf/runs/0.0.24.8_gow_menu_play`,
+  frame 1450). The capturer repeats each copy word by word on uncached memory (`xferMirror`): about 34 of its 68 ms per menu
+  frame **[deduced: ~148,000 words x 0.2 us, not timed]**. Reads of lists and sublists add ~4 ms.
+- The game rewrites that RAM right after the sync. Today a RAM to VRAM transfer met after the sync drops the frame (no
+  garbage, no HD either); `hold_game` + `gate_sync` keeps it right but the game runs at the capturer's speed.
+
+**The idea.** At each sync, the memory the frame used is copied to the Vita (the **photo**) and only then the game goes
+on; the capturer walks the photo afterwards, as if it had been on time. Nothing the game writes after the sync can reach
+the frame, and the photo is read from the Vita's own memory, with cache.
+1. NativeLink posts the sync event **before** calling the original sync (today it posts it after the gate), lets the game
+   wait for its GE as always, and after that waits until the Vita marks the photo done (a new mailbox word; past ~20 ms
+   the game goes on and that frame is not drawn). The gate before enqueue is not used in this mode.
+2. A NativeDraw thread copies the predicted RAM pages into its own memory: DMA for big pieces, NEON for pieces under ~11 KB.
+   The copy runs while the game waits for its GE, so most of it costs the game nothing.
+3. Prediction: per list start address, the pages its last walks touched (the lab: last 4 walks of the same buffer, 8 pages
+   of margin each side, pieces up to 4 pages apart joined into one copy). A list never seen: the game waits at the sync
+   until it is walked live, once (like `hold_game`).
+4. The VRAM mirror copy is queued at the sync instead of the flip, and the capturer copies the pages it uses into its own
+   memory too; RAM to VRAM transfers then go from the photo to that copy with a normal memcpy.
+5. A page outside the photo is a **miss**: it is read live, the frame is not published, the state goes back to the last
+   clean frame (`st_good`) and the page joins the prediction. In the lab, the miss frame held the next frame's pieces:
+   a frame with a miss must never be drawn.
+6. Two photos (one walked while the next is taken). If both are busy at a sync, that frame gets no photo and is not drawn:
+   the game never waits for the capturer.
+
+No longer needed once it works (removed then, `good-practices.md` §2): the gate before enqueue and its self-check, the list
+life samples, the readers with their shared cache, claims and look-ahead check, the `late` and "transfer after the sync"
+drops, the data life samples. Sublist memory can stay (it saves interpreting) with checks that are now cheap.
+Memory: a photo is ~0.5-2 MB of RAM pages plus ~0.6 MB of VRAM pages; two take ~3-5 MB. The readers' cache (0.5 MB) and the
+sublist pool go back. Memory is short today (TODO): it may have to start with one photo.
+
+**Timing model** (`tools/perf/sync_model.py`: the logs above, measured unit costs; the GE wait, the footprint and the God of
+War play transfers are estimates until phase 0). Game fps / HD frames per second the capturer allows (translator and GPU
+apart), Vita DMA at 512 MB/s:
+
+| Game | Today (gate before enqueue) | `hold_game` + `gate_sync` | Photo, Vita DMA |
+|---|---|---|---|
+| God of War menu | 26 / 0 (transfers after the sync) | 15 / 15 | 30 / 29 |
+| God of War play | 26 / 0 | 8 / 8 | 25 / 12 (interpreting limits: 83 ms) |
+| Ridge Racer crowd | 46 / 31 (lists read late) | 31 / 31 | 60 / 43 |
+| Ridge Racer race | 60 / 60 | 60 / 60 | 60 / 60 |
+
+With DMA at 139 MB/s (KBENCH, 1 MB) God of War play drops to 22 fps and the crowd to 55: the copy no longer fits in the GE wait.
+A photo by the PSP's GE into the shared zone (VPROBE: 4.8 ms per MB) costs the game the whole copy, because it runs after
+the frame's lists: 25 / 23 in the menu, 52 / 37 in the crowd. It stays as the alternative.
+
+**Lab** (`tools/perf/sync_lab.c`, the real capturer and record under qemu, `sh tools/perf/sync_lab.sh`): a scripted game in
+three scenes, each frame compared with the same frame captured with the game held.
+
+| Scene | Today, capturer at 0 % / 50 % / 90 % of the list at the sync | Photo |
+|---|---|---|
+| `pieces` (God of War: pieces built in RAM, copied to 8 reused VRAM slots, rewritten after the sync) | all dropped | 13 right, 1 dropped (warm-up miss), 0 wrong; 182 KB and 2.5 copies per frame |
+| `pieces2` (the same, pieces in two buffers) | all dropped | 13 right, 1 dropped, 0 wrong |
+| `ring` (vertices in a ring that moves every frame) | all right | 34 right, 4 dropped (misses at each wrap of the ring), 0 wrong |
+
+**Phases** (each checked on the Vita before the next; the photo is a switch until it is the default):
+0. **Measure, nothing changes** (development build): (a) `xferMirror` time per frame in `capture split`; (b) DMA from PSP RAM to
+   the Vita's cached memory, per call and MB/s from 4 KB to 1 MB, once at start; (c) per frame, RAM pages the walk touches, the
+   copies they make and how many the lab's prediction would have missed (a log line); (d) a photo taken and thrown away at
+   each sync: does it slow the GE (`sync_GE_us`, game fps)? (a) and (c) need the same God of War run.
+1. **Quick win in today's design:** `xferMirror` by DMA for big pieces, if (a) confirms the 34 ms. Useful with `hold_game`
+   and as the copy of transfers inside the photo.
+2. **Photo with Vita DMA** (switch `photo`): NativeLink, the sync hook (event before the original sync, wait on the new word
+   after it); NativeDraw, the photo thread, `vtr()` to the photo, transfers from the photo, misses. Test: `sync_lab check`
+   with the real code, then God of War menu and play and the Ridge Racer race on the Vita.
+3. **Photo by default** and removal of what it replaces (simpler `capture.c`).
+4. **The capturer itself** (interpreting is 83 ms in God of War play): two photos walked by two threads at once (needs the GE
+   state at each sync: NativeLink saves the registers at each sync, not every 32 frames), and the GPU reading vertices from
+   the photo (C.1).
+
+Discarded: a cached view of live PSP RAM (KBENCH: only 1.7 times faster, and stale lines while the game writes); a photo of
+all 24 MB (over 50 ms); copying only the list at the sync (vertices and transfer sources are elsewhere).
+
 ## C. Large changes (ask the user first)
 1. **3D vertices in a GXM vertex shader reading the PSP RAM mapped for the GPU** (`sceGxmMapMemory` at 0x70000000 works,
    stage 1). Removes the vertex copy from the capturer (~5 ms) and the CPU transform from the translator (16-20 ms per HD

@@ -2,13 +2,14 @@
 
 The only list of pending work. Ordered from what comes next to what can wait. Each item says where it came from
 (a document in `docs/dev/en/`, `docs/agent/en/`, `docs/changelog/en/` or the claude.ai project). Done items are removed;
-what was done is in `CHANGELOG.md`. Updated 2026-11-05 (NativeLink 0.0.8 + NativeDraw 0.0.25 confirmed; tests up to NativeDraw 0.0.25.18). How the work is done: `docs/agent/en/workflow.md`; stage 3 plan and results:
+what was done is in `CHANGELOG.md`. Updated 2026-11-06 (NativeLink 0.0.8 + NativeDraw 0.0.25 confirmed; tests up to NativeDraw 0.0.25.20; photo at the sync proposed). How the work is done: `docs/agent/en/workflow.md`; stage 3 plan and results:
 `docs/agent/en/stage3-plan.md`.
 
 ## Next
 - [ ] **God of War, 1024-wide shadow atlas** (0.0.25.18): the game draws 64x64 tiles into a 1024-wide image (`161800`, `181800`) by moving the target 64 pixels each time (`161880`, `161900`...). The translator refuses targets over 512 wide and sees each position as an image of its own (only 2 per frame): left out, and what reads it gives `bad_texture` (all of play). Plan: one intermediate image at PSP size for the whole strip (1024 fits the surfaces), each position an offset inside it.
 - [ ] **God of War menu, image `162000` left out for `mask`:** an alpha test the translator cannot convert (`alphaFn`); what reads that image gives `other_target`. Log the alpha test register (0xDB) of that draw first.
-- [ ] **PSP-Vita frame sync for games that copy sublists to VRAM** (user's idea, 2026-11-05): `hold_game` + `gate_sync` keeps God of War's capture right (garbage gone) but the game runs at the capturer's speed (menu ~9 fps, play 5-7). To do: wait at the sync only when the Vita sees RAM to VRAM sublists (a mailbox flag), extend the gate's self-check to the transfer sources, and make the capturer fast enough (then optimize it with this game, `performance-plan.md`).
+- [ ] **Photo at the sync** (`docs/dev/en/performance-plan.md` §D, proposed 2026-11-06 from the user's frame-sync idea of 2026-11-05, instead of waiting at the sync only when needed): at each sync the RAM the frame used is copied to the Vita and the capturer walks that copy, so nothing the game writes after the sync reaches the frame and the reads have cache. Next: phase 0, measuring only (`xferMirror` time per frame, Vita DMA from PSP RAM per call and MB/s, pages the walk touches and the misses the prediction would have, whether a copy at the sync slows the GE), in a God of War run. Then the quick win (`xferMirror` by DMA) and the photo as a switch. Lab and model: `tools/perf/sync_lab.sh`.
+- [ ] **`sync_lab` does not model yet:** several syncs per frame, games that never call a sync (photo before the next enqueue or at the flip), CPU writes to VRAM, the GE slowed by the copy (bus), and the cost of the copy itself (the model `sync_model.py` does).
 - [ ] **God of War closes (C1-2858-3) with `hold_game`:** twice, the PSP stopped first (`capture health:` the capturer was idle); not with `hold_game` off; not seen with `gate_sync`. Suspected: frames of 200+ ms the game does not tolerate. Not proven.
 - [ ] **God of War, still to check once the menu and play are in HD:** the gray blocks of the menu (dumps 287-289: 9 draws with garbage state, from the mixed-frame captures; check again with the sync) and whether an image kept at PSP size was something sharp (`keep_hd`).
 - [ ] **Diagnostics added for God of War, remove when closed:** `walk_log`, `walk_trace` (flight recorder), `capture health:`, the `hold: flip walk` lines.
@@ -123,7 +124,7 @@ what was done is in `CHANGELOG.md`. Updated 2026-11-05 (NativeLink 0.0.8 + Nativ
       `dev` to `master` when the first release is made.
 
 ## Capture performance (stage 2 closed with ≥ 58 fps in the heaviest part of GT)
-- [ ] **Read the PSP RAM more cheaply** (postponed 2026-10-29: 58 fps minimum is enough for now). It limits the sublist
+- [ ] **Read the PSP RAM more cheaply** (now planned as the photo at the sync, above). It limits the sublist
       check: ~2 µs per line for the capturer and the readers; the capturer still compares ~5.5 ms per frame in the
       heaviest part of GT. Ideas: a cached view or DMA (KBENCH: 1.7–4 times faster on big blocks). Measure first.
       (`docs/changelog/en/etapa2_fase2_adelanto.md`, `etapa2_fase1_impacto.md`)

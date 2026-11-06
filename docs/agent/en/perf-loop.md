@@ -30,6 +30,8 @@ palettes, texture cache) and `sublists` (sublist memory and the readers, no reco
 - `complete`: frames the record published complete. It must not drop.
 What it cannot see: the real cost of uncached reads beyond the model, the readers running on other cores, the GE, the
 mirror timing, the translator and the GPU. A KEEP here is a candidate for the Vita, not a result.
+When and from where the capturer reads (the gate, the sync, a photo) is judged by `tools/perf/sync_lab.sh` instead: correctness
+frame by frame against a held capture, and a timing model per design.
 
 ## 2. Reference and verdict
 - `tools/perf/baseline.json` (in the repo) is the reference: the numbers of the last confirmed state. `bench.sh` compares

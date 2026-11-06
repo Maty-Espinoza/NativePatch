@@ -24,6 +24,9 @@ echo "== capturer bench (builds and runs one scene)"
 arm-linux-gnueabihf-gcc -static -O2 -mthumb -mfpu=neon -mfloat-abi=hard -w -I$B/inc -o $B/bench $R/tools/perf/capture_bench.c
 $(command -v qemu-arm-static || command -v qemu-arm) $B/bench rr_race | grep -q "complete=38" || { echo "FAIL: capture_bench"; exit 1; }
 echo "ok   capture_bench"
+echo "== memory-reading lab (photo at the sync draws nothing wrong; today's capture drops the God of War frames)"
+arm-linux-gnueabihf-gcc -static -O2 -mthumb -mfpu=neon -mfloat-abi=hard -w -I$B/inc -o $B/sync_lab $R/tools/perf/sync_lab.c
+$(command -v qemu-arm-static || command -v qemu-arm) $B/sync_lab check
 
 echo "== log parsers"
 C=$R/tests/run; X=$B/corrida

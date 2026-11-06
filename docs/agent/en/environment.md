@@ -69,6 +69,7 @@ GitHub release built by `.github/workflows/toolchain.yml` on push.
 | `bottleneck.py <run> [from_s to_s]` | What limits the HD frames, second by second: translator, GPU, no new frame; translator parts, pixels per program, capturer (`../../dev/en/logs-and-switches.md`) |
 | `perf/bench.sh [--save] [scene]` | Performance bench of the capturer and the record on ARM under qemu (`perf/capture_bench.c`): per scene, a deterministic estimate of Vita microseconds from the memory counters and the CPU time under qemu, compared with `perf/baseline.json`. `perf/iterate.sh [--keep]` adds the capturer test and prints KEEP/REVERT; `perf/ai_loop.sh [n]` runs Claude Code unattended on it (`perf-loop.md`) |
 | `perf/bench.sh`, `perf/iterate.sh`, `perf/instr.sh`, `perf/ab.sh`, `perf/tr_check.sh`, `perf/arm_count.sh` | Performance bench (`perf-loop.md`): counters, instructions per frame, verdict, comparison with a commit, same translator output, real ARM count |
+| `perf/sync_lab.sh [check \| <scene> [<mode>]]` | Lab for how the capturer reads PSP memory (`perf/sync_lab.c`, the real capturer and record under qemu, a scripted game): today's gate, `hold_game` and the photo at the sync, frame by frame against the held capture (`DETAIL=1`: per frame); then the timing model `perf/sync_model.py` (game fps and HD per design, from the Vita logs). `../../dev/en/performance-plan.md` §D |
 | `dump.py <dump folder> [K]` | Draws a dumped frame on the PC imitating the GE and compares it with the normal image and the Vita's (`../../dev/en/dumps.md`). Needs numpy and Pillow |
 
 ## Tests
@@ -81,7 +82,7 @@ Rules: `good-practices.md` §7. When to run them: `workflow.md` §3.
 | Execution: components communicate | `python3 tools/test_link.py <run> [version.txt]` | PC, on the logs after a Vita run |
 | Performance on the PC (not one of the three: a filter before the Vita) | `sh tools/perf/bench.sh`, `sh tools/perf/iterate.sh` | PC, same packages as the capturer test; `perf-loop.md` |
 
-`test_ci.sh` runs the capturer test, the parsers against the `tests/run/` fixture (and a damaged copy, which must
+`test_ci.sh` runs the capturer test, the memory-reading lab (`sync_lab check`), the parsers against the `tests/run/` fixture (and a damaged copy, which must
 fail) and the production builds.
 
 ### Capturer test outside the Vita (qemu)
