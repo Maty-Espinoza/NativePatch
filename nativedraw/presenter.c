@@ -322,7 +322,7 @@ static int isBlack(const uint32_t *p, uint32_t line, uint32_t w, uint32_t h) {  
 // row, the normal image is shown and the Vita keeps drawing behind to compare; after 10 frames in a row almost equal
 // (10 points different or fewer), the Vita drawing returns.
 // cur_hd: surface cur has a Vita drawing (not a copy)
-static uint32_t cur_hd, surf_dif, surf_ok, covered;
+static uint32_t cur_hd, surf_dif, surf_ok, covered, cov_k;  // cov_k: blocks that differed when covered was set
 static int diffBlocks(const uint32_t *pj, const uint32_t *ps) {  // different points (of 64; tolerance 40 per channel)
   int k = 0;
   for (int j = 0; j < 8; j++)
@@ -459,7 +459,7 @@ static int hookEnd(SceGxmContext *c, const SceGxmNotification *v, const SceGxmNo
     if (t_on && draw_on && drawn == fr && cur_hd && !surf_ready) g_skip++;
     if (t_on && draw_on && drawn == fr && cur_hd && surf_ready) {  // covered: normal image differs from the Vita drawing
       int k = diffBlocks(pj, surf[cur]);
-      if (k >= 32) { surf_ok = 0; if (++surf_dif >= 6 && !covered) { covered = 1; } }
+      if (k >= 32) { surf_ok = 0; if (++surf_dif >= 6 && !covered) { covered = 1; cov_k = k; } }
       else { surf_dif = 0; if (k <= 10 && covered && ++surf_ok >= 10) covered = 0; }
     }
     // Check (1 of every 4 frames): blocks of the Vita drawing different from the normal image (dump.c); 6 to 8 or
@@ -624,14 +624,16 @@ static void notifs(volatile uint32_t *nr) {
 static tai_hook_ref_t ref_ctrl;
 static SceUID hk_ctrl = -1;
 static uint32_t combo0;
-// Hook on sceCompatWriteSharedCtrl (ScePspemu): the buttons the Vita passes to the PSP. L+R+SELECT requests a dump;
+// Hook on sceCompatWriteSharedCtrl (ScePspemu): the buttons the Vita passes to the PSP. L+R+SELECT requests a dump (in
+// automatic, turns the automatic captures on or off);
 // L+R+START opens or closes the menu (only while the PSP image is being seen). With the menu open or a combination
 // held, the game receives "nothing pressed".
 static int hookCtrl(SceCtrlDataPsp *p) {
   if (p && ready) {
     static uint32_t cv0;  // L+R+SELECT (0x301): dump
     uint32_t cv = (p->Buttons & 0x301) == 0x301;
-    if (cv && !cv0 && (dump_on == DUMP_OFF || dump_on == DUMP_ARMED) && !dump_req) dump_req = 1;
+    if (cv && !cv0 && dump_auto) dump_go ^= 1;
+    else if (cv && !cv0 && (dump_on == DUMP_OFF || dump_on == DUMP_ARMED) && !dump_req) dump_req = 1;
     cv0 = cv;
     if (cv) { p->Buttons = 0; p->Lx = p->Ly = p->Rx = p->Ry = 128; }
     uint32_t combo = (p->Buttons & 0x308) == 0x308;  // L (0x100) + R (0x200) + START (0x8)
@@ -726,7 +728,7 @@ static int presThread(SceSize args, void *argp) {
     repTick();
     if (menu != m0) { m0 = menu; alog("presenter: menu %s\n", m0 ? "open" : "closed"); }
     static uint32_t tp0;
-    if (covered != tp0) { tp0 = covered; alog("translator: %s\n", tp0 ? "something covers the image (not in the record): normal image" : "the Vita drawing is back"); }
+    if (covered != tp0) { tp0 = covered; alog(tp0 ? "translator: something covers the image (not in the record, %u of 510 blocks differ): normal image\n" : "translator: the Vita drawing is back\n", cov_k); }
     if (warned < 2 && n_pres >= (warned ? 60 : 1)) alog("presenter: %s\n", warned++ ? "60 frames drawn" : "first frame drawn");
     DEV(if (!((k + 1) % 20)) bnLog();)
     if (++k < 200) continue;

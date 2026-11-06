@@ -14,7 +14,7 @@ static volatile uint32_t dump_req, dump_on, dump_k;
 extern volatile uint32_t nd_exact_until;  // (capture.c) until when the record carries the exact PSP image
 DEV(extern volatile uint32_t nd_dump_mark;)  // (capture.c) the running program asked for a dump
 // whether automatic; dumps made; time of the last; bad blocks of the one that triggered the automatic; request time
-static uint32_t dump_auto, dump_n, dump_t, dump_dif, dump_t0;
+static uint32_t dump_auto, dump_n, dump_t, dump_dif, dump_t0, dump_go;  // dump_go: automatic captures on (L+R+SELECT)
 // Level (0 off, 1 screenshot, 2 frame, 3 sequence, 4 auto) and frames per dump
 static uint32_t dump_level = 3, dump_nf = VN;
 static const char *dump_names[5] = { "off", "screenshot", "frame", "sequence", "auto" };
@@ -366,13 +366,18 @@ static void dumpFree(void) {  // frees all the dump memory
   dump_rtblk = 0; dump_rt = 0; dump_mem = 0;
   DEV(fl_lent = 0;)
 }
-// In the presenter thread (every 50 ms): in automatic it arms the dump (dump_on = DUMP_ARMED, at most 10 per game); with an
-// L+R+SELECT request it takes the memory and starts capturing; when capture ends (dump_on = DUMP_WRITE) it writes the
+// In the presenter thread (every 50 ms): in automatic, while L+R+SELECT has them on (dump_go), it arms the dump (dump_on =
+// DUMP_ARMED, at most 10 per game); otherwise, with an L+R+SELECT request it takes the memory and starts capturing; when capture ends (dump_on = DUMP_WRITE) it writes the
 // files to the first free dumps/NNN folder and frees the memory (except in automatic).
 static void dumpTick(void) {
   DEV(failTick();)
   DEV(if (nd_dump_mark) { nd_dump_mark = 0; if (dump_on == DUMP_OFF || dump_on == DUMP_ARMED) dump_req = 1; })
-  if (dump_auto && dump_on == DUMP_OFF && dump_n < 10) {  // automatic: armed (the memory stays taken)
+  static uint32_t go0;
+  if (dump_auto && dump_go != go0) {
+    go0 = dump_go; alog("dump: automatic captures %s (L+R+SELECT)\n", go0 ? "on" : "off");
+    if (!go0 && dump_on == DUMP_ARMED) dump_on = DUMP_OFF;
+  }
+  if (dump_auto && dump_go && dump_on == DUMP_OFF && dump_n < 10) {  // automatic: armed (the memory stays taken)
     if (!dump_mem && !dumpAlloc()) { dump_auto = 0; return; }
     dump_k = 0; dump_dif = 0; dump_lastn = 0; dump_on = DUMP_ARMED;
     return;

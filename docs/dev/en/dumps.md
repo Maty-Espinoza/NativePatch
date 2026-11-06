@@ -13,10 +13,10 @@ information is needed and how much it can cost.
 | `screenshot` | 1 frame: PSP image + Vita image + one line | ~3 MB only while saving |
 | `frame` | 1 frame with everything: images, text, frame record (`.bin`), intermediate image and the exact PSP image | ~8 MB only while saving; the PSP copies its image for ~1.5 s (slower during that time) |
 | `sequence` | 3 consecutive frames with everything (with the exact image, like `frame`) | ~15 MB only while saving; same |
-| `auto` | like `sequence`, and it also triggers by itself when a block of the Vita image does not look like any of the last 4 PSP images | ~17 MB taken for the whole game; a few ms per frame of the Adrenaline thread; nothing for the PSP |
+| `auto` | like `sequence`, and while L+R+SELECT has them on (press it again to turn them off) it also triggers by itself when a block of the Vita image does not look like any of the last 4 PSP images | ~17 MB taken from the first L+R+SELECT to the end of the game; a few ms per frame of the Adrenaline thread; nothing for the PSP |
 
 - Each dump ends up in `ux0:data/nativedraw/dumps/NNN/`. Saving takes about 7 s (the card): meanwhile, another one
-  cannot be made. The NativeDraw log notes `dump: done in ... (automatic)`.
+  cannot be made. The NativeDraw log notes `dump: done in ... (automatic)` and `dump: automatic captures on/off (L+R+SELECT)`.
 - `auto`: compares (1 out of every 2 frames) 16x16 blocks of the Vita image with the **last 4 PSP images** that Adrenaline
   copied and takes the most similar one (the Vita is 1–2 frames behind: this way the lag does not count). It triggers with
   6 blocks that do not look like any of them (and fewer than half: with more, it is a dialog on top). `fK_normal.bmp` is

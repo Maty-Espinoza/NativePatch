@@ -13,10 +13,10 @@ información hace falta y cuánto puede costar.
 | `screenshot` | 1 frame: imagen del PSP + imagen de la Vita + una línea | ~3 MB solo mientras guarda |
 | `frame` | 1 frame con todo: imágenes, texto, registro (`.bin`), imagen intermedia y la imagen exacta del PSP | ~8 MB solo mientras guarda; el PSP copia su imagen ~1,5 s (más lento ese rato) |
 | `sequence` | 3 frames seguidos con todo (con la imagen exacta, como `frame`) | ~15 MB solo mientras guarda; lo mismo |
-| `auto` | como `sequence`, y además se dispara solo cuando un bloque de la imagen de la Vita no se parece a ninguna de las últimas 4 imágenes del PSP | ~17 MB tomados todo el juego; unos ms por frame del hilo de Adrenaline; nada para el PSP |
+| `auto` | como `sequence`, y mientras L+R+SELECT las tenga encendidas (otra vez para apagarlas) además se dispara solo cuando un bloque de la imagen de la Vita no se parece a ninguna de las últimas 4 imágenes del PSP | ~17 MB tomados desde el primer L+R+SELECT hasta el fin del juego; unos ms por frame del hilo de Adrenaline; nada para el PSP |
 
 - Cada volcado queda en `ux0:data/nativedraw/dumps/NNN/`. Guardar tarda unos 7 s (la tarjeta): mientras, no se
-  puede hacer otro. El log de NativeDraw anota `dump: done in ... (automatic)`.
+  puede hacer otro. El log de NativeDraw anota `dump: done in ... (automatic)` y `dump: automatic captures on/off (L+R+SELECT)`.
 - `auto`: compara (1 de cada 2 frames) bloques de
   16x16 de la imagen de la Vita con las **últimas 4 imágenes del PSP** que copió Adrenaline y vale la más parecida (la
   Vita va 1–2 frames atrás: así el atraso no cuenta). Se dispara con 6 bloques que no se parecen a ninguna (y menos de
