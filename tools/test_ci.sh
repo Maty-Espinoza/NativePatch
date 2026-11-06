@@ -15,7 +15,7 @@ echo "== capturer"
 $(command -v qemu-arm-static || command -v qemu-arm) $B/prueba
 
 echo "== translator: GPU and CPU paths draw the same triangles"
-G=$(T=$T sh $R/tools/perf/tr_gv.sh); echo "$G" | grep -q "lines equal" || { echo "FAIL: tr_gv"; exit 1; }
+G=$(T=$T sh $R/tools/perf/tr_gv.sh) && [ "$(echo "$G" | grep -c "lines equal")" -eq "$(ls $R/tools/perf/data/*.bin.gz | wc -l)" ] || { echo "$G" | grep -A2 "differs\|length"; echo "FAIL: tr_gv"; exit 1; }
 # the crowd frame: draws joined by indices, thousands of draws arrive as hundreds of GXM calls
 [ "$(echo "$G" | grep 'draws=3688' | sed 's/.*gxm_draws=\([0-9]*\).*/\1/' | head -1)" -lt 400 ] || { echo "FAIL: GXM draws in the crowd"; exit 1; }
 # God of War combat: a shadow atlas 1024 wide, a glow chain in one row and more than 64K vertices, all in the two surfaces

@@ -129,9 +129,9 @@ static SceGxmShaderPatcherId i5;
 static int skI(void) { return -1; }
 static void triS(int sk, uint32_t k, float *o, float *ou, float *ov, float *og, float *c) {}
 #endif
-// One vertex as the GPU's clip stage sees it: position, UV in texels, fog, color (thousandths, so a rounding of 1 passes).
+// One vertex as the GPU's clip stage sees it, into r: position, UV in texels, fog, color (thousandths, so a rounding of 1 passes).
 // k: its place in the stream
-static void triV(uint32_t k) {
+static void triV(uint32_t k, float *r) {
   float o[4], u, v, g, c[4];
   int sk = skI();
   if (sk >= 0) triS(sk, k, o, &u, &v, &g, c);
@@ -169,19 +169,23 @@ static void triV(uint32_t k) {
     for (int i = 0; i < 4; i++) c[i] = q->c >> i * 8 & 255;
   }
   if (fprog >> 28 == ((uint32_t)ifc & 15)) u = v = 0;  // (no texture: its UV means nothing)
-  fprintf(tri, "V %.5g %.5g %.6g %.5g %.3f %.5g %.5g %.4f %.4f %.4f %.4f\n", o[0], o[1], o[2], o[3], u * set_w, v, g, c[0] / 1000, c[1] / 1000, c[2] / 1000, c[3] / 1000);
+  const float x[11] = { o[0], o[1], o[2], o[3], u * set_w, v, g, c[0] / 1000, c[1] / 1000, c[2] / 1000, c[3] / 1000 };
+  memcpy(r, x, sizeof x);
 }
-// The triangles of a draw of n vertices in order, each with the winding it has on screen; those with two equal vertices (joined
-// strips) draw nothing and are left out
+// 1 if vertices a and b (triV) are equal: by value, so -0 and 0 are, which the bytes of the stream tell apart
+static int triEq(const float *a, const float *b) { for (int i = 0; i < 11; i++) if (a[i] != b[i]) return 0; return 1; }
+// The triangles of a draw of n vertices in order, each with the winding it has on screen; those with two vertices equal as the GPU
+// sees them (joined strips) draw nothing and are left out
 static void triDump(SceGxmPrimitiveType t, const uint16_t *ix, unsigned n) {
-  uint32_t sz = vprog == gvp[0] || vprog == gvp[3] ? 24 : vprog == gvp[1] ? 16 : vprog == gvp[2] ? 20 : skI() >= 0 ? gsz[skI()] : sizeof(TV);
   for (unsigned i = 0; i + 2 < n; i += t == SCE_GXM_PRIMITIVE_TRIANGLES ? 3 : 1) {
     unsigned a = t == SCE_GXM_PRIMITIVE_TRIANGLE_FAN ? 0 : i, b = i + 1, c = i + 2;
     if (t == SCE_GXM_PRIMITIVE_TRIANGLE_STRIP && i & 1) { unsigned s = b; b = c; c = s; }
     a = ix[a]; b = ix[b]; c = ix[c];
-    const uint8_t *p = stream;
-    if (!memcmp(p + a * sz, p + b * sz, sz) || !memcmp(p + b * sz, p + c * sz, sz) || !memcmp(p + a * sz, p + c * sz, sz)) continue;
-    fprintf(tri, "D %08x\n", fprog); triV(a); triV(b); triV(c);
+    float r[3][11];
+    triV(a, r[0]); triV(b, r[1]); triV(c, r[2]);
+    if (triEq(r[0], r[1]) || triEq(r[1], r[2]) || triEq(r[0], r[2])) continue;
+    fprintf(tri, "D %08x\n", fprog);
+    for (int j = 0; j < 3; j++) fprintf(tri, "V %.5g %.5g %.6g %.5g %.3f %.5g %.5g %.4f %.4f %.4f %.4f\n", r[j][0], r[j][1], r[j][2], r[j][3], r[j][4], r[j][5], r[j][6], r[j][7], r[j][8], r[j][9], r[j][10]);
   }
 }
 static uint32_t gxm_calls;
