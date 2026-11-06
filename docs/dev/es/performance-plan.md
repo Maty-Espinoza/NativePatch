@@ -299,14 +299,18 @@ Racer; logs en
    la misma corrida de God of War.
 1. **Mejora rápida en el diseño de hoy:** `xferMirror` por DMA para los pedazos grandes, si (a) confirma los 34 ms. Sirve con
    `hold_game` y como la copia de las transferencias dentro de la foto.
-   **Probada en 0.0.25.26 (banco, falta la Vita):** los pedazos que se siguen en el origen y en el espejo (filas enteras,
+   **Hecha en 0.0.25.26:** los pedazos que se siguen en el origen y en el espejo (filas enteras,
    páginas seguidas) se juntan en tramos; un tramo de 8 KB o más va por DMA, uno menor por `sceClibMemcpy` y uno desalineado
    por medias palabras como antes. Banco (`gow_menu_xfer`, `gow_play_xfer`: las 59 transferencias registradas de un frame del
    menú y un frame de combate de 97 transferencias, 1,35 MB): menú 35,3 -> 9,6 ms, combate 84,1 -> 21,8 ms (todo por CPU:
    14,4 / 34,1; un DMA por tramo: 13,3 / 27,4). 8 KB queda a menos de 2 % del mejor umbral con cualquiera de los costos aún no
-   medidos (llamada DMA 72-181 us, escritura de la CPU en la RAM del PSP 2,5-11 ns/B). Falta saber en la Vita si el DMA y
-   `sceClibMemcpy` pueden escribir en la RAM del PSP (nunca se había hecho) y cuánto cuesta: lo miden al arrancar las líneas
-   `memory bench (PSP RAM->mirror ...)`.
+   medidos (llamada DMA 72-181 us, escritura de la CPU en la RAM del PSP 2,5-11 ns/B). **Vita** (`stage3_0.0.25.26/gow1`,
+   `hold_game` + `gate_sync`): RAM del PSP -> espejo con memcpy de la CPU ~12,5 ns/B, por DMA ~65 us por llamada más ~1,7
+   ns/B, palabra por palabra ~47 ns/B; todas las copias llegaron (los dos bloques son memoria normal sin caché, tipo 0x80).
+   Copias por frame de combate 70 -> 10 ms (menú 30 -> 4,6); capturador ~200 -> ~160 ms por frame de combate, juego 5,5 ->
+   6,8 fps en combate y 8,7 -> 10,2 en el menú. Los frames HD siguen en ~4 por segundo: el traductor también está ocupado el
+   segundo entero. Lo que queda en el capturador por frame de combate: registro ~76 ms (vértices, índices y matrices ~45,
+   texturas ~25), recorrido ~70.
    Lo siguiente en el mismo camino: el registro vuelve a leer de memoria sin caché los vértices transferidos (~40 ms por
    frame de combate); una copia con caché de las últimas transferencias, de la que lea el registro, ahorraría ~15 ms más por
    frame de combate (banco: combate 19,4 ms con la copia por CPU), con 512 KB más de memoria.

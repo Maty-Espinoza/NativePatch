@@ -285,13 +285,17 @@ three scenes, each frame compared with the same frame captured with the game hel
    each sync: does it slow the GE (`sync_GE_us`, game fps)? (a) and (c) need the same God of War run.
 1. **Quick win in today's design:** `xferMirror` by DMA for big pieces, if (a) confirms the 34 ms. Useful with `hold_game`
    and as the copy of transfers inside the photo.
-   **Tried in 0.0.25.26 (bench, waiting for the Vita):** pieces that follow each other in the source and in the mirror (whole
+   **Done in 0.0.25.26:** pieces that follow each other in the source and in the mirror (whole
    rows, consecutive pages) are joined into runs; a run of 8 KB or more goes by DMA, a smaller one by `sceClibMemcpy`, an
    unaligned one by halfwords as before. Bench (`gow_menu_xfer`, `gow_play_xfer`: the 59 logged transfers of a menu frame and
    a play frame of 97 transfers, 1.35 MB): menu 35.3 -> 9.6 ms, play 84.1 -> 21.8 ms (all CPU copies: 14.4 / 34.1; one DMA per
    run: 13.3 / 27.4). 8 KB stays within 2 % of the best threshold under every unit cost not measured yet (DMA call 72-181 us,
-   CPU write into PSP RAM 2.5-11 ns/B). Unknown until the Vita run: whether DMA and `sceClibMemcpy` can write into PSP RAM
-   (never done before) and what it costs: the `memory bench (PSP RAM->mirror ...)` lines measure it at start.
+   CPU write into PSP RAM 2.5-11 ns/B). **Vita** (`stage3_0.0.25.26/gow1`, `hold_game` + `gate_sync`): PSP RAM -> mirror
+   by CPU memcpy ~12.5 ns/B, by DMA ~65 us per call plus ~1.7 ns/B, word by word ~47 ns/B; every copy arrived (both blocks are
+   normal uncached memory, type 0x80). Transfers per combat frame 70 -> 10 ms (menu 30 -> 4.6); capturer ~200 -> ~160 ms per
+   combat frame, game 5.5 -> 6.8 fps in combat and 8.7 -> 10.2 in the menu. HD frames stay at ~4 per second: the translator
+   is busy the whole second too. What is left in the capturer per combat frame: record ~76 ms (vertices, indices and
+   matrices ~45, textures ~25), walk ~70.
    Next on the same path: the record reads the transferred vertices a second time from uncached memory (~40 ms per combat
    frame); a cached copy of the last transfers the record reads from would save ~15 ms more per combat frame (bench:
    play 19.4 ms with the CPU copy), with 512 KB more memory.
