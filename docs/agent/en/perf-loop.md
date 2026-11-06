@@ -9,9 +9,12 @@ conversation follows it by hand. The rules of `good-practices.md` and `CLAUDE.md
 `sh tools/perf/bench.sh` builds `tools/perf/capture_bench.c` (the real `capture.c` with the Vita functions replaced, on ARM
 under qemu) and runs synthetic scenes shaped like the games measured on the Vita: `rr_crowd` (3400 3D strip draws,
 23.8k vertices in RAM, VRAM textures), `rr_race` (900 of the same), `sprites2d` (300 rects with swizzled RAM textures and
-palettes, texture cache) and `sublists` (sublist memory and the readers, no record). Each scene gives, per frame:
+palettes, texture cache), `sublists` (sublist memory and the readers, no record), and `gow_menu_xfer` / `gow_play_xfer`
+(God of War's RAM to VRAM transfers: the 59 logged transfers of a menu frame, and 97 transfers of 1.35 MB per play frame
+whose shapes were not logged, each followed by a draw reading its vertices from the destination). Each scene gives, per frame:
 - **`mem_us`**: an estimate of Vita microseconds from counters that do not depend on the PC (256-byte reads of PSP RAM,
-  shared-cache hits, bytes the CPU copies or compares from PSP RAM, DMA calls and bytes, clock reads) and the unit costs
+  shared-cache hits, bytes the CPU copies or compares from PSP RAM, bytes it writes into PSP RAM (`ucw_kb`, an estimated
+  cost until the Vita measures it), bytes `xferMirror` copies word by word (`xw_kb`), DMA calls and bytes, clock reads) and the unit costs
   measured on the Vita (`capture_bench.c`, `C_*`). Deterministic: two runs of the same code give the same number. **This
   is the judge for anything that moves memory.**
 - **`ir_k/f`**: thousands of instructions per frame counted by Callgrind on an x86 build (`tools/perf/instr.sh`; apt packages
@@ -30,6 +33,8 @@ palettes, texture cache) and `sublists` (sublist memory and the readers, no reco
 - `complete`: frames the record published complete. It must not drop.
 What it cannot see: the real cost of uncached reads beyond the model, the readers running on other cores, the GE, the
 mirror timing, the translator and the GPU. A KEEP here is a candidate for the Vita, not a result.
+A change to `xferMirror` must also pass `tools/perf/xfer_diff.c` (build line at its top; 5000 cases with two seeds): random
+transfers compared byte by byte with the original word-by-word copy.
 When and from where the capturer reads (the gate, the sync, a photo) is judged by `tools/perf/sync_lab.sh` instead: correctness
 frame by frame against a held capture, and a timing model per design.
 
