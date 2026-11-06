@@ -401,6 +401,17 @@ static uint32_t rgVLater(uint32_t s, uint32_t n, int gpu) {
   f->na = o + n;
   return o + 1;
 }
+// 3D vertices in VRAM for the GPU: copied at once from their mirror copy to the end of tx, where rgVLater puts those in RAM.
+// 0 if they have no copy in the mirror or do not fit (the caller copies them as usual)
+static uint32_t rgSrc(uint32_t a, uint32_t n);
+static uint32_t rgVNow(uint32_t a, uint32_t n) {
+  RFrame *f = rf[rg_w];
+  uint32_t s = rgSrc(a, n), m = (n + 47) / 48 * 48;
+  if (!s || f->ntx + f->nvx + m > TX_N) return 0;
+  f->nvx += m;
+  sceClibMemcpy(f->tx + TX_N - f->nvx, (const void *)PSP(s), n);
+  return VX | (TX_N - f->nvx);
+}
 int sceGxmMapMemory(void *base, SceSize size, int attr);
 // (translator, with GXM initialized) maps for the GPU, read-only, the textures of all records
 int regMapGpu(void) {
@@ -683,7 +694,8 @@ static void regDraw(uint32_t n, uint32_t type, uint32_t vt, uint32_t idx) {
   d->vlen = nv * vs;
   // (3D: the texture rows do not come from the vertices, so they can wait)
   int later = !(vt >> 23 & 1) && rg_ordc && !isVram(vaddr) && ramEnd(vaddr) >= vaddr + d->vlen && d->vlen <= OR_N;
-  if (!(d->voff = later ? rgVLater(vaddr, d->vlen, rgVGpu(type, vt, idx)) : rgCopy(vaddr, d->vlen))) return;
+  uint32_t vn = !later && !(vt >> 23 & 1) && isVram(vaddr) && rgVGpu(type, vt, idx) ? rgVNow(vaddr, d->vlen) : 0;
+  if (!(d->voff = vn ? vn : later ? rgVLater(vaddr, d->vlen, rgVGpu(type, vt, idx)) : rgCopy(vaddr, d->vlen))) return;
   DEV(CSA(CS_RVT, tc); tc = CST();)
   d->woff = d->moff = d->loff = 0;
   static uint32_t lw, lwb, lm, ll;  // last matrix and light blocks of this frame (lwb: world and the 8 bones, for vertices with weights)
