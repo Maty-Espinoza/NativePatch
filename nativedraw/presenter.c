@@ -487,7 +487,7 @@ static int hookEnd(SceGxmContext *c, const SceGxmNotification *v, const SceGxmNo
         // The Vita drawing shows one frame behind the normal image, so an HD frame among frames that are not drawable
         // looks like a jump back: HD only resumes once the frames have been drawable for a whole second; until then
         // they are only checked (held back)
-        DEV(if (p_on) trCensus(rg);)
+        DEV(if (p_on) trCensus(rg); trImages(rg);)
         uint32_t t1 = now(), dp, od;
         int chk = t1 - t_bad < 1000000 && t_frame != ~0u, r = chk ? trCheckFrame(rg, &dp, &od) : trFrame(c, rg, s, src);
         if (chk && !r) r = T_HOLD;

@@ -1114,6 +1114,71 @@ static void trCensusLog(void) {
   cs_fr = cs_many = cs_wide = 0;
   sceClibMemset(cs_r, 0, sizeof cs_r); sceClibMemset(cs_tex, 0, sizeof cs_tex);
 }
+
+// Images of a frame (every frame, 40 distinct sets at most): the images other than the shown one, in the order they are
+// first drawn, are its set. The first time a set is seen it is logged, one line per image: address, width, format, the box
+// its draws cover (the corners of 16-bit rectangles, the scissor for the rest) and the first draws that read it as a
+// texture, with the texture's offset into the image, size and buffer width
+static void trImages(RFrame *f) {
+  static uint32_t sig[40], nsig;
+  typedef struct { uint32_t fb, w, psm, x0, y0, x1, y1, nd, d0, d1, nr, rd[4], ro[4], rs[4], rw[4]; } Img;
+  static Img im[16];
+  uint32_t disp = f->fb & 0x1FFFF0, ni = 0, h = 2166136261u, k;
+  if (nsig >= 40) return;
+  for (uint32_t i = 0; i < f->nd; i++) {
+    const RDraw *d = &f->d[i];
+    const uint32_t *e = f->e[d->st];
+    uint32_t fb = RE(e, 0x9C) & 0x1FFFF0, w = RE(e, 0x9D) & 0x7FF, psm = RE(e, 0xD2) & 3, vt = d->vt, tc = vt & 3;
+    if (fb == disp) continue;
+    for (k = 0; k < ni && (im[k].fb != fb || im[k].w != w || im[k].psm != psm); k++) {}
+    if (k == ni) {
+      if (ni == 16) continue;
+      Img *m = &im[ni++]; sceClibMemset(m, 0, sizeof *m);
+      m->fb = fb; m->w = w; m->psm = psm; m->x0 = m->y0 = 1 << 14; m->d0 = i;
+      h = (h ^ fb ^ w << 21 ^ psm << 30) * 16777619u;
+    }
+    Img *m = &im[k];
+    uint32_t x0, y0, x1, y1, d4 = RE(e, 0xD4), d5 = RE(e, 0xD5);
+    if (d->prim == 6 && !d->ioff && vt >> 23 & 1 && (vt >> 7 & 3) == 2 && !(vt >> 2 & 7) && !(vt >> 5 & 3) && (tc == 0 || tc == 2)) {
+      const int16_t *p = (const int16_t *)(f->a + d->voff - 1) + (tc ? 2 : 0);
+      uint32_t st = tc ? 5 : 3;
+      x0 = y0 = 1 << 14; x1 = y1 = 0;
+      for (uint32_t j = 0; j < d->n; j++, p += st) {
+        uint32_t x = p[0] < 0 ? 0 : p[0], y = p[1] < 0 ? 0 : p[1];
+        x0 = x < x0 ? x : x0; y0 = y < y0 ? y : y0; x1 = x > x1 ? x : x1; y1 = y > y1 ? y : y1;
+      }
+    } else { x0 = d4 & 0x3FF; y0 = d4 >> 10 & 0x3FF; x1 = (d5 & 0x3FF) + 1; y1 = (d5 >> 10 & 0x3FF) + 1; }
+    if (x1 > w) x1 = w;
+    m->x0 = x0 < m->x0 ? x0 : m->x0; m->y0 = y0 < m->y0 ? y0 : m->y0; m->x1 = x1 > m->x1 ? x1 : m->x1; m->y1 = y1 > m->y1 ? y1 : m->y1;
+    m->nd++; m->d1 = i;
+  }
+  for (uint32_t i = 0; i < f->nd && ni; i++) {  // (readers: the image whose memory holds the texture's address, the nearest below it)
+    const RDraw *d = &f->d[i];
+    const uint32_t *e = f->e[d->st];
+    uint32_t ta = texAddr(e), best = ni;
+    if (d->toff || !hasTex(e, d) || (ta & 0x0F000000) != 0x04000000) continue;
+    ta &= 0x1FFFF0;
+    for (k = 0; k < ni; k++)
+      if (ta >= im[k].fb && ta < im[k].fb + im[k].w * (im[k].psm == 3 ? 4 : 2) * (im[k].y1 ? im[k].y1 : 1) && (best == ni || im[k].fb > im[best].fb)) best = k;
+    if (best == ni) continue;
+    Img *m = &im[best];
+    if (m->nr < 4) { m->rd[m->nr] = i; m->ro[m->nr] = ta - m->fb; m->rs[m->nr] = RE(e, 0xB8) & 0xF0F; m->rw[m->nr] = RE(e, 0xA8) & 0x7FF; }
+    m->nr++;
+  }
+  if (!ni) return;
+  for (k = 0; k < nsig && sig[k] != h; k++) {}
+  if (k < nsig) return;
+  sig[nsig++] = h;
+  alog("translator: images set %u in frame %u (%u draws, shown %06x): %u images\n", nsig, f->frame, f->nd, disp, ni);
+  for (k = 0; k < ni; k++) {
+    Img *m = &im[k];
+    char b[200]; int n = 0;
+    for (uint32_t j = 0; j < m->nr && j < 4; j++)
+      n += sceClibSnprintf(b + n, sizeof b - n, " [%u +%x %ux%u w%u]", m->rd[j], m->ro[j], 1u << (m->rs[j] & 15), 1u << (m->rs[j] >> 8 & 15), m->rw[j]);
+    alog("translator:   image %06x/%u fmt %u box %u,%u-%u,%u | %u draws (%u..%u) | read by %u draws:%s\n", m->fb, m->w, m->psm, m->x0, m->y0, m->x1, m->y1,
+         m->nd, m->d0, m->d1, m->nr, n ? b : " none");
+  }
+}
 #endif
 
 // Leaves in each intermediate image of frame f the region its draws touch, so its scenes do not load and store the whole
