@@ -88,8 +88,8 @@ static uint32_t texAddr(const uint32_t *e) { return (RE(e, 0xA0) & 0xFFFFF0) | (
 // nd_fd, in between (modulate with doubling or fog, no alpha test), and nd_fa, nd_fd with a minimum alpha
 // (swizzled ones arrive already sorted from the record). Each fragment program is built once per blend that appears
 // (fps, up to 64) ---
-static SceGxmVertexProgram *nvp, *gvp[20];  // gvp: the 3D vertices of the record as they are: nd_v3, nd_v4 with 16-bit UV, with float UV, nd_v3 with 16-bit UV; from 4, nd_v5 (skinProg)
-static uint32_t gsz[16], g5try, g5r[6];  // nd_v5: vertex size of each program, programs tried (bits), resources of its attributes
+static SceGxmVertexProgram *nvp, *gvp[29];  // gvp: the 3D vertices of the record as they are: nd_v3, nd_v4 with 16-bit UV, with float UV, nd_v3 with 16-bit UV; from 4, nd_v5 (skinProg)
+static uint32_t gsz[25], g5try, g5r[6];  // nd_v5: vertex size of each program, programs tried (bits), resources of its attributes
 static SceGxmShaderPatcherId i5;
 static const SceGxmProgram *pft, *pfc, *pfm, *pfd, *pfa, *pv;
 static SceGxmShaderPatcherId ift, ifc, ifm, ifd, ifa;
@@ -219,18 +219,20 @@ static int trInit(void) {
   DEV(trBench();)
   return r3 < 0 ? r3 : 0;
 }
-// Place in gvp of the nd_v5 program for skinned vertex type vt (GVS), one per type, made with the patcher the first time: each
+// Place in gvp of the nd_v5 program for vertex type vt (GVS), one per type, made with the patcher the first time: each
 // attribute at the offset of its field in the vertex, laid out as in trVerts (aW1, with 4 weights or fewer, reads the first one
-// again: its bones are zero). The entry stays 0 if it cannot be made
+// again: its bones are zero; with no weights both read the position and all bones are zero). The entry stays 0 if it cannot be
+// made
 static uint32_t skinProg(uint32_t vt) {
-  uint32_t k = ((vt & 0x3F) == 0x3E ? 8 : 0) + (vt >> 14 & 7);
+  uint32_t wt = vt >> 9 & 3, k = ((vt & 0x3F) == 0x3E ? 8 : 0) + (vt >> 14 & 7) + (wt ? 0 : 16);
   if (g5try >> k & 1 || !g5) return 4 + k;
   g5try |= 1u << k;
   static const uint8_t s4[4] = { 0, 1, 2, 4 }, cs[8] = { 0, 0, 0, 0, 2, 2, 2, 4 };
-  uint32_t wn = (vt >> 14 & 7) + 1, fn[5] = { wn, 2, 1, 3, 3 }, fs[5] = { 4, s4[vt & 3], cs[vt >> 2 & 7], s4[vt >> 5 & 3], 4 }, o[5], z = 0;
-  for (int i = 0; i < 5; i++) { z = (z + fs[i] - 1) & ~(fs[i] - 1); o[i] = z; z += fn[i] * fs[i]; }
+  uint32_t wn = (vt >> 14 & 7) + 1, fn[5] = { wn, 2, 1, 3, 3 }, fs[5] = { wt ? 4 : 0, s4[vt & 3], cs[vt >> 2 & 7], s4[vt >> 5 & 3], 4 }, o[5] = { 0 }, z = 0;
+  for (int i = 0; i < 5; i++) if (fs[i]) { z = (z + fs[i] - 1) & ~(fs[i] - 1); o[i] = z; z += fn[i] * fs[i]; }
   gsz[k] = z = (z + 3) & ~3u;
-  SceGxmVertexAttribute a[6] = { { 0, 0, SCE_GXM_ATTRIBUTE_FORMAT_F32, wn < 4 ? wn : 4, g5r[0] }, { 0, wn > 4 ? 16 : 0, SCE_GXM_ATTRIBUTE_FORMAT_F32, wn > 4 ? wn - 4 : 1, g5r[1] },
+  SceGxmVertexAttribute a[6] = { { 0, wt ? 0 : o[4], SCE_GXM_ATTRIBUTE_FORMAT_F32, !wt ? 1 : wn < 4 ? wn : 4, g5r[0] },
+                                 { 0, !wt ? o[4] : wn > 4 ? 16 : 0, SCE_GXM_ATTRIBUTE_FORMAT_F32, wn > 4 ? wn - 4 : 1, g5r[1] },
                                  { 0, o[4], SCE_GXM_ATTRIBUTE_FORMAT_F32, 3, g5r[2] }, { 0, o[3], SCE_GXM_ATTRIBUTE_FORMAT_S8, 3, g5r[3] },
                                  { 0, o[1], (vt & 3) == 2 ? SCE_GXM_ATTRIBUTE_FORMAT_U16 : SCE_GXM_ATTRIBUTE_FORMAT_U8, 2, g5r[4] },
                                  { 0, o[2], SCE_GXM_ATTRIBUTE_FORMAT_U8, (vt >> 2 & 7) == 6 ? 2 : 4, g5r[5] } };
@@ -543,8 +545,8 @@ static void t3Uni(void *u, const T3 *t, float tw, float th, const float *wm, int
     sceGxmSetUniformDataF(u, g4gu, 0, 4, gu);
     return;
   }
-  if (lv >= 4) {  // (trVerts with weights: t3Flat, or t3Light with directional and point lights; t3Gen of an environment map. Rows of u: nd_v5.cg)
-    uint32_t fm = (lv - 4) >> 3, wn = ((lv - 4) & 7) + 1;  // (fm: 0 8-bit UV and 4444 color, 1 16-bit UV and 8888)
+  if (lv >= 4) {  // (trVerts with or without weights: t3Flat, or t3Light with directional and point lights; t3Gen of an environment map. Rows of u: nd_v5.cg)
+    uint32_t fm = (lv - 4) >> 3 & 1, wn = ((lv - 4) & 7) + 1;  // (fm: 0 8-bit UV and 4444 color, 1 16-bit UV and 8888)
     float q[252] = { 0 }, *ba = q + 24, *kc = q + 28, *md = q + 32, *ms = q + 36, s = t->rev ? -1 : 1, kt = fm ? k16 : 1 / 128.0f;
     sceClibMemcpy(q, m, 64); sceClibMemcpy(q + 20, fg, 16);
     q[16] = t->us * ku * kt; q[17] = t->vs * kv * kt; q[18] = t->uo * ku; q[19] = t->vo * kv;
@@ -567,7 +569,8 @@ static void t3Uni(void *u, const T3 *t, float tw, float th, const float *wm, int
       for (int k = 0; k < 3; k++) { md[k] = t->upd & 2 ? 0 : t->ad[k]; ms[k] = t->upd & 4 ? 0 : t->as[k]; }
       md[3] = t->upd >> 1 & 1; ms[3] = t->upd >> 2 & 1;
     }
-    for (uint32_t b = 0; b < wn; b++) for (int r = 0; r < 3; r++) for (int c = 0; c < 4; c++) q[124 + b * 12 + r * 4 + c] = t->b[b * 12 + c * 3 + r];
+    if (lv >= 20) q[51] = 1;
+    else for (uint32_t b = 0; b < wn; b++) for (int r = 0; r < 3; r++) for (int c = 0; c < 4; c++) q[124 + b * 12 + r * 4 + c] = t->b[b * 12 + c * 3 + r];
     sceGxmSetUniformDataF(u, g5, 0, 252, q);
     return;
   }
@@ -1635,7 +1638,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     }
     // Vertices the GPU reads as they are: no translated vertices, and the state below uses none of them
     int cov = sc[0] <= 0 && sc[1] <= 0 && sc[2] >= (dst ? dst->vr.xMax + 1 : W) && sc[3] >= (dst ? dst->vr.yMax + 1 : H);  // (nothing for the scissor to clip)
-    int gl = GVL(d->vt), sk = GVS(d->vt), gp = gl ? gl : sk ? skinProg(d->vt) : d->vt == 0x1BE ? 3 : 0, gnr = gl && !t3.lit && t3.gen == 1 && t3.prj == 3;
+    int gl = GVL(d->vt), sk = GVS(d->vt) && !(GV3(d->vt) && !(t3.lit && t3.nl)), gp = gl ? gl : sk ? skinProg(d->vt) : d->vt == 0x1BE ? 3 : 0, gnr = gl && !t3.lit && t3.gen == 1 && t3.prj == 3;
     int lok = gl ? gnr || (t3.lit && t3One(&t3)) : sk ? !t3.lit || t3Dl(&t3) : !(t3.lit && t3.nl), gok = !t3.gen || gnr || (sk && t3.gen == 2 && !t3.l[t3.ls0].type && !t3.l[t3.ls1].type);  // (lights and UV are what its program does)
     int gv = d->voff & VX && gvp[gp] && w3d && !self && cov && gok && lok && !grayFix(e) ? gp + 1 : 0;  // (gv: its program + 1)
     uint32_t prim = d->prim;

@@ -1,17 +1,18 @@
-// Skinned 3D vertices of the record as the game wrote them: float weights (up to 8, in aW0 and aW1) and position; 8-bit normal,
-// 8 or 16-bit UV and color as integers. What the GE does to them: position and normal are the sum of the bones by their weights; then
+// 3D vertices of the record as the game wrote them: float weights (none, or up to 8 in aW0 and aW1) and position; 8-bit normal, 8 or
+// 16-bit UV and color as integers. What the GE does to them: position and normal are the sum of the bones by their weights; then
 // directional and point lights or the lit color with no lights, UV scaled or from the normal (environment map), fog. Uniforms u, by
 // rows: 0-3 m, model -> surface clip space; 4 UV scale (xy) and offset (zw); 5 fog factor, dot(position, xyz) + w, 0 to 1; 6, 7 color
 // = 6 + 7 * vertex color + diffuse + specular + ambient; 8, 9, 62 diffuse, specular and ambient material, rgb + w * vertex color;
-// 10-12 model -> world for the normal (w of 10: 1 UV from the normal, w of 11: 1 8888 color, 0 4444 color in two bytes); 13, 14
-// directions of the UV from the normal, w its scale; 15-30 four lights: direction, or position with w 1 (point light), attenuation
-// (1, 0, 0 for a directional light) and specular power, diffuse color, specular color; 31-54 the 8 bones, 3 rows each (zero those
-// with no weight); 55-58 ambient color of each light; 59-61 model -> world for the position.
+// 10-12 model -> world for the normal (w of 10: 1 UV from the normal, w of 11: 1 8888 color, 0 4444 color in two bytes, w of 12: 1
+// no weights, position and normal as they are); 13, 14 directions of the UV from the normal, w its scale; 15-30 four lights:
+// direction, or position with w 1 (point light), attenuation (1, 0, 0 for a directional light) and specular power, diffuse color,
+// specular color; 31-54 the 8 bones, 3 rows each (zero those with no weight); 55-58 ambient color of each light; 59-61 model ->
+// world for the position.
 void main(float4 aW0, float4 aW1, float3 aPosition, float3 aNormal, float2 aTexcoord, float4 aColor, uniform float4 u[63],
           float4 out vPosition : POSITION, float3 out vTexcoord : TEXCOORD0, float4 out vColor : COLOR)
 {
   float4 x = float4(aPosition, 1), n = float4(aNormal, 0);
-  float3 s = 0, sn = 0;
+  float3 s = u[12].w * aPosition, sn = u[12].w * aNormal;
   for (int b = 0; b < 4; b++) {
     float4 r0 = u[31 + b * 3], r1 = u[32 + b * 3], r2 = u[33 + b * 3];
     s += aW0[b] * float3(dot(x, r0), dot(x, r1), dot(x, r2));

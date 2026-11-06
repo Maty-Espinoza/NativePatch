@@ -53,8 +53,8 @@ static inline uint32_t RE(const uint32_t *e, uint32_t r) {  // value of register
 #define GVL(vt) ((vt) == 0x142 ? 1 : (vt) == 0x143 ? 2 : 0)  // lit vertices nd_v4 reads: 1 16-bit UV, 2 float UV
 #define GV3(vt) ((vt) == 0x19F || (vt) == 0x1BE)  // vertices nd_v3 reads: float position, 8888 color, float UV (0x19F) or 16-bit UV and a normal it skips (0x1BE)
 // skinned vertices nd_v5 reads: 1 to 8 float weights and float position, 8-bit normal, with 8-bit UV and 4444 color (0x7B9) or with
-// 16-bit UV and 8888 color (0x7BE)
-#define GVS(vt) (((vt) & ~0x1C000u) == 0x7B9 || ((vt) & ~0x1C000u) == 0x7BE)
+// 16-bit UV and 8888 color (0x7BE); also the same with no weights
+#define GVS(vt) (((vt) & ~0x1C000u) == 0x7B9 || ((vt) & ~0x1C000u) == 0x7BE || (vt) == 0x1B9 || (vt) == 0x1BE)
 #define VX 0x80000000u  // (RDraw.voff) the vertices are in tx
 static inline const uint8_t *RV(const RFrame *f, const RDraw *d) {  // vertices of draw d
   return d->voff & VX ? f->tx + (d->voff & ~VX) : f->a + d->voff - 1;

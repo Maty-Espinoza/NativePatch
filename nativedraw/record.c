@@ -682,14 +682,14 @@ static int rgDir(uint32_t on) {
 }
 // The vertex size if the GPU can take the vertices of a draw as they are, 0 if not: no indices, triangles in a scissor that takes in the whole
 // image (what is seen of one 480 wide or more, all of a narrower one) or in the one of the last clear; for nd_v3 the types of GV3, no lights
-// and no generated UV, for nd_v4 16-bit position and normal, no color and one directional light or, with no lighting, UV from the normal;
-// for nd_v5 the types of GVS, directional and point lights and no generated UV or the environment map of two directional lights. The record must be
+// and no generated UV (lit, those of GVS go to nd_v5), for nd_v4 16-bit position and normal, no color and one directional light or, with
+// no lighting, UV from the normal; for nd_v5 the types of GVS, directional and point lights and no generated UV or the environment map of two directional lights. The record must be
 // free of the GPU: it reads these bytes while drawing.
 static uint32_t rgVGpu(uint32_t type, uint32_t vt, uint32_t idx) {
   uint32_t w = reg[0x9D] & 0x7FF, on = (reg[0x18] & 1) | (reg[0x19] & 1) << 1 | (reg[0x1A] & 1) << 2 | (reg[0x1B] & 1) << 3, l = 0;
   while (on >> l > 1) l++;  // (the last light on)
   uint32_t lt = reg[0x5F + l], lit = reg[0x17] & 1 && on;
-  if (!(DEV(!cpu_verts &&) (GV3(vt) ? !lit && !(reg[0xC0] & 3) : GVL(vt) ? (reg[0x17] & 1 ? on && !(on & (on - 1)) && !(lt >> 8 & 3) && (lt & 3) != 2 && !(reg[0xC0] & 3) : (reg[0xC0] & 0x303) == 0x301) :
+  if (!(DEV(!cpu_verts &&) (GV3(vt) && !lit ? !(reg[0xC0] & 3) : GVL(vt) ? (reg[0x17] & 1 ? on && !(on & (on - 1)) && !(lt >> 8 & 3) && (lt & 3) != 2 && !(reg[0xC0] & 3) : (reg[0xC0] & 0x303) == 0x301) :
         GVS(vt) && (!lit || rgDir(on)) && (!(reg[0xC0] & 3) || ((reg[0xC0] & 3) == 2 && !(reg[0x5F + (reg[0xC1] & 3)] & 0x300) && !(reg[0x5F + (reg[0xC1] >> 8 & 3)] & 0x300)))) && !idx && type >= 3 && type <= 5 && !(reg[0xD3] & 1) && (reg[0x50] & 1) &&
         ((!(reg[0xD4] & 0xFFFFF) && (reg[0xD5] & 0x3FF) + 1 >= (w < 480 ? w : 480) && (w < 480 || (reg[0xD5] >> 10 & 0x3FF) >= 271)) ||
          (!((reg[0xD4] ^ rg_box[0]) & 0xFFFFF) && !((reg[0xD5] ^ rg_box[1]) & 0xFFFFF) && !((reg[0x9C] ^ rg_box[2]) & 0xFFFFF0))))) return 0;

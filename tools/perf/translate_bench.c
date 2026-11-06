@@ -82,21 +82,23 @@ int sceGxmBeginScene(SceGxmContext *context, unsigned int flags, const SceGxmRen
 static const float *uni(const SceGxmProgramParameter *p) { return ((typeof(&par[0]))p)->v; }
 #ifdef GVS
 // Which nd_v5 program (skinProg) is in the context; -1 if none
-static int skI(void) { for (int k = 0; k < 16; k++) if (gvp[4 + k] && vprog == gvp[4 + k]) return k; return -1; }
+static int skI(void) { for (int k = 0; k < 25; k++) if (gvp[4 + k] && vprog == gvp[4 + k]) return k; return -1; }
 // triV for nd_v5 program sk (skinProg): its attributes laid out as in trVerts; components not given are 0, w 1
 static void triS(int sk, uint32_t k, float *o, float *ou, float *ov, float *og, float *c) {
   float u, v, g;
   static const uint8_t s4[4] = { 0, 1, 2, 4 }, cs[8] = { 0, 0, 0, 0, 2, 2, 2, 4 };
-  uint32_t vt = sk >> 3 ? 0x7BE : 0x7B9, wn = (sk & 7) + 1, z = 0, of[5], fn[5] = { wn, 2, 1, 3, 3 }, fs[5] = { 4, s4[vt & 3], cs[vt >> 2 & 7], s4[vt >> 5 & 3], 4 };
-  for (int i = 0; i < 5; i++) { z = (z + fs[i] - 1) / fs[i] * fs[i]; of[i] = z; z += fn[i] * fs[i]; }
+  uint32_t vt = (sk >> 3 & 1 ? 0x7BE : 0x7B9) & (sk >= 16 ? 0x1FF : ~0u), wn = (sk & 7) + 1, z = 0, of[5] = { 0 }, fn[5] = { wn, 2, 1, 3, 3 },
+           fs[5] = { sk < 16 ? 4 : 0, s4[vt & 3], cs[vt >> 2 & 7], s4[vt >> 5 & 3], 4 };
+  for (int i = 0; i < 5; i++) if (fs[i]) { z = (z + fs[i] - 1) / fs[i] * fs[i]; of[i] = z; z += fn[i] * fs[i]; }
   const uint8_t *p = (const uint8_t *)stream + k * gsz[sk];
-  const float *pf = (const float *)p, *x = (const float *)(p + of[4]), *q = uni(g5);
+  const float *x = (const float *)(p + of[4]), *pf = sk < 16 ? (const float *)p : x, *q = uni(g5);
   float w8[8] = { 0, 0, 0, 1, 0, 0, 0, 1 }, nr[3], t2[2], a[4] = { 0, 0, 0, 1 }, s3[3] = { 0, 0, 0 }, sn[3] = { 0, 0, 0 }, wv[3], d[3] = { 0, 0, 0 }, ps[3] = { 0, 0, 0 }, am[3] = { 0, 0, 0 }, cv[4], wp[3];
   for (uint32_t i = 0; i < wn && i < 4; i++) w8[i] = pf[i];
   for (uint32_t i = 0; i < (wn > 4 ? wn - 4 : 1); i++) w8[4 + i] = pf[wn > 4 ? 4 + i : i];
   for (int i = 0; i < 3; i++) nr[i] = (int8_t)p[of[3] + i];
   for (int i = 0; i < 2; i++) t2[i] = (vt & 3) == 2 ? ((const uint16_t *)(p + of[1]))[i] : p[of[1] + i];
   for (int i = 0; i < ((vt >> 2 & 7) == 6 ? 2 : 4); i++) a[i] = p[of[2] + i];
+  for (int r = 0; r < 3; r++) { s3[r] = q[51] * x[r]; sn[r] = q[51] * nr[r]; }
   for (int b = 0; b < 8; b++) for (int r = 0; r < 3; r++) {
     const float *m = q + (31 + b * 3 + r) * 4;
     s3[r] += w8[b] * (x[0] * m[0] + x[1] * m[1] + x[2] * m[2] + m[3]); sn[r] += w8[b] * (nr[0] * m[0] + nr[1] * m[1] + nr[2] * m[2]);
@@ -245,10 +247,10 @@ static void gvMark(RFrame *f) {
   for (uint32_t i = 0; i < f->nd; i++) {
     RDraw *d = &f->d[i];
     const uint32_t *e = f->e[d->st];
-    uint32_t d5 = RE(e, 0xD5), w = RE(e, 0x9D) & 0x7FF, m = d->vlen, vz = d->n ? d->vlen / d->n : 16;
+    uint32_t d5 = RE(e, 0xD5), w = RE(e, 0x9D) & 0x7FF, m = d->vlen, vz = d->n ? d->vlen / d->n : 16, lo = RE(e, 0x17) & (RE(e, 0x18) | RE(e, 0x19) | RE(e, 0x1A) | RE(e, 0x1B)) & 1;
     if (RE(e, 0xD3) & 1) { b4 = RE(e, 0xD4); b5 = d5; b9 = RE(e, 0x9C); }
     if ((!GV3(d->vt) && !GVL(d->vt) && !GVS(d->vt)) || d->ioff || d->prim < 3 || d->prim > 5 || RE(e, 0xD3) & 1 || !(RE(e, 0x50) & 1) ||
-        (GV3(d->vt) && (RE(e, 0xC0) & 3 || RE(e, 0x17) & (RE(e, 0x18) | RE(e, 0x19) | RE(e, 0x1A) | RE(e, 0x1B)) & 1)) ||
+        (GV3(d->vt) && (lo ? !GVS(d->vt) : RE(e, 0xC0) & 3)) ||
         (GVL(d->vt) && (RE(e, 0x17) & 1 ? RE(e, 0xC0) & 3 : (RE(e, 0xC0) & 0x303) != 0x301)) || (GVS(d->vt) && !gvSkin(f, d, e)) ||
         ((RE(e, 0xD4) & 0xFFFFF || (d5 & 0x3FF) + 1 < (w < 480 ? w : 480) || (w >= 480 && (d5 >> 10 & 0x3FF) < 271)) &&
          ((RE(e, 0xD4) ^ b4) & 0xFFFFF || (d5 ^ b5) & 0xFFFFF || (RE(e, 0x9C) ^ b9) & 0xFFFFF0))) continue;
