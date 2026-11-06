@@ -296,6 +296,13 @@ three scenes, each frame compared with the same frame captured with the game hel
    combat frame, game 5.5 -> 6.8 fps in combat and 8.7 -> 10.2 in the menu. HD frames stay at ~4 per second: the translator
    is busy the whole second too. What is left in the capturer per combat frame: record ~76 ms (vertices, indices and
    matrices ~45, textures ~25), walk ~70.
+   **Split with `cap_split`** (`tests/perf/runs/0.0.25.26_gow_cap_split`, complete combat frames of ~6,900 draws; the clock reads
+   inflate the total to ~188 ms, ~171 of CPU): record 112 (vertices 37.5, textures 22.2, matrix and light blocks 11.3, state
+   4.9, indices 3.9, texture rows 3.5, ~29 not split, mostly the clock reads themselves), interpreter 34.9, flip 21.6,
+   transfers 9.2, `draw()` 9.0, list reads 7.8, events 4.8. The vertices are 1.56 MB per frame copied from the mirror in
+   ~6,100 small pieces (~256 bytes each): 24 ns per byte, twice the 12 ns of a big uncached copy, so each piece pays the
+   latency of uncached memory. Those bytes were just copied by `xferMirror`: reading them from a cached copy of the last
+   transfers (prototype `claude/xfer_staging_c2.patch` in the claude.ai project) is the next step; then textures and the flip.
    Next on the same path: the record reads the transferred vertices a second time from uncached memory (~40 ms per combat
    frame); a cached copy of the last transfers the record reads from would save ~15 ms more per combat frame (bench:
    play 19.4 ms with the CPU copy), with 512 KB more memory.

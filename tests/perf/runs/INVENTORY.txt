@@ -29,6 +29,7 @@ rr_crowd.bin.gz                 Crowd, ends in vertex_out
 
 0.0.24.8_gow_menu_play: God of War Ghost of Sparta with hold_game, menu ~4,500 draws per frame and play 6,000-13,000: capturer 65 and 100-150 ms per frame, record over its limit of draws.
 0.0.25.21_phase0: phase 0 of the photo (performance-plan.md §D): gow/ God of War menu and play, rr/ Ridge Racer race, both with hold_game and gate_sync. Lines vram copies, photo footprint and memory bench (DMA into cached).
+0.0.25.26_gow_cap_split: God of War menu and combat with hold_game, gate_sync and cap_split: the capturer split per frame after transfers went by DMA (record 112 ms, interpreter 35, flip 22 per combat frame), memory bench (PSP RAM->mirror), and the end of the fight where BASE goes wrong (second ~408).
 
 Still only in the relays
 Mac: stage3_0.0.16.4/rr1 (run behind the capturer analysis), if it is kept there; stage3_0.0.22.1/rr1.

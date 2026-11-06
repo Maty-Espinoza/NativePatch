@@ -10,6 +10,23 @@ the Vita but not yet confirmed as a numbered release.
   KEEP/REVERT step (`iterate.sh`) and the unattended loop with Claude Code (`ai_loop.sh`, `docs/agent/en/perf-loop.md`).
 - `docs/dev/*/performance-plan.md`: the ordered plan towards 60 fps, from the analysis of the capturer on `stage3_0.0.16.4/rr1`.
 
+## NativeDraw 0.0.26 (2026-11-06)
+Tests 0.0.25.1-0.0.25.26, checked on the Vita with God of War Ghost of Sparta (`hold_game` + `gate_sync`): the menu and
+about half of the combat in HD (~4 HD frames per second), game 6.8 fps in combat and 10.2 in the menu (5.5 and 8.7 with
+0.0.25.25). Known: the ship's deck sometimes disappears in combat; after the fight the capturer's BASE goes wrong and it
+stops drawing (both in `TODO.md`).
+- **Bigger record in the spare 128 MB block:** what the GPU reads goes there; up to 16,384 draws and 4 MB of vertices per frame.
+- **Transfers:** to the plain VRAM copy at 0x04400000 too; one met after the list's sync drops the rest of the list, with the
+  transfer registers repaired from the GE snapshot; copied to the mirror in runs, by DMA from 8 KB and by memcpy below
+  (transfers per combat frame 70 -> 10 ms).
+- **Translator:** vertices with bone weights (8 bones); draws to images it cannot draw are left out; fixed blend factors
+  near zero and fixed-color blends with two grays; intermediate images share the two surfaces and atlas tiles are views of
+  their image, up to 96K vertices per surface; type `0x1BE` with no lights and 3D vertices in VRAM go to the GPU path.
+- **Measurements (development):** `hd_mark`, `walk_log`, `walk_trace`, `capture health`, photo measures (footprint, misses),
+  `memory bench (PSP RAM->mirror ...)`; named states for dumps and replay.
+- **Tools and tests:** `sync_lab` and `sync_model.py` (photo at the sync), bench scenes `gow_menu_xfer` / `gow_play_xfer`,
+  `xfer_diff.c`, `capture_test` case for a transfer joined across pages, `docs/dev/*/unsupported.md`.
+
 ## NativeDraw 0.0.25 + NativeLink 0.0.8 (2026-11-05)
 Tests 0.0.24.1-0.0.24.8, checked on the Vita with God of War Ghost of Sparta (`hold_game`): no crash in about 3 minutes of play, cutscene in HD. The menu (~4,500 draws per frame) and play (6,000-13,000) go past the record's limit, so they still show the normal image.
 - **GE state of the previous game:** when a frame failed, the capturer went back to the state of the last clean frame, which could belong to the previous game, so a game opened after another one never reached HD. NativeLink now publishes the real BASE and the capturer repairs its copy; going back to the last clean frame keeps it.

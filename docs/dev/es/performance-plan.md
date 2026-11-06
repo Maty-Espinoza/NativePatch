@@ -311,6 +311,14 @@ Racer; logs en
    6,8 fps en combate y 8,7 -> 10,2 en el menú. Los frames HD siguen en ~4 por segundo: el traductor también está ocupado el
    segundo entero. Lo que queda en el capturador por frame de combate: registro ~76 ms (vértices, índices y matrices ~45,
    texturas ~25), recorrido ~70.
+   **Desglose con `cap_split`** (`tests/perf/runs/0.0.25.26_gow_cap_split`, frames completos de combate de ~6.900 dibujos; las
+   lecturas del reloj inflan el total a ~188 ms, ~171 de CPU): registro 112 (vértices 37,5, texturas 22,2, bloques de matrices
+   y luces 11,3, estado 4,9, índices 3,9, filas de textura 3,5, ~29 sin desglosar, casi todo las propias lecturas del reloj),
+   intérprete 34,9, flip 21,6, transferencias 9,2, `draw()` 9,0, lecturas de la lista 7,8, eventos 4,8. Los vértices son
+   1,56 MB por frame copiados del espejo en ~6.100 pedazos chicos (~256 bytes cada uno): 24 ns por byte, el doble de los 12
+   ns de una copia grande sin caché, así que cada pedazo paga la espera de la memoria sin caché. Esos bytes los acaba de
+   copiar `xferMirror`: leerlos de una copia con caché de las últimas transferencias (prototipo `claude/xfer_staging_c2.patch`
+   en el proyecto de claude.ai) es el paso siguiente; después las texturas y el flip.
    Lo siguiente en el mismo camino: el registro vuelve a leer de memoria sin caché los vértices transferidos (~40 ms por
    frame de combate); una copia con caché de las últimas transferencias, de la que lea el registro, ahorraría ~15 ms más por
    frame de combate (banco: combate 19,4 ms con la copia por CPU), con 512 KB más de memoria.
