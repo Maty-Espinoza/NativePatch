@@ -906,8 +906,8 @@ static void xferNote(uint32_t s, uint32_t t, uint32_t bp) {
 }
 // --- Walk trace (switch walk_trace): ux0:pspemu/nativedraw_trace.log ---
 // A flight recorder of everything the walk does around VRAM sublists: two 8 MB halves of the spare block filled in turn.
-// The first suspicious event (trTrig: registers that differ from the real GE, a BASE, OFFSET or transfer position
-// changed inside a VRAM sublist, a transfer with a position or out of the real VRAM, a bad target, the list limit) arms it;
+// The first suspicious event (trTrig: registers that differ from the real GE, a BASE changed inside a VRAM sublist, a
+// transfer position changed, a transfer with a position or out of the real VRAM, a bad target, the list limit) arms it;
 // TR_AFTER frames later (or 10 s) it stops and the log thread writes both halves, oldest first.
 #define TR_HALF (8u << 20)
 #define TR_AFTER 150
@@ -1140,7 +1140,7 @@ static int __attribute__((noinline)) walkList(List *l) {
       if ((prev >> 24) == 0x0E) { acc.signals++; break; }
       return 1;
     case 0x0E: case 0x0F: break;
-    case 0x13: DEV(if (TR_ON && isVram(pc) && l->off != d << 8) { char w[48]; sceClibSnprintf(w, sizeof w, "offset %08x>%08x", l->off, d << 8); trCtx(w, l, pc); trTrig(w); }) l->off = d << 8; break;
+    case 0x13: DEV(if (TR_ON && isVram(pc) && l->off != d << 8) tlog("offset %08x>%08x at %08x sublevel %u\n", l->off, d << 8, pc, l->sp);) l->off = d << 8; break;
     case 0x14: l->off = pc; break;
     case 0x2A: case 0x3A: case 0x3C: case 0x3E: case 0x40: {
       int m = c == 0x2A ? 4 : (c - 0x3A) / 2;
