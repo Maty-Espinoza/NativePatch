@@ -17,7 +17,7 @@ UNIT = {
     'word_unc_us': 0.199,    # m: one uncached word read (performance-plan.md, translator split)
     'word_wr_us': 0.03,      # a: one uncached word write (KBENCH: 1 MB written in 4.4 ms = 0.017)
     'cpu_mbs': 91,           # m: CPU copy from uncached PSP RAM, MB/s (memcpy and neon256)
-    'cached_mbs': 1000,      # a: CPU copy or walk over the photo in Vita memory, MB/s
+    'cached_mbs': 550,       # m: CPU copy cached to cached, MB/s ('memory bench' line of nativedraw_capture.log: 376-720)
     'ge_ram_ms_mb': 4.8,     # m: PSP GE copy RAM to RAM, ms per MB (VPROBE)
     'latency_ms': 0.4,       # m: the Vita sees a PSP request, polling at ~100 us (KBENCH: p50 0.2-0.5 ms)
 }

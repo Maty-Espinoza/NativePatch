@@ -238,12 +238,12 @@ capturador (traductor y GPU aparte), DMA de la Vita a 512 MB/s:
 
 | Juego | Hoy (compuerta antes de encolar) | `hold_game` + `gate_sync` | Foto, DMA de la Vita |
 |---|---|---|---|
-| God of War, menú | 26 / 0 (copias después del sync) | 15 / 15 | 30 / 29 |
+| God of War, menú | 26 / 0 (copias después del sync) | 15 / 15 | 30 / 27 |
 | God of War, combate | 26 / 0 | 8 / 8 | 25 / 12 (limita interpretar: 83 ms) |
-| Ridge Racer, público | 46 / 31 (listas leídas tarde) | 31 / 31 | 60 / 43 |
+| Ridge Racer, público | 46 / 31 (listas leídas tarde) | 31 / 31 | 60 / 41 |
 | Ridge Racer, carrera | 60 / 60 | 60 / 60 | 60 / 60 |
 
-Con el DMA a 139 MB/s (KBENCH, 1 MB) el combate de God of War baja a 22 fps y el público a 55: la copia ya no cabe en la
+La línea `memory bench` que cada corrida escribe al arrancar mide el DMA de la RAM del PSP a la memoria **sin caché** de la Vita en 480-570 MB/s, pero la CPU lee esa memoria a solo ~100 MB/s: la foto tiene que quedar en memoria con caché, y el DMA a memoria con caché (invalidando la caché) todavía no está medido (fase 0). Con el DMA a 139 MB/s (KBENCH, 1 MB) el combate de God of War baja a 22 fps y el público a 55: la copia ya no cabe en la
 espera al GE. Una foto hecha por el GE del PSP en la zona compartida (VPROBE: 4,8 ms por MB) le cuesta al juego la copia
 entera, porque corre después de las listas del frame: 25 / 23 en el menú, 52 / 37 en el público. Queda como alternativa.
 

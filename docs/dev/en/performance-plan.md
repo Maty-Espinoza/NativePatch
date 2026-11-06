@@ -230,12 +230,12 @@ apart), Vita DMA at 512 MB/s:
 
 | Game | Today (gate before enqueue) | `hold_game` + `gate_sync` | Photo, Vita DMA |
 |---|---|---|---|
-| God of War menu | 26 / 0 (transfers after the sync) | 15 / 15 | 30 / 29 |
+| God of War menu | 26 / 0 (transfers after the sync) | 15 / 15 | 30 / 27 |
 | God of War play | 26 / 0 | 8 / 8 | 25 / 12 (interpreting limits: 83 ms) |
-| Ridge Racer crowd | 46 / 31 (lists read late) | 31 / 31 | 60 / 43 |
+| Ridge Racer crowd | 46 / 31 (lists read late) | 31 / 31 | 60 / 41 |
 | Ridge Racer race | 60 / 60 | 60 / 60 | 60 / 60 |
 
-With DMA at 139 MB/s (KBENCH, 1 MB) God of War play drops to 22 fps and the crowd to 55: the copy no longer fits in the GE wait.
+The `memory bench` line every run writes at start measures DMA from PSP RAM into the Vita's **uncached** memory at 480-570 MB/s, but the CPU reads that memory at only ~100 MB/s: the photo has to land in cached memory, and DMA into cached memory (with the cache invalidated) is not measured yet (phase 0). With DMA at 139 MB/s (KBENCH, 1 MB) God of War play drops to 22 fps and the crowd to 55: the copy no longer fits in the GE wait.
 A photo by the PSP's GE into the shared zone (VPROBE: 4.8 ms per MB) costs the game the whole copy, because it runs after
 the frame's lists: 25 / 23 in the menu, 52 / 37 in the crowd. It stays as the alternative.
 
