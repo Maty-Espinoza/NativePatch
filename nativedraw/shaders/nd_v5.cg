@@ -1,5 +1,5 @@
-// Skinned 3D vertices of the record as the game wrote them: float weights (up to 8, in aW0 and aW1) and position, 8-bit normal,
-// UV and color as integers. What the GE does to them: position and normal are the sum of the bones by their weights; then
+// Skinned 3D vertices of the record as the game wrote them: float weights (up to 8, in aW0 and aW1) and position; 8-bit normal,
+// 8 or 16-bit UV and color as integers. What the GE does to them: position and normal are the sum of the bones by their weights; then
 // directional lights or the lit color with no lights, UV scaled or from the normal (environment map), fog. Uniforms u, by rows:
 // 0-3 m, model -> surface clip space; 4 UV scale (xy) and offset (zw); 5 fog factor, dot(position, xyz) + w, 0 to 1; 6, 7 color =
 // 6 + 7 * vertex color + diffuse + specular; 8, 9 diffuse and specular material, rgb + w * vertex color; 10-12 model -> world for

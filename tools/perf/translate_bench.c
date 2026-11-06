@@ -82,14 +82,13 @@ int sceGxmBeginScene(SceGxmContext *context, unsigned int flags, const SceGxmRen
 static const float *uni(const SceGxmProgramParameter *p) { return ((typeof(&par[0]))p)->v; }
 #ifdef GVS
 // Which nd_v5 program (skinProg) is in the context; -1 if none
-static int skI(void) { for (int k = 0; k < 24; k++) if (gvp[4 + k] && vprog == gvp[4 + k]) return k; return -1; }
-// triV for nd_v5 program sk (skinProg): its attributes laid out as in trVerts, absent ones on the weights; components not given
-// are 0, w 1
+static int skI(void) { for (int k = 0; k < 16; k++) if (gvp[4 + k] && vprog == gvp[4 + k]) return k; return -1; }
+// triV for nd_v5 program sk (skinProg): its attributes laid out as in trVerts; components not given are 0, w 1
 static void triS(int sk, uint32_t k, float *o, float *ou, float *ov, float *og, float *c) {
   float u, v, g;
   static const uint8_t s4[4] = { 0, 1, 2, 4 }, cs[8] = { 0, 0, 0, 0, 2, 2, 2, 4 };
-  uint32_t vt = sk >> 3 == 1 ? 0x7B9 : sk >> 3 == 2 ? 0x7BE : 0x780, wn = (sk & 7) + 1, z = 0, of[5] = { 0 }, fn[5] = { wn, 2, 1, 3, 3 }, fs[5] = { 4, s4[vt & 3], cs[vt >> 2 & 7], s4[vt >> 5 & 3], 4 };
-  for (int i = 0; i < 5; i++) if (fs[i]) { z = (z + fs[i] - 1) / fs[i] * fs[i]; of[i] = z; z += fn[i] * fs[i]; }
+  uint32_t vt = sk >> 3 ? 0x7BE : 0x7B9, wn = (sk & 7) + 1, z = 0, of[5], fn[5] = { wn, 2, 1, 3, 3 }, fs[5] = { 4, s4[vt & 3], cs[vt >> 2 & 7], s4[vt >> 5 & 3], 4 };
+  for (int i = 0; i < 5; i++) { z = (z + fs[i] - 1) / fs[i] * fs[i]; of[i] = z; z += fn[i] * fs[i]; }
   const uint8_t *p = (const uint8_t *)stream + k * gsz[sk];
   const float *pf = (const float *)p, *x = (const float *)(p + of[4]), *q = uni(g5);
   float w8[8] = { 0, 0, 0, 1, 0, 0, 0, 1 }, nr[3], t2[2], a[4] = { 0, 0, 0, 1 }, s3[3] = { 0, 0, 0 }, sn[3] = { 0, 0, 0 }, wv[3], d[3] = { 0, 0, 0 }, ps[3] = { 0, 0, 0 }, cv[4];

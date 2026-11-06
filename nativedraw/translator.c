@@ -88,8 +88,8 @@ static uint32_t texAddr(const uint32_t *e) { return (RE(e, 0xA0) & 0xFFFFF0) | (
 // nd_fd, in between (modulate with doubling or fog, no alpha test), and nd_fa, nd_fd with a minimum alpha
 // (swizzled ones arrive already sorted from the record). Each fragment program is built once per blend that appears
 // (fps, up to 64) ---
-static SceGxmVertexProgram *nvp, *gvp[28];  // gvp: the 3D vertices of the record as they are: nd_v3, nd_v4 with 16-bit UV, with float UV, nd_v3 with 16-bit UV; from 4, nd_v5 (skinProg)
-static uint32_t gsz[24], g5try, g5r[6];  // nd_v5: vertex size of each program, programs tried (bits), resources of its attributes
+static SceGxmVertexProgram *nvp, *gvp[20];  // gvp: the 3D vertices of the record as they are: nd_v3, nd_v4 with 16-bit UV, with float UV, nd_v3 with 16-bit UV; from 4, nd_v5 (skinProg)
+static uint32_t gsz[16], g5try, g5r[6];  // nd_v5: vertex size of each program, programs tried (bits), resources of its attributes
 static SceGxmShaderPatcherId i5;
 static const SceGxmProgram *pft, *pfc, *pfm, *pfd, *pfa, *pv;
 static SceGxmShaderPatcherId ift, ifc, ifm, ifd, ifa;
@@ -220,15 +220,15 @@ static int trInit(void) {
   return r3 < 0 ? r3 : 0;
 }
 // Place in gvp of the nd_v5 program for skinned vertex type vt (GVS), one per type, made with the patcher the first time: each
-// attribute at the offset of its field in the vertex, laid out as in trVerts; absent fields read the weights and their uniforms
-// make them count 0. The entry stays 0 if it cannot be made
+// attribute at the offset of its field in the vertex, laid out as in trVerts (aW1, with 4 weights or fewer, reads the first one
+// again: its bones are zero). The entry stays 0 if it cannot be made
 static uint32_t skinProg(uint32_t vt) {
-  uint32_t k = ((vt & 0x3F) == 0x39 ? 8 : (vt & 0x3F) == 0x3E ? 16 : 0) + (vt >> 14 & 7);
+  uint32_t k = ((vt & 0x3F) == 0x3E ? 8 : 0) + (vt >> 14 & 7);
   if (g5try >> k & 1 || !g5) return 4 + k;
   g5try |= 1u << k;
   static const uint8_t s4[4] = { 0, 1, 2, 4 }, cs[8] = { 0, 0, 0, 0, 2, 2, 2, 4 };
-  uint32_t wn = (vt >> 14 & 7) + 1, fn[5] = { wn, 2, 1, 3, 3 }, fs[5] = { 4, s4[vt & 3], cs[vt >> 2 & 7], s4[vt >> 5 & 3], 4 }, o[5] = { 0 }, z = 0;
-  for (int i = 0; i < 5; i++) if (fs[i]) { z = (z + fs[i] - 1) & ~(fs[i] - 1); o[i] = z; z += fn[i] * fs[i]; }
+  uint32_t wn = (vt >> 14 & 7) + 1, fn[5] = { wn, 2, 1, 3, 3 }, fs[5] = { 4, s4[vt & 3], cs[vt >> 2 & 7], s4[vt >> 5 & 3], 4 }, o[5], z = 0;
+  for (int i = 0; i < 5; i++) { z = (z + fs[i] - 1) & ~(fs[i] - 1); o[i] = z; z += fn[i] * fs[i]; }
   gsz[k] = z = (z + 3) & ~3u;
   SceGxmVertexAttribute a[6] = { { 0, 0, SCE_GXM_ATTRIBUTE_FORMAT_F32, wn < 4 ? wn : 4, g5r[0] }, { 0, wn > 4 ? 16 : 0, SCE_GXM_ATTRIBUTE_FORMAT_F32, wn > 4 ? wn - 4 : 1, g5r[1] },
                                  { 0, o[4], SCE_GXM_ATTRIBUTE_FORMAT_F32, 3, g5r[2] }, { 0, o[3], SCE_GXM_ATTRIBUTE_FORMAT_S8, 3, g5r[3] },
@@ -544,17 +544,17 @@ static void t3Uni(void *u, const T3 *t, float tw, float th, const float *wm, int
     return;
   }
   if (lv >= 4) {  // (trVerts with weights: t3Flat, or t3Light with directional lights; t3Gen of an environment map. Rows of u: nd_v5.cg)
-    uint32_t fm = (lv - 4) >> 3, wn = ((lv - 4) & 7) + 1;  // (fm: 0 no UV, color or normal, 1 8-bit UV and 4444 color, 2 16-bit UV and 8888)
-    float q[220] = { 0 }, *ba = q + 24, *kc = q + 28, *md = q + 32, *ms = q + 36, s = t->rev ? -1 : 1, kt = fm == 1 ? 1 / 128.0f : fm == 2 ? k16 : 0;
+    uint32_t fm = (lv - 4) >> 3, wn = ((lv - 4) & 7) + 1;  // (fm: 0 8-bit UV and 4444 color, 1 16-bit UV and 8888)
+    float q[220] = { 0 }, *ba = q + 24, *kc = q + 28, *md = q + 32, *ms = q + 36, s = t->rev ? -1 : 1, kt = fm ? k16 : 1 / 128.0f;
     sceClibMemcpy(q, m, 64); sceClibMemcpy(q + 20, fg, 16);
     q[16] = t->us * ku * kt; q[17] = t->vs * kv * kt; q[18] = t->uo * ku; q[19] = t->vo * kv;
     for (int r = 0; r < 3; r++) { q[40 + r * 4] = t->w[r] * s; q[41 + r * 4] = t->w[3 + r] * s; q[42 + r * 4] = t->w[6 + r] * s; }
-    q[43] = t->gen == 2; q[47] = fm == 2;
+    q[43] = t->gen == 2; q[47] = fm;
     if (t->gen == 2) { sceClibMemcpy(q + 52, t->l[t->ls0].p, 12); q[55] = ku; sceClibMemcpy(q + 56, t->l[t->ls1].p, 12); q[59] = kv; }
-    if (!t->lit) { for (int k = 0; k < 4; k++) kc[k] = fm != 0; if (!fm) rgbf(mat, ba); }
-    else if (!t->nl) for (int k = 0; k < 4; k++) { kc[k] = fm && t->upd & 1 ? t->ai[k] / 256.0f : 0; ba[k] = (fm && t->upd & 1 ? t->ei[k] : t->lc >> k * 8 & 255) / 255.0f; }
+    if (!t->lit) for (int k = 0; k < 4; k++) kc[k] = 1;
+    else if (!t->nl) for (int k = 0; k < 4; k++) { kc[k] = t->upd & 1 ? t->ai[k] / 256.0f : 0; ba[k] = (t->upd & 1 ? t->ei[k] : t->lc >> k * 8 & 255) / 255.0f; }
     else {
-      int va = fm && t->upd & 1;
+      int va = t->upd & 1;
       float a[4] = { t->ac[0], t->ac[1], t->ac[2], t->ac[3] };
       for (int i = 0; i < 4; i++) {  // (direction, half vector and power, diffuse, specular)
         const LT *l = &t->l[i];
@@ -564,8 +564,8 @@ static void t3Uni(void *u, const T3 *t, float tw, float th, const float *wm, int
         z[6] += 1; tnorm(z + 4); z[7] = (int)(t->sp + .5f);
       }
       for (int k = 0; k < 4; k++) { ba[k] = t->em[k] + (va ? 0 : a[k] * t->am[k]); kc[k] = va ? a[k] : 0; }
-      for (int k = 0; k < 3; k++) { md[k] = fm && t->upd & 2 ? 0 : t->ad[k]; ms[k] = fm && t->upd & 4 ? 0 : t->as[k]; }
-      md[3] = fm && t->upd & 2; ms[3] = fm && t->upd & 4;
+      for (int k = 0; k < 3; k++) { md[k] = t->upd & 2 ? 0 : t->ad[k]; ms[k] = t->upd & 4 ? 0 : t->as[k]; }
+      md[3] = t->upd >> 1 & 1; ms[3] = t->upd >> 2 & 1;
     }
     for (uint32_t b = 0; b < wn; b++) for (int r = 0; r < 3; r++) for (int c = 0; c < 4; c++) q[124 + b * 12 + r * 4 + c] = t->b[b * 12 + c * 3 + r];
     sceGxmSetUniformDataF(u, g5, 0, 220, q);

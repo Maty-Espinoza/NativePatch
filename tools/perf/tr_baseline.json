@@ -1,1 +1,1 @@
-{"arm_k": 19777, "gxm_ops": 3941, "uniform_floats": 16904, "gxm_draws": 488, "cpu_vertices": 18115, "est_ms": 169.6}
+{"arm_k": 7998, "gxm_ops": 4715, "uniform_floats": 90668, "gxm_draws": 489, "cpu_vertices": 6764, "est_ms": 85.4}
