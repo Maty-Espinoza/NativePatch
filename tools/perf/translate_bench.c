@@ -52,7 +52,7 @@ int sceGxmReserveVertexDefaultUniformBuffer(SceGxmContext *c, void **u) { static
 int sceGxmReserveFragmentDefaultUniformBuffer(SceGxmContext *c, void **u) { static float b[256]; *u = b; g_ops++; return 0; }
 // What the context holds, for the dump: each program parameter (by program and name) with its last values, vertex stream, programs
 static struct { const SceGxmProgram *p; char name[8]; float v[256]; } par[64];
-static const void *stream; static uint32_t fprog, fid, tex_w, gf2[2];  // (fid: fragment shader in the context; gf2: indices drawn with nd_f2 and their vertices with fog)
+static const void *stream; static uint32_t fprog, fid, tex_w, gfn[3][2];  // (fid: fragment shader in the context; gfn: indices drawn with nd_f2 and nd_fr (fNew) and their vertices with fog)
 static FILE *dmp, *tri;
 static const SceGxmVertexProgram *vprog;
 static uint32_t gn[5], gn5[3];  // vertices drawn by each GPU vertex program (4: all of nd_v5), and by nd_v5 and each of its variants
@@ -186,13 +186,9 @@ static void triV(uint32_t k, float *r) {
   const float x[11] = { o[0], o[1], o[2], o[3], u * set_w, v, g, c[0] / 1000, c[1] / 1000, c[2] / 1000, c[3] / 1000 };
   memcpy(r, x, sizeof x);
 }
-// 1 if fragment shader id is not one of nd_ft, nd_fc, nd_fm, nd_fd, nd_fa and has a parameter named n (tf: nd_f2; an older
-// translator, built by tr_check.sh, has none)
-static int fNew(uint32_t id, const char *n) {
-  if (id == (uint32_t)ift || id == (uint32_t)ifc || id == (uint32_t)ifm || id == (uint32_t)ifd || id == (uint32_t)ifa) return 0;
-  for (int i = 0; i < 64 && par[i].p; i++) if ((uint32_t)par[i].p == id && !strcmp(par[i].name, n)) return 1;
-  return 0;
-}
+// Fragment shaders trInit registers after nd_fa, in its order: 1 nd_f2, 2 nd_fr; 0 any other (an older translator, built by
+// tr_check.sh, sets none of them: those ids are its vertex programs)
+static uint32_t fNew(uint32_t id) { return id > (uint32_t)ifa && id <= (uint32_t)ifa + 2 ? id - (uint32_t)ifa : 0; }
 // 1 if vertices a and b (triV) are equal: by value, so -0 and 0 are, which the bytes of the stream tell apart
 static int triEq(const float *a, const float *b) { for (int i = 0; i < 11; i++) if (a[i] != b[i]) return 0; return 1; }
 // The triangles of a draw of n vertices in order, each with the winding it has on screen; those with two vertices equal as the GPU
@@ -204,7 +200,7 @@ static void triDump(SceGxmPrimitiveType t, const uint16_t *ix, unsigned n) {
     a = ix[a]; b = ix[b]; c = ix[c];
     float r[3][11];
     triV(a, r[0]); triV(b, r[1]); triV(c, r[2]);
-    if (fNew(fid, "tf")) for (int j = 0; j < 3; j++) gf2[1] += r[j][6] != 1;  // (nd_f2 leaves out the fog: it must do nothing)
+    for (int j = 0; j < 3; j++) gfn[fNew(fid)][1] += r[j][6] != 1;  // (nd_f2 and nd_fr leave out the fog: it must do nothing)
     if (triEq(r[0], r[1]) || triEq(r[1], r[2]) || triEq(r[0], r[2])) continue;
     fprintf(tri, "D %08x\n", fprog);
     for (int j = 0; j < 3; j++) fprintf(tri, "V %.5g %.5g %.6g %.5g %.3f %.5g %.5g %.4f %.4f %.4f %.4f\n", r[j][0], r[j][1], r[j][2], r[j][3], r[j][4], r[j][5], r[j][6], r[j][7], r[j][8], r[j][9], r[j][10]);
@@ -215,7 +211,7 @@ static uint32_t gxm_calls;
 static int hasU(const SceGxmProgram *p) { for (int i = 0; i < 64 && par[i].p; i++) if (par[i].p == p && !strcmp(par[i].name, "u")) return 1; return 0; }
 int sceGxmDraw(SceGxmContext *c, SceGxmPrimitiveType t, SceGxmIndexFormat f, const void *ix, unsigned n) {
   if (ix) gxm_calls++, g_ops++;
-  if (ix && fNew(fid, "tf")) gf2[0] += n;
+  if (ix) gfn[fNew(fid)][0] += n;
   if (tri && ix && !in_rt) triDump(t, ix, n);
   for (int i = 0; i < 4; i++) if (vprog == gvp[i]) gn[i] += n;
   int sk = skI();
@@ -337,7 +333,7 @@ int main(int argc, char **argv) {
     CALLGRIND_TOGGLE_COLLECT;
     if (dmp) fprintf(dmp, "F %s\n", tnames[res]);
   }
-  printf("frames=%d draws=%u result=%s gpu_vertices=%u,%u,%u,%u,%u gxm_draws=%u gxm_ops=%u uniform_floats=%u vertices_in=%u cpu_vertices=%u nd_v5=%u,%u,%u nd_f2=%u,%u\n", n, f->nd, tnames[res],
-         gn[0] / n, gn[1] / n, gn[2] / n, gn[3] / n, gn[4] / n, gxm_calls / n, g_ops / n, g_uf / n, t_c[TC_VIN] / n, (t_c[TC_VIN] - t_c[TC_VGPU]) / n, gn5[0] / n, gn5[1] / n, gn5[2] / n, gf2[0] / n, gf2[1]);
+  printf("frames=%d draws=%u result=%s gpu_vertices=%u,%u,%u,%u,%u gxm_draws=%u gxm_ops=%u uniform_floats=%u vertices_in=%u cpu_vertices=%u nd_v5=%u,%u,%u nd_f2=%u,%u nd_fr=%u,%u\n", n, f->nd, tnames[res],
+         gn[0] / n, gn[1] / n, gn[2] / n, gn[3] / n, gn[4] / n, gxm_calls / n, g_ops / n, g_uf / n, t_c[TC_VIN] / n, (t_c[TC_VIN] - t_c[TC_VGPU]) / n, gn5[0] / n, gn5[1] / n, gn5[2] / n, gfn[1][0] / n, gfn[1][1], gfn[2][0] / n, gfn[2][1]);
   return 0;
 }
