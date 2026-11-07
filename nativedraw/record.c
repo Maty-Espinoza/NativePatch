@@ -573,6 +573,10 @@ static uint32_t rgVNow(uint32_t a, uint32_t n, uint32_t vz, uint32_t chk) {
   VQ(VQ_BAD, 0);
   sceClibMemcpy(f->tx + TX_N - f->nvx, p, n);
   VQ(p == rg_ord || p == (const uint8_t *)PSP(s) ? VQ_TXM : VQ_TXS, n);
+  // (from the transfer copy the next draw usually reads on from here: its first 256 bytes come into the cache meanwhile)
+  if (p != rg_ord && p != (const uint8_t *)PSP(s))
+#pragma GCC unroll 8
+    for (const uint8_t *q = p + n, *e = q + 256; q < e; q += 32) __builtin_prefetch(q);
   return VX | (TX_N - f->nvx);
 }
 int sceGxmMapMemory(void *base, SceSize size, int attr);
