@@ -217,6 +217,26 @@ static void xfers(int f, int n) {
   }
   E(0x0F, 0); E(0x0C, 0);
 }
+// Scene 6: a God of War Ghost of Sparta combat frame (capture log of the 0.0.25.26 run, combat seconds 320-322: ~115
+// transfers of 1.5 MB, ~7,000 3D strips of ~9 vertices that read the destination of the transfer before them piece by piece,
+// RAM textures changing every ~47 draws, 30 of them swizzled under 8 KB, copied to the record every frame, the others in the
+// texture cache). The transfers of gow_play_xfer; vt 0x15E (20 bytes).
+static void combat(int f, int n) {
+  rnd_s = 1; pc_ = MAIN; head(0x15E);
+  if (!f) { uint8_t *p = (uint8_t *)W(TEX); for (uint32_t k = 0; k < 30 * 4096 + 35 * 16384; k++) p[k] = rnd2(256); }
+  for (int i = 0, d = 0; i < n; i++) {
+    uint32_t s = XF[i % 59][0], t = XF[i % 59][1], h = (XF[i % 59][2] * 138 + 50) / 100;
+    if (!f) { uint8_t *p = (uint8_t *)W(s); for (uint32_t k = 0; k < h * 512; k++) p[k] = rnd2(256); want(t, h * 512, 1); }
+    E(0xB2, s & 0xFFFFF0); E(0xB3, (s >> 8 & 0x0F0000) | 128); E(0xB4, t & 0xFFFFF0); E(0xB5, (t >> 8 & 0x0F0000) | 128);
+    E(0xEB, 0); E(0xEC, 0); E(0xEE, 127 | (h - 1) << 10); E(0xEA, 1);
+    E(0x10, t >> 8 & 0x0F0000);
+    for (uint32_t o = 0; o + 180 <= h * 512; o += 180, d++) {
+      if (d % 47 == 0) { uint32_t k = d / 47 % 65; if (k < 30) texState(TEX + k * 4096, 6, 6, 5, 1); else texState(TEX + 30 * 4096 + (k - 30) * 16384, 8, 6, 5, 1); }
+      E(0x01, (t + o) & 0xFFFFFF); E(0x04, 4 << 16 | 9);
+    }
+  }
+  E(0x0F, 0); E(0x0C, 0);
+}
 
 // late: the presenter takes one frame in three, as on the Vita, so the others are walked without recording
 typedef struct { const char *name; void (*build)(int, int); int n, record, memo, readers, vram, late; } Scene;
@@ -230,6 +250,7 @@ static const Scene S[] = {
   { "images", images, 30, 1, 0, 0, 1, 0 },
   { "gow_menu_xfer", xfers, 59, 1, 0, 0, 1, 0 },
   { "gow_play_xfer", xfers, 97, 1, 0, 0, 1, 0 },
+  { "gow_combat", combat, 97, 1, 0, 0, 1, 0 },
 };
 #define SN (int)(sizeof S / sizeof *S)
 #define FRAMES 40
