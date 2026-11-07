@@ -1,0 +1,17 @@
+# Exports of nativedraw.skprx (kernel.c) for vita-elf-create, and the same list for the stubs nativedraw.suprx calls
+# them with (vita-libs-gen, in nativedraw/build.sh). The NIDs are fixed here so both sides always agree.
+NativeDrawKernel:
+  attributes: 0
+  version:
+    major: 1
+    minor: 0
+  main:
+    start: module_start
+    stop: module_stop
+  libraries:
+    NativeDrawKernel:
+      syscall: true
+      functions:
+        - ndkVramMap: 0x4E444B01
+        - ndkPaddr: 0x4E444B02
+        - ndkVramRead: 0x4E444B03

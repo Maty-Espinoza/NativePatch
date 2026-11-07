@@ -2,7 +2,8 @@
 // The VPK carries nativelink.prx, nativedraw.suprx and version.txt (added by tools/build.sh) and leaves them where
 // Adrenaline 8 and taiHEN load them:
 //   - NativeLink: ux0:pspemu/seplugins/nativelink.prx, enabled with LINK_LINE in plugins.txt (or EPIplugins.txt).
-//   - NativeDraw: ux0:data/nativedraw/nativedraw.suprx, under *PSPEMUCFW in taiHEN's config.txt (needs a reboot).
+//   - NativeDraw: ux0:data/nativedraw/nativedraw.suprx, under *PSPEMUCFW in taiHEN's config.txt (needs a reboot), and its
+//     kernel half, ux0:data/nativedraw/nativedraw.skprx, under *KERNEL.
 // Before changing a config file it leaves a copy in ux0:data/nativepatch/backup/.
 // Updating = installing from a newer VPK.
 #include <psp2/kernel/processmgr.h>
@@ -26,6 +27,7 @@
 #define LINK_LINE "game, ms0:/seplugins/nativelink.prx, on"
 #define DRAW_DIR "ux0:data/nativedraw"
 #define DRAW_DST "ux0:data/nativedraw/nativedraw.suprx"
+#define KERN_DST "ux0:data/nativedraw/nativedraw.skprx"
 #define BACKUP "ux0:data/nativepatch/backup"
 
 // --- Screen: 8x16 text doubled (60 columns x 17 lines) ---------------------------------------------------------
@@ -301,16 +303,18 @@ static int leftovers(int erase) {
 }
 
 // --- Actions --------------------------------------------------------------------------------------------------------
-// Copies both plugins and version.txt, enables NativeLink in plugins.txt (replaces another nativelink.prx line) and
-// adds NativeDraw under *PSPEMUCFW in config.txt. If a plugin cannot be copied, the config is left alone.
+// Copies the plugins and version.txt, enables NativeLink in plugins.txt (replaces another nativelink.prx line) and
+// adds NativeDraw under *PSPEMUCFW and its kernel half under *KERNEL in config.txt. If a plugin cannot be copied, the
+// config is left alone.
 static void install(void) {
   say(C_TITLE, "Install / update: %s", bundled);
   mkdirs("ux0:pspemu/seplugins");
   mkdirs(DRAW_DIR);
-  int a = copyFile("app0:nativelink.prx", LINK_DST), b = copyFile("app0:nativedraw.suprx", DRAW_DST);
+  int a = copyFile("app0:nativelink.prx", LINK_DST), b = copyFile("app0:nativedraw.suprx", DRAW_DST), k = copyFile("app0:nativedraw.skprx", KERN_DST);
   say(a ? C_BAD : C_OK, "  NativeLink -> %s%s", LINK_DST, a ? ": ERROR" : "");
   say(b ? C_BAD : C_OK, "  NativeDraw -> %s%s", DRAW_DST, b ? ": ERROR" : "");
-  if (a || b) { say(C_BAD, "Could not copy. Configuration left unchanged."); return; }
+  say(k ? C_BAD : C_OK, "  NativeDraw kernel half -> %s%s", KERN_DST, k ? ": ERROR" : "");
+  if (a || b || k) { say(C_BAD, "Could not copy. Configuration left unchanged."); return; }
   copyFile("app0:version.txt", VERSION_FILE);
   static const char *const oldLink[] = { "nativelink.prx", NULL };  // the NativeLink line, if it was written differently
   const char *p = pluginsTxt();
@@ -319,6 +323,8 @@ static void install(void) {
   const char *c = taiConfig();
   if (!hasLine(c, DRAW_DST)) editText(c, NULL, "*PSPEMUCFW", DRAW_DST, &need_reboot);
   else say(C_DIM, "  %s: NativeDraw already there", c);
+  if (!hasLine(c, KERN_DST)) editText(c, NULL, "*KERNEL", KERN_DST, &need_reboot);
+  else say(C_DIM, "  %s: kernel half already there", c);
   if (exists("ux0:pspemu/seplugins/ge_patch.prx") || isDir("ux0:data/gepresent"))
     say(C_TITLE, "Old GePatch files remain: see 'Clean test leftovers'.");
   say(C_OK, need_reboot ? "Done. Reboot the Vita to load NativeDraw." : "Done. Close Adrenaline if it was open.");
@@ -327,7 +333,7 @@ static void install(void) {
 // ux0:data/nativedraw folder (switches and dumps too). The backups stay.
 static void uninstall(void) {
   say(C_TITLE, "Uninstall NativeLink and NativeDraw");
-  static const char *const link[] = { "nativelink.prx", NULL }, *const draw[] = { DRAW_DST, NULL };
+  static const char *const link[] = { "nativelink.prx", NULL }, *const draw[] = { DRAW_DST, KERN_DST, NULL };
   editText(pluginsTxt(), link, NULL, NULL, NULL);
   editText("ux0:tai/config.txt", draw, NULL, NULL, &need_reboot);
   editText("ur0:tai/config.txt", draw, NULL, NULL, &need_reboot);
@@ -383,7 +389,7 @@ int main(void) {
   for (;;) {
     readVersion(VERSION_FILE, installed);
     int hasLink = exists(LINK_DST), hasDraw = exists(DRAW_DST), plug = hasLine(pluginsTxt(), LINK_LINE),
-        tai = hasLine(taiConfig(), DRAW_DST), stale = exists("ux0:pspemu/seplugins/ge_patch.prx") || isDir("ux0:data/gepresent");
+        tai = hasLine(taiConfig(), DRAW_DST), kern = exists(KERN_DST) && hasLine(taiConfig(), KERN_DST), stale = exists("ux0:pspemu/seplugins/ge_patch.prx") || isDir("ux0:data/gepresent");
     clear();
     putText(0, 0, C_TITLE, C_BG, "NativePatch - installer");
     putText(0, 1, C_DIM, C_BG, "Project in development (made with AI): not ready to play.");
@@ -393,8 +399,8 @@ int main(void) {
     putText(0, 4, C_TEXT, C_BG, l);
     snprintf(l, sizeof l, "  NativeLink %s, %s", hasLink ? "copied" : "missing", plug ? "enabled" : "not enabled in plugins.txt");
     putText(0, 5, hasLink && plug ? C_OK : C_DIM, C_BG, l);
-    snprintf(l, sizeof l, "  NativeDraw %s, %s", hasDraw ? "copied" : "missing", tai ? "in config.txt" : "not in config.txt");
-    putText(0, 6, hasDraw && tai ? C_OK : C_DIM, C_BG, l);
+    snprintf(l, sizeof l, "  NativeDraw %s, %s; kernel half %s", hasDraw ? "copied" : "missing", tai ? "in config.txt" : "not in config.txt", kern ? "ok" : "missing");
+    putText(0, 6, hasDraw && tai && kern ? C_OK : C_DIM, C_BG, l);
     if (stale) putText(0, 7, C_BAD, C_BG, "  GePatch/gepresent leftovers on the Vita.");
     if (need_reboot) putText(0, 8, C_TITLE, C_BG, "  config.txt changed: reboot the Vita to apply.");
     for (int i = 0; i < 5; i++) {

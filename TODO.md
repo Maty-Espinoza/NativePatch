@@ -6,6 +6,15 @@ what was done is in `CHANGELOG.md`. Updated 2026-11-06 (NativeLink 0.0.8 + Nativ
 `docs/agent/en/stage3-plan.md`.
 
 ## Next
+- [ ] **Direct VRAM through the kernel half (NativeDraw 0.0.28.2, test; analysis `claude/analisis_estructura_60fps_2026-11-06.md` §H):**
+  the PSP's VRAM should be the Vita's 2 MB compat RAM ("Tachyon-eDRAM", physical 0x1C000000; HENkaku wiki `Pervasive` gate 0x28;
+  SKGleba's psp2renga maps it from a non-secure kernel plugin as "Camera SRAM" with `ksceKernelAllocMemBlock` type 0x10208006 and a
+  paddr; the 2026-10-26 search found it in no memory block of Adrenaline's process). `nativedraw.skprx` maps it into the process;
+  the `vram_direct` measurement compares each mirrored page with it. To confirm on the Vita: the mapping works with a user type
+  (which one), the reads do not fault, pages equal their mirror copy (or which address transform), read speed by CPU and DMA
+  (`vram direct:` lines). If it holds: the mirror and its GE copies, `want`/`mirCheck`, the record thread's wait and the stale-page
+  errors can go (`performance-plan.md` §C, `architecture-and-roadmap.md` §3.5); the GPU might even read textures from it
+  (`sceGxmMapMemory` on the mapping, to test). If the compat RAM turns out not to be the VRAM, the kernel half is removed.
 - [ ] **God of War combat, what limits it now** (NativeDraw 0.0.26.5, `stage3_0.0.26.5/gow1`, seconds 318-368, per frame): the capturer
   ~125 ms (record ~90: vertices 52-61 ms copying ~1.9 MB from uncached memory, textures ~28, states ~6), so with `hold_game` the game waits
   ~105 ms per frame and runs at ~8 fps; the Vita GPU ~82 ms per HD frame (surface 70: `nd_v5` always does 8 bones and 4 lights, textured
