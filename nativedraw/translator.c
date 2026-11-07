@@ -45,7 +45,7 @@ static uint32_t t_mark[RD_N / 32 + 1];  // a bit per draw not done
 static uint32_t t_prevd = ~0u, t_prev2 = ~0u;  // images shown by the last frames drawn, the latest first: t_prevd's surface is the one not being drawn
 DEV(static void failNote(RFrame *f, uint32_t i, int r);)  // dump.c
 static uint16_t *tib;        // 0, 1, 2... (indices for the GPU)
-#define TG_N (192 << 10)     // indices of the joined draws of the GPU path, per surface
+#define TG_N (192 << 10)     // indices of the joined draws of the GPU path, per surface (and 24 more: gAdd writes in blocks)
 static uint16_t *tgi[2];
 // Intermediate image: a game draw to another VRAM image (not the shown one) goes to a part of one of our two surfaces
 // (rsf, 1024x544, double size); if later in the same frame a texture is at that address, it is read from there. Each target
@@ -143,8 +143,8 @@ static int trInit(void) {
   for (int i = 0; i < 2; i++)
     if (!(tv[i] = gmem(TV_N * sizeof(TV), RD)) || !(tpal[i] = gmem(TP_B, RD))) return -1;
   if (!(tib = gmem(TI_N * 2, RD))) return -1;
-  if (!(tgi[0] = gmem(TG_N * 4, RD))) return -1;
-  tgi[1] = tgi[0] + TG_N;
+  if (!(tgi[0] = gmem((TG_N + 24) * 4, RD))) return -1;
+  tgi[1] = tgi[0] + TG_N + 24;
   for (uint32_t i = 0; i < TI_N; i++) tib[i] = i;
   SceGxmShaderPatcherId iv;
   int r = sceGxmShaderPatcherRegisterProgram(pat, (const SceGxmProgram *)nd_v_gxp, &iv);
@@ -1504,12 +1504,22 @@ static inline int gOff(uint32_t vo, uint32_t gb, uint32_t vz, uint32_t *ix) {
   *ix = x;
   return vo >= gb && !(b & ((1u << k) - 1)) && x < 0x10000;
 }
-// Writes the triangles of a draw of nt triangles starting at vertex ix as indices; returns how many
+// Writes the triangles of a draw of nt triangles starting at vertex ix as indices; returns how many. Lists and strips go with NEON in
+// 16-byte stores, 8 indices or 8 triangles at a time (each pair of strip triangles is k + 0, 1, 2, 1, 3, 2): up to 23 indices past
+// the end get garbage, which the next draw overwrites and no draw sends (TG_N leaves room)
 static inline uint32_t gAdd(uint16_t *o, uint32_t ix, uint32_t prim, uint32_t nt) {
+  static const uint16_t sp[32] = { 0, 1, 2, 3, 4, 5, 6, 7, 0, 1, 2, 1, 3, 2, 2, 3, 4, 3, 5, 4, 4, 5, 6, 5, 7, 6, 6, 7, 8, 7, 9, 8 };
   uint16_t *p = o;
-  if (prim == 3) for (uint32_t k = 0; k < nt * 3; k++) *p++ = ix + k;
+  if (prim == 3) { for (uint32_t k = 0; k < nt * 3; k += 8) vst1q_u16(p + k, vaddq_u16(vdupq_n_u16(ix + k), vld1q_u16(sp))); p += nt * 3; }
   else if (prim == 5) for (uint32_t k = 0; k < nt; k++) { p[0] = ix; p[1] = ix + k + 1; p[2] = ix + k + 2; p += 3; }
-  else for (uint32_t k = 0; k < nt; k++) { p[0] = ix + k; p[1] = ix + k + 1 + (k & 1); p[2] = ix + k + 2 - (k & 1); p += 3; }
+  else {
+    uint16x8_t a = vld1q_u16(sp + 8), b = vld1q_u16(sp + 16), c = vld1q_u16(sp + 24);
+    for (uint32_t k = 0; k < nt; k += 8) {
+      uint16x8_t x = vdupq_n_u16(ix + k);
+      vst1q_u16(p + k * 3, vaddq_u16(x, a)); vst1q_u16(p + k * 3 + 8, vaddq_u16(x, b)); vst1q_u16(p + k * 3 + 16, vaddq_u16(x, c));
+    }
+    p += nt * 3;
+  }
   return p - o;
 }
 #ifdef NP_DEV
