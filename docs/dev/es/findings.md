@@ -165,6 +165,11 @@ directa.
 - **Los vértices no se pueden copiar después de soltar la lista:** el juego los reescribe de inmediato. El 0,5 % medido un frame después no lo anticipó: copiar unos ms tarde deformó la geometría de forma masiva.
 - **`cap_split` arruina una carrera:** ~0,7 us por lectura de reloj frenan tanto al capturador que toda la pista se comporta como el público, con errores gráficos e imagen normal. Avisar al usuario antes de usarlo.
 
+- **Combate de God of War en la GPU:** con huesos y luces en `nd_v5` el traductor baja de ~230 a ~50 ms por frame HD y todo el combate queda en HD; el límite pasa al capturador (~125 ms por frame, de ellos 52-61 ms copiando ~1,9 MB de vértices desde memoria sin caché) y a la GPU de la Vita (~82 ms por frame HD, `nd_v5` siempre hace 8 huesos y 4 luces).
+- **El brillo de God of War es un color fijo de mezcla** (`0xE0` = 3f5343, destino 0): sin él la imagen HD quedaba sin el tono verde y saltaba la revisión de "tapado", que mostraba la imagen normal.
+- **Las cinemáticas de God of War son videos:** el GE solo dibuja los subtítulos encima, así que no se pueden dibujar en HD (el "NAMCO presents" de Ridge Racer tampoco).
+- **Los vértices basura se dibujan en el camino GPU:** el camino CPU rechaza un frame con posiciones locas (`vertex_out`), `nd_v5` dibuja en cambio un triángulo enorme. Revisar las posiciones al entrar al registro (0.0.26.6) no quitó los frames corruptos.
+
 ## Gran Turismo y el 3D (lo que viene)
 - GT tiene ~9000–15 000 draws por frame, ~5300 con textura nueva. En GXM un draw cuesta ~1 µs sin cambios, ~2 µs con
   textura o programa nuevo, ~1,3 µs de GPU aunque no pinte [medido, etapa 1]. **Grabar GT draw por draw no entra** ni

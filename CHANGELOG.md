@@ -10,6 +10,20 @@ the Vita but not yet confirmed as a numbered release.
   KEEP/REVERT step (`iterate.sh`) and the unattended loop with Claude Code (`ai_loop.sh`, `docs/agent/en/perf-loop.md`).
 - `docs/dev/*/performance-plan.md`: the ordered plan towards 60 fps, from the analysis of the capturer on `stage3_0.0.16.4/rr1`.
 
+## NativeDraw 0.0.27 (2026-11-06)
+Tests 0.0.26.1-0.0.26.6, checked on the Vita with God of War Ghost of Sparta (`hold_game` + `gate_sync`): the whole combat in
+HD with the green glow, translator ~230 -> ~50 ms per HD frame. The game still runs at ~8 fps in combat: the capturer is the
+limit now. Known: corrupted frames in combat from vertices that are not the draw's; cinematics are videos and stay normal
+(both in `TODO.md`).
+- **Skinning and lights on the GPU:** `nd_v5` takes vertices with up to 8 bone weights, directional and point lights,
+  environment map, fog and 4444 color; also lit `0x1B9`/`0x1BE` with no weights.
+- **Record:** `tx` 3 MB with room kept for the textures (no more frames lost to `texture limit`); the hash clear stops at the
+  end of its table (crash C2-12828-1); GPU vertices with a garbage float position leave the frame `not_read`.
+- **Translator:** fixed blend colors of any color for the source (God of War's glow); up to 192K joined indices.
+- **Dumps:** with `dump=auto`, L+R+SELECT turns the automatic captures on and off.
+- **Tools and tests:** translator bench loop `tools/perf/tr_iterate.sh` (ARM instructions + GXM calls, estimate calibrated on the
+  Vita), frames `gow_combat` and `gow_enemies`, `TR_STATS`/`TR_LOG`; `test_ci` checks God of War on the GPU and its glow.
+
 ## NativeDraw 0.0.26 (2026-11-06)
 Tests 0.0.25.1-0.0.25.26, checked on the Vita with God of War Ghost of Sparta (`hold_game` + `gate_sync`): the menu and
 about half of the combat in HD (~4 HD frames per second), game 6.8 fps in combat and 10.2 in the menu (5.5 and 8.7 with

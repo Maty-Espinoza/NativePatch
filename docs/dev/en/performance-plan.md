@@ -189,6 +189,11 @@ game runs at the capturer's speed: menu ~9 fps (4,500 draws), play 5-7 fps (6,50
 leaves out a 1024-wide shadow atlas (`161800`, `181800`, tiles drawn by moving the target 64 pixels) and an image at `162000`
 with an alpha test mask it cannot convert.
 
+Update (0.0.27, `stage3_0.0.26.5/gow1`, combat seconds 318-368, per frame): the whole combat in HD. Capturer ~125 ms (record
+~90: vertices 52-61 ms, textures ~28, states ~6), so the game runs at ~8 fps; Vita GPU ~82 ms per HD frame (surface 70); translator
+~50-58 ms per HD frame (GXM calls 21, vertices 13). Next, in this order: the capturer's vertex copy, then its textures; lighter `nd_v5`
+variants by weights and lights; fewer GXM calls per draw. The translator is measured on the PC with `tools/perf/tr_iterate.sh`.
+
 ## D. Reading PSP memory: photo at the sync (proposal, 2026-11-06)
 **Why.** Three facts, all from the logs:
 - Reading the PSP RAM from the Vita is the slow part: ~2 us per uncached 64-byte line. KBENCH, 1 MB: 34.6 ms uncached,
