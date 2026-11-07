@@ -226,6 +226,16 @@ intérprete ~35. Escena nueva del banco `gow_combat` (la forma de ese frame). Cu
 Sin hacer: el intérprete (~600 ns por comando, 58.000 comandos por frame de combate). Meter VADDR/PRIM en el camino rápido no dio
 nada antes (B.9), y `gow_combat` no tiene la mezcla de God of War (sublistas en VRAM, ~8 comandos por dibujo): primero una escena
 desde una lista real del juego, después el cambio.
+**Vita** (`tests/perf/runs/0.0.27.1_gow_cap_split`, `hold_game` + `gate_sync` + `hd_mark` + `cap_split`, contra
+`0.0.25.26_gow_cap_split` con las mismas opciones; 196 y 152 segundos completos de combate, ~7.000 dibujos por frame; la 0.0.26 también
+cambió el registro entremedio): juego 5,4 -> 6,9 fps, todos los frames del juego en HD; capturador 195 -> 158 ms por frame (27 -> 22 us
+por dibujo). Texturas 23,4 -> 7,8 ms (orden de texturas chicas con swizzle 4,8 -> 1,7 ms, 53 de 80 KB saltados por estar ya ordenados;
+revisión del caché 1,6 -> 0,9), filas de texturas 3,7 -> 0,6. La copia funciona (1.471 KB por frame leídos de ella, 130 del espejo; sin
+`transfer copy: no memory`; 2 dibujos con posiciones basura en la corrida), pero los vértices solo bajaron 39,6 -> 30,2 ms y las
+transferencias subieron 9,9 -> 15,2 ms (la segunda copia): juntos 49,5 -> 45,4. 30 ms por 1,5 MB siguen siendo ~19 ns por byte aunque se
+lean de memoria con caché, así que la mayor parte del tiempo de vértices no es la lectura; dónde se va todavía no está medido (dentro de
+la columna `vertices`: `rgVGpu`, la copia a `tx`, la revisión de posiciones, la lectura del reloj de la propia columna). Lo siguiente:
+separar esa columna antes de cambiarla.
 
 ## D. Leer la memoria del PSP: foto en el sync (propuesta, 2026-11-06)
 **Por qué.** Tres hechos, todos de los logs:

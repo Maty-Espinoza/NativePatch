@@ -16,8 +16,9 @@ what was done is in `CHANGELOG.md`. Updated 2026-11-06 (NativeLink 0.0.8 + Nativ
   per draw (uniform blocks of ~1 KB per state change of `nd_v5`). Bench: `tools/perf/tr_iterate.sh` (gow_combat + gow_enemies).
   **(2) in test as NativeDraw 0.0.27.1** (`performance-plan.md`, "Capturer in God of War combat"): transfers through a cached copy
   the record reads vertices from, repeated RAM textures without `rgTex`, small swizzled textures sorted from cached memory, photo
-  footprint only with `photo_probe`. Check on the Vita (combat, `cap_split`): `vertices` and `textures` columns, `KB read from the
-  transfer copy` against `from the mirror` in the `3D vertices` line, game fps, no corruption new to this version. Left of the
+  footprint only with `photo_probe`. Vita (`tests/perf/runs/0.0.27.1_gow_cap_split`): combat 5.4 -> 6.9 fps, capturer 195 -> 158 ms,
+  textures 23 -> 8 ms; vertices only 40 -> 30 ms with the transfers 10 -> 15: split the `vertices` column first (the read is not the
+  cost). Still to do: a run without `cap_split` against 0.0.26.5 (~8 fps, capturer ~125 ms), and the user's look at it. Left of the
   capturer: the interpreter (~35 ms per combat frame): first a bench scene from a real God of War list (VRAM sublists, ~8
   commands per draw), then the change; the matrix blocks (~8 ms).
 - [ ] **God of War combat, corrupted frames** (0.0.26.1-0.0.26.6, a few per minute of combat, also at its start; probably the same as

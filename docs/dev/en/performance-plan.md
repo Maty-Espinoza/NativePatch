@@ -217,6 +217,15 @@ Four changes, against the confirmed 0.0.27 (`gow_combat`: mem_us 23.8 -> 14.0 ms
 Not done: the interpreter (~600 ns per command, 58,000 commands per combat frame). VADDR/PRIM in the tight loop gave nothing
 before (B.9), and `gow_combat` does not have God of War's mix (VRAM sublists, ~8 commands per draw): first a scene from a
 real list of the game, then the change.
+**Vita** (`tests/perf/runs/0.0.27.1_gow_cap_split`, `hold_game` + `gate_sync` + `hd_mark` + `cap_split`, against
+`0.0.25.26_gow_cap_split` with the same switches; 196 and 152 complete combat seconds, ~7,000 draws per frame; 0.0.26 also
+changed the record in between): game 5.4 -> 6.9 fps, every game frame in HD; capturer 195 -> 158 ms per frame (27 -> 22 us per
+draw). Textures 23.4 -> 7.8 ms (sort of small swizzled textures 4.8 -> 1.7 ms, 53 of 80 KB skipped as already sorted; cache check
+1.6 -> 0.9), texture rows 3.7 -> 0.6. The copy works (1,471 KB per frame read from it, 130 from the mirror; no `transfer copy: no
+memory`; garbage-position draws 2 in the run), but vertices only fell 39.6 -> 30.2 ms and the transfers rose 9.9 -> 15.2 ms (the
+second copy): together 49.5 -> 45.4. 30 ms for 1.5 MB is still ~19 ns per byte although it is read from cached memory, so most of
+the vertex time is not the read; where it goes is not measured yet (inside the `vertices` column: `rgVGpu`, the copy to `tx`, the
+position check, the clock read of the column itself). Next: split that column before changing it.
 
 ## D. Reading PSP memory: photo at the sync (proposal, 2026-11-06)
 **Why.** Three facts, all from the logs:
