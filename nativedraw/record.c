@@ -825,16 +825,24 @@ static int rgDir(uint32_t on) {
 // and no generated UV (lit, those of GVS go to nd_v5), for nd_v4 16-bit position and normal, no color and one directional light or, with
 // no lighting, UV from the normal; for nd_v5 the types of GVS, directional and point lights and no generated UV or the environment map of two directional lights. The record is
 // free of the GPU while it is written (regFlip skips a frame whose record the GPU still reads, and the GPU only finishes scenes).
+// The answer is kept for the same vertex type, primitive, indices and light kinds (0x5F-0x62) until regDraw forgets it
+// (gv_vt = ~0u): when a register of the state may have changed, or on a clear (the box).
+static uint32_t gv_vt = ~0u, gv_k, gv_r, gv_l[4];
 static uint32_t rgVGpu(uint32_t type, uint32_t vt, uint32_t idx) {
+  if (vt == gv_vt && (type | idx << 3) == gv_k && !((gv_l[0] ^ reg[0x5F]) | (gv_l[1] ^ reg[0x60]) | (gv_l[2] ^ reg[0x61]) | (gv_l[3] ^ reg[0x62]))) {
+    VQ(VQ_GPU, 0); return gv_r;
+  }
   uint32_t w = reg[0x9D] & 0x7FF, on = (reg[0x18] & 1) | (reg[0x19] & 1) << 1 | (reg[0x1A] & 1) << 2 | (reg[0x1B] & 1) << 3, l = 0;
   while (on >> l > 1) l++;  // (the last light on)
   uint32_t lt = reg[0x5F + l], lit = reg[0x17] & 1 && on;
-  if (!(DEV(!cpu_verts &&) (GV3(vt) && !lit ? !(reg[0xC0] & 3) : GVL(vt) ? (reg[0x17] & 1 ? on && !(on & (on - 1)) && !(lt >> 8 & 3) && (lt & 3) != 2 && !(reg[0xC0] & 3) : (reg[0xC0] & 0x303) == 0x301) :
+  gv_r = (DEV(!cpu_verts &&) (GV3(vt) && !lit ? !(reg[0xC0] & 3) : GVL(vt) ? (reg[0x17] & 1 ? on && !(on & (on - 1)) && !(lt >> 8 & 3) && (lt & 3) != 2 && !(reg[0xC0] & 3) : (reg[0xC0] & 0x303) == 0x301) :
         GVS(vt) && (!lit || rgDir(on)) && (!(reg[0xC0] & 3) || ((reg[0xC0] & 3) == 2 && !(reg[0x5F + (reg[0xC1] & 3)] & 0x300) && !(reg[0x5F + (reg[0xC1] >> 8 & 3)] & 0x300)))) && !idx && type >= 3 && type <= 5 && !(reg[0xD3] & 1) && (reg[0x50] & 1) &&
         ((!(reg[0xD4] & 0xFFFFF) && (reg[0xD5] & 0x3FF) + 1 >= (w < 480 ? w : 480) && (w < 480 || (reg[0xD5] >> 10 & 0x3FF) >= 271)) ||
-         (!((reg[0xD4] ^ rg_box[0]) & 0xFFFFF) && !((reg[0xD5] ^ rg_box[1]) & 0xFFFFF) && !((reg[0x9C] ^ rg_box[2]) & 0xFFFFF0))))) { VQ(VQ_GPU, 0); return 0; }
+         (!((reg[0xD4] ^ rg_box[0]) & 0xFFFFF) && !((reg[0xD5] ^ rg_box[1]) & 0xFFFFF) && !((reg[0x9C] ^ rg_box[2]) & 0xFFFFF0)))) ? vs_sz : 0;
+  gv_vt = vt; gv_k = type | idx << 3;
+  for (int i = 0; i < 4; i++) gv_l[i] = reg[0x5F + i];
   VQ(VQ_GPU, 0);
-  return vs_sz;
+  return gv_r;
 }
 // (capturer, on each draw, before vaddr/iaddr advance) Adds the draw to the frame: the state (RS) if changed, the
 // indices and vertices up to the highest index, and the texture (only the rows the vertices use). If something does
@@ -849,7 +857,7 @@ static void regDraw(uint32_t n, uint32_t type, uint32_t vt, uint32_t idx) {
   uint32_t tm = !(f->draws_seen & 63) DEV(|| cs_on), t0 = tm ? now() : 0, t1, v[NRS];
   VQS(f);
   if (rg_chg || !f->ne) {
-    rg_chg = 0;
+    rg_chg = 0; gv_vt = ~0u;
     for (int i = 0; i < NRS; i++) v[i] = reg[RS[i]];
     if (!f->ne || sceClibMemcmp(v, f->e[f->ne - 1], sizeof v)) {  // new state
       if (f->ne >= RE_N) { DEV(if (p_on) pAdd(P_X_STATES, 0);) f->flags |= R_LIMIT; return; }
@@ -859,7 +867,7 @@ static void regDraw(uint32_t n, uint32_t type, uint32_t vt, uint32_t idx) {
   t1 = tm ? now() : 0; if (tm) ga.us_e += (t1 - t0) * 64;
   DEV(if (cs_on) cs_t[CS_RST] += t1 - t0;)
   VQ(VQ_ST, 0);
-  if (reg[0xD3] & 1) { rg_box[0] = reg[0xD4]; rg_box[1] = reg[0xD5]; rg_box[2] = reg[0x9C]; }
+  if (reg[0xD3] & 1) { rg_box[0] = reg[0xD4]; rg_box[1] = reg[0xD5]; rg_box[2] = reg[0x9C]; gv_vt = ~0u; }
   RDraw *d = &f->d[f->nd];
   d->st = f->ne - 1; d->prim = type; d->n = n; d->vt = vt; d->ioff = 0; d->clut = rg_clut; d->clen = rg_clut ? rg_clut_b : 0;
   uint32_t vs = vs_sz, nv = n;
