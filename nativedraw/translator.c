@@ -84,20 +84,20 @@ static RT *rtOf(uint32_t fb, uint32_t frame) {
 // Address of texture 0 of state e (GE registers 0xA0 and 0xA8)
 static uint32_t texAddr(const uint32_t *e) { return (RE(e, 0xA0) & 0xFFFFF0) | ((RE(e, 0xA8) << 8) & 0x0F000000); }
 
-// --- programs: one vertex program (nd_v) and five fragment programs: nd_fc without texture, nd_ft with texture, nd_fm, its fast path,
-// nd_fd, in between (modulate with doubling or fog, no alpha test), and nd_fa, nd_fd with a minimum alpha
+// --- programs: one vertex program (nd_v) and six fragment programs: nd_fc without texture, nd_ft with texture, nd_fm, its fast path,
+// nd_fd, in between (modulate with doubling or fog, no alpha test), nd_f2, nd_fd without fog, and nd_fa, nd_fd with a minimum alpha
 // (swizzled ones arrive already sorted from the record). Each fragment program is built once per blend that appears
 // (fps, up to 64) ---
 static SceGxmVertexProgram *nvp, *gvp[79];  // gvp: the 3D vertices of the record as they are: nd_v3, nd_v4 with 16-bit UV, with float UV, nd_v3 with 16-bit UV; from 4, nd_v5 and its two variants, 25 each (skinProg)
 static uint32_t gsz[25], g5try[3], g5r[3][6];  // nd_v5: vertex size of each program, programs tried (bits) and resources of the attributes (~0u: none) of each variant
 static SceGxmShaderPatcherId i5[3];
-static const SceGxmProgram *pft, *pfc, *pfm, *pfd, *pfa, *pv;
-static SceGxmShaderPatcherId ift, ifc, ifm, ifd, ifa;
-static const SceGxmProgramParameter *g_m, *g_tu, *g_fg, *g_cm, *g_ca, *g4[14], *g4gu, *g5, *n_wvp, *n_tf, *n_tm, *n_td, *n_ta, *n_atx, *n_atc, *n_env, *n_fgx, *n_fgc, *n_fgd, *n_fga;
+static const SceGxmProgram *pft, *pfc, *pfm, *pfd, *pfa, *pf2, *pv;
+static SceGxmShaderPatcherId ift, ifc, ifm, ifd, ifa, if2;
+static const SceGxmProgramParameter *g_m, *g_tu, *g_fg, *g_cm, *g_ca, *g4[14], *g4gu, *g5, *n_wvp, *n_tf, *n_tm, *n_td, *n_ta, *n_atx, *n_atc, *n_env, *n_fgx, *n_fgc, *n_fgd, *n_fga, *n_t2;
 typedef struct { uint64_t key; SceGxmFragmentProgram *p; } FP;
 static FP fps[128];
 static uint32_t nfps;
-// Fragment program for tex (0 no texture, 1 textured, 2 fast textured, 3 nd_fd, 4 nd_fa), key (0 no blending; otherwise the 4 bytes of SceGxmBlendInfo + 1,
+// Fragment program for tex (0 no texture, 1 textured, 2 fast textured, 3 nd_fd, 4 nd_fa, 5 nd_f2), key (0 no blending; otherwise the 4 bytes of SceGxmBlendInfo + 1,
 // see blendKey) and mask (SCE_GXM_COLOR_MASK_*, see colorMask). Finds it in fps or creates it with the patcher; 0 on
 // failure.
 static SceGxmFragmentProgram *fragProg(int tex, uint32_t key, uint32_t mask) {
@@ -109,7 +109,7 @@ static SceGxmFragmentProgram *fragProg(int tex, uint32_t key, uint32_t mask) {
   else { sceClibMemset(&b, 0, sizeof b); b.colorFunc = b.alphaFunc = SCE_GXM_BLEND_FUNC_NONE; }
   b.colorMask = mask;
   SceGxmFragmentProgram *p = 0;
-  int r = sceGxmShaderPatcherCreateFragmentProgram(pat, tex == 4 ? ifa : tex == 3 ? ifd : tex == 2 ? ifm : tex ? ift : ifc, SCE_GXM_OUTPUT_REGISTER_FORMAT_UCHAR4,
+  int r = sceGxmShaderPatcherCreateFragmentProgram(pat, tex == 5 ? if2 : tex == 4 ? ifa : tex == 3 ? ifd : tex == 2 ? ifm : tex ? ift : ifc, SCE_GXM_OUTPUT_REGISTER_FORMAT_UCHAR4,
                                                    SCE_GXM_MULTISAMPLE_NONE, &b, pv, &p);
   if (r < 0) { alog("translator: fragment program %u %08x: %08x\n", tex, key, r); return 0; }
   fps[nfps].key = k; fps[nfps++].p = p;
@@ -153,6 +153,7 @@ static int trInit(void) {
   if (r >= 0) r = sceGxmShaderPatcherRegisterProgram(pat, (const SceGxmProgram *)nd_fm_gxp, &ifm);
   if (r >= 0) r = sceGxmShaderPatcherRegisterProgram(pat, (const SceGxmProgram *)nd_fd_gxp, &ifd);
   if (r >= 0) r = sceGxmShaderPatcherRegisterProgram(pat, (const SceGxmProgram *)nd_fa_gxp, &ifa);
+  if (r >= 0) r = sceGxmShaderPatcherRegisterProgram(pat, (const SceGxmProgram *)nd_f2_gxp, &if2);
   if (r < 0) { alog("translator: register shaders %08x\n", r); return r; }
   pv = sceGxmShaderPatcherGetProgramFromId(iv); pft = sceGxmShaderPatcherGetProgramFromId(ift); pfc = sceGxmShaderPatcherGetProgramFromId(ifc); pfm = sceGxmShaderPatcherGetProgramFromId(ifm);
   const SceGxmProgramParameter *pa = sceGxmProgramFindParameterByName(pv, "aPosition"), *pt = sceGxmProgramFindParameterByName(pv, "aTexcoord"),
@@ -160,10 +161,11 @@ static int trInit(void) {
   n_wvp = sceGxmProgramFindParameterByName(pv, "wvp");
   pfd = sceGxmShaderPatcherGetProgramFromId(ifd); n_td = sceGxmProgramFindParameterByName(pfd, "tf"); n_fgd = sceGxmProgramFindParameterByName(pfd, "fog");
   pfa = sceGxmShaderPatcherGetProgramFromId(ifa); n_ta = sceGxmProgramFindParameterByName(pfa, "tf"); n_fga = sceGxmProgramFindParameterByName(pfa, "fog");
+  pf2 = sceGxmShaderPatcherGetProgramFromId(if2); n_t2 = sceGxmProgramFindParameterByName(pf2, "tf");
   n_tf = sceGxmProgramFindParameterByName(pft, "tf"); n_atx = sceGxmProgramFindParameterByName(pft, "at");
   n_atc = sceGxmProgramFindParameterByName(pfc, "at"); n_tm = sceGxmProgramFindParameterByName(pfm, "tf"); n_env = sceGxmProgramFindParameterByName(pft, "env");
   n_fgx = sceGxmProgramFindParameterByName(pft, "fog"); n_fgc = sceGxmProgramFindParameterByName(pfc, "fog");
-  if (!pa || !pt || !pc || !n_wvp || !n_tf || !n_atx || !n_atc || !n_env || !n_fgx || !n_fgc || !n_tm || !n_td || !n_fgd || !n_ta || !n_fga) { alog("translator: shader parameters not found\n"); return -2; }
+  if (!pa || !pt || !pc || !n_wvp || !n_tf || !n_atx || !n_atc || !n_env || !n_fgx || !n_fgc || !n_tm || !n_td || !n_fgd || !n_ta || !n_fga || !n_t2) { alog("translator: shader parameters not found\n"); return -2; }
   SceGxmVertexAttribute at[3] = { { 0, 0, SCE_GXM_ATTRIBUTE_FORMAT_F32, 4, sceGxmProgramParameterGetResourceIndex(pa) },
                                   { 0, 16, SCE_GXM_ATTRIBUTE_FORMAT_F32, 3, sceGxmProgramParameterGetResourceIndex(pt) },
                                   { 0, 28, SCE_GXM_ATTRIBUTE_FORMAT_U8N, 4, sceGxmProgramParameterGetResourceIndex(pc) } };
@@ -1785,12 +1787,12 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     uint32_t afn = 1, aref = 0, c9 = RE(e, 0xC9), b2 = !(clr & 1) && blend2x(e);
     if (!(clr & 1) && (RE(e, 0x22) & 1)) alphaFn(e, &afn, &aref);
     int fast = tex && !(c9 & 0x10007) && afn == 1 && !b2 && !(w3d && t3.fog);
-    int mid = tex && !fast && !(c9 & 7) && afn == 1 && !b2;
+    int mid = tex && !fast && !(c9 & 7) && afn == 1 && !b2, dbl = mid && !(w3d && t3.fog);  // (dbl: doubling without fog, nd_f2)
     int mina = tex && !(c9 & 7) && (afn == 6 || afn == 7) && !b2;  // (afn 6 greater, 7 greater or equal: the rounded alpha passes from aref +- half a step up)
     DEV(why = !tex || fast || mid || mina ? 0 : !!(c9 & 7) << BW_FUNC | !!(c9 & 0x10000) << BW_DOUBLE | (afn != 1) << BW_ATEST | (w3d && t3.fog) << BW_FOG | b2 << BW_BLEND2X;
         pb = fast ? BP_FAST : !tex ? BP_COL : mid || mina ? BP_MID : BP_TEX;
         t_c[fast ? TC_VFAST : tex ? TC_VTEX : TC_VCOL] += n; t_c[TC_FOG] += w3d && t3.fog; t_c[TC_ATEST] += afn != 1; t_c[TC_BLEND] += key != 0;)
-    int kind = fast ? 2 : mid ? 3 : mina ? 4 : tex;
+    int kind = fast ? 2 : dbl ? 5 : mid ? 3 : mina ? 4 : tex;
     SceGxmFragmentProgram *p = fragProg(kind, key, colorMask(e));
     if (!p) { res = T_PROG; break; }
     // The program and its uniforms (all made from fk) go to the context only when they change: until then the draws keep the
@@ -1804,6 +1806,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     // function, TCC and color doubling
     float tf[4] = { (float)(c9 & 7), (float)(c9 >> 8 & 1), (float)(c9 >> 16 & 1), 0 };
     if (fast) sceGxmSetUniformDataF(u, n_tm, 0, 4, tf);
+    else if (dbl) { tf[2] += 1; sceGxmSetUniformDataF(u, n_t2, 0, 4, tf); }
     else if (mid || mina) {
       float fg[4];
       tf[2] += 1;  // (a factor here: 1 or 2)

@@ -28,6 +28,8 @@ echo "$G" | grep 'draws=6642' | grep -q 'result=ok' || { echo "FAIL: God of War 
 # God of War: skinned with no lights on and 4 weights at most go through nd_v5_b4l0, 0x1BE with one light through nd_v5_b0l1
 [ "$(echo "$G" | grep 'draws=6642' | sed 's/.*nd_v5=[0-9]*,\([0-9]*\),.*/\1/')" -gt 50000 ] || { echo "FAIL: God of War unlit skinned vertices not on nd_v5_b4l0"; exit 1; }
 [ "$(echo "$G" | grep 'draws=8429' | sed 's/.*nd_v5=[0-9]*,[0-9]*,\([0-9]*\).*/\1/')" -gt 50000 ] || { echo "FAIL: God of War 0x1BE with one light not on nd_v5_b0l1"; exit 1; }
+# God of War: doubled color with no fog goes through nd_f2, and none of its vertices has fog (nd_f2 leaves it out)
+echo "$G" | grep 'draws=6642' | grep -q 'nd_f2=[4-9][0-9][0-9][0-9][0-9],0$' || { echo "FAIL: God of War doubled color without fog not on nd_f2"; exit 1; }
 # God of War's glow: the scene goes to 162000 times a colored fixed blend color (3f5343), carried by the vertex color
 TR_LOG=1 $(command -v qemu-arm-static || command -v qemu-arm) $R/build/perf/tr_gv $R/build/perf/gow_combat.bin 1 2>&1 | grep -q "left out.*'blend'" && { echo "FAIL: God of War glow (colored fixed blend) left out"; exit 1; }
 echo "== capturer bench (builds and runs one scene)"

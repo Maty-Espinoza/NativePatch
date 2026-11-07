@@ -7,7 +7,7 @@
 set -e
 D=$(cd "$(dirname "$0")" && pwd); O=$D/../shaders_nd.h
 echo "// Translator shaders (nativedraw/shaders/*.cg), compiled with shaders/build.sh. Do not edit." > $O
-for s in nd_v nd_v3 nd_v4 nd_v5 nd_v5_b4l0 nd_v5_b0l1 nd_ft nd_fc nd_fm nd_fd nd_fa; do
+for s in nd_v nd_v3 nd_v4 nd_v5 nd_v5_b4l0 nd_v5_b0l1 nd_ft nd_fc nd_fm nd_fd nd_fa nd_f2; do
   k=--fragment; case $s in nd_v*) k=--vertex;; esac
   c=$D/$s.cg
   case $s in nd_v5_*) v=${s#nd_v5_b}; c=/tmp/$s.cg; printf '#define NB %s\n#define NL %s\n' ${v%l*} ${v#*l} | cat - $D/nd_v5.cg > $c;; esac
