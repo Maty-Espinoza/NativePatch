@@ -237,6 +237,47 @@ static void combat(int f, int n) {
   }
   E(0x0F, 0); E(0x0C, 0);
 }
+// Scene 7: the same combat frame on the GPU path, as the capture log of the 0.0.28.1 run shows it (combat seconds 190-328, per
+// frame: ~7,600 3D strips of ~9 vertices read from the transfer copy, ~200 bytes each, 92 % for the GPU; light block on 93 % of
+// the draws; vertex type changes ~500, and ~100-150 each of 0x48, 0x49, 0x21, 0xC9, 0x24, 0xE7, 0x1F, 0x4B; matrices on ~9 %
+// of the draws, bones on ~7 %). The transfers and textures of gow_combat, with strips of 7 vertices so that their 1.3 MB give the
+// game's draws per frame; the sources hold floats, so every position is valid.
+// Groups of 16 draws share a vertex type, from the mix of the dumped combat frame (TR_STATS of tools/perf/data/gow_combat):
+// 0x1BE and 0x7BE lit with no light on, 0x87B9 (3 weights) half with three directional lights, 0x19F, and 0x780, which stays
+// off the GPU (copied as is). Lighting is on throughout; a material color changes every 400 draws. Same-value commands (BASE, texture
+// and shading on) bring it to the game's ~7.5 commands per draw; which ones the game repeats was not logged.
+static void gpuCombat(int f, int n) {
+  static const uint32_t vts[20] = { 0x1BE, 0x1BE, 0x1BE, 0x1BE, 0x7BE, 0x87B9, 0x1BE, 0x7BE, 0x87B9, 0x19F,
+                                    0x1BE, 0x1BE, 0x1BE, 0x1BE, 0x7BE, 0x87B9, 0x1BE, 0x7BE, 0x87B9, 0x780 };
+  rnd_s = 1; pc_ = MAIN; head(0x1BE);
+  E(0x50, 1); E(0x17, 1); E(0x18, 0); E(0x19, 0); E(0x1A, 0); E(0x5F, 0); E(0x60, 0); E(0x61, 0);
+  E(0x3A, 0); for (int i = 0; i < 12; i++) E(0x3B, 0x3F8000 + i);
+  E(0x3C, 0); for (int i = 0; i < 12; i++) E(0x3D, 0x3F8000 + i);
+  E(0x3E, 0); for (int i = 0; i < 16; i++) E(0x3F, 0x3F8000 + i);
+  if (!f) { uint8_t *p = (uint8_t *)W(TEX); for (uint32_t k = 0; k < 30 * 4096 + 35 * 16384; k++) p[k] = rnd2(256); }
+  for (int i = 0, d = 0; i < n; i++) {
+    uint32_t s = XF[i % 59][0], t = XF[i % 59][1], h = (XF[i % 59][2] * 138 + 50) / 100;
+    if (!f) { uint32_t *p = W(s); for (uint32_t k = 0; k < h * 128; k++) p[k] = 0x3F000000 | rnd2(1 << 24); want(t, h * 512, 1); }
+    E(0xB2, s & 0xFFFFF0); E(0xB3, (s >> 8 & 0x0F0000) | 128); E(0xB4, t & 0xFFFFF0); E(0xB5, (t >> 8 & 0x0F0000) | 128);
+    E(0xEB, 0); E(0xEC, 0); E(0xEE, 127 | (h - 1) << 10); E(0xEA, 1);
+    for (uint32_t o = 0;; d++) {
+      uint32_t g = d / 16, k = g % 20, vt = vts[k], vs = vsize(vt), nb = vt >> 9 & 3 ? (vt >> 14 & 7) + 1 : 0;
+      if (o + 7 * vs > h * 512) break;
+      if (d % 16 == 0) {
+        vtype(vt);
+        if (k % 10 == 5 || k % 10 == 6) for (int j = 0; j < 3; j++) E(0x18 + j, k % 10 == 5);  // (lights on for one 0x87B9 group)
+        if (g % 3 == 0) { E(0x48, 0x3F8000 + g % 2); E(0x49, 0x3F8000 + g % 2); E(0x21, g % 2); E(0xC9, g % 2); E(0x24, 0); E(0xE7, g % 2); E(0x1F, g % 2); E(0x4B, g % 2); }
+      }
+      if (d % 47 == 0) { uint32_t x = d / 47 % 65; if (x < 30) texState(TEX + x * 4096, 6, 6, 5, 1); else texState(TEX + 30 * 4096 + (x - 30) * 16384, 8, 6, 5, 1); }
+      if (d % 400 == 0) E(0x55, 0x808080 + d / 400);
+      if (nb && d % 6 == 0) { E(0x2A, 0); for (uint32_t j = 0; j < 12 * nb; j++) E(0x2B, 0x3F8000 + (j + d + f) % 64); }
+      if (d % 100 == 0) { E(0x3A, 0); for (int j = 0; j < 12; j++) E(0x3B, 0x3F8000 + j + f); }
+      E(0x10, (t + o) >> 8 & 0x0F0000); E(0x01, (t + o) & 0xFFFFFF); E(0x1E, 1); E(0x50, 1); E(0x04, 4 << 16 | 7);
+      o += 7 * vs;
+    }
+  }
+  E(0x0F, 0); E(0x0C, 0);
+}
 
 // late: the presenter takes one frame in three, as on the Vita, so the others are walked without recording
 typedef struct { const char *name; void (*build)(int, int); int n, record, memo, readers, vram, late; } Scene;
@@ -251,6 +292,7 @@ static const Scene S[] = {
   { "gow_menu_xfer", xfers, 59, 1, 0, 0, 1, 0 },
   { "gow_play_xfer", xfers, 97, 1, 0, 0, 1, 0 },
   { "gow_combat", combat, 97, 1, 0, 0, 1, 0 },
+  { "gow_gpu", gpuCombat, 97, 1, 0, 0, 1, 0 },
 };
 #define SN (int)(sizeof S / sizeof *S)
 #define FRAMES 40

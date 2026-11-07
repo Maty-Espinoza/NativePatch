@@ -34,6 +34,7 @@ echo "== capturer bench (builds and runs one scene)"
 arm-linux-gnueabihf-gcc -static -O2 -mthumb -mfpu=neon -mfloat-abi=hard -w -I$B/inc -o $B/bench $R/tools/perf/capture_bench.c
 $(command -v qemu-arm-static || command -v qemu-arm) $B/bench rr_race | grep -q "complete=38" || { echo "FAIL: capture_bench"; exit 1; }
 $(command -v qemu-arm-static || command -v qemu-arm) $B/bench gow_combat | grep -q "complete=39" || { echo "FAIL: capture_bench gow_combat (transfers read piece by piece, RAM textures)"; exit 1; }
+$(command -v qemu-arm-static || command -v qemu-arm) $B/bench gow_gpu | grep -q "complete=39" || { echo "FAIL: capture_bench gow_gpu (vertices for the GPU from the transfer copy, lights, bones)"; exit 1; }
 echo "ok   capture_bench"
 echo "== transfers to the mirror and the record's cached copy of them"
 arm-linux-gnueabihf-gcc -static -O2 -mthumb -mfpu=neon -mfloat-abi=hard -w -I$B/inc -o $B/xfer_diff $R/tools/perf/xfer_diff.c
