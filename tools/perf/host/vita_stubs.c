@@ -17,6 +17,8 @@ int sceGxmGetNotificationRegion(void) { return 0; }
 int sceGxmMapFragmentUsseMemory(void) { return 0; }
 int sceGxmMapMemory(void) { return 0; }
 int sceGxmMapVertexUsseMemory(void) { return 0; }
+int sceGxmProgramGetDefaultUniformBufferSize(void) { return 0; }
+int sceGxmProgramParameterGetArraySize(void) { return 0; }
 int sceGxmProgramParameterGetResourceIndex(void) { return 0; }
 int sceGxmSetCullMode(void) { return 0; }
 int sceGxmSetFrontDepthFunc(void) { return 0; }

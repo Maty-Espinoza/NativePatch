@@ -88,9 +88,9 @@ static uint32_t texAddr(const uint32_t *e) { return (RE(e, 0xA0) & 0xFFFFF0) | (
 // nd_fd, in between (modulate with doubling or fog, no alpha test), and nd_fa, nd_fd with a minimum alpha
 // (swizzled ones arrive already sorted from the record). Each fragment program is built once per blend that appears
 // (fps, up to 64) ---
-static SceGxmVertexProgram *nvp, *gvp[29];  // gvp: the 3D vertices of the record as they are: nd_v3, nd_v4 with 16-bit UV, with float UV, nd_v3 with 16-bit UV; from 4, nd_v5 (skinProg)
-static uint32_t gsz[25], g5try, g5r[6];  // nd_v5: vertex size of each program, programs tried (bits), resources of its attributes
-static SceGxmShaderPatcherId i5;
+static SceGxmVertexProgram *nvp, *gvp[79];  // gvp: the 3D vertices of the record as they are: nd_v3, nd_v4 with 16-bit UV, with float UV, nd_v3 with 16-bit UV; from 4, nd_v5 and its two variants, 25 each (skinProg)
+static uint32_t gsz[25], g5try[3], g5r[3][6];  // nd_v5: vertex size of each program, programs tried (bits) and resources of the attributes (~0u: none) of each variant
+static SceGxmShaderPatcherId i5[3];
 static const SceGxmProgram *pft, *pfc, *pfm, *pfd, *pfa, *pv;
 static SceGxmShaderPatcherId ift, ifc, ifm, ifd, ifa;
 static const SceGxmProgramParameter *g_m, *g_tu, *g_fg, *g_cm, *g_ca, *g4[14], *g4gu, *g5, *n_wvp, *n_tf, *n_tm, *n_td, *n_ta, *n_atx, *n_atc, *n_env, *n_fgx, *n_fgc, *n_fgd, *n_fga;
@@ -201,12 +201,21 @@ static int trInit(void) {
   alog("translator: GPU lit vertex programs %08x %08x\n", r1v, r2v);
   if (r1v < 0 || !ok4) gvp[1] = 0;
   if (r2v < 0 || !ok4) gvp[2] = 0;
-  if ((r = sceGxmShaderPatcherRegisterProgram(pat, (const SceGxmProgram *)nd_v5_gxp, &i5)) < 0) { alog("translator: register nd_v5 %08x\n", r); return r; }
-  const SceGxmProgram *p5 = sceGxmShaderPatcherGetProgramFromId(i5);
+  // nd_v5 and its variants, which leave out the attributes they do not read; a variant that cannot be registered or whose uniforms are
+  // not laid out as nd_v5's is never used
+  static const unsigned char *const x5[3] = { nd_v5_gxp, nd_v5_b4l0_gxp, nd_v5_b0l1_gxp };
   static const char *const a5[6] = { "aW0", "aW1", "aPosition", "aNormal", "aTexcoord", "aColor" };
-  int ok5 = !!(g5 = sceGxmProgramFindParameterByName(p5, "u"));
-  for (int i = 0; i < 6; i++) { const SceGxmProgramParameter *q = sceGxmProgramFindParameterByName(p5, a5[i]); ok5 = q && ok5; g5r[i] = q ? sceGxmProgramParameterGetResourceIndex(q) : 0; }
-  if (!ok5) g5 = 0;
+  const SceGxmProgram *p5 = 0;
+  for (int j = 0; j < 3; j++) {
+    if ((r = sceGxmShaderPatcherRegisterProgram(pat, (const SceGxmProgram *)x5[j], &i5[j])) < 0) { alog("translator: register nd_v5 %d %08x\n", j, r); if (!j) return r; g5try[j] = ~0u; continue; }
+    const SceGxmProgram *p = sceGxmShaderPatcherGetProgramFromId(i5[j]);
+    const SceGxmProgramParameter *q = sceGxmProgramFindParameterByName(p, "u");
+    if (!j) { p5 = p; g5 = q; }
+    if (!q || !g5 || sceGxmProgramParameterGetResourceIndex(q) != sceGxmProgramParameterGetResourceIndex(g5) || sceGxmProgramParameterGetArraySize(q) != sceGxmProgramParameterGetArraySize(g5) ||
+        sceGxmProgramGetDefaultUniformBufferSize(p) != sceGxmProgramGetDefaultUniformBufferSize(p5)) g5try[j] = ~0u;
+    for (int i = 0; i < 6; i++) { q = sceGxmProgramFindParameterByName(p, a5[i]); g5r[j][i] = q ? sceGxmProgramParameterGetResourceIndex(q) : ~0u; }
+  }
+  for (int i = 0; i < 6; i++) if (g5r[0][i] == ~0u) g5 = 0;
   if (!fragProg(0, 0, C_RGB) || !fragProg(1, 0, C_RGB)) return -3;
   for (int i = 0; i < 2; i++) rtMem(&rsf[i]);
   for (int i = 0; i < RT_N; i++) rts[i].fb = ~0u;
@@ -219,28 +228,30 @@ static int trInit(void) {
   DEV(trBench();)
   return r3 < 0 ? r3 : 0;
 }
-// Place in gvp of the nd_v5 program for vertex type vt (GVS), one per type, made with the patcher the first time: each
-// attribute at the offset of its field in the vertex, laid out as in trVerts (aW1, with 4 weights or fewer, reads the first one
-// again: its bones are zero; with no weights both read the position and all bones are zero). The entry stays 0 if it cannot be
-// made
-static uint32_t skinProg(uint32_t vt) {
-  uint32_t wt = vt >> 9 & 3, k = ((vt & 0x3F) == 0x3E ? 8 : 0) + (vt >> 14 & 7) + (wt ? 0 : 16);
-  if (g5try >> k & 1 || !g5) return 4 + k;
-  g5try |= 1u << k;
+// Place in gvp of the program of variant v (0 nd_v5, 1 nd_v5_b4l0, 2 nd_v5_b0l1) for vertex type vt (GVS), one per type and
+// variant, made with the patcher the first time: each attribute the program has at the offset of its field in the vertex, laid
+// out as in trVerts (aW1, with 4 weights or fewer, reads the first one again: its bones are zero; with no weights both read the
+// position and all bones are zero). A variant that cannot be made gives nd_v5's place; nd_v5's entry stays 0 if it cannot be made
+static uint32_t skinProg(uint32_t vt, uint32_t v) {
+  uint32_t wt = vt >> 9 & 3, k = ((vt & 0x3F) == 0x3E ? 8 : 0) + (vt >> 14 & 7) + (wt ? 0 : 16), g = 4 + v * 25 + k;
+  if (g5try[v] >> k & 1 || !g5) return gvp[g] || !v ? g : skinProg(vt, 0);
+  g5try[v] |= 1u << k;
   static const uint8_t s4[4] = { 0, 1, 2, 4 }, cs[8] = { 0, 0, 0, 0, 2, 2, 2, 4 };
   uint32_t wn = (vt >> 14 & 7) + 1, fn[5] = { wn, 2, 1, 3, 3 }, fs[5] = { wt ? 4 : 0, s4[vt & 3], cs[vt >> 2 & 7], s4[vt >> 5 & 3], 4 }, o[5] = { 0 }, z = 0;
   for (int i = 0; i < 5; i++) if (fs[i]) { z = (z + fs[i] - 1) & ~(fs[i] - 1); o[i] = z; z += fn[i] * fs[i]; }
   gsz[k] = z = (z + 3) & ~3u;
-  SceGxmVertexAttribute a[6] = { { 0, wt ? 0 : o[4], SCE_GXM_ATTRIBUTE_FORMAT_F32, !wt ? 1 : wn < 4 ? wn : 4, g5r[0] },
-                                 { 0, !wt ? o[4] : wn > 4 ? 16 : 0, SCE_GXM_ATTRIBUTE_FORMAT_F32, wn > 4 ? wn - 4 : 1, g5r[1] },
-                                 { 0, o[4], SCE_GXM_ATTRIBUTE_FORMAT_F32, 3, g5r[2] }, { 0, o[3], SCE_GXM_ATTRIBUTE_FORMAT_S8, 3, g5r[3] },
-                                 { 0, o[1], (vt & 3) == 2 ? SCE_GXM_ATTRIBUTE_FORMAT_U16 : SCE_GXM_ATTRIBUTE_FORMAT_U8, 2, g5r[4] },
-                                 { 0, o[2], SCE_GXM_ATTRIBUTE_FORMAT_U8, (vt >> 2 & 7) == 6 ? 2 : 4, g5r[5] } };
+  SceGxmVertexAttribute a[6] = { { 0, wt ? 0 : o[4], SCE_GXM_ATTRIBUTE_FORMAT_F32, !wt ? 1 : wn < 4 ? wn : 4, g5r[v][0] },
+                                 { 0, !wt ? o[4] : wn > 4 ? 16 : 0, SCE_GXM_ATTRIBUTE_FORMAT_F32, wn > 4 ? wn - 4 : 1, g5r[v][1] },
+                                 { 0, o[4], SCE_GXM_ATTRIBUTE_FORMAT_F32, 3, g5r[v][2] }, { 0, o[3], SCE_GXM_ATTRIBUTE_FORMAT_S8, 3, g5r[v][3] },
+                                 { 0, o[1], (vt & 3) == 2 ? SCE_GXM_ATTRIBUTE_FORMAT_U16 : SCE_GXM_ATTRIBUTE_FORMAT_U8, 2, g5r[v][4] },
+                                 { 0, o[2], SCE_GXM_ATTRIBUTE_FORMAT_U8, (vt >> 2 & 7) == 6 ? 2 : 4, g5r[v][5] } };
+  uint32_t na = 0;
+  for (int i = 0; i < 6; i++) if (g5r[v][i] != ~0u) a[na++] = a[i];
   SceGxmVertexStream st = { z, SCE_GXM_INDEX_SOURCE_INDEX_16BIT };
-  int r = sceGxmShaderPatcherCreateVertexProgram(pat, i5, a, 6, &st, 1, &gvp[4 + k]);
-  alog("translator: GPU skinned vertex program %06x %08x\n", vt, r);
-  if (r < 0) gvp[4 + k] = 0;
-  return 4 + k;
+  int r = sceGxmShaderPatcherCreateVertexProgram(pat, i5[v], a, na, &st, 1, &gvp[g]);
+  alog("translator: GPU skinned vertex program %06x variant %u %08x\n", vt, v, r);
+  if (r < 0) gvp[g] = 0;
+  return gvp[g] || !v ? g : skinProg(vt, 0);
 }
 
 // PSP color c in format f (0 5650, 1 5551, 2 4444, 3 8888; R in the low bits) -> 0xAABBGGRR (channels scaled to 0-255)
@@ -513,7 +524,7 @@ static int t3Dl(const T3 *t) {
   for (int i = 0; i < 4; i++) if (t->l[i].on && (t->l[i].type > 1 || t->l[i].comp == 2)) return 0;
   return 1;
 }
-// Uniforms of nd_v3 (lv 0, 3 with 16-bit UV), nd_v4 (lv 1, 2: GVL) or nd_v5 (lv 4 on: skinProg) for a draw of t with texture size tw x th and material color mat, in the default buffer u; wm: the scene's matrix.
+// Uniforms of nd_v3 (lv 0, 3 with 16-bit UV), nd_v4 (lv 1, 2: GVL) or nd_v5 and its variants (lv 4 on: skinProg) for a draw of t with texture size tw x th and material color mat, in the default buffer u; wm: the scene's matrix.
 // What trVerts does per vertex, as numbers: m is wm x viewport x t->m, column by column (model -> surface clip); 16-bit values count
 // 1 / 32768, as on the GE.
 static void t3Uni(void *u, const T3 *t, float tw, float th, const float *wm, int lv, uint32_t mat) {
@@ -546,7 +557,7 @@ static void t3Uni(void *u, const T3 *t, float tw, float th, const float *wm, int
     return;
   }
   if (lv >= 4) {  // (trVerts with or without weights: t3Flat, or t3Light with directional and point lights; t3Gen of an environment map. Rows of u: nd_v5.cg)
-    uint32_t fm = (lv - 4) >> 3 & 1, wn = ((lv - 4) & 7) + 1;  // (fm: 0 8-bit UV and 4444 color, 1 16-bit UV and 8888)
+    uint32_t k5 = (lv - 4) % 25, fm = k5 >> 3 & 1, wn = (k5 & 7) + 1;  // (fm: 0 8-bit UV and 4444 color, 1 16-bit UV and 8888)
     float q[252] = { 0 }, *ba = q + 24, *kc = q + 28, *md = q + 32, *ms = q + 36, s = t->rev ? -1 : 1, kt = fm ? k16 : 1 / 128.0f;
     sceClibMemcpy(q, m, 64); sceClibMemcpy(q + 20, fg, 16);
     q[16] = t->us * ku * kt; q[17] = t->vs * kv * kt; q[18] = t->uo * ku; q[19] = t->vo * kv;
@@ -557,19 +568,19 @@ static void t3Uni(void *u, const T3 *t, float tw, float th, const float *wm, int
     else if (!t->nl) for (int k = 0; k < 4; k++) { kc[k] = t->upd & 1 ? t->ai[k] / 256.0f : 0; ba[k] = (t->upd & 1 ? t->ei[k] : t->lc >> k * 8 & 255) / 255.0f; }
     else {
       int va = t->upd & 1;
-      for (int i = 0; i < 4; i++) {  // (direction or position, attenuation and power, diffuse, specular; ambient)
+      for (int i = 0, j = 0; i < 4; i++) {  // (direction or position, attenuation and power, diffuse, specular; ambient. The lights on first)
         const LT *l = &t->l[i];
-        float *z = q + 60 + i * 16;
+        float *z = q + 60 + j * 16;
         if (!l->on) continue;
-        for (int k = 0; k < 3; k++) { z[k] = l->p[k]; z[4 + k] = l->type ? l->a[k] : k == 0; z[8 + k] = l->cd[k]; z[12 + k] = l->comp == 1 ? l->cs[k] : 0; q[220 + i * 4 + k] = l->ca[k]; }
-        z[3] = l->type != 0; z[7] = (int)(t->sp + .5f);
+        for (int k = 0; k < 3; k++) { z[k] = l->p[k]; z[4 + k] = l->type ? l->a[k] : k == 0; z[8 + k] = l->cd[k]; z[12 + k] = l->comp == 1 ? l->cs[k] : 0; q[220 + j * 4 + k] = l->ca[k]; }
+        z[3] = l->type != 0; z[7] = (int)(t->sp + .5f); j++;
       }
       for (int r = 0; r < 3; r++) for (int c = 0; c < 4; c++) q[236 + r * 4 + c] = t->w[c * 3 + r];
       for (int k = 0; k < 4; k++) { ba[k] = t->em[k] + (va ? 0 : t->ac[k] * t->am[k]); kc[k] = va ? t->ac[k] : 0; q[248 + k] = k < 3 ? (va ? 0 : t->am[k]) : va; }
       for (int k = 0; k < 3; k++) { md[k] = t->upd & 2 ? 0 : t->ad[k]; ms[k] = t->upd & 4 ? 0 : t->as[k]; }
       md[3] = t->upd >> 1 & 1; ms[3] = t->upd >> 2 & 1;
     }
-    if (lv >= 20) q[51] = 1;
+    if (k5 >= 16) q[51] = 1;
     else for (uint32_t b = 0; b < wn; b++) for (int r = 0; r < 3; r++) for (int c = 0; c < 4; c++) q[124 + b * 12 + r * 4 + c] = t->b[b * 12 + c * 3 + r];
     sceGxmSetUniformDataF(u, g5, 0, 252, q);
     return;
@@ -1640,7 +1651,8 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     }
     // Vertices the GPU reads as they are: no translated vertices, and the state below uses none of them
     int cov = sc[0] <= 0 && sc[1] <= 0 && sc[2] >= (dst ? dst->vr.xMax + 1 : W) && sc[3] >= (dst ? dst->vr.yMax + 1 : H);  // (nothing for the scissor to clip)
-    int gl = GVL(d->vt), sk = GVS(d->vt) && !(GV3(d->vt) && !(t3.lit && t3.nl)), gp = gl ? gl : sk ? skinProg(d->vt) : d->vt == 0x1BE ? 3 : 0, gnr = gl && !t3.lit && t3.gen == 1 && t3.prj == 3;
+    uint32_t v5 = !t3.lit || !t3.nl ? (d->vt >> 14 & 7) < 4 : t3.nl == 1 && !(d->vt >> 9 & 3) ? 2 : 0;  // (skinProg variant: 1 no light on and 4 weights at most, 2 one light and no weights)
+    int gl = GVL(d->vt), sk = GVS(d->vt) && !(GV3(d->vt) && !(t3.lit && t3.nl)), gp = gl ? gl : sk ? skinProg(d->vt, v5) : d->vt == 0x1BE ? 3 : 0, gnr = gl && !t3.lit && t3.gen == 1 && t3.prj == 3;
     int lok = gl ? gnr || (t3.lit && t3One(&t3)) : sk ? !t3.lit || t3Dl(&t3) : !(t3.lit && t3.nl), gok = !t3.gen || gnr || (sk && t3.gen == 2 && !t3.l[t3.ls0].type && !t3.l[t3.ls1].type);  // (lights and UV are what its program does)
     int gv = d->voff & VX && gvp[gp] && w3d && !self && cov && gok && lok && !fixBlend(e) ? gp + 1 : 0;  // (gv: its program + 1)
     uint32_t prim = d->prim;
@@ -1827,7 +1839,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
       if (nu) { sceGxmReserveVertexDefaultUniformBuffer(c, &u); t3Uni(u, &t3, tw, th, wm, gp, mat); }
       // Same state as the pending draw and same vertex size: its triangles are added by indices to the pending draw, on the
       // vertices where the record has them. The base goes below the first draw because the record fills downwards
-      uint32_t vo = d->voff & ~VX, vz = gv > 4 ? gsz[gv - 5] : gv == 1 || gv == 4 ? 24 : gv == 2 ? 16 : 20, nt = prim == 3 ? n / 3 : n - 2;
+      uint32_t vo = d->voff & ~VX, vz = gv > 4 ? gsz[(gv - 5) % 25] : gv == 1 || gv == 4 ? 24 : gv == 2 ? 16 : 20, nt = prim == 3 ? n / 3 : n - 2;
       if (gn > gs && (gz != vz || !gOff(vo, gb, vz, &ix) || ix + n > 0xFFFF)) GRUN();
       if (n < 3 || gn + nt * 3 > TG_N DEV(|| no_join)) {
         GRUN();

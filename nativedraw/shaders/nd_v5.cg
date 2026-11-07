@@ -8,17 +8,25 @@
 // direction, or position with w 1 (point light), attenuation (1, 0, 0 for a directional light) and specular power, diffuse color,
 // specular color; 31-54 the 8 bones, 3 rows each (zero those with no weight); 55-58 ambient color of each light; 59-61 model ->
 // world for the position.
+// NB bones (8) and NL lights (4) are what the loops go through: shaders/build.sh also makes lighter variants with fewer, for draws
+// whose other bones are zero and other lights off, which add nothing; translator.c puts the lights on first.
+#ifndef NB
+#define NB 8
+#endif
+#ifndef NL
+#define NL 4
+#endif
 void main(float4 aW0, float4 aW1, float3 aPosition, float3 aNormal, float2 aTexcoord, float4 aColor, uniform float4 u[63],
           float4 out vPosition : POSITION, float3 out vTexcoord : TEXCOORD0, float4 out vColor : COLOR)
 {
   float4 x = float4(aPosition, 1), n = float4(aNormal, 0);
   float3 s = u[12].w * aPosition, sn = u[12].w * aNormal;
-  for (int b = 0; b < 4; b++) {
+  for (int b = 0; b < (NB < 4 ? NB : 4); b++) {
     float4 r0 = u[31 + b * 3], r1 = u[32 + b * 3], r2 = u[33 + b * 3];
     s += aW0[b] * float3(dot(x, r0), dot(x, r1), dot(x, r2));
     sn += aW0[b] * float3(dot(n, r0), dot(n, r1), dot(n, r2));
   }
-  for (int b = 0; b < 4; b++) {
+  for (int b = 0; b < NB - 4; b++) {
     float4 r0 = u[43 + b * 3], r1 = u[44 + b * 3], r2 = u[45 + b * 3];
     s += aW1[b] * float3(dot(x, r0), dot(x, r1), dot(x, r2));
     sn += aW1[b] * float3(dot(n, r0), dot(n, r1), dot(n, r2));
@@ -29,7 +37,7 @@ void main(float4 aW0, float4 aW1, float3 aPosition, float3 aNormal, float2 aTexc
   float4 c = u[11].w > 0 ? aColor / 255 : float4(l.x, h.x, l.y, h.y) / 15;
   float4 sw = float4(s, 1);
   float3 wp = float3(dot(sw, u[59]), dot(sw, u[60]), dot(sw, u[61])), d = 0, p = 0, a = 0;
-  for (int i = 0; i < 4; i++) {  // (light direction L, attenuation k, half vector L + (0, 0, 1))
+  for (int i = 0; i < NL; i++) {  // (light direction L, attenuation k, half vector L + (0, 0, 1))
     float4 lp = u[15 + i * 4], at = u[16 + i * 4];
     float3 L = lp.xyz - lp.w * wp;
     float r = max(dot(L, L), 1e-30), den = at.x + at.y * sqrt(r) + at.z * r, k = den > 0 ? min(1 / den, 1) : 0;
