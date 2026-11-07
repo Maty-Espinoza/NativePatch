@@ -5,7 +5,7 @@ recibió para dibujarla. Sirve para encontrar el origen de un error visual sin a
 `../../agent/en/workflow.md`). Los niveles funcionan como los del registro (`logs-and-switches.md`): se elige uno según cuánta
 información hace falta y cuánto puede costar.
 
-## Niveles (`ux0:data/nativedraw/dump`, una palabra; sin el archivo: `sequence`)
+## Niveles (opción `dump` de `ux0:data/nativedraw/options.txt`, una palabra; sin la línea: `sequence`)
 
 | Nivel | L+R+SELECT guarda | Costo |
 |---|---|---|
@@ -77,7 +77,7 @@ La referencia es la imagen exacta del frame si el `.bin` la trae (`auto` desde 0
 0.0.8.7); si no, `fK_normal.bmp`.
 
 ## Reproducción
-`ux0:data/nativedraw/replay` con la ruta de un `fK_record.bin`: al abrir el juego (con `draw`) la Vita lo
+La opción `replay` con la ruta de un `fK_record.bin`: al abrir el juego (con `draw`) la Vita lo
 vuelve a dibujar con el mismo traductor y deja `fK_replay.bmp` y `fK_replay_intermediate.bmp` junto al `.bin`
 (`_record.bin` se cambia por el sufijo `_replay`)
 (después escribe `no` en el archivo). Si la reproducción sale bien y el volcado en vivo no, el error depende del momento
@@ -87,7 +87,7 @@ vuelve a dibujar con el mismo traductor y deja `fK_replay.bmp` y `fK_replay_inte
 - 0.0.7.4: L+R+SELECT, 4 frames, imágenes y texto. 0.0.7.5: escritura rápida y texto compacto. 0.0.7.7: registro
   `.bin` y `tools/dump.py`. 0.0.7.8–0.0.7.10: automático (puntos → bloques; se confirma con la GPU terminada).
   0.0.7.9: 3 frames, texto armado desde el registro al escribir. 0.0.8.3: imagen intermedia. 0.0.8.4: imagen exacta del
-  frame. 0.0.8.5: niveles y reproducción (`replay.c`: `ux0:data/nativedraw/replay` con la ruta de un `.bin` lo
+  frame. 0.0.8.5: niveles y reproducción (`replay.c`: la opción `replay` con la ruta de un `.bin` lo
   vuelve a dibujar en la Vita). 0.0.8.7: imagen exacta también con L+R+SELECT.
 - En 0.0.8–0.0.8.15 una textura con swizzle va tal cual en el registro (versiones 2 y 3 del registro): `tools/dump.py`
   la ordena en el PC. Desde 0.0.8.16 (versión 4) el registro ya la trae ordenada; la reproducción en la Vita no carga

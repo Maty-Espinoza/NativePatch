@@ -9,7 +9,7 @@ To understand NativePatch without knowing anything beforehand. Spanish version: 
 | 3 | `how-it-works.md` | How NativeLink and NativeDraw work: mailbox, mirror, gate, capture, frame record, translator, presenter |
 | 4 | `findings.md` | What was measured, what was discovered, what was ruled out and what limits it has |
 | 5 | `architecture-and-roadmap.md` | The analysis that decided the architecture and the roadmap by stages (kept as it was written) |
-| — | `logs-and-switches.md` | What each log writes, line by line, and the switches in `ux0:data/nativedraw/` |
+| — | `logs-and-switches.md` | What each log writes, line by line, and the options of `ux0:data/nativedraw/options.txt` |
 | — | `dumps.md` | Frame dumps: levels, files, how to read them with `tools/dump.py`, replay on the Vita |
 | — | `nptest.md` | The synthetic 2D battery: scenes, rare techniques, how to run it on the Vita and on a PC |
 | — | `unsupported.md` | The rendering techniques not drawn yet or drawn slowly, with the test that covers each one: the list to design support from |

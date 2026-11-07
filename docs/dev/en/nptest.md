@@ -70,7 +70,7 @@ new record (`no_new_frame`, for example `limit`) is not in those lines: look at 
 ## Comparing the images
 With `ms0:/nptest_dumps` starting with `y` (`send/ux0/pspemu/nptest_dumps`), each scene lasts 5 s (about 9 min) and at its
 frame 60 sends a GE NOP carrying `0x4E5044`, which makes a development NativeDraw take a dump. Use the `screenshot` level
-(`ux0:data/nativedraw/dump`, read when Adrenaline opens) and leave it as it was afterwards.
+(option `dump` of `options.txt`, read when Adrenaline opens) and leave it as it was afterwards.
 `python3 tools/nptest_compare.py <dumps> <run> <out>` matches each dump to its scene by the bar code, reduces the Vita image
 and compares it in 4x4 blocks: `same`, `DIFF`, `normal (reason)` or `no dump`. It leaves `compare.txt` and pages with PSP,
 Vita and differences. Animated scenes can differ by a frame. Scenes that show no GE list (`ramShown`) make no dump.

@@ -41,6 +41,8 @@ int sceClibMemcmp(const void *a, const void *b, SceSize n) { return memcmp(a, b,
 int sceClibVsnprintf(char *b, SceSize n, const char *f, va_list ap) { return vsnprintf(b, n, f, ap); }
 int sceClibSnprintf(char *b, SceSize n, const char *f, ...) { va_list ap; va_start(ap, f); int r = vsnprintf(b, n, f, ap); va_end(ap); return r; }
 SceUID sceIoOpen(const char *p, int f, SceMode m) { return -1; }
+const char *optStr(const char *n) { return NULL; }  // (no options file: every option at its default)
+int optOn(const char *n) { return 0; }
 int sceIoWrite(SceUID fd, const void *b, SceSize n) { return -1; }
 int sceIoClose(SceUID fd) { return 0; }
 int sceIoRemove(const char *p) { return 0; }

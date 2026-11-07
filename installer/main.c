@@ -239,24 +239,39 @@ static const char *const leftDirs[] = { "ux0:data/gepresent", "ux0:data/adrfsr",
   "ux0:pspemu/PSP/GAME/KBENCH", "ux0:pspemu/PSP/GAME/GEPTEST", "ux0:pspemu/PSP/GAME/GEPVM", DRAW_DIR "/volcados", NULL };
 static const char *const leftFiles[] = { "ux0:pspemu/seplugins/ge_patch.prx", "ux0:pspemu/seplugins/ge_patch_anterior.prx",
   "ux0:pspemu/seplugins/._ge_patch.prx", "ux0:pspemu/seplugins/kbench.prx", "ux0:pspemu/seplugins/vpjuego.prx",
-  "ux0:pspemu/seplugins/geptest.prx", DRAW_DIR "/dibujar", DRAW_DIR "/espejo_espera", DRAW_DIR "/medir_ge",
-  DRAW_DIR "/medir_gpu", DRAW_DIR "/memo_revisar", DRAW_DIR "/nucleo_captura", DRAW_DIR "/captura_sin_lectores",
-  DRAW_DIR "/compuerta_sync", DRAW_DIR "/sin_adelanto", DRAW_DIR "/sin_captura", DRAW_DIR "/sin_compuerta",
-  DRAW_DIR "/sin_espejo", DRAW_DIR "/sin_libre", DRAW_DIR "/sin_memoria", DRAW_DIR "/registro", DRAW_DIR "/reproducir",
-  DRAW_DIR "/volcado", NULL };  // (exFAT is case-insensitive: also deletes GE_PATCH.PRX)
+  "ux0:pspemu/seplugins/geptest.prx", NULL };  // (exFAT is case-insensitive: also deletes GE_PATCH.PRX)
 static const char *const leftPlug[] = { "ge_patch.prx", "kbench.prx", "vpjuego.prx", "geptest.prx", NULL };
 static const char *const leftTai[] = { "ux0:data/gepresent/", "ux0:data/adrfsr/", "ux0:data/kbench/", "ux0:data/vprobe/", NULL };
-static int isLeftover(const char *n) {  // loose files in ux0:pspemu: GePatch logs, dumps and options, old NativeDraw logs
+// Loose files that are leftovers: in ux0:pspemu, GePatch logs, dumps and options and old NativeDraw logs; in
+// ux0:data/nativedraw, everything but the plugin, version.txt and options.txt (the old one-file-per-switch names, peeks)
+static int isLeftover(const char *dir, const char *n) {
   int l = strlen(n);
   if (!strncmp(n, "._", 2)) n += 2, l -= 2;  // ("._" copies left by the Mac Finder)
+  if (!strcmp(dir, DRAW_DIR)) return strcasecmp(n, "nativedraw.suprx") && strcasecmp(n, "version.txt") && strcasecmp(n, "options.txt");
   return (!strncasecmp(n, "ge_patch", 8) && l > 4 && !strcasecmp(n + l - 4, ".log")) || (l > 4 && !strcasecmp(n + l - 4, ".gpd")) ||
          !strncasecmp(n, "gepatch_", 8) || !strncasecmp(n, "nativedraw_captura", 18) || !strncasecmp(n, "nativedraw_tarde", 16);
 }
-// Finds the leftovers: folders and files of the lists, loose files of ux0:pspemu (isLeftover), leftPlug lines
-// in plugins.txt and game.txt, and leftTai lines in both config.txt. With erase, also deletes them (lines with
-// editText, with backup). Returns how many it found and leaves the detail in the log.
+// Loose files of dir that are leftovers (isLeftover); with erase, deletes them. Returns how many
+static int looseFiles(const char *dir, int erase) {
+  int loose = 0;
+  SceUID d = sceIoDopen(dir);
+  if (d < 0) return 0;
+  SceIoDirent e;
+  while (sceIoDread(d, &e) > 0)
+    if (!SCE_S_ISDIR(e.d_stat.st_mode) && isLeftover(dir, e.d_name)) {
+      char c[300];
+      snprintf(c, sizeof c, "%s/%s", dir, e.d_name);
+      if (erase) sceIoRemove(c);
+      loose++;
+    }
+  sceIoDclose(d);
+  return loose;
+}
+// Finds the leftovers: folders and files of the lists, loose files of ux0:pspemu and ux0:data/nativedraw (looseFiles),
+// leftPlug lines in plugins.txt and game.txt, and leftTai lines in both config.txt. With erase, also deletes them
+// (lines with editText, with backup). Returns how many it found and leaves the detail in the log.
 static int leftovers(int erase) {
-  int total = 0, loose = 0;
+  int total = 0, loose, old;
   for (const char *const *d = leftDirs; *d; d++)
     if (isDir(*d)) {
       if (erase) { int n = removeTree(*d); say(isDir(*d) ? C_BAD : C_OK, "  %s (%d files)%s", *d, n, isDir(*d) ? ": ERROR" : ""); }
@@ -269,19 +284,10 @@ static int leftovers(int erase) {
       else say(C_TEXT, "  %s", *f);
       total++;
     }
-  SceUID d = sceIoDopen("ux0:pspemu");
-  if (d >= 0) {
-    SceIoDirent e;
-    while (sceIoDread(d, &e) > 0)
-      if (!SCE_S_ISDIR(e.d_stat.st_mode) && isLeftover(e.d_name)) {
-        char c[300];
-        snprintf(c, sizeof c, "ux0:pspemu/%s", e.d_name);
-        if (erase) sceIoRemove(c);
-        loose++;
-      }
-    sceIoDclose(d);
-  }
+  loose = looseFiles("ux0:pspemu", erase);
   if (loose) { say(erase ? C_OK : C_TEXT, "  %d old logs, .gpd dumps and options in ux0:pspemu", loose); total += loose; }
+  old = looseFiles(DRAW_DIR, erase);
+  if (old) { say(erase ? C_OK : C_TEXT, "  %d old switch files in " DRAW_DIR " (now options.txt)", old); total += old; }
   const char *plug[3] = { pluginsTxt(), "ux0:pspemu/seplugins/game.txt", NULL };
   for (int i = 0; plug[i]; i++)
     if (exists(plug[i])) {

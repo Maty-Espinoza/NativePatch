@@ -92,10 +92,10 @@ moment, the user wins; afterwards this list is updated.
 
 ## 7. Tests
 Three kinds. When each one runs: `workflow.md`; how: `environment.md`.
-1. **Automatic on GitHub: no functional regression.** `tools/test_ci.sh` (capturer under qemu, log parsers against
+1. **Automatic on GitHub: no functional regression.** `tools/test_ci.sh` (capturer under qemu, options file reader, log parsers against
    `tests/run/`, production builds), on every push.
 2. **Local: performance did not regress.** `sh tools/test_local.sh <run> [ref]` judges a saved run. A 60 fps game may
-   be at most 5 fps lower than without the plugin, a 30 fps game about 2 lower. `ref` is the same game with `ux0:data/nativedraw/off` or another version. The target comes from `--target 30|60`
+   be at most 5 fps lower than without the plugin, a 30 fps game about 2 lower. `ref` is the same game with `off=yes` in `options.txt` or another version. The target comes from `--target 30|60`
    (`run_summary.py --check`), then `ref`, then the `GAME_FPS` table of `run_summary.py`; otherwise it is a guess from the
    median, printed `GUESS`, and a game that mixes 60 fps menus with 30 fps play is misjudged: that is not a real verdict.
    In the table, Retro City Rampage 60 and Silent Hill 30 are unconfirmed.

@@ -2,8 +2,8 @@
 // (fK_record.bin, dumpBin format in dump.c). Used to separate an error that depends on timing (changing data,
 // races with the GPU) from one that always appears with the same data (translator, shaders).
 // Included inside presenter.c: presStart calls repStart, the presenter thread repTick and the Adrenaline thread
-// repDraw. Usage: ux0:data/nativedraw/replay with the .bin path. Leaves fK_replay.bmp and
-// fK_replay_intermediate.bmp next to the .bin and writes "no" to the file (once per game).
+// repDraw. Usage: replay=<.bin path> in options.txt. Leaves fK_replay.bmp and
+// fK_replay_intermediate.bmp next to the .bin and sets the option to "no" (once per game).
 static char rep_path[128];
 // rep_on: what the replay is doing (REP_READY: loaded, drawn by the Adrenaline thread; REP_DRAWN: drawn, to write)
 enum { REP_OFF, REP_LOAD, REP_READY, REP_DRAWN };
@@ -13,14 +13,15 @@ static RFrame *rep_f;
 static uint8_t *rep_hd, *rep_rt;
 static SceUID rep_blk[2];
 
-// Reads the path from ux0:data/nativedraw/replay (trimming trailing blanks); if present and not "no", rep_on = REP_LOAD.
+// Reads the path from the replay option (up to the end of its line, trimming trailing blanks); if present and not "no",
+// rep_on = REP_LOAD.
 static void repStart(void) {
-  SceUID fd = sceIoOpen("ux0:data/nativedraw/replay", SCE_O_RDONLY, 0);
-  if (fd < 0) return;
-  int n = sceIoRead(fd, rep_path, sizeof rep_path - 1);
-  sceIoClose(fd);
-  while (n > 0 && (rep_path[n - 1] == '\n' || rep_path[n - 1] == '\r' || rep_path[n - 1] == ' ')) n--;
-  rep_path[n > 0 ? n : 0] = 0;
+  const char *v = optStr("replay");
+  if (!v) return;
+  int n = 0;
+  while (v[n] && v[n] != '\n' && n < (int)sizeof rep_path - 1) { rep_path[n] = v[n]; n++; }
+  while (n > 0 && (rep_path[n - 1] == '\r' || rep_path[n - 1] == ' ')) n--;
+  rep_path[n] = 0;
   if (n > 4 && !(rep_path[0] == 'n' && rep_path[1] == 'o')) { rep_on = REP_LOAD; alog("replay: %s\n", rep_path); }
 }
 
@@ -88,8 +89,7 @@ static void repTick(void) {
   sceClibSnprintf(p, sizeof p, "%.*s_replay.bmp", n, rep_path); bmp(p, rep_hd, W, H, LINE);
   sceClibSnprintf(p, sizeof p, "%.*s_replay_intermediate.bmp", n, rep_path); bmp(p, rep_rt, LINE, H, LINE);
   dump_w = vw;
-  SceUID fd = sceIoOpen("ux0:data/nativedraw/replay", SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0666);
-  if (fd >= 0) { sceIoWrite(fd, "no\n", 3); sceIoClose(fd); }
+  optSet("replay", "no");  // (not again at the next start)
   for (int i = 0; i < 2; i++) if (rep_blk[i] > 0) sceKernelFreeMemBlock(rep_blk[i]);
   alog("replay: done in %s\n", p);
   rep_on = REP_OFF;

@@ -1,6 +1,7 @@
 #!/bin/sh
 # Automatic test (GitHub, .github/workflows/ci.yml): no functional regression. Runs the capturer test on ARM under qemu
-# (nativedraw/capture_test.c decides pass/fail), the log parsers against tests/run/, and builds both plugins in
+# (nativedraw/capture_test.c decides pass/fail), the log parsers against tests/run/, the options file reader
+# (nativedraw/options_test.c, native) and builds both plugins in
 # production (PROD=1, on a copy of nativelink so a dev build in the repo does not mix with it).
 # Needs: tools/setup.sh done, and apt packages qemu-user and gcc-arm-linux-gnueabihf (the capturer test and bench use
 # the Linux libc, which vitasdk does not have).
@@ -99,6 +100,9 @@ for r in range(256):
         if (x >= f(f(r + .5) / f(255))) != (a > r) or (x >= f(f(r - .5) / f(255))) != (a >= r): sys.exit(f'alpha {a} ref {r}')
 PY
 echo "ok   nd_fa threshold"
+
+echo "== options file (nativedraw/options.c on the PC)"
+gcc -w -I$B/inc -o $B/options_test $R/nativedraw/options_test.c && $B/options_test
 
 echo "== production build"
 cp -r $R/nativelink $B/nativelink

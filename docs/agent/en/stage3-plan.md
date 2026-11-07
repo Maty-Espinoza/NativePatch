@@ -40,7 +40,7 @@ and LocoRoco.
 ## Decisions
 - **Versions:** everything is 0.0.x until the first release, which will be NativeLink 0.1.0 + NativeDraw 0.1.0
   (`../../dev/en/versions.md`).
-- **Switch `ux0:data/nativedraw/draw`, off by default** while it stabilizes (without the file nothing of the presenter
+- **Option `draw`, off by default** while it stabilizes (without it nothing of the presenter
   is hooked). New GPU work is turned on on purpose: in stage 1 an experiment shut down the whole Vita.
 - **Own translator**, with PPSSPP as a reference and copying specific functions when it saves time (compatible license,
   noted in `THIRD_PARTY_NOTICES.md`).

@@ -1,7 +1,8 @@
-// measures.h: the measurements of NativeDraw, in one place. Development builds only (NP_DEV). Each one is a file in
-// ux0:data/nativedraw/ (read when Adrenaline opens; off with no file or with "no" inside) and one line here: to add one, add a
-// line and its variable. Included by capture.c and presenter.c. What each log line means: docs/dev/en/logs-and-switches.md.
-// X(file, variable)
+// measures.h: the measurements of NativeDraw, in one place. Development builds only (NP_DEV). Each one is a line
+// "name=yes" in ux0:data/nativedraw/options.txt (options.h; read when Adrenaline opens; off without the line or with "no")
+// and one line here: to add one, add a line and its variable. Included by capture.c and presenter.c. What each log line
+// means: docs/dev/en/logs-and-switches.md.
+// X(name, variable)
 // Capturer side
 #define MEASURES_CAPTURE(X) \
   X(hold_game, hold_game)       /* the game waits for the whole chain: all frames complete and in HD, slower */ \
@@ -24,7 +25,7 @@
   X(keep_hd, keep_hd)           /* images that only blur stay at double size, to compare */ \
   X(fx_log, fx_log)             /* pixels per effect in the surface, 1 frame in 32 */
 // Others that are not on/off, or that stay where they act: log_level, no_lookahead, no_idle, gate_sync, dump.
-#define MEASURE_READ(file, var) var = swOn("ux0:data/nativedraw/" #file);
+#define MEASURE_READ(name, var) var = optOn(#name);
 
 #if defined(NP_DEV) && defined(MEASURES_WALK)
 // crowd_log. op_n: commands by type. bb_*: conditional jumps by bounding box, which the capturer does

@@ -5,7 +5,7 @@ received to draw it. It is used to find the origin of a visual error without gue
 `../../agent/en/workflow.md`). The levels work like the log levels (`logs-and-switches.md`): one is chosen depending on how much
 information is needed and how much it can cost.
 
-## Levels (`ux0:data/nativedraw/dump`, one word, 3 letters are compared, `no` = `off`; without the file: `sequence`)
+## Levels (option `dump` of `ux0:data/nativedraw/options.txt`, one word, 3 letters are compared, `no` = `off`; without the line: `sequence`)
 
 | Level | L+R+SELECT saves | Cost |
 |---|---|---|
@@ -76,7 +76,7 @@ The reference is the exact image of the frame if the `.bin` carries it (`auto` s
 0.0.8.7); otherwise, `fK_normal.bmp`.
 
 ## Replay
-`ux0:data/nativedraw/replay` with the path of an `fK_record.bin`: when the game is opened (with `draw`) the Vita
+The option `replay` with the path of an `fK_record.bin`: when the game is opened (with `draw`) the Vita
 draws it again with the same translator and leaves `fK_replay.bmp` and `fK_replay_intermediate.bmp` next to the `.bin`
 (`_record.bin` is replaced by the `_replay` suffix)
 (then it writes `no` in the file). If the replay comes out right and the live dump does not, the error depends on the timing
@@ -86,7 +86,7 @@ draws it again with the same translator and leaves `fK_replay.bmp` and `fK_repla
 - 0.0.7.4: L+R+SELECT, 4 frames, images and text. 0.0.7.5: fast writing and compact text. 0.0.7.7: `.bin` record
   and `tools/dump.py`. 0.0.7.8–0.0.7.10: automatic (points → blocks; confirmed with the GPU finished).
   0.0.7.9: 3 frames, text built from the record when writing. 0.0.8.3: intermediate image. 0.0.8.4: exact image of the
-  frame. 0.0.8.5: levels and replay (`replay.c`: `ux0:data/nativedraw/replay` with the path of a `.bin` draws it
+  frame. 0.0.8.5: levels and replay (`replay.c`: the option `replay` with the path of a `.bin` draws it
   again on the Vita). 0.0.8.7: exact image also with L+R+SELECT.
 - In 0.0.8–0.0.8.15 a swizzled texture goes as is in the record (record versions 2 and 3): `tools/dump.py`
   sorts it on the PC. Since 0.0.8.16 (version 4) the record already carries it sorted; the replay on the Vita does not load

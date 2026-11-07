@@ -45,7 +45,7 @@ y qué límites se encontraron: `findings.md`. Cómo se llegó a cada pieza, ver
 - **NativeDraw:** taiHEN lo carga en el proceso de Adrenaline (sección `*PSPEMUCFW` de `config.txt`), al abrir
   Adrenaline. Para que cargue una versión nueva hay que cerrar Adrenaline. Un cambio en `config.txt` necesita reiniciar
   la Vita.
-- Si existe `ux0:data/nativedraw/off`, NativeDraw no hace nada. Sin `ux0:data/nativedraw/draw`, NativeDraw captura y
+- Con `off=yes` en `ux0:data/nativedraw/options.txt`, NativeDraw no hace nada. Sin `draw=yes`, NativeDraw captura y
   mide pero solo reemplaza la imagen mientras el menú L+R+START está abierto.
 
 ## Memoria compartida (zona 0x0A000000–0x0B000000 del PSP)
@@ -186,5 +186,5 @@ quedan sin usar: `SB[0x47]`, los bits 4 y 8 de 0x4A y los eventos 7, 8, 9, 10 y 
   listas. Cada frame se comparan 64 puntos de la imagen normal con el dibujo de la Vita; si no se parecen 6 frames
   seguidos, se muestra la imagen normal hasta que vuelvan a parecerse.
 - **Menú L+R+START:** lo dibuja NativeDraw encima de la imagen (cuadro de 256x128 al doble); mientras está abierto el
-  juego no recibe botones. Hoy muestra las versiones; las opciones siguen siendo archivos en `ux0:data/nativedraw/`.
+  juego no recibe botones. Hoy muestra las versiones; las opciones siguen siendo líneas de `ux0:data/nativedraw/options.txt`.
 - **Volcados y reproducción:** `dumps.md`.

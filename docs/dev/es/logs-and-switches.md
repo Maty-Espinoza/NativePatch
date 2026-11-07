@@ -1,21 +1,38 @@
 # Niveles de registro, interruptores y líneas del log
 
-Qué escribe cada plugin en sus logs, qué significa cada línea y qué archivos de `ux0:data/nativedraw/` cambian su
-comportamiento. Los números de versión entre paréntesis dicen desde cuándo existe cada cosa (los viejos, `devNN`/`vNN`,
-se explican en `versions.md`). Pendiente: cambiar los interruptores desde el menú L+R+START (`../../../TODO.md`);
-mientras tanto son archivos. Después de 0.0.8.24 los archivos de interruptores antiguos ya no se leen: los nombres
-son los de aquí (antiguos: `versions.md`) y "Clean test leftovers" del instalador borra los archivos viejos.
+Qué escribe cada plugin en sus logs, qué significa cada línea y qué opciones cambian su comportamiento. Los números de
+versión entre paréntesis dicen desde cuándo existe cada cosa (los viejos, `devNN`/`vNN`, se explican en `versions.md`).
+
+## El archivo de opciones
+Cada opción (nivel de log, nivel de volcado, interruptores, mediciones) es una línea `nombre=valor` de un único archivo,
+`ux0:data/nativedraw/options.txt`, que se lee una vez al abrir Adrenaline (`nativedraw/options.h`). Una opción de
+encendido/apagado está encendida con cualquier valor que no empiece con `no` (`hold_game=yes`); sin la línea está apagada,
+o toma el valor por defecto que dice cada opción abajo. Las líneas que no son `nombre=valor` (comentarios, vacías) se
+ignoran. Para cambiar una opción: subir el archivo completo con el relevo (`send/ux0/data/nativedraw/options.txt`) y
+cerrar las aplicaciones (`cmd_*.txt` con `destroy`). Ejemplo:
+```
+log_level=medium
+dump=auto
+draw=yes
+hd_mark=yes
+hold_game=yes
+gate_sync=yes
+mirror_wait=yes
+gpu_timer=yes
+fx_log=no
+```
+Antes de NativeDraw 0.0.28.10 cada opción era un archivo propio en `ux0:data/nativedraw/` con el mismo nombre (y antes de
+0.0.8.24, con nombre en español: `versions.md`); esos archivos ya no se leen y "Clean test leftovers" del instalador los
+borra. Pendiente: cambiar las opciones desde el menú L+R+START (`../../../TODO.md`).
 
 Cada juego tiene sus propios logs (0.0.8.27): abrir Adrenaline u otro juego pasa `nativedraw.log` y
 `nativedraw_capture.log` a `*_prev.log`, igual que los de NativeLink. Solo se guarda un juego hacia atrás. Las líneas de "primera
 vez" y las de detalle con tope (`translator: first frame with`, `giant draw`, `vertex_out (n)`, `late frame`) se cuentan por sesión
 de Adrenaline, así que un segundo juego puede no repetirlas.
 
-Los registros sirven para entender qué pasa, pero también cuestan rendimiento. Por eso hay tres niveles. Se elige uno en
-la Vita con el archivo `ux0:data/nativedraw/log_level` (contenido `minimum`, `medium` o `extreme`; **sin archivo: mediano**).
+Los registros sirven para entender qué pasa, pero también cuestan rendimiento. Por eso hay tres niveles. Se elige uno
+con la opción `log_level` (`minimum`, `medium` o `extreme`; **sin la línea: mediano**).
 NativeDraw lo lee al abrir Adrenaline y se lo pasa a NativeLink por el buzón (`SB[0x4E]`: 0, 1 o 2), así que vale para los dos.
-Para cambiarlo: subir el archivo con el relevo (`send/ux0/data/nativedraw/log_level`) y cerrar las aplicaciones
-(`cmd_*.txt` con `destroy`).
 
 | Nivel | Para qué | Costo |
 |---|---|---|
@@ -40,7 +57,7 @@ Para cambiarlo: subir el archivo con el relevo (`send/ux0/data/nativedraw/log_le
 | Muestreo del espejo (cuántas páginas cambian) | no | no | sí |
 | T4: avisos de la CPU del juego (vaciar caché, DMA) al buzón | no (solo cuenta) | no (solo cuenta) | sí |
 
-Siguen aparte, con su propio archivo: `draw` (presentador de la etapa 3: con el archivo reemplaza la imagen siempre; sin él, solo con el menú
+Siguen aparte, cada uno su propia opción: `draw` (presentador de la etapa 3: encendido, reemplaza la imagen siempre; apagado, solo con el menú
 L+R+START abierto; además activa el registro del frame y su línea `record:` en `nativedraw_capture.log`; ver `../../agent/en/stage3-plan.md`), T6 (`ge_timing`), `memo_check` (revisar todas), `no_memo`,
 `capture_no_readers`, `off`, `gpu_timer` (cronómetro de la GPU) y `replay` (`dumps.md`).
 
@@ -55,13 +72,13 @@ Las mediciones de desarrollo están dentro de `#ifdef NP_DEV`. Una compilación 
 ## Volcados (NativeDraw 0.0.8.5)
 - Compilación de desarrollo: un NOP del GE con `0x4E5044` pide un volcado, como L+R+SELECT (NPTEST).
 - Compilación de desarrollo: sin memoria para un volcado, L+R+SELECT hace un `peek` (`dumps.md`).
-Niveles de volcado en `ux0:data/nativedraw/dump`: `off`, `screenshot`, `frame`, `sequence` (sin el archivo)
+Niveles de volcado en la opción `dump`: `off`, `screenshot`, `frame`, `sequence` (sin la línea)
 o `auto` (se comparan 3 letras; `no` también lo apaga). Qué guarda cada uno, cuánto cuesta y cómo se leen con `tools/dump.py`: `dumps.md`.
 
-Las mediciones de desarrollo están en `nativedraw/measures.h`, una línea cada una: archivo, variable y qué hace. Para agregar una, se agrega una línea ahí.
+Las mediciones de desarrollo están en `nativedraw/measures.h`, una línea cada una: opción, variable y qué hace. Para agregar una, se agrega una línea ahí.
 
-## Interruptores de la fase de análisis (`ux0:data/nativedraw/`; se apagan con `no` adentro, el relevo no borra)
-| Archivo | Qué hace |
+## Interruptores de la fase de análisis (opciones de `options.txt`; se apagan con `no` o sin la línea)
+| Opción | Qué hace |
 |---|---|
 | `no_gate` | el juego no espera a la Vita en el sync (NativeLink solo cuenta cuántas veces iba atrasada) |
 | `no_mirror` | NativeLink no copia la VRAM al espejo |
@@ -85,7 +102,7 @@ Las mediciones de desarrollo están en `nativedraw/measures.h`, una línea cada 
 | `gate_sync` | (desarrollo) la compuerta espera siempre en el sync del juego en vez de antes de encolar la siguiente lista. Con `hold_game` (espera hasta 200 ms) es la sincronización de frames PSP-Vita que deja bien las sublistas copiadas a VRAM de God of War (ver `how-it-works.md`, compuerta) |
 | `hold_game` | (desarrollo) el juego espera a toda la cadena (compuerta hasta 200 ms, el flip hasta recorrer el frame, el capturador al presentador y a la GPU): todos los frames completos y en HD, y el juego más lento. Se lee al abrir Adrenaline. Para medir |
 | `rec_cost` | (desarrollo) sigue grabando un frame ya incompleto, sin publicarlo, para medir cuánto cuesta grabar |
-| `capture_core` | (v13.13) `0`, `1` o `2` fija el capturador a ese núcleo (antes de v13.13 siempre el 1); sin archivo o cualquier otra cosa: cualquiera de los 3. La línea `threads: capture` del log dice cuál se usó; ver `etapa2_ridge_racer.md` |
+| `capture_core` | (v13.13) `0`, `1` o `2` fija el capturador a ese núcleo (antes de v13.13 siempre el 1); sin la línea o cualquier otra cosa: cualquiera de los 3. La línea `threads: capture` del log dice cuál se usó; ver `etapa2_ridge_racer.md` |
 
 - Solo en desarrollo, cada segundo en `nativedraw_capture.log`: `vram copies (per frame): calls, KB, us`, las copias de RAM a VRAM que el capturador aplica a su espejo de la VRAM (`xferMirror`) y su tiempo; con `cap_split`, también la columna `xfer` de `capture split` (`tools/bottleneck.py` la resta del intérprete).
 - Solo en desarrollo, cada segundo en `nativedraw_capture.log`: `photo footprint (per frame): frames, pages, copied, pieces, missed | frames with a miss, with no history | probe KB, us`: las páginas de 4 KB de RAM del PSP que leen el recorrido y el registro en cada frame (listas, vértices, índices, paletas, texturas en RAM, orígenes de copias; las texturas que copia el hilo del registro pueden contar en el frame siguiente), lo que copiaría la foto en el sync (páginas de los últimos 4 frames con la misma primera lista, 8 más a cada lado, pedazos unidos si están a 4 páginas o menos, como en `tools/perf/sync_lab.c`), sus pedazos y las páginas que le habrían faltado; los frames sin historia esperarían un recorrido en vivo.

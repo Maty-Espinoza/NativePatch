@@ -17,6 +17,7 @@
 #include <psp2/appmgr.h>
 #include "shaders.h"
 #include "version.h"
+#include "options.h"
 #include "../installer/font.h"
 
 void alog(const char *fmt, ...);  // nativedraw.c
@@ -794,28 +795,20 @@ static int presThread(SceSize args, void *argp) {
   return 0;
 }
 
-static int swOn(const char *p) {  // the file exists and does not start with "no" (like capture.c)
-  char b[2] = { 0, 0 };
-  SceUID fd = sceIoOpen(p, SCE_O_RDONLY, 0);
-  if (fd < 0) return 0;
-  sceIoRead(fd, b, 2); sceIoClose(fd);
-  return !(b[0] == 'n' && b[1] == 'o');
-}
-
-// Called by nativedraw.c on load: reads the switches (draw, replay, dump), decides how many PSP image copies
-// are needed and starts the presenter thread.
+// Called by nativedraw.c on load: reads the options (draw, hd_mark, replay, dump, the measurements), decides how many
+// PSP image copies are needed and starts the presenter thread.
 void presStart(void) {
-  draw_on = swOn("ux0:data/nativedraw/draw");
-  hd_mark = swOn("ux0:data/nativedraw/hd_mark");
+  draw_on = optOn("draw");
+  hd_mark = optOn("hd_mark");
   DEV(MEASURES_DRAW(MEASURE_READ))
   repStart();
   dump_level = dumpLevel();  // dumps: off, screenshot, frame, sequence or auto
   if (dump_level == 4 && !draw_on) dump_level = 3;  // (auto needs the Vita drawing to compare)
   dump_auto = dump_level == 4; dump_nf = dump_level <= 2 ? 1 : VN;
-  alog("dump: level %s (ux0:data/nativedraw/dump: off, screenshot, frame, sequence or auto)\n", dump_names[dump_level]);
+  alog("dump: level %s (dump in options.txt: off, screenshot, frame, sequence or auto)\n", dump_names[dump_level]);
   alog("presenter: %s; menu with L+R+START\n", draw_on ? "always replaces the image (draw)" :
-       "replaces the image only with the menu open (create ux0:data/nativedraw/draw for always)");
-  alog("hd mark: %s (ux0:data/nativedraw/hd_mark: green circle on frames drawn in HD)\n", hd_mark ? "on" : "off");
+       "replaces the image only with the menu open (draw=yes in options.txt for always)");
+  alog("hd mark: %s (hd_mark in options.txt: green circle on frames drawn in HD)\n", hd_mark ? "on" : "off");
   SceUID th = sceKernelCreateThread("nativedraw_presenter", presThread, 0xA0, 0x2000, 0, 0, 0);
   if (th >= 0) sceKernelStartThread(th, 0, 0);
 }

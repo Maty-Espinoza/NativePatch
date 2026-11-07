@@ -49,7 +49,7 @@ Requirements: PS Vita with HENkaku/Ensō and **Adrenaline 8** (earlier versions 
 3. Restart the Vita if the installer asks for it (when `config.txt` changed).
 
 To update: install the new VPK and use **Install / update** again. The installer also uninstalls.
-- Drawing on the Vita is enabled with the file `ux0:data/nativedraw/draw` (without it, NativeDraw only measures).
+- Drawing on the Vita is enabled with the line `draw=yes` in `ux0:data/nativedraw/options.txt` (without it, NativeDraw only measures).
 - Open a game while holding **L** (or SELECT): NativeLink stays off for that session.
 - **L+R+START** during the game: NativeDraw menu (today it shows the versions). **L+R+SELECT**: dump for debugging.
 - Logs in `ux0:pspemu/`: `nativelink.log`, `nativedraw.log` and `nativedraw_capture.log` (`logs-and-switches.md`).

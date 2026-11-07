@@ -3,7 +3,7 @@
 // notes in a mailbox in PSP RAM what the game asks of the GE; capture.c walks and records it, and
 // presenter.c draws it with the Vita GPU. This file: startup (module_start), own log (alog), the NativeLink log
 // (written by the Vita, so the PSP does not wait for the card), the NativeLink version for the menu and the hook
-// that notes the emulator threads. With ux0:data/nativedraw/off nothing is hooked.
+// that notes the emulator threads. With off=yes in the options file (options.c) nothing is hooked.
 // Logs: ux0:pspemu/nativedraw.log (this one), nativedraw_capture.log (capture.c) and nativelink.log (NativeLink's).
 // NativeLink log channel (page 0x0A7FF000 of PSP RAM, see nativelink/log.h): +0 "GPV1" (NativeLink),
 // +0x20 "LOGV" (this plugin: serves the mailbox), +0x40 seq, done, bytes (text at 0x0A7FA000).
@@ -14,10 +14,10 @@
 #include <psp2/kernel/sysmem.h>
 #include <psp2/gxm.h>
 #include <psp2/io/fcntl.h>
-#include <psp2/io/stat.h>
 #include <taihen.h>
 #include <stdarg.h>
 #include "version.h"
+#include "options.h"
 
 #define LOGF "ux0:pspemu/nativedraw.log"
 #define LOGP "ux0:pspemu/nativedraw_prev.log"
@@ -146,12 +146,12 @@ static void serveLog(void) {
 void capStart(void);  // capture.c
 void presStart(void), presStop(void);  // presenter.c
 
-// Main thread: starts the presenter, waits until PSP RAM is mapped, starts the capturer and from then on
-// serves the NativeLink log (every 0.2 ms if there is work, otherwise every 2 ms).
+// Main thread: reads the options, starts the presenter, waits until PSP RAM is mapped, starts the capturer and from
+// then on serves the NativeLink log (every 0.2 ms if there is work, otherwise every 2 ms).
 static int mainThread(SceSize args, void *argp) {
-  SceIoStat st;
-  if (sceIoGetstat("ux0:data/nativedraw/off", &st) >= 0) {
-    alog("ux0:data/nativedraw/off exists: nothing is hooked\n");
+  optLoad();
+  if (optOn("off")) {
+    alog("off=yes in ux0:data/nativedraw/options.txt: nothing is hooked\n");
     return sceKernelExitDeleteThread(0);
   }
   presStart();  // presenter and L+R+START menu

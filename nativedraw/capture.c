@@ -15,6 +15,7 @@
 #include <stdarg.h>
 #include <arm_neon.h>
 #include "version.h"
+#include "options.h"
 
 // PSP(a): Vita address where Adrenaline maps PSP RAM address a
 #define PSP(a) (0x68000000u + ((a) & 0x0FFFFFFFu))
@@ -63,7 +64,7 @@ typedef struct {
 } Stats;
 static Stats acc, rep;
 static volatile int rep_ready;
-// Log level (ux0:data/nativedraw/log_level): 0 minimum, 1 medium (no file), 2 extreme (only in development builds).
+// Log level (log_level option): 0 minimum, 1 medium (no line), 2 extreme (only in development builds).
 // NativeLink reads it at SB[0x4E].
 static uint32_t level = 1;
 #ifdef NP_DEV
@@ -2193,7 +2194,7 @@ static void ltFlip(void) {
   }
   while (smp_r != smp_w && smp[smp_r & (SMP_N - 1)].st == 2) smp_r++;
 }
-static uint32_t probe_ge;  // asks NativeLink for the thread watching the GE (T6): ux0:data/nativedraw/ge_timing
+static uint32_t probe_ge;  // asks NativeLink for the thread watching the GE (T6): ge_timing option
 #endif
 #ifdef NP_DEV
 static int tn_on;  // switch thread_split
@@ -2308,39 +2309,28 @@ static int rdrThread(SceSize args, void *argp) {
 }
 
 // Switch p: the file exists and does not start with "no" ("no" inside turns it off without deleting it)
-static int swOn(const char *p) {
-  char b[2] = { 0, 0 };
-  SceUID fd = sceIoOpen(p, SCE_O_RDONLY, 0);
-  if (fd < 0) return 0;
-  sceIoRead(fd, b, 2); sceIoClose(fd);
-  return !(b[0] == 'n' && b[1] == 'o');
-}
 // Startup (called by nativedraw.c): rotates the logs, starts the log thread, reads the level and switches from
-// ux0:data/nativedraw/, finds the readable PSP RAM ranges, reserves sublist memory and the shared
+// the options (options.h), finds the readable PSP RAM ranges, reserves sublist memory and the shared
 // cache (each one turns itself off if memory is short) and starts the capturer, the mirror thread and both readers
 void capStart(void) {
-  SceIoStat st;
   logsRotate();
   SceUID r = sceKernelCreateThread("nativedraw_capture_log", repThread, 0xB0, 0x2000, 0, 0, NULL);  // first: so the
   DEV(log_uid = r;)
   if (r >= 0) sceKernelStartThread(r, 0, NULL);                                                      // log survives
-  {  // log level
-    char b[8] = { 0 };
-    SceUID fd = sceIoOpen("ux0:data/nativedraw/log_level", SCE_O_RDONLY, 0);
-    if (fd >= 0) { sceIoRead(fd, b, 7); sceIoClose(fd); level = DEV(b[0] == 'e' ? 2 :) b[0] == 'm' && b[1] == 'i' ? 0 : 1; }
-  }
+  const char *lv = optStr("log_level");
+  if (lv) level = DEV(lv[0] == 'e' ? 2 :) lv[0] == 'm' && lv[1] == 'i' ? 0 : 1;
   if (EXTREME) { uint32_t t0 = now(), x = 0; for (int i = 0; i < 10000; i++) x += now(); clog("clock read cost: %u ns (%u)\n", (now() - t0) / 10, x & 1); }
   logsHead();
-  static const char *sw[] = { "ux0:data/nativedraw/no_gate", "ux0:data/nativedraw/no_mirror" DEV(, "ux0:data/nativedraw/no_idle", "ux0:data/nativedraw/gate_sync") };
-  for (int k = 0; k < (int)(sizeof sw / sizeof *sw); k++) if (swOn(sw[k])) gp_flags |= 1u << k;
-  if (swOn("ux0:data/nativedraw/mirror_wait")) gp_flags |= 32;  // the PSP flip waits for the mirror copy
+  static const char *sw[] = { "no_gate", "no_mirror" DEV(, "no_idle", "gate_sync") };
+  for (int k = 0; k < (int)(sizeof sw / sizeof *sw); k++) if (optOn(sw[k])) gp_flags |= 1u << k;
+  if (optOn("mirror_wait")) gp_flags |= 32;  // the PSP flip waits for the mirror copy
   DEV(MEASURES_CAPTURE(MEASURE_READ) if (hold_game) gp_flags |= 64;)
-  DEV(pv_on = !swOn("ux0:data/nativedraw/no_lookahead");)
+  DEV(pv_on = !optOn("no_lookahead");)
   DEV(p_on = level >= 2;)
-  reg_on = swOn("ux0:data/nativedraw/draw");  // frame record
+  reg_on = optOn("draw");  // frame record
   if (reg_on) regInit();
   DEV(if (wtrace) { tb = ndExoGet ? ndExoGet(2 * TR_HALF) : 0; clog("walk trace: %s\n", tb ? "flight recorder of 2 x 8 MB, ux0:pspemu/nativedraw_trace.log" : "no memory in the spare block"); })
-  clog("log level: %s (ux0:data/nativedraw/log_level: minimum, medium or extreme) | switches%s%s%s%s%s%s%s%s\n", level == 2 ? "extreme" : level ? "medium" : "minimum", gp_flags & 1 ? " no_gate" : "", gp_flags & 2 ? " no_mirror" : "",
+  clog("log level: %s (log_level in options.txt: minimum, medium or extreme) | switches%s%s%s%s%s%s%s%s\n", level == 2 ? "extreme" : level ? "medium" : "minimum", gp_flags & 1 ? " no_gate" : "", gp_flags & 2 ? " no_mirror" : "",
        gp_flags & 4 ? " no_idle" : "", gp_flags & 8 ? " gate_sync" : "", gp_flags & 32 ? " mirror_wait" : "", no_capture ? " no_capture" : "", pv_on ? "" : " no_lookahead", gp_flags || no_capture || !pv_on ? "" : ": none (all normal)");
   for (uint32_t a = 0x08000000u; a < 0x0C000000u && nr < 4;) {  // PSP RAM ranges mapped in this process
     SceKernelMemBlockInfo in; in.size = sizeof in;
@@ -2356,7 +2346,7 @@ void capStart(void) {
   }
   initCls();
   if (!okRam(0x0A000000u) || !okRam(0x08800000u)) { clog("PSP RAM does not cover the mailbox or the game: no capture\n"); return; }
-  if (sceIoGetstat("ux0:data/nativedraw/no_memo", &st) >= 0) clog("sublist memory: off (no_memo)\n");
+  if (optOn("no_memo")) clog("sublist memory: off (no_memo)\n");
   else {
     void *mm = NULL;
     uint32_t sz = 0;
@@ -2371,7 +2361,7 @@ void capStart(void) {
     else {
       sceClibMemset(mm, 0, MEMO_N * sizeof(Memo));
       memo = mm; pool = (uint32_t *)((char *)mm + MEMO_N * sizeof(Memo));
-      memo_chk = sceIoGetstat("ux0:data/nativedraw/memo_check", &st) >= 0;
+      memo_chk = optOn("memo_check");
       __sync_synchronize();
       memo_on = 1;
       clog("sublist memory: %u sublists, pool of %u KB (%u KB total)%s\n", MEMO_N, POOL_N * 64 >> 10, sz >> 10,
@@ -2379,18 +2369,17 @@ void capStart(void) {
     }
   }
   // The capturer runs on any of the 3 cores (pinned to one it gets less time: it shares it with audio or the
-  // Media Engine). Switch capture_core ("0", "1" or "2") pins it if a game needs that.
-  char nc[8] = { 0 }; uint32_t cmask = 0x70000; const char *cname = "free (0, 1 or 2)";
-  SceUID nf = sceIoOpen("ux0:data/nativedraw/capture_core", SCE_O_RDONLY, 0);
-  if (nf >= 0) { sceIoRead(nf, nc, 7); sceIoClose(nf); }
-  if (nc[0] >= '0' && nc[0] <= '2') { cmask = 0x10000 << (nc[0] - '0'); nc[1] = 0; cname = nc; }
+  // Media Engine). Option capture_core (0, 1 or 2) pins it if a game needs that.
+  char nc[2] = { 0, 0 }; uint32_t cmask = 0x70000; const char *cname = "free (0, 1 or 2)";
+  const char *cc = optStr("capture_core");
+  if (cc && cc[0] >= '0' && cc[0] <= '2') { cmask = 0x10000 << (cc[0] - '0'); nc[0] = cc[0]; cname = nc; }
   SceUID t = sceKernelCreateThread("nativedraw_capture", capThread, 0x61, 0x4000, 0, cmask, NULL);
   // Priority 0x61: just below the emulator threads at 0x60 (ScePspemuRemoteMe: Media Engine, decodes the
   // game audio; TitleInfo, AvcAuInput) and the audio output ones (0x40-0x43). Higher cuts the audio; much
   // lower starves the capturer.
   if (t >= 0) sceKernelStartThread(t, 0, NULL);
   cap_uid = t;
-  clog("threads: capture %08x (core %s, priority 0x61, below the audio threads; ux0:data/nativedraw/capture_core) log %08x; emulator threads seen: %d\n", t, cname, r, emu_n);
+  clog("threads: capture %08x (core %s, priority 0x61, below the audio threads; capture_core in options.txt) log %08x; emulator threads seen: %d\n", t, cname, r, emu_n);
   if (reg_on) {  // record thread: any core, just below the capturer
     SceUID rt = sceKernelCreateThread("nativedraw_record", recThread, 0x62, 0x4000, 0, 0x70000, NULL);
     if (rt >= 0 && sceKernelStartThread(rt, 0, NULL) >= 0) rg_thr = 1;
@@ -2407,9 +2396,9 @@ void capStart(void) {
   if (et >= 0) sceKernelStartThread(et, 0, NULL);
   clog("VRAM mirror: thread %08x (core 0, priority 0xBE); copies at %08x and %08x\n", et, MIRROR, MIRROR2);
 #ifdef NP_DEV
-  clog("T6 (NativeLink thread watching the GE): %s\n", probe_ge ? "requested (ge_timing)" : "off (create ux0:data/nativedraw/ge_timing to measure)");
+  clog("T6 (NativeLink thread watching the GE): %s\n", probe_ge ? "requested (ge_timing)" : "off (ge_timing=yes in options.txt to measure)");
 #endif
-  if (sceIoGetstat("ux0:data/nativedraw/capture_no_readers", &st) >= 0) { clog("readers: off (capture_no_readers)\n"); return; }
+  if (optOn("capture_no_readers")) { clog("readers: off (capture_no_readers)\n"); return; }
   void *m = NULL;
   SceUID blk = sceKernelAllocMemBlock("nativedraw_lines", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, (CL_N * 68 + 0xFFF) & ~0xFFF, NULL);
   if (blk < 0 || sceKernelGetMemBlockBase(blk, &m) < 0) { clog("readers: no memory for the cache (%08x)\n", blk); return; }

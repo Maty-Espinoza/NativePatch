@@ -41,6 +41,9 @@ __attribute__((weak)) int sceGxmTextureSetVAddrMode(void) { return 0; }
 int sceIoClose(void) { return 0; }
 int sceIoMkdir(void) { return 0; }
 int sceIoOpen(void) { return 0; }
+const char *optStr(const char *n) { return 0; }  // (no options file: every option at its default)
+int optOn(const char *n) { return 0; }
+void optSet(const char *n, const char *v) {}
 int sceIoRead(void) { return 0; }
 int sceIoWrite(void) { return 0; }
 int sceKernelCreateThread(void) { return 0; }

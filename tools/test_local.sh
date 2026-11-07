@@ -1,7 +1,7 @@
 #!/bin/sh
 # Local test of performance: judges a run saved from the Vita (fps, MISMATCHES, HD frames) with tools/run_summary.py and, with a
 # reference, compares it zone by zone with tools/run_compare.py.
-# Usage: sh tools/test_local.sh <run folder> [reference: the same game with ux0:data/nativedraw/off or another version, a folder or a saved .json]
+# Usage: sh tools/test_local.sh <run folder> [reference: the same game with off=yes in options.txt or another version, a folder or a saved .json]
 # Reference lap: tests/perf/rr_hold_0.0.21.3.json (Ridge Racer with hold_game).
 [ -n "$1" ] || { echo "usage: sh tools/test_local.sh <run folder> [reference]"; exit 2; }
 D=$(dirname "$0")

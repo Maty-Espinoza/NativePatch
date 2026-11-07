@@ -152,10 +152,10 @@ what was done is in `CHANGELOG.md`. Updated 2026-11-07 (NativeDraw 0.0.28.9 test
       with `draw` set to `no`.
 - [ ] Run **Ridge Racer** and the other installed games with NativeDraw 0.0.2 or later (only GT was retested after the
       rename; the capture did not change).
-- [ ] **Options in the L+R+START menu** (the menu exists since NativeDraw 0.0.4): the ones that are files in
-      `ux0:data/nativedraw/` today (`docs/dev/en/logs-and-switches.md`), including the dump level, so a user can turn on
+- [ ] **Options in the L+R+START menu** (the menu exists since NativeDraw 0.0.4): the lines of
+      `ux0:data/nativedraw/options.txt` today (`docs/dev/en/logs-and-switches.md`), including the dump level, so a user can turn on
       automatic dumps, play and hand us the `dumps/` folder. Decide which are worth it; the ones that only apply when
-      Adrenaline opens (`capture_core`, `off`) must say so. Save in `ux0:data/nativedraw/options.txt`.
+      Adrenaline opens (`capture_core`, `off`) must say so. The menu writes the file with `optSet` (`nativedraw/options.h`).
 - [ ] `nativedraw/capture_test.c` does not simulate the Vita's notice to the PSP (the mirror copy the Vita announces
       in `SB[0x48]`).
 - [ ] **Updater** in the installer (future): look in GitHub releases for a new VPK and download it.
@@ -230,7 +230,7 @@ what was done is in `CHANGELOG.md`. Updated 2026-11-07 (NativeDraw 0.0.28.9 test
 - [ ] T6: "GE busy when called" at the sync is always 0, although the game waits ~0.7 ms (GT) or ~3.7 ms (SH) inside
       `sceGeDrawSync`. Understand what it waits for there (the end of the list with the GE already stopped, or the
       callbacks?).
-- [ ] T6 is off by default (it took ~2–3 fps from GT): enable with `ux0:data/nativedraw/ge_timing`. To leave it always
+- [ ] T6 is off by default (it took ~2–3 fps from GT): enable with `ge_timing=yes` in `options.txt`. To leave it always
       on, sample every ~1 ms or from somewhere else.
 
 ## Unreliable measurements

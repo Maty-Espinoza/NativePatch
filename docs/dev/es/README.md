@@ -9,7 +9,7 @@ Para entender NativePatch sin saber nada de antemano. Versión en inglés: `../e
 | 3 | `how-it-works.md` | Cómo funcionan NativeLink y NativeDraw: buzón, espejo, compuerta, captura, registro del frame, traductor, presentador |
 | 4 | `findings.md` | Qué se midió, qué se descubrió, qué se descartó y qué límites tiene |
 | 5 | `architecture-and-roadmap.md` | El análisis que decidió la arquitectura y la hoja de ruta por etapas (se conserva tal como se escribió) |
-| — | `logs-and-switches.md` | Qué escribe cada log, línea por línea, e interruptores de `ux0:data/nativedraw/` |
+| — | `logs-and-switches.md` | Qué escribe cada log, línea por línea, y las opciones de `ux0:data/nativedraw/options.txt` |
 | — | `dumps.md` | Volcados de frames: niveles, archivos, cómo leerlos con `tools/dump.py`, reproducción en la Vita |
 | — | `nptest.md` | La batería sintética 2D: escenas, técnicas raras, cómo correrla en la Vita y en el PC |
 | — | `unsupported.md` | Las técnicas de dibujo que todavía no se dibujan o se dibujan lento, con la prueba que cubre cada una: la lista desde donde diseñar el soporte |

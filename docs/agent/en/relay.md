@@ -33,9 +33,9 @@ renamed at the end: the relay may pick up a half-written file.
 - **Verify:** a `get_verif.txt` that downloads what was uploaded to `vitabridge/stage<N>_<version>/verif/` and compare
   the md5. `device_commit_files` may deliver an old copy if it is rebuilt with the same file name: when rebuilding,
   send a copy with another name and compare the md5 before asking for the test.
-- **Switches** in `ux0:data/nativedraw/`: they are changed by uploading the file (`send/ux0/data/nativedraw/<name>`);
-  the relay does not delete on the Vita, so they are turned off with `no` inside. List in `../../dev/en/logs-and-switches.md`.
-  Those that are only read when Adrenaline opens need `destroy`.
+- **Options** (`ux0:data/nativedraw/options.txt`, one `name=value` per line): the whole file is uploaded again
+  (`send/ux0/data/nativedraw/options.txt`) and, as it is read when Adrenaline opens, `destroy` follows. List in
+  `../../dev/en/logs-and-switches.md`.
 
 ## How the relay behaves (and why)
 - **Awake / asleep:** it starts awake for 30 min and works up to 30 min after the last request or after a log

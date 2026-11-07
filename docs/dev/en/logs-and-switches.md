@@ -1,10 +1,28 @@
 # Log levels, switches and log lines
 
-What each plugin writes in its logs, what each line means, and which files in `ux0:data/nativedraw/` change its
-behavior. The version numbers in parentheses say since when each thing exists (the old ones, `devNN`/`vNN`, are
-explained in `versions.md`). Pending item: change the switches from the L+R+START menu (`../../../TODO.md`);
-for now they are files. After 0.0.8.24 the old Spanish switch files are no longer read: the names
-are the ones here (old names: `versions.md`), and the installer's "Clean test leftovers" removes the old files.
+What each plugin writes in its logs, what each line means, and which options change its behavior. The version
+numbers in parentheses say since when each thing exists (the old ones, `devNN`/`vNN`, are explained in `versions.md`).
+
+## The options file
+Every option (log level, dump level, switches, measurements) is one line `name=value` of a single file,
+`ux0:data/nativedraw/options.txt`, read once when Adrenaline opens (`nativedraw/options.h`). An on/off option is on
+with any value that does not start with `no` (`hold_game=yes`); a missing line is off, or the default the option says
+below. Lines that are not `name=value` (comments, blanks) are ignored. To change an option: upload the whole file with
+the relay (`send/ux0/data/nativedraw/options.txt`) and close the applications (`cmd_*.txt` with `destroy`). Example:
+```
+log_level=medium
+dump=auto
+draw=yes
+hd_mark=yes
+hold_game=yes
+gate_sync=yes
+mirror_wait=yes
+gpu_timer=yes
+fx_log=no
+```
+Before NativeDraw 0.0.28.10 each option was its own file in `ux0:data/nativedraw/` with the same name (and before 0.0.8.24,
+a Spanish name: `versions.md`); those files are no longer read and the installer's "Clean test leftovers" removes them.
+Pending item: change the options from the L+R+START menu (`../../../TODO.md`).
 
 Each game has its own logs (0.0.8.27): opening Adrenaline or another game moves `nativedraw.log` and
 `nativedraw_capture.log` to `*_prev.log`, like NativeLink's. Only one game back is kept. "First time" lines and the capped
@@ -12,10 +30,8 @@ detail lines (`translator: first frame with`, `giant draw`, `vertex_out (n)`, `l
 session, so a second game may not repeat them.
 
 Logs help to understand what is going on, but they also cost performance. That is why there are three levels. One is
-chosen on the Vita with the file `ux0:data/nativedraw/log_level` (content `minimum`, `medium` or `extreme`; **no file: medium**).
+chosen with the option `log_level` (`minimum`, `medium` or `extreme`; **no line: medium**).
 NativeDraw reads it when Adrenaline opens and passes it to NativeLink through the mailbox (`SB[0x4E]`: 0, 1 or 2), so it applies to both.
-To change it: upload the file with the relay (`send/ux0/data/nativedraw/log_level`) and close the applications
-(`cmd_*.txt` with `destroy`).
 
 | Level | What for | Cost |
 |---|---|---|
@@ -40,7 +56,7 @@ To change it: upload the file with the relay (`send/ux0/data/nativedraw/log_leve
 | Mirror sampling (how many pages change) | no | no | yes |
 | T4: notices from the game CPU (cache flush, DMA) to the mailbox | no (only counts) | no (only counts) | yes |
 
-These stay separate, each with its own file: `draw` (the stage 3 presenter: with the file it always replaces the image; without it, only with the
+These stay separate, each its own option: `draw` (the stage 3 presenter: on, it always replaces the image; off, only with the
 L+R+START menu open; it also turns on the frame record and its `record:` line in `nativedraw_capture.log`; see `../../agent/en/stage3-plan.md`), T6 (`ge_timing`), `memo_check` (check all), `no_memo`,
 `capture_no_readers`, `off`, `gpu_timer` (GPU timer) and `replay` (`dumps.md`).
 
@@ -56,13 +72,13 @@ The development measurements are inside `#ifdef NP_DEV`. A normal build has them
 ## Dumps (NativeDraw 0.0.8.5)
 - Development builds: a GE NOP carrying `0x4E5044` asks for a dump, like L+R+SELECT (NPTEST).
 - Development builds: with no memory for a dump, L+R+SELECT makes a `peek` (`dumps.md`).
-Dump levels in `ux0:data/nativedraw/dump`: `off`, `screenshot`, `frame`, `sequence` (without the file)
+Dump levels in the option `dump`: `off`, `screenshot`, `frame`, `sequence` (without the line)
 or `auto` (3 letters are compared; `no` also turns it off). What each one saves, how much it costs and how they are read with `tools/dump.py`: `dumps.md`.
 
-The development measurements are listed in `nativedraw/measures.h`, one line each: file, variable, what it does. To add one, add a line there.
+The development measurements are listed in `nativedraw/measures.h`, one line each: option, variable, what it does. To add one, add a line there.
 
-## Analysis phase switches (`ux0:data/nativedraw/`; turned off with `no` inside, the relay does not delete)
-| File | What it does |
+## Analysis phase switches (options of `options.txt`; off with `no` or without the line)
+| Option | What it does |
 |---|---|
 | `no_gate` | the game does not wait for the Vita at the sync (NativeLink only counts how many times it was late) |
 | `no_mirror` | NativeLink does not copy the VRAM to the mirror |
@@ -86,7 +102,7 @@ The development measurements are listed in `nativedraw/measures.h`, one line eac
 | `walk_trace` | (development) flight recorder in `ux0:pspemu/nativedraw_trace.log`: every transfer to VRAM with its registers, every CALL/JUMP/RET of a VRAM sublist (latest transfer covering it, mirror equal to its RAM source or not), lists and flips, in two 8 MB halves of the spare block. The first suspicious event (`TRIGGER`: registers differ from the real GE, BASE changed in a VRAM sublist, a transfer position changed, a transfer out of the real VRAM, a bad target, the list limit) stops it 150 frames (or 10 s) later and both halves are written, oldest first. `CONTEXT` lines: the stack and 16 words of the mirror and of the RAM source around the event. Slows the capturer |
 | `photo_probe` | (development) at each sync the capturer handles, copies by DMA the RAM pages the photo at the sync would copy (the `photo footprint` prediction) into a buffer that is thrown away: compare the game's fps and `sync_GE_us` with and without it to see whether the copy slows the PSP's GE. It runs when the capturer gets to the sync, not at the game's own sync. `probe KB/us` in the `photo footprint` line. The page marks and the `photo footprint` lines only run with this switch: they cost a fixed share of the capturer's work every frame (in the bench, 17-40 % of its instructions) |
 | `gate_sync` | (development) the gate always waits at the game's sync instead of before the next enqueue. With `hold_game` (wait up to 200 ms) this is the PSP-Vita frame sync that keeps God of War's VRAM-copied sublists right (see `how-it-works.md`, gate) |
-| `capture_core` | (v13.13) `0`, `1` or `2` pins the capturer to that core (before v13.13 always core 1); no file or anything else: any of the 3. The `threads: capture` line of the log says which one was used; see `etapa2_ridge_racer.md` |
+| `capture_core` | (v13.13) `0`, `1` or `2` pins the capturer to that core (before v13.13 always core 1); no line or anything else: any of the 3. The `threads: capture` line of the log says which one was used; see `etapa2_ridge_racer.md` |
 
 - Development builds only, every second in `nativedraw_capture.log`: `vram copies (per frame): calls, KB, us`, the RAM to VRAM transfers the capturer applies to its VRAM mirror (`xferMirror`) and their time; with `cap_split`, also the `xfer` column of `capture split` (subtracted from the interpreter by `tools/bottleneck.py`).
 - Development builds only, every second in `nativedraw_capture.log`: `photo footprint (per frame): frames, pages, copied, pieces, missed | frames with a miss, with no history | probe KB, us`: the 4 KB pages of PSP RAM the walk and the record read for each frame (lists, vertices, indices, palettes, RAM textures, transfer sources; textures copied by the record thread may count in the next frame), what the photo at the sync would copy (pages of the last 4 frames with the same first list, 8 more each side, pieces joined when 4 or fewer apart, as in `tools/perf/sync_lab.c`), its pieces and the pages it would have missed; frames with no history would wait for a live walk.

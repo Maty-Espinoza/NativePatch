@@ -1,6 +1,6 @@
 // record.c: frame record. Saves every draw of the frame so the Vita can draw it later with its GPU.
 // Included inside capture.c (uses its GE state: reg, vaddr, iaddr, vtr, the VRAM mirror) and only works with
-// ux0:data/nativedraw/draw. The capturer calls regDraw/regClut/regCurve/regMemo while walking the list and regFlip on
+// the draw option. The capturer calls regDraw/regClut/regCurve/regMemo while walking the list and regFlip on
 // each flip; the presenter (translator.c) takes the last complete frame with regTake/regRelease.
 // Saved per frame: copied vertices and indices (the game may reuse that memory), the GE state (RS) only when it changes,
 // palettes when loaded and the texture rows the draws use (copied to uncached memory the GPU reads; those with PSP

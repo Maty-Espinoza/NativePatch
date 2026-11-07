@@ -43,7 +43,7 @@ Más detalle: [`docs/dev/es/overview.md`](docs/dev/es/overview.md) y [`docs/dev/
 3. Reiniciar la Vita si el instalador lo pide (cuando cambió `config.txt`).
 
 Para actualizar: instalar el VPK nuevo y volver a usar **Install / update**. El instalador también desinstala.
-- El dibujo en la Vita se activa con el archivo `ux0:data/nativedraw/draw` (sin él, NativeDraw solo mide).
+- El dibujo en la Vita se activa con la línea `draw=yes` en `ux0:data/nativedraw/options.txt` (sin ella, NativeDraw solo mide).
 - Abrir un juego manteniendo **L** (o SELECT): NativeLink queda apagado para esa sesión.
 - **L+R+START** durante el juego: menú de NativeDraw (por ahora muestra las versiones). **L+R+SELECT**: volcado para
   depurar.

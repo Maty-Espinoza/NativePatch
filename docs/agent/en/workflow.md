@@ -60,8 +60,8 @@ latest confirmed). The tag `gepatch-dev66` is the last state with the old names.
 
 ## 4. Asking the user for tests
 - Say **which game, what to do and what to look at**, and at the end a summary of which game goes with which option. The
-  options, with the name they have in the plugin's menu (when it exists) or, in the meantime, which file was uploaded to
-  `ux0:data/nativedraw/`.
+  options, with the name they have in the plugin's menu (when it exists) or, in the meantime, which lines
+  `ux0:data/nativedraw/options.txt` was uploaded with.
 - Games: Gran Turismo (UCUS-98632; the race and the bridge are the heaviest; the user always does the same race
   with the same car), Silent Hill Shattered Memories (ULUS-10450; outdoors), Ridge Racer (ULJS-00001; the heaviest is
   the curve before the crowd, once per lap), LocoRoco (NPEG-00024), Retro City Rampage DX (NPUH-10199), KOF 96

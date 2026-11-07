@@ -12,8 +12,9 @@ O=${O:-o}; rm -rf $O; mkdir -p $O
 [ -n "$PROD" ] || A=-DsceKernelAllocMemBlock=ndAlloc
 arm-none-eabi-gcc $F -I$VH/include -I$TAI/include -c nativedraw.c -o $O/nativedraw.o
 for c in capture presenter; do arm-none-eabi-gcc $F $A -I$VH/include -I$TAI/include -c $c.c -o $O/$c.o; done
+arm-none-eabi-gcc $F -I$VH/include -I$TAI/include -c options.c -o $O/options.o
 # Stubs: each missing function comes from the first $STUBS file that has it, in this library order
-arm-none-eabi-ld -r -o $O/all.o $O/nativedraw.o $O/capture.o $O/presenter.o
+arm-none-eabi-ld -r -o $O/all.o $O/nativedraw.o $O/capture.o $O/presenter.o $O/options.o
 for s in $(arm-none-eabi-nm -u $O/all.o | awk '{print $2}' | grep -v -E '^(__|tai|mem)' | sort -u); do
   ok=
   for lib in SceLibKernel_SceLibKernel SceIofilemgr_SceIofilemgr SceSysmem_SceSysmem SceKernelThreadMgr_SceThreadmgr \

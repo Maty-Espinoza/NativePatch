@@ -2,7 +2,7 @@
 // (hookEnd) calls dumpText and dumpFrame to capture each frame; the presenter thread calls dumpTick
 // to build the dump (L+R+SELECT or automatic) and write it to ux0:data/nativedraw/dumps/NNN/. Saves per frame
 // the PSP image, the Vita image, a text with how it was made and a copy of the frame record (record.h) for
-// tools/dump.py and replay.c. Level in ux0:data/nativedraw/dump (dumpLevel).
+// tools/dump.py and replay.c. Level in the dump option (dumpLevel).
 #include <psp2/io/stat.h>
 void *sceDmacMemcpy(void *dst, const void *src, SceSize size);
 #define VN 3            // frames per dump (at most)
@@ -18,13 +18,11 @@ static uint32_t dump_auto, dump_n, dump_t, dump_dif, dump_t0, dump_go;  // dump_
 // Level (0 off, 1 screenshot, 2 frame, 3 sequence, 4 auto) and frames per dump
 static uint32_t dump_level = 3, dump_nf = VN;
 static const char *dump_names[5] = { "off", "screenshot", "frame", "sequence", "auto" };
-// Dump level: the word in ux0:data/nativedraw/dump (3 letters are compared; "no" = disabled); without
-// file, 3 (sequence).
+// Dump level: the value of dump in options.txt (3 letters are compared; "no" = disabled); without the line, 3
+// (sequence).
 int dumpLevel(void) {
-  char b[16] = { 0 };
-  SceUID fd = sceIoOpen("ux0:data/nativedraw/dump", SCE_O_RDONLY, 0);
-  if (fd < 0) return 3;
-  sceIoRead(fd, b, 15); sceIoClose(fd);
+  const char *b = optStr("dump");
+  if (!b) return 3;
   for (int i = 0; i < 5; i++) if (!sceClibStrncmp(b, dump_names[i], 3)) return i;
   return b[0] == 'n' ? 0 : 3;  // ("no": disabled)
 }
