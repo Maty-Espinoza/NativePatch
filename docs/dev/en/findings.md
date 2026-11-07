@@ -21,7 +21,7 @@ proof.
   non-secure kernel plugin. Detail: `claude/analisis_estructura_60fps_2026-11-06.md` §10 (project) and the logs in
   `vitabridge/stage3_0.0.28.{2..7}/`.
 - **A "proxy" on the PSP side** (NativeLink serving the Vita's reads of the VRAM) is what the mirror already is: only
-  hardware on the PSP side can touch the VRAM, and the choice is who copies and when. The GE at the flip (today, 1.3-3 ms of GE
+  compatibility hardware can touch the VRAM (the PSP side and, very likely, the compat LCD DMA, below), and the choice is who copies and when. The GE at the flip (today, 1.3-3 ms of GE
   per frame) copies the VRAM as it was at the end of the frame. The PSP's DMA costs about the same (~2.3-2.7 ms per MB) and
   slows the game's CPU 10-20 % on the bus. A PSP CPU thread answering the Vita's requests at once would read the VRAM in the
   middle of the frame the game is drawing (mixed images) and would charge the game's CPU. The Media Engine is not a free core on
@@ -30,14 +30,39 @@ proof.
   pages when the list that draws it finishes instead of at the flip (one frame less of latency), and measure which requested
   pages NativeDraw already has (its own HD intermediate images, transfers repeated from RAM) to leave in the mirror only what
   the game writes into VRAM with the CPU (`TODO.md`, "VRAM mirror").
+- **The compat LCD DMA** (`SceCompatLCDDMA`, registers at 0xE5071000 on the ARM side: width, height, a physical address and
+  "done" flags; HENkaku wiki *PSP Emulator*) is very likely what carries the PSP's image from its VRAM to the 0x74000000 buffer
+  that Adrenaline copies [deduced: from its name and registers]. So the bus firewall lets at least that unit through.
+  Reprogramming it to copy other VRAM pages is a possible route, not tried and risky: kernel only, half-documented
+  registers, and a mistake can break the image that works today.
 - The PSP's RAM is seen from the ARM at `0x68000000 + address`, uncached. **Reading it is the expensive part** (~2 µs
   per 64-byte line) [measured]: almost all of the capturer's cost is that wait, not interpreting. Reading 256 bytes at a
   time with NEON overlaps the waits; DMA (`sceDmacMemcpy`) copies at ~512 MB/s versus ~74 MB/s for the CPU, but each
   call costs ~100 µs.
+- **The PSP's RAM lives in the Vita's CDRAM**, the GPU's memory: the SceGrab registers 0xE8300120-0xE830012C hold "CDRAM
+  base + 1" for three 16 MB windows and for flash0 at base + 0x3000000 (HENkaku wiki *PSP Emulator*; the wiki marks the mapping
+  with "?"). It fits what was measured: the ARM reaches CDRAM by a slow path, so the cost is the memory, not the cache
+  attributes (a cached view was only 1.7 times faster, NEON 256-byte loads give the same ~91 MB/s as `memcpy`), while the DMA
+  and the GPU read it fast. Faster ARM reads do not pay; reading less with the ARM, or letting the DMA, the PSP's GE or the
+  GPU read, does (`performance-plan.md`, C). Probably explained by it too [deduced]: the 112 MiB game CDRAM partition (wiki
+  *Memory budget*) is mostly the PSP's RAM, hence only 4 MB free in Adrenaline's process; `sceCompatAllocCdramWithHole`
+  (taken in the A3 notes for the VRAM's backing) reserves that RAM; Adrenaline's kernel hook `SceGrabForDriver_E9C25A28`
+  (0x21000001 → 0x22000001) moves one of those windows to another CDRAM block.
 - **The Vita's GPU can read the PSP's RAM directly** if it is registered with `sceGxmMapMemory` (0x70000000, 32 MB),
-  at the same speed as its own memory [measured, stage 1]. With 0x72000000 it fails.
+  at the same speed as its own memory [measured, stage 1]. With 0x72000000 it fails. Probable cause [deduced]: past the
+  first 32 MB the RAM is not one contiguous CDRAM block (the 16 MB windows above; Adrenaline keeps extra blocks at physical
+  0x23000000/0x24000000). Registering it in 16 MB pieces is untried (`TODO.md`).
 - ARM at 444 MHz, SGX543MP4+ GPU at 222 MHz, bus at 222 MHz [measured, stage 1]. In the Adrenaline process there are
   ~33 MB of free LPDDR and 4 MB of CDRAM.
+- **L2 cache:** a PL310 of 16 ways × 128 KB = 2 MB, shared by the four cores, with hardware prefetch on (HENkaku wiki
+  *Caches*, configured values; the size is computed from them). Prefetching by hand adds little, as measured
+  (`performance-plan.md`), and every byte of the photo, the record and the translator competes there with Adrenaline itself:
+  keeping them small is worth more than their own copy time suggests [deduced].
+- **GPU programs (SGX543, wiki *SGX543*):** pixel discard (`kill`), depth written by the program (`depthf`) and half-precision
+  formats (f16, fx10) are ordinary shader instructions. On PowerVR GPUs, which sort each tile and shade only the visible
+  pixels, `kill` and `depthf` turn that off for the draw [general PowerVR knowledge, not measured here]: hence programs without
+  `discard` wherever possible (`performance-plan.md`, C.3). It does not explain the cost of the clip planes: `discard` alone cost
+  ~2 ms in the same test.
 - Reserving **CDRAM** inside Adrenaline breaks the Vita's videos (previews, cutscenes: static or black). There were only
   4 MB and the videos use them. **Never CDRAM** [measured, 0.0.3.2 and 0.0.8.14].
 - With a render target of its own in GXM you must **always use a z surface** (D24S8): without z the GPU does not draw

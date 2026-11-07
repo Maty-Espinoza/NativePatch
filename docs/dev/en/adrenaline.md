@@ -40,7 +40,9 @@ Adrenaline 7 (TheOfficialFloW/Adrenaline, commit 7d382b7, reviewed on 2026-10-21
 - **Screen:** a thread on the ARM (`user/menu.c`, `AdrenalineDraw`) draws with the Vita's GPU (vita2d):
   - Normal: it copies the PSP framebuffer (480x272, at `0x74000000` on the ARM side) and scales it.
   - If `DRAW_NATIVE` (`0xABCDEF00`) ≠ 0: it uses as texture `NATIVE_FRAMEBUFFER` = `0x0A400000` in the PSP RAM, 960x544 in 565 BGR format, at scale 1.
-  - The ARM sees the PSP RAM at `0x68000000 + (addr & 0x0FFFFFFF)`.
+  - The ARM sees the PSP RAM at `0x68000000 + (addr & 0x0FFFFFFF)`. Physically that RAM is in the Vita's CDRAM
+    (`findings.md`, "The hardware"); Adrenaline's kernel hook `SceGrabForDriver_E9C25A28` (0x21000001 → 0x22000001) probably
+    moves one of its 16 MB windows to another CDRAM block [deduced].
   - Reading the native buffer is not synchronized with the game's flips: there can be tearing if the GE writes while the Vita reads.
 - **CPU:** Adrenaline sets 333 MHz by default. With the "CPU speed for ISO/UMD" option, `SetSpeed` can lower it (222 MHz, etc.).
 

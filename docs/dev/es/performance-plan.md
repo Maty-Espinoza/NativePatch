@@ -115,7 +115,7 @@ por draw reescrito por `trTris`.
 | `clip_gpu`, planos `CLP0` (con o sin region clip) | 14,6 | 42,2 | 99 | 45,2 | 1,4 |
 | `prog_swap`, solo cambio de vertex program | 20,6 | 24,5 | 17 | 37,9 | 4,8 |
 | `clip_discard`, `discard` en `nd_ftc`/`nd_fcc` + region clip | 20,5 | 26,4 | 37 | 37,1 | 1,7 |
-Los planos son exactos pero saturan la GPU, y no por el área (region clip no ayuda) ni por el cambio de programa; causa desconocida. `discard` funciona con el programa general. Visual: un momento de artefactos en el cielo en el público con `clip_discard`, causa abierta; el fallo `color_test_or_logic` de esa zona también salió con `prog_swap`. `no_join`: +1 us de CPU por dibujo (GXM 5,43 -> 6,45 us), ~0,8 ms por frame HD, GPU igual: C.1 puede dibujar sin unir.
+Los planos son exactos pero saturan la GPU, y no por el área (region clip no ayuda) ni por el cambio de programa; causa desconocida (no es el costo del descarte en PowerVR: `discard` solo cuesta ~2 ms aquí). `discard` funciona con el programa general. Visual: un momento de artefactos en el cielo en el público con `clip_discard`, causa abierta; el fallo `color_test_or_logic` de esa zona también salió con `prog_swap`. `no_join`: +1 us de CPU por dibujo (GXM 5,43 -> 6,45 us), ~0,8 ms por frame HD, GPU igual: C.1 puede dibujar sin unir.
 **Vértices con luz (`light_split`, 0.0.18.4):** pantalla de elegir auto: ~5200 vértices, ~25 ms: tipos `0x142`/`0x143` con una luz direccional y especular ~5,5 us por vértice, UV generado ~3,3 us, contra ~1,3 us del camino rápido; la luz es ~2 us de eso. En la carrera, los autos rivales suman solo ~1-3,5 ms; los picos son más vértices `0x19f`.
 
 **C.1, primera etapa (0.0.18.6-0.0.18.8, confirmada como 0.0.19):** `nd_v3` lee la copia del registro al final de `tx`. Elegibles: tipo `0x19F`, sin índices, triángulos, tira o abanico, sombreado suave, sin luces, sin UV generada, scissor que abarca toda la imagen.
@@ -395,7 +395,9 @@ Racer; logs en
 
 Descartado: una vista con caché de la RAM del PSP en vivo (KBENCH: solo 1,7 veces más rápida, y líneas viejas mientras el
 juego escribe); una foto de los 24 MB (más de 50 ms); copiar solo la lista en el sync (los vértices y los orígenes de las
-copias están en otro lado).
+copias están en otro lado). Por qué el lado ARM no puede hacerlo mucho mejor (`findings.md`, "El hardware"): la RAM del PSP
+está en la CDRAM de la Vita y el ARM llega a ella por un camino lento. Lo que rinde es leer menos con el ARM o que lea el DMA,
+el GE (C.2) o la GPU (C.1).
 
 ## C. Cambios grandes (preguntar primero al usuario)
 1. **Vértices 3D en un vertex shader de GXM leyendo la RAM del PSP mapeada para la GPU** (`sceGxmMapMemory` en 0x70000000
@@ -407,10 +409,16 @@ copias están en otro lado).
    por frame del público. Verificar: Vita.
 3. **Relleno de la GPU**: un programa de niebla sin alpha test ni `discard`, no dibujar la imagen de abajo cuando el frame
    la cubre (11 % de los píxeles), menos sobredibujado. La etapa más dura: 4,8 M de píxeles por frame en el SGX543 a 222 MHz.
-   Verificar: Vita (línea `bottleneck`, ms de `gpu`).
+   Verificar: Vita (línea `bottleneck`, ms de `gpu`). También el programa sin `discard` siempre que el alpha test no pueda
+   rechazar nada, y nunca profundidad escrita por el programa (`depthf`): en PowerVR ambos apagan la eliminación de píxeles
+   ocultos [conocimiento general]; colores en punto fijo y UV en f16 (el SGX543 los tiene, `findings.md`).
 4. **Cachés del traductor** (paletas, draws traducidos, escenas idénticas) y unir más draws. Verificar: Vita.
 5. **Dividir `capture.c`** (1900 líneas) en recorrido, memoria de sublistas, lectores y logs: no da fps, pero hace seguros
    B.6 y C.1. Verificar: bench y test_ci sin cambios.
+6. **La GPU como copiadora** (`sceGxmTransferCopy` desde la RAM del PSP registrada en 0x70000000 hacia LPDDR) para lo que solo
+   lee la GPU (texturas de RAM, vértices con C.1): sin CPU y sin los ~65-100 µs por llamada al DMA. Riesgos: la GPU hace la
+   copia cuando su cola llega a ella, quizá después de que el juego reescribió los datos (como en 0.0.19.1-0.0.19.2), y el
+   resultado no queda coherente con la caché del ARM. Primero medir cuándo corre la copia respecto del flip. Verificar: Vita.
 
 ## Metas realistas
 - Juego a 60 fps con el plugin encendido en toda Ridge Racer: B.2 + B.4 (+ B.1/B.3) deberían lograrlo.

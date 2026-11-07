@@ -109,7 +109,7 @@ instructions do not explain; the cause is open. A fit on 10 s windows gives ~27 
 | `clip_gpu`, clip planes `CLP0` (with or without region clip) | 14.6 | 42.2 | 99 | 45.2 | 1.4 |
 | `prog_swap`, vertex program change alone | 20.6 | 24.5 | 17 | 37.9 | 4.8 |
 | `clip_discard`, `discard` in `nd_ftc`/`nd_fcc` + region clip | 20.5 | 26.4 | 37 | 37.1 | 1.7 |
-Clip planes are exact but saturate the GPU, not because of the area (region clip does not help) or the program change; the cause is unknown. `discard` works with the generic program. Visual: one moment of artifacts in the sky in the crowd with `clip_discard`, cause open; the failure `color_test_or_logic` of that zone also appeared with `prog_swap`. `no_join`: +1 us of CPU per draw (GXM 5.43 -> 6.45 us), ~0.8 ms per HD frame, GPU unchanged: C.1 can draw without joining.
+Clip planes are exact but saturate the GPU, not because of the area (region clip does not help) or the program change; the cause is unknown (not the PowerVR cost of discard: `discard` alone costs ~2 ms here). `discard` works with the generic program. Visual: one moment of artifacts in the sky in the crowd with `clip_discard`, cause open; the failure `color_test_or_logic` of that zone also appeared with `prog_swap`. `no_join`: +1 us of CPU per draw (GXM 5.43 -> 6.45 us), ~0.8 ms per HD frame, GPU unchanged: C.1 can draw without joining.
 **Lit vertices (`light_split`, 0.0.18.4):** car selection screen: ~5200 vertices, ~25 ms: types `0x142`/`0x143` with one directional light and specular ~5.5 us per vertex, generated UV ~3.3 us, against ~1.3 us of the fast path; the light is ~2 us of it. In the race, rival cars add only ~1-3.5 ms; the peaks are more `0x19f` vertices.
 
 **C.1, first stage (0.0.18.6-0.0.18.8, confirmed as 0.0.19):** `nd_v3` reads the record's copy at the end of `tx`. Eligible: type `0x19F`, no indices, triangles, strip or fan, smooth, no lights, no generated UV, scissor that takes in the whole image.
@@ -373,7 +373,9 @@ three scenes, each frame compared with the same frame captured with the game hel
    the photo (C.1).
 
 Discarded: a cached view of live PSP RAM (KBENCH: only 1.7 times faster, and stale lines while the game writes); a photo of
-all 24 MB (over 50 ms); copying only the list at the sync (vertices and transfer sources are elsewhere).
+all 24 MB (over 50 ms); copying only the list at the sync (vertices and transfer sources are elsewhere). Why the ARM side cannot do much better
+(`findings.md`, "The hardware"): the PSP's RAM is in the Vita's CDRAM and the ARM reaches it by a slow path. What pays is
+reading less with the ARM or letting the DMA, the GE (C.2) or the GPU (C.1) read.
 
 ## C. Large changes (ask the user first)
 1. **3D vertices in a GXM vertex shader reading the PSP RAM mapped for the GPU** (`sceGxmMapMemory` at 0x70000000 works,
@@ -385,10 +387,16 @@ all 24 MB (over 50 ms); copying only the list at the sync (vertices and transfer
    ~55 runs per crowd frame. Verify: Vita.
 3. **GPU fill**: a fog program without alpha test or `discard`, skip the image underneath when the frame covers it (11 % of
    the pixels), less overdraw. The hardest stage: 4.8 M pixels per frame on the SGX543 at 222 MHz. Verify: Vita
-   (`bottleneck` line, `gpu` ms).
+   (`bottleneck` line, `gpu` ms). Also the program without `discard` whenever the alpha test cannot reject anything, never
+   depth written by the program (`depthf`): on PowerVR both turn off the removal of hidden pixels [general knowledge]; colors
+   in fixed point and UVs in f16 (the SGX543 has them, `findings.md`).
 4. **Translator caches** (palettes, translated draws, identical scenes) and joining more draws. Verify: Vita.
 5. **Split `capture.c`** (1900 lines) into walk, sublist memory, readers and logs: no fps, but makes B.6 and C.1 safe to
    do. Verify: bench and test_ci unchanged.
+6. **GPU as copier** (`sceGxmTransferCopy` from the PSP's RAM registered at 0x70000000 into LPDDR) for what only the GPU reads
+   (RAM textures, vertices with C.1): no CPU and none of the ~65-100 µs per DMA call. Risks: the GPU runs the copy when its
+   queue gets there, perhaps after the game rewrote the data (as in 0.0.19.1-0.0.19.2), and the result is not coherent with
+   the ARM's cache. First measure when the copy runs against the flip. Verify: Vita.
 
 ## Realistic targets
 - Game at 60 fps with the plugin on, in every part of Ridge Racer: B.2 + B.4 (+ B.1/B.3) should do it.
