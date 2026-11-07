@@ -1483,7 +1483,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     d0 = t_draws; spx = 0; ssw = 0; cur_rt = (dst_); opened = 1; \
     if (!cur_rt && has_base && zcut) sceGxmDepthStencilSurfaceSetForceLoadMode(&dss, SCE_GXM_DEPTH_STENCIL_FORCE_LOAD_ENABLED); \
     SCENE(cur_rt ? &cur_rt->cs : &cs[s], cur_rt ? &cur_rt->vr : 0); \
-    if (!cur_rt && !has_base) { has_base = 1; nv = trBase(c, base, o, nv); spx += W * H; DEV(bpx[0][BP_BASE] += W * H;) } } while (0)
+    if (!cur_rt && !has_base) { has_base = 1; nv = trBase(c, base, o, nv); spx += W * H; DEV(bpx[0][BP_BASE] += W * H;) } fp_cur = 0; } while (0)
   // SURF_WAIT: the surface s is being sampled for the screen until the previous frame's scenes end, and its scene must not start before
 #define SURF_WAIT() do { if (!cur_rt) gWait(fq[0]); } while (0)
   // GRUN: sends the pending draw of the GPU path, triangles of indices gs to gn on the vertices of the record at gb
@@ -1497,6 +1497,8 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
   uint16_t *gi = tgi[s];
   float wm[16];    // the scene's matrix
   int gv_cur = 0;  // the program in the context is gvp
+  const SceGxmFragmentProgram *fp_cur = 0;  // fragment program in the context and the key of its uniforms (0: unknown)
+  uint32_t fk_cur[4];
   const RDraw *pd = 0;  // last draw whose state is set in the context, which the next one may share (t, tw, th included)
   SceGxmTexture t;
   float tw = 1, th = 1;
@@ -1555,7 +1557,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
       sceGxmReserveVertexDefaultUniformBuffer(c, &u); sceGxmSetUniformDataF(u, p_wvp, 0, 16, wm);
       sceGxmSetFragmentTexture(c, 0, &ts); sceGxmSetVertexStream(c, 0, q);
       sceGxmDraw(c, SCE_GXM_PRIMITIVE_TRIANGLE_STRIP, SCE_GXM_INDEX_FORMAT_U16, ib, 4);
-      sceGxmSetVertexProgram(c, nvp); gv_cur = 0; pd = 0;
+      sceGxmSetVertexProgram(c, nvp); gv_cur = 0; pd = 0; fp_cur = 0;
       sceGxmReserveVertexDefaultUniformBuffer(c, &u); sceGxmSetUniformDataF(u, n_wvp, 0, 16, wm);
     }
     if (i < ord ? pass != (dst ? 0u : 1u) : pass != 2) continue;
@@ -1779,7 +1781,12 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     int kind = fast ? 2 : mid ? 3 : mina ? 4 : tex;
     SceGxmFragmentProgram *p = fragProg(kind, key, colorMask(e));
     if (!p) { res = T_PROG; break; }
-    sceGxmSetFragmentProgram(c, p);
+    // The program and its uniforms (all made from fk) go to the context only when they change: until then the draws keep the
+    // buffer reserved last, as joined draws do
+    uint32_t fk[4] = { c9 & 0x10107, afn | aref << 8 | b2 << 16, RE(e, 0xCF) & 0xFFFFFF, RE(e, 0xCA) & 0xFFFFFF };
+    if (p == fp_cur && !sceClibMemcmp(fk, fk_cur, sizeof fk)) goto ftex;
+    if (p != fp_cur) sceGxmSetFragmentProgram(c, p);
+    fp_cur = p; sceClibMemcpy(fk_cur, fk, sizeof fk);
     sceGxmReserveFragmentDefaultUniformBuffer(c, &u);
     // uniforms (see shaders/*.cg): at = alpha test function (1: always passes) and reference; tf = texture
     // function, TCC and color doubling
@@ -1803,6 +1810,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
         sceGxmSetUniformDataF(u, n_env, 0, 4, env);
       }
     }
+  ftex:;
     if (tex) {
       sceGxmSetFragmentTexture(c, 0, &t);
     }

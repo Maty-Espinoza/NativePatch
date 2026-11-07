@@ -21,6 +21,8 @@ G=$(T=$T sh $R/tools/perf/tr_gv.sh) && [ "$(echo "$G" | grep -c "lines equal")" 
 # God of War combat: a shadow atlas 1024 wide, a glow chain in one row and more than 64K vertices, all in the two surfaces
 echo "$G" | grep 'draws=6642' | grep -q 'result=ok' || { echo "FAIL: God of War combat frame not drawn"; exit 1; }
 [ "$(echo "$G" | grep 'draws=6642' | sed 's/.*gpu_vertices=[0-9]*,[0-9]*,[0-9]*,\([0-9]*\).*/\1/')" -gt 50000 ] || { echo "FAIL: God of War type 0x1BE not on the GPU"; exit 1; }
+# fragment program and uniforms equal to those in the context are not sent again: ~6 GXM calls per GXM draw, not ~10
+[ "$(echo "$G" | grep 'draws=6642' | sed 's/.*gxm_ops=\([0-9]*\).*/\1/')" -lt 3600 ] || { echo "FAIL: God of War combat GXM calls"; exit 1; }
 # God of War with enemies: skinned vertices with a point light and lit 0x1BE on the GPU (nd_v5)
 [ "$(echo "$G" | grep 'draws=8429' | sed 's/.*cpu_vertices=\([0-9]*\).*/\1/')" -lt 10000 ] || { echo "FAIL: God of War lit vertices not on the GPU"; exit 1; }
 # God of War's glow: the scene goes to 162000 times a colored fixed blend color (3f5343), carried by the vertex color
