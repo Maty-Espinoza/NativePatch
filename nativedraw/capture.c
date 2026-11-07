@@ -2224,7 +2224,6 @@ static void thrSample(void) {
 // they differ. Once: how fast it reads by CPU (and by DMA, with vram_dma). With vram_kread, if no user mapping can be
 // made, the kernel copies it on each read instead (a fault there restarts the Vita: only with that switch).
 int ndkVramMap(uint32_t type, uint32_t size, void **ubase) __attribute__((weak));  // (weak: the PC tests have no kernel half)
-int ndkPaddr(const void *ua, uint32_t *upa) __attribute__((weak));
 int ndkVramRead(uint32_t off, void *udst, uint32_t n) __attribute__((weak));
 #define VD_N 0x1FE000  // bytes mapped (the camera SRAM: the 2 MB minus the last 8 KB)
 static int vd_on, vd_kread, vd_dma, vd_mode, vd_tried;  // vd_mode: 0 not available, 1 user mapping, 2 the kernel copies
@@ -2247,15 +2246,11 @@ static void vdInit(void) {
   if (unresolved(ndkVramMap)) { clog("vram direct: nativedraw.skprx is not loaded (*KERNEL in config.txt)\n"); return; }
   static const uint32_t types[4] = { 0x0B100840, 0x0B100240, 0x0C200860, 0x0C208060 };  // USER_IO_DEVICE_R, USER_IO_SO_R, USER_MAIN_DEVICE_RW, USER_RW_UNCACHE
   for (int i = 0; i < 4 && !vd_mode; i++) {
-    void *b = 0; uint32_t pa = 0;
+    void *b = 0;
     int r = ndkVramMap(types[i], VD_N, &b);
     clog("vram direct: map type %08x -> %08x base %08x\n", types[i], r, (uint32_t)b);
-    sceKernelDelayThread(1500000);
-    if (r < 0 || !b) continue;
-    int rp = ndkPaddr(b, &pa);
-    clog("vram direct: physical %08x (%08x)\n", pa, rp);
-    sceKernelDelayThread(1500000);
-    if (rp >= 0 && pa == 0x1C000000u) { vd_base = b; vd_mode = 1; }
+    sceKernelDelayThread(3000000);
+    if (r >= 0 && b) { vd_base = b; vd_mode = 1; }
   }
   if (!vd_mode && vd_kread) { clog("vram direct: kernel copy of 256 bytes next\n"); sceKernelDelayThread(1500000); int r = ndkVramRead(0, vd_a, 256); clog("vram direct: kernel copy -> %08x\n", r); if (r >= 0) vd_mode = 2; }
   if (!vd_mode) return;

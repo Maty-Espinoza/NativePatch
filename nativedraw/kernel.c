@@ -11,6 +11,13 @@
 #define VRAM_PADDR 0x1C000000u
 #define VRAM_SIZE 0x200000u
 
+// Options of a block mapped on the compat RAM: on that physical address and without the zero fill a new block gets (it
+// would wipe the PSP's VRAM)
+static void vramOpt(SceKernelAllocMemBlockKernelOpt *opt) {
+  for (uint32_t i = 0; i < sizeof *opt / 4; i++) ((uint32_t *)opt)[i] = 0;
+  opt->size = sizeof *opt; opt->attr = SCE_KERNEL_ALLOC_MEMBLOCK_ATTR_HAS_PADDR | SCE_KERNEL_ALLOC_MEMBLOCK_ATTR_SKIP_ZERO_FILL;
+  opt->paddr = VRAM_PADDR;
+}
 // Memory block of the given type (a user one) mapped on the compat RAM, in the process that calls: its size is `size`
 // bytes (0 or too big: all of it) and its address in that process goes to *ubase. Returns the block's UID for that
 // process, or an error.
@@ -18,8 +25,7 @@ int ndkVramMap(uint32_t type, uint32_t size, void **ubase) {
   uint32_t state;
   ENTER_SYSCALL(state);
   SceKernelAllocMemBlockKernelOpt opt;
-  for (uint32_t i = 0; i < sizeof opt / 4; i++) ((uint32_t *)&opt)[i] = 0;
-  opt.size = sizeof opt; opt.attr = SCE_KERNEL_ALLOC_MEMBLOCK_ATTR_HAS_PADDR; opt.paddr = VRAM_PADDR;
+  vramOpt(&opt);
   if (!size || size > VRAM_SIZE) size = VRAM_SIZE;
   void *base = 0;
   int r = ksceKernelAllocMemBlock("NativeDrawVram", type, size, &opt);
@@ -33,17 +39,6 @@ int ndkVramMap(uint32_t type, uint32_t size, void **ubase) {
   return r;
 }
 
-// Physical address of user address ua (to check what a mapping points to). Returns 0 or an error.
-int ndkPaddr(const void *ua, uint32_t *upa) {
-  uint32_t state;
-  ENTER_SYSCALL(state);
-  uintptr_t pa = 0;
-  int r = ksceKernelVAtoPA(ua, &pa);
-  if (upa) ksceKernelCopyToUser(upa, &pa, sizeof pa);
-  EXIT_SYSCALL(state);
-  return r;
-}
-
 // Copies n bytes of the compat RAM, from offset off, to the user buffer udst, through a kernel mapping made on the
 // first call (for when no user mapping works). Returns 0 or an error.
 int ndkVramRead(uint32_t off, void *udst, uint32_t n) {
@@ -53,8 +48,7 @@ int ndkVramRead(uint32_t off, void *udst, uint32_t n) {
   int r = 0;
   if (!kbase) {
     SceKernelAllocMemBlockKernelOpt opt;
-    for (uint32_t i = 0; i < sizeof opt / 4; i++) ((uint32_t *)&opt)[i] = 0;
-    opt.size = sizeof opt; opt.attr = SCE_KERNEL_ALLOC_MEMBLOCK_ATTR_HAS_PADDR; opt.paddr = VRAM_PADDR;
+    vramOpt(&opt);
     r = ksceKernelAllocMemBlock("NativeDrawVramK", SCE_KERNEL_MEMBLOCK_TYPE_KERNEL_ROOT_NC_RW, VRAM_SIZE, &opt);
     void *b = 0;
     if (r >= 0) r = ksceKernelGetMemBlockBase(r, &b);
