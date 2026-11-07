@@ -241,7 +241,7 @@ static void clPut(uint32_t b, uint32_t ord, const uint32_t *src) {
 // lists (fp_h, fp_hk, fp_hn: how many frames each has), those of the last 4 frames (fp_g, fp_gn) and the counts of fpFlip.
 // fp_kind: the same pages by what read them (FP_LIST, FP_VERT, FP_TEX, FP_XFER); fp_last: the frame (fp_fr) each page
 // was last read in, to tell how old a missed page is (fp_s; fp_r: those of the last second)
-// fp_run: the pieces fpFlip predicted last (first page, pages), copied by fpProbe with switch photo_probe
+// fp_run: the pieces fpFlip predicted last (first page, pages), copied by fpProbe. All of it only with switch photo_probe
 #define FP_N 8192
 static uint32_t fp_now[FP_N / 32], fp_key, fp_hk[4], fp_hn[4], fp_h[4][4][FP_N / 32], fp_g[4][FP_N / 32], fp_gn, fp_s[25], fp_r[25], fp_run[256][2], fp_nrun;
 static int photo_probe;
@@ -249,7 +249,7 @@ enum { FP_LIST, FP_VERT, FP_TEX, FP_XFER };
 static uint32_t fp_kind[4][FP_N / 32], fp_fr;
 static uint16_t fp_last[FP_N];
 static void fpMark(uint32_t a, uint32_t n, uint32_t k) {
-  if (a < 0x08000000u || a >= 0x0A000000u || !n) return;
+  if (!photo_probe || a < 0x08000000u || a >= 0x0A000000u || !n) return;
   for (uint32_t p = (a - 0x08000000u) >> 12, e = (a + n - 1 - 0x08000000u) >> 12; p <= e && p < FP_N; p++) {
     __atomic_or_fetch(&fp_now[p >> 5], 1u << (p & 31), __ATOMIC_RELAXED);
     __atomic_or_fetch(&fp_kind[k][p >> 5], 1u << (p & 31), __ATOMIC_RELAXED);
@@ -887,11 +887,12 @@ static uint64_t bx_w;  // bytes xferMirror copies word by word (tools/perf/captu
 #else
 #define BXW(n) ((void)0)
 #endif
-// Copies n bytes of PSP RAM at sa into the mirror at ra and takes the destination lines out of the readers' cache: by DMA
-// from 8 KB (where the fixed cost of a call is paid back), by sceClibMemcpy below, by halfwords when not 4-aligned
-// (uncached PSP RAM may not take the unaligned accesses of a general memcpy)
+// Copies n bytes of PSP RAM at sa into the mirror at ra and takes the destination lines out of the readers' cache: through the
+// record's cached copy (rgStage) when it has one, otherwise by DMA from 8 KB (where the fixed cost of a call is paid back) or
+// by sceClibMemcpy below; by halfwords when not 4-aligned (uncached PSP RAM may not take the unaligned accesses of a general memcpy)
 static void xferRun(uint32_t ra, uint32_t sa, uint32_t n) {
-  if ((ra | sa | n) & 3) { BXW(n); for (uint32_t i = 0; i < n; i += 2) ((volatile uint16_t *)PSP(ra))[i / 2] = ((volatile uint16_t *)PSP(sa))[i / 2]; }
+  if ((ra | sa | n) & 3) { rgStage(ra, 0, n); BXW(n); for (uint32_t i = 0; i < n; i += 2) ((volatile uint16_t *)PSP(ra))[i / 2] = ((volatile uint16_t *)PSP(sa))[i / 2]; }
+  else if (rgStage(ra, sa, n)) {}
   else if (n >= 8192) sceDmacMemcpy((void *)PSP(ra), (const void *)PSP(sa), n);
   else sceClibMemcpy((void *)PSP(ra), (const void *)PSP(sa), n);
   for (uint32_t b = ra & ~63u; b < ra + n; b += 64) if (clOk(b)) cl_tag[clSlot(b)] = 0;
@@ -1709,7 +1710,7 @@ static void event(volatile uint32_t *e) {
     f_cmds = f_draws = f_us = 0;
     DEV(if (level >= 2) lifeFlip(); if (crowd_on) skipNote();)
     lf_ord_cmds = 0;
-    DEV(fpFlip();)
+    DEV(if (photo_probe) fpFlip();)
     gen++; ntex = 0;
     DEV(for (int k = 0; k < 4; k++) smp_f[k] = 0;)
     DEV(ltFlip();)
@@ -2026,7 +2027,7 @@ static int repThread(SceSize args, void *argp) {
       if (!level) goto sync;  // (minimum: only this line and the vram and sync one)
       if (reg_on) {  // frame record
         uint32_t g = gr.fr ? gr.fr : 1, dd = gr.draws ? gr.draws : 1;
-        clog("  3D vertices (per frame): runs %u, by DMA %u (%u KB read) | draws %u, near the list %u | not for the GPU: record busy %u, no room %u | garbage positions (draws in the second) %u\n", gr.v_runs / g, gr.v_dma / g, gr.v_kb / g >> 10, gr.v_all / g, gr.v_list / g, gr.v_busy / g, gr.v_full / g, gr.v_bad);
+        clog("  3D vertices (per frame): runs %u, by DMA %u (%u KB read) | draws %u, near the list %u | not for the GPU: record busy %u, no room %u | garbage positions (draws in the second) %u | KB read from the transfer copy %u, from the mirror %u\n", gr.v_runs / g, gr.v_dma / g, gr.v_kb / g >> 10, gr.v_all / g, gr.v_list / g, gr.v_busy / g, gr.v_full / g, gr.v_bad, gr.v_st / g >> 10, gr.v_mir / g >> 10);
 #ifdef NP_DEV
         char nb[300]; int nk = 0; nb[0] = 0;
         for (int i = 0; i < NR_N; i++) if (gr.nr[i]) nk += sceClibSnprintf(nb + nk, sizeof nb - nk, " %s=%u", nr_names[i], gr.nr[i]);

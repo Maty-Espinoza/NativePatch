@@ -25,7 +25,7 @@ static const char *nr_names[NR_N] = { "vertices", "swizzle_width", "texture", "x
 // (same, changed, new); unswizzled bytes; distinct textures
 // per frame
 static struct { uint32_t fr, ok, memo, rd_fail, limit, curve, draws, st, kb, cl, us, d3, clear, blend, atest, swz, fmt[16], us_e, us_v, us_t, us_p, t_b, us_l, stomped, n_late, gpu, o_b, us_o,
-  t_n[2], t_kb[2], t_dma[2], t_ord[2], t_calls, t_size[5], t_rb[6], v_dma, v_kb, v_runs, v_list, v_all, v_busy, v_full, v_bad, t_same, t_changed, t_lines, t_tex,
+  t_n[2], t_kb[2], t_dma[2], t_ord[2], t_calls, t_size[5], t_rb[6], v_dma, v_kb, v_runs, v_list, v_all, v_busy, v_full, v_bad, v_st, v_mir, t_same, t_changed, t_lines, t_tex,
   c_hit, c_fill, c_chg, c_rec, c_fail, c_us, skip DEV(, nr[NR_N]); } ga, gr;
 // RN records: with fewer, the one the GPU just read would at times be the only free one, overwriting its textures
 #define RN 4
@@ -76,7 +76,7 @@ static void rgGpu(int k, const char *what) {
 static uint32_t rg_clut, rg_clut_b, rg_t;   // loaded palette (offset + 1) and its size; us of this frame
 
 void *sceDmacMemcpy(void *dst, const void *src, SceSize size);
-// Textures with PSP swizzle (blocks of 16 bytes x 8 rows): copied by DMA to rg_ord (OR_N bytes; rg_ordc: cached) and
+// Textures with PSP swizzle (blocks of 16 bytes x 8 rows): copied to rg_ord (OR_N bytes; rg_ordc: cached) and
 // the CPU leaves them sorted in the record, so the GPU reads them as a plain texture (filtered if the game asks and
 // without computing where each texel is)
 #define OR_N (256 << 10)
@@ -106,10 +106,10 @@ static int rgCoherent(uint8_t *c, uint8_t *u) {
   return 1;
 }
 // Copies m bytes from s (PSP memory; pa: its PSP address) to d (record textures), by CPU under 8 KB, where a DMA call
-// costs more than the bytes. rb: bytes per row if the texture is swizzled (0: as is); then m is whole groups of 8 rows and each group is sorted: block b (16 bytes wide) of row
+// costs more than the bytes. rb: bytes per row if the texture is swizzled (0: as is); then m is whole groups of 8 rows, copied to tr and each group sorted from there: block b (16 bytes wide) of row
 // r is at s + b * 128 + r * 16 and goes to d + r * rb + b * 16 (d is written in order: it is uncached memory).
-// tr: transit memory of the calling thread. kr: record whose tx holds d (-1: the texture cache), for skipping groups already sorted there; only groups read by DMA,
-// which leaves them in cached memory where the hash costs little.
+// tr: transit memory of the calling thread. kr: record whose tx holds d (-1: the texture cache), for skipping groups already sorted there; only with tr
+// in cached memory, where the hash costs little.
 // Notes the t_* measurements of the "texturas:" line.
 static void rgTexCopy(uint8_t *d, const void *s, uint32_t m, uint32_t rb, uint32_t pa, int kr, uint8_t *tr) {
   uint32_t v = isVram(pa), t0 = now(), td = 0, k;
@@ -126,9 +126,10 @@ static void rgTexCopy(uint8_t *d, const void *s, uint32_t m, uint32_t rb, uint32
   for (uint32_t o = 0; o < m; o += max) {
     uint32_t l = m - o < max ? m - o : max, t1 = now();
     const uint8_t *src = (const uint8_t *)s + o;
-    if (l >= 8192) { sceDmacMemcpy(tr, src, l); src = tr; ga.t_calls++; td += now() - t1; }
+    if (l >= 8192) { sceDmacMemcpy(tr, src, l); ga.t_calls++; td += now() - t1; } else sceClibMemcpy(tr, src, l);
+    src = tr;
     for (uint32_t g = 0; g < l; g += gb) {
-      if (kr >= 0 && rg_hash[kr] && !(src == tr && rg_ordc)) rg_hash[kr][(d + o + g - rf[kr]->tx) >> 7].a = 0;
+      if (kr >= 0 && rg_hash[kr] && !rg_ordc) rg_hash[kr][(d + o + g - rf[kr]->tx) >> 7].a = 0;
       else if (kr >= 0 && rg_hash[kr]) {
         uint32_t h = gb, a = pa + o + g, c = (d + o + g - rf[kr]->tx) >> 7;
         for (uint32_t i = 0; i < gb; i += 4) h = (h ^ *(const uint32_t *)(src + g + i)) * 16777619u;
@@ -254,6 +255,45 @@ static void rcInval(uint32_t a, uint32_t n) {
     if (e->key && e->a < a + n && a < e->a + (e->key & 0x7FFFFFFF)) { e->d |= e->m; e->m = 0; }
   }
 }
+// Cached copy of the last RAM to VRAM transfers, so the record reads their bytes (vertices, indices, palettes) from it and
+// not from the uncached mirror: xferRun copies each run from PSP RAM to rg_st and from there to the mirror, and rg_sp notes
+// the last SP_N runs (mirror address a, n bytes, offset o in rg_st; the newest at rg_spi - 1, joined with the one before when
+// they follow each other). rg_st is a ring, written at the same offset modulo 64 as the mirror. A run leaves rg_sp when the
+// ring reuses its bytes, when the mirror under it is written again, or when lists are read with another mirror copy (rg_spu).
+#define STG_N (512u << 10)
+#define SP_N 16
+static uint8_t *rg_st;
+static struct { uint32_t a, n, o; } rg_sp[SP_N];
+static uint32_t rg_spi, rg_spu, rg_stw;
+// (xferRun) n bytes go to the mirror at ra from s (PSP RAM, 4-aligned; 0: the caller copies them): forgets the runs they
+// overwrite and, with s, copies them through rg_st (by DMA from 8 KB, where the call pays back). 1 if copied
+static int rgStage(uint32_t ra, uint32_t s, uint32_t n) {
+  if (!rg_st) return 0;
+  if (rg_spu != mir_u) { sceClibMemset(rg_sp, 0, sizeof rg_sp); rg_spu = mir_u; }
+  uint32_t o = rg_stw + ((ra - rg_stw) & 63), j = (rg_spi - 1) % SP_N;
+  if (o + n > STG_N) o = ra & 63;
+  if (o + n > STG_N) s = 0;
+  for (uint32_t i = 0; i < SP_N; i++)
+    if (rg_sp[i].n && ((rg_sp[i].a < ra + n && ra < rg_sp[i].a + rg_sp[i].n) || (s && rg_sp[i].o < o + n && o < rg_sp[i].o + rg_sp[i].n))) rg_sp[i].n = 0;
+  if (!s) return 0;
+  if (n >= 8192) sceDmacMemcpy(rg_st + o, (const void *)PSP(s), n); else sceClibMemcpy(rg_st + o, (const void *)PSP(s), n);
+  sceClibMemcpy((void *)PSP(ra), rg_st + o, n);
+  rg_stw = o + n;
+  if (rg_sp[j].n && rg_sp[j].a + rg_sp[j].n == ra && rg_sp[j].o + rg_sp[j].n == o) rg_sp[j].n += n;
+  else { j = rg_spi++ % SP_N; rg_sp[j].a = ra; rg_sp[j].n = n; rg_sp[j].o = o; }
+  return 1;
+}
+// Where the record reads n bytes at s (an address vtr gave): in the mirror, from rg_st if one run of rg_sp holds them all;
+// otherwise PSP memory
+static const void *rgFrom(uint32_t s, uint32_t n) {
+  if (s < MIRROR) return (const void *)PSP(s);
+  for (uint32_t i = 1; i <= SP_N && rg_spu == mir_u && rg_st; i++) {
+    uint32_t j = (rg_spi - i) % SP_N;
+    if (s - rg_sp[j].a < rg_sp[j].n && n <= rg_sp[j].a + rg_sp[j].n - s) { ga.v_st += n; return rg_st + rg_sp[j].o + (s - rg_sp[j].a); }
+  }
+  ga.v_mir += n;
+  return (const void *)PSP(s);
+}
 // Reserves the RN records: the main part in cached memory and the textures in uncached memory (read by the GPU), and
 // the transit memory for sorting swizzled textures. Without memory it turns the record off (reg_on = 0). Without
 // memory for the texture cache, every texture goes to the record.
@@ -299,6 +339,8 @@ static void regInit(void) {
   if (p && c >= 0 && sceKernelGetMemBlockBase(c, &q) >= 0) {
     rc_tx = p; rc = q; sceClibMemset(rc, 0, sizeof(RC) * RC_E);
   } else clog("texture cache: no memory (%08x)\n", c);
+  b = sceKernelAllocMemBlock("nativedraw_xfer", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, STG_N, 0);
+  if (b >= 0 && sceKernelGetMemBlockBase(b, &p) >= 0) rg_st = p; else clog("transfer copy: no memory (%08x)\n", b);
   clog("frame record: active (draw), %u x %u KB; swizzled textures sorted by the CPU from memory %s\n", RN,
        (unsigned)(sizeof(RFrame) >> 10), rg_ordc ? "with cache (the DMA keeps it up to date)" : "without cache (the DMA does not keep the cache up to date: slow)");
 }
@@ -382,7 +424,7 @@ static uint32_t rgCopy(uint32_t a, uint32_t n) {
       if (isVram(a + k)) want(a + k, m, 1);
       RG_READ(NR_VERT, a + k, m); return 0;
     }
-    sceClibMemcpy(f->a + o + k, (const void *)PSP(s), m);
+    sceClibMemcpy(f->a + o + k, rgFrom(s, m), m);
     DEV(fpMark(s, m, FP_VERT);)
     k += m;
   }
@@ -455,8 +497,8 @@ static uint32_t rgVNow(uint32_t a, uint32_t n, uint32_t vz, uint32_t chk) {
   while (m & 15) m += vz;
   if (!s || (f->ntx > rg_txr ? f->ntx : rg_txr) + f->nvx + m > TX_N) return 0;
   f->nvx += m;
-  const uint8_t *p = (const uint8_t *)PSP(s);
-  if (chk && n <= OR_N) { sceClibMemcpy(rg_ord, p, n); p = rg_ord; if (rgVBad(p, n, vz)) { ga.v_bad++; RG_READ(NR_VERT, a, n); } }
+  const uint8_t *p = rgFrom(s, n);
+  if (chk && n <= OR_N) { if (p == (const uint8_t *)PSP(s)) { sceClibMemcpy(rg_ord, p, n); p = rg_ord; } if (rgVBad(p, n, vz)) { ga.v_bad++; RG_READ(NR_VERT, a, n); } }
   sceClibMemcpy(f->tx + TX_N - f->nvx, p, n);
   return VX | (TX_N - f->nvx);
 }
@@ -516,7 +558,8 @@ static int rgStale(RFrame *f, uint32_t i, uint32_t g0, uint32_t g1) {
 // rows is one contiguous block and sorted takes the same place (rgTexCopy sorts it). RAM ones are copied right away by
 // DMA (the game may change them); VRAM ones are marked and regPend copies them from the flip's mirror.
 // Returns offset + 1 in tx; 0 if not copied (unsupported format, image drawn in this frame, limit or unreadable).
-static uint32_t tx_lo, tx_all;  // what rgTex returned for the last VRAM texture of this record (0: none); 1 if it asked for all its rows
+static uint32_t tx_lo, tx_all, tx_ord;  // what rgTex returned for the last texture of this record (0: none); 1 if it asked for all its rows; list it was
+                                        // checked in if from RAM (~0u: VRAM)
 static uint32_t rgTex(uint32_t r0, uint32_t r1) {
   RFrame *f = rf[rg_w];
   static const uint8_t bp[6] = { 16, 16, 16, 32, 4, 8 };
@@ -586,7 +629,7 @@ static uint32_t rgTex(uint32_t r0, uint32_t r1) {
     if (!vr) rg_tc[i] |= ((h - g < 64 ? (1ull << (h - g)) : 0) - 1) << g;
     g = h;
   }
-  if (vr) { lt = ta; lk = key; lr = rr; tx_lo = f->to[i] + 1; tx_all = !r0 && r1 == th; }
+  lt = ta; lk = key; lr = rr; tx_lo = f->to[i] + 1; tx_all = !r0 && r1 == th; tx_ord = vr ? ~0u : pub_ord;
   return f->to[i] + 1;
 }
 // Pending frame: VRAM textures are copied from the mirror copy the PSP made at that frame's flip (f->tgt): the game
@@ -782,7 +825,7 @@ static void regDraw(uint32_t n, uint32_t type, uint32_t vt, uint32_t idx) {
   if ((reg[0x1E] & 1) && !(reg[0xD3] & 1)) {  // the texture, after the vertices (they give the rows it uses)
     uint32_t r0 = 0, r1 = 0;
     DEV(tc = CST();)
-    if (!(vt >> 23 & 1) && !rg_tchg && tx_lo && tx_all) d->toff = tx_lo;  // (3D, the same VRAM texture, whole: nothing to look up)
+    if (!(vt >> 23 & 1) && !rg_tchg && tx_lo && tx_all && (tx_ord == ~0u || tx_ord == pub_ord)) d->toff = tx_lo;  // (3D, the same texture, whole, a RAM one already checked in this list: nothing to look up)
     else {
       if (vt >> 23 & 1) rgRows(vt, f->a + d->voff - 1, d->vlen, d->ioff ? f->a + d->ioff - 1 : 0, n, &r0, &r1);
       DEV(CSA(CS_RRW, tc); tc = CST();)

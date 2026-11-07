@@ -1,7 +1,8 @@
 // xfer_diff.c: differential check of xferMirror (nativedraw/capture.c) against the original word-by-word copy, under qemu.
 // Random RAM to VRAM transfers (2/4 bytes per pixel, strides, offsets, unaligned sources, pages without a copy in the
-// mirror, destinations outside the real VRAM, sources near the end of RAM): the candidate must leave both mirrors, the
-// readers' cache tags and the read buffer exactly as the reference does.
+// mirror, destinations outside the real VRAM, sources near the end of RAM; two per case, the second over the first): the
+// candidate must leave both mirrors, the readers' cache tags and the read buffer exactly as the reference does, and every run
+// the record's cached copy of transfers holds (rgStage) equal to the mirror under it.
 // Build (after tools/perf/bench.sh made build/perf/inc): arm-linux-gnueabihf-gcc -static -O2 -mthumb -mfpu=neon
 // -mfloat-abi=hard -w -Ibuild/perf/inc -o build/perf/xfer_diff tools/perf/xfer_diff.c (-DCB='"<path>/capture_bench.c"' to
 // check another tree); run: qemu-arm-static build/perf/xfer_diff [cases] [seed]
@@ -37,7 +38,7 @@ int main(int argc, char **argv) {
       mmap((void *)0x72000000, 0x400000, PROT_READ | PROT_WRITE, MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0) == MAP_FAILED ||
       mmap((void *)0x72C00000, 0x200000, PROT_READ | PROT_WRITE, MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0) == MAP_FAILED) { perror("mmap"); return 1; }
   rlo[0] = 0x08000000; rhi[0] = 0x0A000000; nr = 1; initCls(); level = 1; mir_on = 1;  // (readable RAM ends at 0x0A000000: sources near the end)
-  cl_data = calloc(CL_N, 64); cl_tag = calloc(CL_N, 4);
+  cl_data = calloc(CL_N, 64); cl_tag = calloc(CL_N, 4); rg_st = malloc(STG_N);
   for (uint32_t i = 0; i < 0x2000000 / 4; i++) ((uint32_t *)0x70000000)[i] = i * 2654435761u;
   uint8_t *m1 = (uint8_t *)PSP(MIRROR), *m2 = (uint8_t *)PSP(MIRROR2);
   uint8_t *s1 = malloc(MSZ), *s2 = malloc(MSZ), *r1 = malloc(MSZ), *r2 = malloc(MSZ);
@@ -61,16 +62,18 @@ int main(int argc, char **argv) {
     reg[0xB3] = (s >> 8 & 0x0F0000) | sw; reg[0xB5] = (t >> 8 & 0x0F0000) | dw;
     reg[0xEB] = sy << 10 | sx; reg[0xEC] = dy << 10 | dx; reg[0xEE] = (pw - 1) | (ph - 1) << 10;
     s &= ~15u; t &= ~15u;
+    uint32_t s2x = (s + R(65536)) & ~15u, t2x = (t + R(8192)) & ~15u;
     memcpy(s1, m1, MSZ); memcpy(s2, m2, MSZ); memcpy(ct, cl_tag, CL_N * 4);
     uint32_t okb[2][16]; memcpy(okb, (void *)mir_ok, sizeof okb);
-    R0.n = 7; xferRef(s, t, bp); uint32_t rn = R0.n;
+    R0.n = 7; xferRef(s, t, bp); xferRef(s2x, t2x, bp); uint32_t rn = R0.n;
     memcpy(r1, m1, MSZ); memcpy(r2, m2, MSZ); memcpy(rt, cl_tag, CL_N * 4);
     memcpy(m1, s1, MSZ); memcpy(m2, s2, MSZ); memcpy(cl_tag, ct, CL_N * 4); memcpy((void *)mir_ok, okb, sizeof okb);
-    R0.n = 7; xferMirror(s, t, bp);
-    int e1 = memcmp(r1, m1, MSZ), e2 = memcmp(r2, m2, MSZ), e3 = memcmp(rt, cl_tag, CL_N * 4), e4 = rn != R0.n;
-    if (e1 || e2 || e3 || e4) {
+    rg_spu = mir_u + 1; R0.n = 7; xferMirror(s, t, bp); xferMirror(s2x, t2x, bp);
+    int e1 = memcmp(r1, m1, MSZ), e2 = memcmp(r2, m2, MSZ), e3 = memcmp(rt, cl_tag, CL_N * 4), e4 = rn != R0.n, e5 = 0;
+    for (int i = 0; i < SP_N && rg_spu == mir_u; i++) if (rg_sp[i].n && memcmp(rg_st + rg_sp[i].o, (void *)PSP(rg_sp[i].a), rg_sp[i].n)) e5 = 1;
+    if (e1 || e2 || e3 || e4 || e5) {
       bad++;
-      printf("FAIL case %d: s %08x t %08x bp %u w %u h %u sw %u dw %u sxy %u,%u dxy %u,%u mirror1 %d mirror2 %d tags %d R0 %d\n", c, s, t, bp, pw, ph, sw, dw, sx, sy, dx, dy, !!e1, !!e2, !!e3, e4);
+      printf("FAIL case %d: s %08x t %08x bp %u w %u h %u sw %u dw %u sxy %u,%u dxy %u,%u mirror1 %d mirror2 %d tags %d R0 %d stage %d\n", c, s, t, bp, pw, ph, sw, dw, sx, sy, dx, dy, !!e1, !!e2, !!e3, e4, e5);
     }
     bytes += (uint64_t)pw * ph * bp;
   }
