@@ -78,6 +78,13 @@ static uint32_t rel(const void *p) {
   while (b + 1 < nblk && (uintptr_t)blk[b + 1] <= a) b++;
   return 0x40000000 | b << 22 | (a - (uintptr_t)blk[b]);
 }
+// The entries of the palette of the texture in the context (P4: 16, P8: 256), hashed for the dump; 0 with no palette
+static uint32_t palHash(void) {
+  uint32_t w = ctx_tex[3], n = (ctx_tex[0] >> 24) == 0x94 ? 16 : (ctx_tex[0] >> 24) == 0x95 ? 256 : 0, h = 2166136261u;
+  const uint32_t *p = (w >> 30) == 2 ? (const uint32_t *)(frm->tx + (w & 0x7FFFFFFF)) : (w >> 30) == 1 ? (const uint32_t *)((uint8_t *)blk[w >> 22 & 255] + (w & 0x3FFFFF)) : 0;
+  for (uint32_t i = 0; p && i < n; i++) h = (h ^ p[i]) * 16777619u;
+  return n && p ? h : 0;
+}
 static uint32_t *tw4(SceGxmTexture *t) { return (uint32_t *)t; }
 int sceGxmTextureSetWidth(SceGxmTexture *t, unsigned w) { cur_w = w; tw4(t)[1] = (tw4(t)[1] & ~0xFFFFu) | w; return 0; }
 int sceGxmTextureSetData(SceGxmTexture *t, const void *d) { tw4(t)[2] = rel(d); return 0; }
@@ -245,7 +252,7 @@ int sceGxmDraw(SceGxmContext *c, SceGxmPrimitiveType t, SceGxmIndexFormat f, con
   int sk = skI();
   if (sk >= 0) gn[4] += n, gn5[sk / 25] += n;
   if (!dmp || !ix) return 0;  // (no ix: the presenter's quad, not the translator's)
-  fprintf(dmp, "D %d %u %08x %08x %08x %08x %08x", t, n, fprog, ctx_tex[0], ctx_tex[1], ctx_tex[2], ctx_tex[3]);
+  fprintf(dmp, "D %d %u %08x %08x %08x %08x %08x %08x", t, n, fprog, ctx_tex[0], ctx_tex[1], ctx_tex[2], ctx_tex[3], palHash());
   // (not those of nd_v5 and its variants, the programs with a parameter u: an older translator, built by tr_check.sh, has none)
   for (int i = 0; i < 64 && par[i].p; i++) if (strcmp(par[i].name, "wvp") && !hasU(par[i].p)) for (int k = 0; k < 4; k++) fprintf(dmp, " %.5g", par[i].v[k]);
   fputc('\n', dmp);
