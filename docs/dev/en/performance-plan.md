@@ -226,6 +226,12 @@ memory`; garbage-position draws 2 in the run), but vertices only fell 39.6 -> 30
 second copy): together 49.5 -> 45.4. 30 ms for 1.5 MB is still ~19 ns per byte although it is read from cached memory, so most of
 the vertex time is not the read; where it goes is not measured yet (inside the `vertices` column: `rgVGpu`, the copy to `tx`, the
 position check, the clock read of the column itself). Next: split that column before changing it.
+Without `cap_split` (`tests/perf/runs/0.0.27.1_gow`, combat seconds 178-306, 118 s): game 11.2 fps (0.0.26.5: ~8), 10.7 HD frames
+per second; capturer ~94 ms per frame (13 us per draw; 0.0.26.5: ~125 ms), so `cap_split` itself costs ~64 ms per combat frame (its
+clock reads, ~9 us per draw). The three stages are now even (`tools/bottleneck.py`): drawing thread ~93 ms per HD frame (translator
+72.8: GXM 28, vertices 15.3, textures 6.9, check 5.8, scenes 5.9; it limits 95 of 98 s), GPU 84.6 ms (surface 72.6, intermediate 12;
+idle 13-16 %; 3.4 M pixels, 534 thousand of them off the fast program because of the blend function), capturer ~94 ms (record 54:
+vertices 37.5 sampled, textures 9.7, states 6.5). Lowering one stage alone gives little: all three must come down.
 
 ## D. Reading PSP memory: photo at the sync (proposal, 2026-11-06)
 **Why.** Three facts, all from the logs:

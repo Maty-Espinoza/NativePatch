@@ -236,6 +236,12 @@ transferencias subieron 9,9 -> 15,2 ms (la segunda copia): juntos 49,5 -> 45,4. 
 lean de memoria con caché, así que la mayor parte del tiempo de vértices no es la lectura; dónde se va todavía no está medido (dentro de
 la columna `vertices`: `rgVGpu`, la copia a `tx`, la revisión de posiciones, la lectura del reloj de la propia columna). Lo siguiente:
 separar esa columna antes de cambiarla.
+Sin `cap_split` (`tests/perf/runs/0.0.27.1_gow`, segundos de combate 178-306, 118 s): juego 11,2 fps (0.0.26.5: ~8), 10,7 frames HD
+por segundo; capturador ~94 ms por frame (13 us por dibujo; 0.0.26.5: ~125 ms), así que `cap_split` mismo cuesta ~64 ms por frame de
+combate (sus lecturas del reloj, ~9 us por dibujo). Las tres etapas quedaron parejas (`tools/bottleneck.py`): hilo de dibujo ~93 ms por
+frame HD (traductor 72,8: GXM 28, vértices 15,3, texturas 6,9, revisión 5,8, escenas 5,9; limita 95 de 98 s), GPU 84,6 ms (superficie
+72,6, intermedias 12; ociosa 13-16 %; 3,4 M de píxeles, 534 mil fuera del programa rápido por la función de mezcla), capturador ~94 ms
+(registro 54: vértices 37,5 muestreados, texturas 9,7, estados 6,5). Bajar una sola etapa da poco: hay que bajar las tres.
 
 ## D. Leer la memoria del PSP: foto en el sync (propuesta, 2026-11-06)
 **Por qué.** Tres hechos, todos de los logs:

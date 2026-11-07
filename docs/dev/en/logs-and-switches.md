@@ -74,7 +74,7 @@ The development measurements are listed in `nativedraw/measures.h`, one line eac
 | `thread_split` | (development) every second in the capture log: on which core the capturer, the record thread and Adrenaline's drawing thread ran, how long, and how often they were preempted, interrupted and moved |
 | `vert_split` | (development) splits the vertex work of 1 HD frame in 8: `vertex split plain` and `vertex split warm` lines, summed up by `tools/bottleneck.py` |
 | `cpu_verts` | (development) no vertices go to the GPU's vertex program (`nd_v3`): every 3D draw takes the CPU path, to compare. Read when Adrenaline opens. |
-| `cap_split` | (development) times every part of the capturer on every frame (it costs ~0.7 us per clock read and in a heavy game the capturer falls behind: graphic errors and the normal image; warn before using it): `capture split` lines by kind of frame, summed up by `tools/bottleneck.py` |
+| `cap_split` | (development) times every part of the capturer on every frame (it costs ~0.7 us per clock read, ~64 ms per God of War combat frame, and in a heavy game the capturer falls behind: graphic errors and the normal image; warn before using it): `capture split` lines by kind of frame, summed up by `tools/bottleneck.py` |
 | `crowd_log` | (development) every second in the capture log: commands by type, bounding box jumps, what a frame needs from the one before |
 | `no_join` | (development) draws of the GPU path are not joined, to compare |
 | `keep_hd` | (development) images that only blur stay at double size, to compare |
