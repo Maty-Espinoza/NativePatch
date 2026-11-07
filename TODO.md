@@ -2,10 +2,21 @@
 
 The only list of pending work. Ordered from what comes next to what can wait. Each item says where it came from
 (a document in `docs/dev/en/`, `docs/agent/en/`, `docs/changelog/en/` or the claude.ai project). Done items are removed;
-what was done is in `CHANGELOG.md`. Updated 2026-11-06 (NativeLink 0.0.8 + NativeDraw 0.0.28 confirmed: God of War combat at 11 fps, capturer, translator and GPU even). How the work is done: `docs/agent/en/workflow.md`; stage 3 plan and results:
+what was done is in `CHANGELOG.md`. Updated 2026-11-07 (NativeDraw 0.0.28.9 test: the long iteration on the Vita, God of War combat 11.7 HD fps). How the work is done: `docs/agent/en/workflow.md`; stage 3 plan and results:
 `docs/agent/en/stage3-plan.md`.
 
 ## Next
+- [ ] **0.0.28.9 on the Vita, before confirming it** (`performance-plan.md`, end of C; runs `tests/perf/runs/0.0.28.9_gow*`). Keep
+  `hold_game` and `gate_sync` on in these runs, so the stages stay in step and the bottleneck reads clearly (user, 2026-11-07). In order:
+  1. **Jumps of 3-4 PSP frames** (37 in 0.0.28.9, 1 in 0.0.28.1; the user sees them as stutter): the same combat with `fx_log` off. If they
+     go, the cause is the `fx_log` frame passing the 100 ms of `hold_game` in `regFlip`; if not, look for which wait times out (a log
+     line for it is missing).
+  2. **Capturer walking ~400,000 commands per frame** (`0.0.28.9_gow_cpu_verts`, from ~187 s after a scene change with no draws, ~130 s,
+     `bad target` from 181 s, `list_too_long`): ask the user what was on screen; reproduce it without `cpu_verts`. If it comes back, check
+     against 0.0.28.8 (without the transfer copy `rgStage`) before touching code.
+  3. **Translator `gxm` piece** (35 ms per HD frame in combat, only ~7 ms in `gxm split`): find what the rest is (waiting inside GXM for
+     the ring or the GPU?) before more translator work.
+  4. Check the green glow (stencil) and flicker with the new depth/stencil loads; then confirm 0.0.28.9 as the next version.
 - [ ] **God of War combat, what limits it now** (NativeDraw 0.0.26.5, `stage3_0.0.26.5/gow1`, seconds 318-368, per frame): the capturer
   ~125 ms (record ~90: vertices 52-61 ms copying ~1.9 MB from uncached memory, textures ~28, states ~6), so with `hold_game` the game waits
   ~105 ms per frame and runs at ~8 fps; the Vita GPU ~82 ms per HD frame (surface 70: `nd_v5` always does 8 bones and 4 lights, textured

@@ -281,8 +281,15 @@ etapa, cada paso revisado en el PC:
   profundidad y stencil solo si una posterior los lee (God of War: guardar / cargar / nada en vez de guardar / cargar+guardar /
   cargar+guardar). `fx_log` da los píxeles 3D de la superficie por programa. Estimado: 9-22 ms por frame HD. Sin hacer: dibujar solo las
   960 columnas visibles (no es exacto en el borde derecho para dibujos que leen la superficie), imágenes intermedias a tamaño PSP.
-Corrida pendiente en la Vita: combate de God of War con `hold_game`, `gate_sync`, `hd_mark`, `gpu_timer` y `fx_log`; después la misma con
-`cpu_verts` para separar el tiempo de vértices y de fragmentos de la GPU.
+**En la Vita (0.0.28.9, `tests/perf/runs/0.0.28.9_gow*`).** Combate de God of War con `hold_game`, `gate_sync`, `hd_mark`, `gpu_timer`
+y `fx_log`, contra la 0.0.28.1: 10,4 -> 11,7 frames HD/s en los segundos que limita el traductor; capturador 61 -> 50 ms por frame del
+juego (registro 34,7 -> 24,7); GPU 82 -> 62 ms por frame HD (libre 22 -> 38 %). El traductor no bajó: 73 -> 76 ms por frame HD, con
+`gxm` 27,8 -> 35,0 aunque `gxm split` suma solo ~7 ms de llamadas GXM, `t3Set` y `t3Uni`: el resto de ese tramo es espera dentro de GXM
+[deducido, sin medir]. Tirones: 37 saltos de 3-4 frames del PSP (1 en la 0.0.28.1). Causa probable [deducida]: `fx_log`, el único
+interruptor distinto, rehace en la CPU los vértices del camino de GPU en 1 frame de cada 32; ese frame pasa los 100 ms que `hold_game`
+espera en `regFlip`. Con `cpu_verts` hubo solo ~20 s de combate (5 frames HD/s, vértices 133 ms por frame HD); después de un cambio de
+escena (~187 s) el capturador recorrió ~400.000 comandos por frame con 1 dibujo durante ~130 s (`bad target`, `list_too_long`), sin
+nada para el traductor. Solo apareció en esa corrida; causa sin encontrar (`TODO.md`).
 
 ## D. Leer la memoria del PSP: foto en el sync (propuesta, 2026-11-06)
 **Por qué.** Tres hechos, todos de los logs:

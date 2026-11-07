@@ -269,8 +269,15 @@ one per stage, each step checked on the PC:
   store / load / nothing instead of store / load+store / load+store). `fx_log` gives the 3D surface pixels by program. Estimate:
   9-22 ms per HD frame. Not done: drawing only the 960 visible columns (not exact at the right edge for draws that read the
   surface), intermediate images at PSP size.
-Vita run to do: God of War combat with `hold_game`, `gate_sync`, `hd_mark`, `gpu_timer` and `fx_log`; then the same with `cpu_verts`
-to split GPU vertex and fragment time.
+**On the Vita (0.0.28.9, `tests/perf/runs/0.0.28.9_gow*`).** God of War combat with `hold_game`, `gate_sync`, `hd_mark`, `gpu_timer`
+and `fx_log`, against 0.0.28.1: 10.4 -> 11.7 HD frames/s in the seconds the translator limits; capturer 61 -> 50 ms per game frame
+(record 34.7 -> 24.7); GPU 82 -> 62 ms per HD frame (idle 22 -> 38 %). The translator did not go down: 73 -> 76 ms per HD frame, with
+`gxm` 27.8 -> 35.0 while `gxm split` adds up to only ~7 ms of GXM calls, `t3Set` and `t3Uni`: the rest of that piece is waiting inside GXM
+[deduced, not measured]. Stutter: 37 jumps of 3-4 PSP frames (1 in 0.0.28.1). Probable cause [deduced]: `fx_log`, the only switch that
+differs, redoes the GPU-path vertices on the CPU in 1 frame of every 32; that frame goes past the 100 ms `hold_game` waits in `regFlip`.
+With `cpu_verts` there were only ~20 s of combat (5 HD frames/s, vertices 133 ms per HD frame); after a scene change (~187 s) the
+capturer walked ~400,000 commands per frame with 1 draw for ~130 s (`bad target`, `list_too_long`), with nothing for the translator.
+Seen only in that run; cause not found (`TODO.md`).
 
 ## D. Reading PSP memory: photo at the sync (proposal, 2026-11-06)
 **Why.** Three facts, all from the logs:
