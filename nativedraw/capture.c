@@ -395,7 +395,7 @@ static struct { volatile uint32_t n[4], ch1[4], ch2[4], warn[4], wall[4], ms1, m
 #endif
 
 static uint32_t vs_vt = ~0u, vs_sz;  // last vertex type and its size
-static int rg_chg = 1, rg_lchg = 1, rg_mchg = 1, rg_tchg = 1;  // since the last recorded draw: state, light block (0x53-0x9A) or matrix values changed
+static int rg_chg = 1, rg_lchg = 1, rg_mchg = 1, rg_tchg = 1;  // since the last recorded draw: state (RS), light block (0x53-0x9A) or matrix values changed
 static int reg_on, reg_big;  // frame record (switch draw); last frame had more draws than a record holds
 // Until when (Vita time) each frame carries the exact PSP image: set by dump.c for an
 // L+R+SELECT dump and used by record.c
@@ -1201,7 +1201,7 @@ static int __attribute__((noinline)) walkList(List *l) {
         if (rec) rec->mmask |= 1 << m;
         if (mi[m] < (uint32_t)max) { if (mtx[m][mi[m]] != d) { mtx[m][mi[m]] = d; dirty |= C_MTX; rg_mchg = 1; } mi[m]++; }
       } else {
-        if (cls[c] && reg[c] != d) { rg_chg = 1; rg_lchg |= c - 0x53 < 72; rg_tchg |= cls[c] & C_TEX; dirty |= cls[c]; if (cls[c] & (C_OTHER | C_TL)) acc.chg[c]++; }
+        if (cls[c] && reg[c] != d) { rg_chg |= RI[c] != 0; rg_lchg |= c - 0x53 < 72; rg_tchg |= cls[c] & C_TEX; dirty |= cls[c]; if (cls[c] & (C_OTHER | C_TL)) acc.chg[c]++; }
         DEV(if (c == 0x10) baseLog("list", pc, d);
             if (TR_ON && reg[c] != d && ((isVram(pc) && c == 0x10) || c == 0xEB || c == 0xEC)) { char w[48]; sceClibSnprintf(w, sizeof w, "register %02x %06x>%06x", c, reg[c], d); trCtx(w, l, pc); trTrig(w); })
         reg[c] = d; TOUCH(c);
