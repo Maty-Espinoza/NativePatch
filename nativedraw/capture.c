@@ -1728,7 +1728,7 @@ static void event(volatile uint32_t *e) {
       acc.t0 = n - sec_t0;
       if (level) cpuSample();
       DEV(if (off_min != ~0u) { off = off_min; off_min = ~0u; })  // clock: the minimum of the last second
-      if (!rep_ready) { DEV(sceClibMemcpy(cs_r, cs_s, sizeof cs_r); sceClibMemset(cs_s, 0, sizeof cs_s); sceClibMemcpy(xm_r, xm_t, sizeof xm_r); sceClibMemset(xm_t, 0, sizeof xm_t); sceClibMemcpy(fp_r, fp_s, sizeof fp_r); sceClibMemset(fp_s, 0, sizeof fp_s);) rep = acc; gr = ga; rep_ready = 1; }
+      if (!rep_ready) { DEV(sceClibMemcpy(cs_r, cs_s, sizeof cs_r); sceClibMemset(cs_s, 0, sizeof cs_s); sceClibMemcpy(xm_r, xm_t, sizeof xm_r); sceClibMemset(xm_t, 0, sizeof xm_t); sceClibMemcpy(fp_r, fp_s, sizeof fp_r); sceClibMemset(fp_s, 0, sizeof fp_s); sceClibMemcpy(vq_r, vq_s, sizeof vq_r); sceClibMemset(vq_s, 0, sizeof vq_s);) rep = acc; gr = ga; rep_ready = 1; }
       // the record yields complete 2D frames (drawn by the Vita): NativeLink copies all requested VRAM at each flip
       if (reg_on) {
         if ((ga.ok + ga.skip) * 2 > ga.fr && ga.d3 * 10 < (ga.draws ? ga.draws : 1)) gp_flags |= 16; else gp_flags &= ~16u;
@@ -2029,6 +2029,7 @@ static int repThread(SceSize args, void *argp) {
         uint32_t g = gr.fr ? gr.fr : 1, dd = gr.draws ? gr.draws : 1;
         clog("  3D vertices (per frame): runs %u, by DMA %u (%u KB read) | draws %u, near the list %u | not for the GPU: record busy %u, no room %u | garbage positions (draws in the second) %u | KB read from the transfer copy %u, from the mirror %u\n", gr.v_runs / g, gr.v_dma / g, gr.v_kb / g >> 10, gr.v_all / g, gr.v_list / g, gr.v_busy / g, gr.v_full / g, gr.v_bad, gr.v_st / g >> 10, gr.v_mir / g >> 10);
 #ifdef NP_DEV
+        vqLog(g);
         char nb[300]; int nk = 0; nb[0] = 0;
         for (int i = 0; i < NR_N; i++) if (gr.nr[i]) nk += sceClibSnprintf(nb + nk, sizeof nb - nk, " %s=%u", nr_names[i], gr.nr[i]);
         if (nk || gr.skip) clog("  record not_read:%s | frames only walked: %u\n", nb, gr.skip);

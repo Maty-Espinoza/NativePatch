@@ -346,6 +346,7 @@ static void regInit(void) {
 }
 // Diagnostic (once, when the mailbox is found): measures the speed of each copy type (256 KB, CPU or DMA, cached or
 // not) using record 2 as test memory, and writes it to the log.
+DEV(static int rgVBad(const uint8_t *p, uint32_t n, uint32_t vz);)
 static void regBench(void) {
   static int ran;
   if (ran++ || !rf[2] || !okRam(0x0A200000u)) return;
@@ -397,6 +398,32 @@ static void regBench(void) {
   }
   clog("memory bench (PSP RAM->mirror): memory types %x/%x (blocks %08x/%08x), source %s\n", bi[0].memoryType, bi[1].memoryType,
        bi[0].type, bi[1].type, sceClibMemcmp(c, gs, n) ? "CHANGED" : "unchanged");
+  // 256-byte pieces into uncached memory, as rgVNow copies vertices into tx (ns per KB, 8 areas of 16 KB): from cached memory just
+  // filled by DMA, the same read once by the CPU before (as rgStage leaves its copy after copying it to the mirror), cached memory
+  // the CPU just wrote, and the mirror. Then in cached memory already read: 256-byte copies, compares of 432 equal bytes (rgBlock
+  // with the bones), rgVBad on 24-byte vertices; and one clock read in ns
+  uint8_t *z = c + (1 << 20), *w = c + (2 << 20);
+  uint32_t q[8] = { 0 };
+  sceDmacMemcpy(z, ps, 1 << 17); sceDmacMemcpy(z + (1 << 17), ps, 1 << 17);
+  for (uint32_t a = 0; a < 1 << 17; a += 16384) {
+    sceClibMemcpy(u + n, z + (1 << 17) + a, 16384);
+    sceClibMemcpy(z + (2 << 17) + a, (const uint8_t *)ps + a, 16384);
+    for (int m = 0; m < 4; m++) {
+      const uint8_t *s = m == 3 ? (const uint8_t *)ps + a : z + (m << 17) + a;
+      t0 = now(); for (uint32_t o = 0; o < 16384; o += 256) sceClibMemcpy(u + a + o, s + o, 256); q[m] += now() - t0;
+    }
+  }
+  const uint8_t *h = z + (3 << 17) - 16384;  // (the last area the CPU wrote: in the cache)
+  sceClibMemcpy(w, h, 16384);
+  t0 = now(); for (int r = 0; r < 8; r++) for (uint32_t o = 0; o < 16384; o += 256) sceClibMemcpy(w + 16384 + o, h + o, 256); q[4] = now() - t0;
+  t0 = now(); for (int r = 0; r < 8; r++) for (uint32_t o = 0; o + 432 <= 16384; o += 432) sum += sceClibMemcmp(w + o, h + o, 432); q[5] = now() - t0;
+  for (uint32_t i = 0; i < 4096; i++) ((uint32_t *)w)[i] = 0x3F800000u;
+  t0 = now(); for (int r = 0; r < 8; r++) sum += rgVBad(w, 16368, 24); q[6] = now() - t0;
+  t0 = now(); for (int r = 0; r < 64; r++) sum += now(); q[7] = now() - t0;
+  clog("memory bench (256 B pieces into uncached memory, ns per KB): from cached filled by DMA %u, filled by DMA and read once %u, "
+       "written by the CPU %u, from the mirror %u | in cached memory: 256 B copies %u, compares of 432 B %u, position check of 24 B vertices %u | "
+       "clock read %u ns\n", q[0] * 1000 / 128, q[1] * 1000 / 128, q[2] * 1000 / 128, q[3] * 1000 / 128, q[4] * 1000 / 128, q[5] * 1000 / 125,
+       q[6] * 1000 / 128, q[7] * 1000 / 65);
 #endif
 }
 #ifdef NP_DEV
@@ -487,6 +514,43 @@ static uint32_t rgVLater(uint32_t s, uint32_t n, uint32_t gpu, uint32_t chk) {
   f->na = o + n;
   return o + 1;
 }
+#ifdef NP_DEV
+// Record draw split (not with cap_split): on 1 draw in 64, not one the record times itself, regDraw and what it calls read the clock
+// between their pieces. VQ(k, b) adds to piece k the time since the last read (vq_c) and b bytes; vqEnd closes the draw with the
+// rest and one more read right after (VQ_CLK: what the clock adds to every piece, removed in the log). vq_s: us, times and bytes
+// of each piece in this second; vq_r: those of the last second, for the log thread
+enum { VQ_ST, VQ_IX, VQ_GPU, VQ_BUSY, VQ_SRC, VQ_FROM, VQ_MIR, VQ_BAD, VQ_TXS, VQ_TXM, VQ_LATER, VQ_COPY, VQ_MTX, VQ_BONE, VQ_LIGHT, VQ_REST, VQ_CLK, VQ_N };
+static uint32_t vq, vq_c, vq_s[3][VQ_N], vq_r[3][VQ_N];
+static void vqMark(int k, uint32_t b) { uint32_t t = now(); vq_s[0][k] += t - vq_c; vq_s[1][k]++; vq_s[2][k] += b; vq_c = t; }
+static void vqEnd(void) { vqMark(VQ_REST, 0); vqMark(VQ_CLK, 0); vq = 0; }
+// (log thread) The "record draw split" line: each piece in ns per timed draw without the clock / % of the timed draws it ran in,
+// bytes per timed draw, and the states and the index to the blocks in us per frame of fr frames (x64, as the record line)
+static void vqLog(uint32_t fr) {
+  static const char *nm[VQ_CLK] = { "state", "index", "gpu_check", "gpu_busy", "source", "from", "mirror", "check", "tx_copy", "tx_mirror",
+                                    "ram", "copy", "matrix", "bones", "lights", "rest" };
+  uint32_t *t = vq_r[0], *n = vq_r[1], *b = vq_r[2], s = n[VQ_CLK];
+  if (!s) return;
+  uint32_t c = t[VQ_CLK] * 1000 / s;
+  char l[480]; int k = 0, v = 0, sum = 0;
+  for (int i = 0; i < VQ_CLK; i++) {
+    v = (int)(((int64_t)t[i] * 1000 - (int64_t)n[i] * c) / s); sum += i ? v : 0;
+    k += sceClibSnprintf(l + k, sizeof l - k, " %s=%d/%u", nm[i], v, n[i] * 100 / s);
+  }
+  v = (int)(((int64_t)t[VQ_ST] * 1000 - (int64_t)n[VQ_ST] * c) / s);
+  clog("  record draw split (1 draw in 64, ns per draw without the clock / %% of draws): timed=%u clock=%u ns |%s | bytes per draw: tx_copy %u, "
+       "tx_mirror %u, ram %u, copy %u | us per frame (x64): states %d, index to blocks %d\n", s, c, l, b[VQ_TXS] / s, b[VQ_TXM] / s,
+       b[VQ_LATER] / s, b[VQ_COPY] / s, (int)((int64_t)v * s * 64 / 1000 / fr), (int)((int64_t)sum * s * 64 / 1000 / fr));
+}
+#endif
+#if defined(NP_DEV) && !defined(NP_BENCH)  // (tools/perf judges the capturer, not this measurement)
+#define VQ(k, b) do { if (vq) vqMark(k, b); } while (0)
+#define VQS(f) do { vq = !cs_on && ((f)->draws_seen & 63) == 32; if (vq) vq_c = now(); } while (0)
+#define VQE() do { if (vq) vqEnd(); } while (0)
+#else
+#define VQ(k, b) do {} while (0)
+#define VQS(f) do {} while (0)
+#define VQE() do {} while (0)
+#endif
 // 3D vertices in VRAM for the GPU, of vertex size vz: copied at once from their mirror copy to the end of tx, where rgVLater puts those
 // in RAM; with chk (float positions), through rg_ord, checked by rgVBad. 0 if they have no copy in the mirror or do not fit with rg_txr
 // left for the textures (the caller copies them as usual)
@@ -494,12 +558,16 @@ static uint32_t rgSrc(uint32_t a, uint32_t n);
 static uint32_t rgVNow(uint32_t a, uint32_t n, uint32_t vz, uint32_t chk) {
   RFrame *f = rf[rg_w];
   uint32_t s = rgSrc(a, n), m = n;
+  VQ(VQ_SRC, 0);
   while (m & 15) m += vz;
   if (!s || (f->ntx > rg_txr ? f->ntx : rg_txr) + f->nvx + m > TX_N) return 0;
   f->nvx += m;
   const uint8_t *p = rgFrom(s, n);
-  if (chk && n <= OR_N) { if (p == (const uint8_t *)PSP(s)) { sceClibMemcpy(rg_ord, p, n); p = rg_ord; } if (rgVBad(p, n, vz)) { ga.v_bad++; RG_READ(NR_VERT, a, n); } }
+  VQ(VQ_FROM, 0);
+  if (chk && n <= OR_N) { if (p == (const uint8_t *)PSP(s)) { sceClibMemcpy(rg_ord, p, n); p = rg_ord; VQ(VQ_MIR, n); } if (rgVBad(p, n, vz)) { ga.v_bad++; RG_READ(NR_VERT, a, n); } }
+  VQ(VQ_BAD, 0);
   sceClibMemcpy(f->tx + TX_N - f->nvx, p, n);
+  VQ(p == rg_ord || p == (const uint8_t *)PSP(s) ? VQ_TXM : VQ_TXS, n);
   return VX | (TX_N - f->nvx);
 }
 int sceGxmMapMemory(void *base, SceSize size, int attr);
@@ -751,9 +819,12 @@ static uint32_t rgVGpu(uint32_t type, uint32_t vt, uint32_t idx) {
   if (!(DEV(!cpu_verts &&) (GV3(vt) && !lit ? !(reg[0xC0] & 3) : GVL(vt) ? (reg[0x17] & 1 ? on && !(on & (on - 1)) && !(lt >> 8 & 3) && (lt & 3) != 2 && !(reg[0xC0] & 3) : (reg[0xC0] & 0x303) == 0x301) :
         GVS(vt) && (!lit || rgDir(on)) && (!(reg[0xC0] & 3) || ((reg[0xC0] & 3) == 2 && !(reg[0x5F + (reg[0xC1] & 3)] & 0x300) && !(reg[0x5F + (reg[0xC1] >> 8 & 3)] & 0x300)))) && !idx && type >= 3 && type <= 5 && !(reg[0xD3] & 1) && (reg[0x50] & 1) &&
         ((!(reg[0xD4] & 0xFFFFF) && (reg[0xD5] & 0x3FF) + 1 >= (w < 480 ? w : 480) && (w < 480 || (reg[0xD5] >> 10 & 0x3FF) >= 271)) ||
-         (!((reg[0xD4] ^ rg_box[0]) & 0xFFFFF) && !((reg[0xD5] ^ rg_box[1]) & 0xFFFFF) && !((reg[0x9C] ^ rg_box[2]) & 0xFFFFF0))))) return 0;
+         (!((reg[0xD4] ^ rg_box[0]) & 0xFFFFF) && !((reg[0xD5] ^ rg_box[1]) & 0xFFFFF) && !((reg[0x9C] ^ rg_box[2]) & 0xFFFFF0))))) { VQ(VQ_GPU, 0); return 0; }
+  VQ(VQ_GPU, 0);
   ga.v_busy += rgBusy(rg_w);
-  return rgBusy(rg_w) ? 0 : vs_sz;
+  uint32_t r = rgBusy(rg_w) ? 0 : vs_sz;
+  VQ(VQ_BUSY, 0);
+  return r;
 }
 // (capturer, on each draw, before vaddr/iaddr advance) Adds the draw to the frame: the state (RS) if changed, the
 // indices and vertices up to the highest index, and the texture (only the rows the vertices use). If something does
@@ -766,6 +837,7 @@ static void regDraw(uint32_t n, uint32_t type, uint32_t vt, uint32_t idx) {
   if (f->nd >= RD_N) { DEV(if (p_on) pAdd(P_X_DRAWS, 0);) f->flags |= R_LIMIT; return; }
   // (reading the clock costs: the times are sampled, 1 draw in 64)
   uint32_t tm = !(f->draws_seen & 63) DEV(|| cs_on), t0 = tm ? now() : 0, t1, v[NRS];
+  VQS(f);
   if (rg_chg || !f->ne) {
     rg_chg = 0;
     for (int i = 0; i < NRS; i++) v[i] = reg[RS[i]];
@@ -776,6 +848,7 @@ static void regDraw(uint32_t n, uint32_t type, uint32_t vt, uint32_t idx) {
   }
   t1 = tm ? now() : 0; if (tm) ga.us_e += (t1 - t0) * 64;
   DEV(if (cs_on) cs_t[CS_RST] += t1 - t0;)
+  VQ(VQ_ST, 0);
   if (reg[0xD3] & 1) { rg_box[0] = reg[0xD4]; rg_box[1] = reg[0xD5]; rg_box[2] = reg[0x9C]; }
   RDraw *d = &f->d[f->nd];
   d->st = f->ne - 1; d->prim = type; d->n = n; d->vt = vt; d->ioff = 0; d->clut = rg_clut; d->clen = rg_clut ? rg_clut_b : 0;
@@ -789,12 +862,14 @@ static void regDraw(uint32_t n, uint32_t type, uint32_t vt, uint32_t idx) {
     for (uint32_t i = 0; i < n; i++) { uint32_t x = ib == 1 ? p[i] : ib == 2 ? ((const uint16_t *)p)[i] : ((const uint32_t *)p)[i]; if (x > mx) mx = x; }
     nv = mx + 1;
   }
+  VQ(VQ_IX, idx ? n << (idx - 1) : 0);
   DEV(CSA(CS_RIX, tc); tc = CST();)
   d->vlen = nv * vs;
   // (3D: the texture rows do not come from the vertices, so they can wait)
   int later = !(vt >> 23 & 1) && rg_ordc && !isVram(vaddr) && ramEnd(vaddr) >= vaddr + d->vlen && d->vlen <= OR_N;
   uint32_t fp = (vt >> 7 & 3) == 3, vz = !later && !(vt >> 23 & 1) && isVram(vaddr) ? rgVGpu(type, vt, idx) : 0, vn = vz ? rgVNow(vaddr, d->vlen, vz, fp) : 0;
   if (!(d->voff = vn ? vn : later ? rgVLater(vaddr, d->vlen, rgVGpu(type, vt, idx), fp) : rgCopy(vaddr, d->vlen))) return;
+  DEV(if (!vn) VQ(later ? VQ_LATER : VQ_COPY, d->vlen);)
   DEV(CSA(CS_RVT, tc); tc = CST();)
   d->woff = d->moff = d->loff = 0;
   static uint32_t lw, lwb, lm, ll;  // last matrix and light blocks of this frame (lwb: world and the 8 bones, for vertices with weights)
@@ -807,19 +882,23 @@ static void regDraw(uint32_t n, uint32_t type, uint32_t vt, uint32_t idx) {
       rg_mchg = 0;
       sceClibMemcpy(vm, mtx[1], 48); sceClibMemcpy(vm + 12, mtx[2], 64); sceClibMemcpy(vm + 28, mtx[3], 48);
       if (!rgBlock(mtx[0], 12, &lw) || !rgBlock(vm, 40, &lm)) return;
+      VQ(VQ_MTX, 0);
     }
     if ((vt >> 9 & 3) && !lwb) {
       uint32_t wb[108];
       sceClibMemcpy(wb, mtx[0], 48); sceClibMemcpy(wb + 12, mtx[4], 384);
       if (!rgBlock(wb, 108, &lwb)) return;
+      VQ(VQ_BONE, 0);
     }
     d->woff = vt >> 9 & 3 ? lwb : lw; d->moff = lm;
     if ((reg[0x17] & 1) || (reg[0xC0] & 3) == 2) {
       if ((rg_lchg || !ll) && !rgBlock(reg + 0x53, 72, &ll)) return;
       rg_lchg = 0; d->loff = ll;
+      VQ(VQ_LIGHT, 0);
     }
   }
   d->toff = 0;
+  VQE();
   uint32_t t2 = tm ? now() : 0; if (tm) ga.us_v += (t2 - t1) * 64;
   DEV(CSA(CS_RBK, tc);)
   if ((reg[0x1E] & 1) && !(reg[0xD3] & 1)) {  // the texture, after the vertices (they give the rows it uses)
