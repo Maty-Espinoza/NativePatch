@@ -9,7 +9,7 @@ conversation follows it by hand. The rules of `good-practices.md` and `CLAUDE.md
 `sh tools/perf/bench.sh` builds `tools/perf/capture_bench.c` (the real `capture.c` with the Vita functions replaced, on ARM
 under qemu) and runs synthetic scenes shaped like the games measured on the Vita: `rr_crowd` (3400 3D strip draws,
 23.8k vertices in RAM, VRAM textures), `rr_race` (900 of the same), `sprites2d` (300 rects with swizzled RAM textures and
-palettes, texture cache), `sublists` (sublist memory and the readers, no record), `gow_combat` (a God of War combat frame: ~7,600 3D strips that read the destination of the transfer before them piece by piece, RAM textures changing every 47 draws, 30 of them swizzled under 8 KB), and `gow_menu_xfer` / `gow_play_xfer`
+palettes, texture cache), `sublists` (sublist memory and the readers, no record), `gow_gpu` (the same combat frame on God of War's GPU path: float positions, lights, bones on ~7 % of draws, through `rgVGpu` and `rgVNow`), `gow_combat` (a God of War combat frame: ~7,600 3D strips that read the destination of the transfer before them piece by piece, RAM textures changing every 47 draws, 30 of them swizzled under 8 KB), and `gow_menu_xfer` / `gow_play_xfer`
 (God of War's RAM to VRAM transfers: the 59 logged transfers of a menu frame, and 97 transfers of 1.35 MB per play frame
 whose shapes were not logged, each followed by a draw reading its vertices from the destination). Each scene gives, per frame:
 - **`mem_us`**: an estimate of Vita microseconds from counters that do not depend on the PC (256-byte reads of PSP RAM,
@@ -22,8 +22,8 @@ whose shapes were not logged, each followed by a draw reading its vertices from 
   gives the same number on any PC, so 1 % counts. **This is the judge for CPU work**, and `instr.sh --top` shows where it goes,
   function by function; `callgrind_annotate --auto=yes` on `build/perf/instr/cg.*`, line by line. The `tr_*` scenes are the
   translator on real frames (`tools/perf/translate_bench.c`, `tools/perf/data/`: dumps of the Vita).
-- **`tools/perf/tr_check.sh <commit>`**: same draws, state and vertices as a commit, on the real frames, in the x86 and the ARM
-  builds. Run it on every change to the translator: a faster translator must draw the same. `sh tools/perf/arm_count.sh [--top]`:
+- **`tools/perf/tr_check.sh <commit>`**: same draws, state, vertices, textures, palettes and GPU-path uniforms as a commit, on all the
+  real frames, comparing the ARM build with the commit's ARM build and the x86 with the x86. Run it on every change to the translator: a faster translator must draw the same. `sh tools/perf/arm_count.sh [--top]`:
   real ARM instructions per frame of the translator under qemu (slow, ~1 min). **`tr_*` in `ir_k/f` does not see NEON** (on x86
   each NEON operation is C): for NEON work the judge is `arm_count.sh`.
 - **`tools/perf/tr_gv.sh`**: on the real frames, the GPU path (`nd_v3`, `TR_GV=1` marks the draws as the record does) must send the same triangles to the surface as the CPU path. The boxed stretch (`trBoxed`) is compared too. Other intermediate images are left out: the CPU clips there and the GPU does it itself. `TR_GV=1 sh tools/perf/arm_count.sh` counts that path; it does not see the cost of reading uncached memory.
@@ -33,7 +33,8 @@ whose shapes were not logged, each followed by a draw reading its vertices from 
 - `complete`: frames the record published complete. It must not drop.
 What it cannot see: the real cost of uncached reads beyond the model (reads through a plain pointer, as the old sort of small swizzled textures did, are not counted at all: moving them into a copy shows up as more `ucp_kb`, although on the Vita the copy is ~4 times cheaper), the readers running on other cores, the GE, the
 mirror timing, the translator and the GPU. A KEEP here is a candidate for the Vita, not a result.
-A change to `xferMirror` must also pass `tools/perf/xfer_diff.c` (build line at its top; 5000 cases with two seeds): random
+A change to the capturer or the record must leave the record identical: `sh tools/perf/rec_check.sh <commit>` compares every scene's
+record byte by byte with a commit. A change to `xferMirror` must also pass `tools/perf/xfer_diff.c` (build line at its top; 5000 cases with two seeds): random
 transfers compared byte by byte with the original word-by-word copy.
 When and from where the capturer reads (the gate, the sync, a photo) is judged by `tools/perf/sync_lab.sh` instead: correctness
 frame by frame against a held capture, and a timing model per design.

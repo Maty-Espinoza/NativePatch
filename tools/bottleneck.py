@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # Says what limits the HD frames of a run, second by second, from the "bottleneck:" lines of nativedraw.log (development
-# builds, `gpu_timer` on for the GPU figures) and the "sec:" and "record:" lines of nativedraw_capture.log.
+# builds, `gpu_timer` on for the GPU figures) and the "sec:" and "record:" lines of nativedraw_capture.log; with "gxm split" lines,
+# also what each kind of GXM call of the translator costs over those seconds.
 # The drawing thread's second is split in: translator work, GPU (waits plus frames skipped because it was behind), no new
 # frame (the capturer delivered nothing new) and the rest (Adrenaline and waiting for the next frame).
 # Usage: bottleneck.py <run folder or log> [from_s to_s]   (only that part of the run, in log seconds)
@@ -76,6 +77,25 @@ def show_vert(s):
         v = (o['fast'] + o['slow']) / n; a = (o['again_fast'] + o['again_slow']) / n
         print(f'    trVerts {v:.0f} us, repeated at once {a:.0f} us; the clock adds ~0.5 us per part per draw')
 
+GX = re.compile(r'\s*(\d+) gxm split \(.*?\): frames=(\d+) timed=(\d+) clock=(-?\d+) ns \| (.*) \| us per HD frame')
+
+def gxm_split(path, t0, t1):
+    # "gxm split" lines: per kind, ns per call weighted by its calls, calls and the longest call (us); HD frames and draws timed
+    o, fr, tm = {}, 0, 0
+    for line in open(path, errors='replace'):
+        m = GX.match(line)
+        if not m or not t0 <= int(m[1]) / 1000 <= t1: continue
+        f = int(m[2]); fr += f; tm += int(m[3])
+        for k, ns, c, mx in re.findall(r'(\w+)=(-?\d+)/(\d+)/(\d+)', m[5]):
+            x = o.setdefault(k, [0, 0, 0]); x[0] += int(ns) * int(c) * f; x[1] += int(c) * f; x[2] = max(x[2], int(mx))
+    return fr, tm, o
+
+def show_gxm(fr, tm, o):
+    ms = lambda x: x[0] / fr / 1e6
+    print(f'\ngxm split ({fr} HD frames, {tm} draws timed): ns per call x calls per HD frame = ms per HD frame (longest call, us)')
+    print('  ' + ', '.join(f'{k} {x[0] / max(x[1], 1):.0f} x {x[1] / fr:.0f} = {ms(x):.2f} ({x[2]})' for k, x in o.items()))
+    print(f'  GXM calls {sum(ms(x) for k, x in o.items() if not k.startswith("t3")):.1f} ms per HD frame; ' + ', '.join(f'{k} {ms(x):.1f}' for k, x in o.items() if k.startswith('t3')))
+
 def thread_split(path):
     # "thread" lines of the capture log: per thread, turns on each core and the average of the rest per second
     out = {}
@@ -129,6 +149,7 @@ def main():
         print(f'  total {tot / len(px):.0f} ({tot / len(px) / 522:.1f} screens); on the middle program: {sum(x["s_mid"] + x["i_mid"] for x in px) * 100 / max(tot, 1):.0f} %; '
               f'image underneath: {sum(x["s_base"] for x in px) * 100 / max(tot, 1):.0f} %')
     if why: print('  why not the fast program: ' + ', '.join(f'{k} {sum(x[k] for x in why) / len(why):.0f}' for k in WN))
+    if (g := gxm_split(p, t0, t1))[0]: show_gxm(*g)
     if s := vert_split(p, t0, t1):
         print('\nvertex split, us per frame:'); show_vert(s)
     cp = os.path.join(d, 'nativedraw_capture.log')

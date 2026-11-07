@@ -258,6 +258,32 @@ corrida tiene 9 % más dibujos por frame, 7.883 contra 7.246, así que lo justo 
   pieces)`: desde memoria con caché llenada por DMA 6,3 ns por byte, leída una vez antes 3,7, escrita por la CPU 3,6, desde el espejo
   13,5; en caché copias de 256 bytes 2,0, revisión de posiciones 2,2; lectura del reloj 584 ns.
 
+**Iteración larga de las tres etapas (rama `it-merge`, sobre la 0.0.28.4; solo en el PC, sin probar en la Vita).** Tres agentes, uno por
+etapa, cada paso revisado en el PC:
+- Capturador (`it-cap`, registro igual byte a byte con `tools/perf/rec_check.sh`): escena nueva del banco `gow_gpu` (el camino de GPU de
+  God of War); `rgBusy` ya no se lee en cada dibujo (un registro que se escribe solo puede pasar de ocupado a libre; `record busy` salió
+  de la línea `3D vertices`); marca de luces solo cuando cambian 0x53-0x9A; marca de estado solo cuando cambia un registro de RS; `rgSrc`
+  recuerda el último tramo legible; `rgVBad` sin saltos; la respuesta de `rgVGpu` se guarda hasta que cambian sus registros; un bit por
+  matriz; prefetch de los vértices del dibujo siguiente (lo juzga la Vita). Arreglado: el dibujo después de una transferencia dibujada en
+  el frame tomaba el estado de la transferencia. Banco `gow_gpu` -13 % de instrucciones; estimado en la Vita ~15 ms por frame de combate
+  (con los costos de `record draw split`), +0-4 con el prefetch.
+- Traductor (`it-tr`): `tr_check.sh` compara ARM con ARM y x86 con x86, en todos los frames, y también el camino de GPU; los stubs del
+  banco modelan el descriptor de textura, la basura de los búferes de uniforms nuevos y las paletas. La textura va a GXM solo cuando
+  cambia (469 -> 96 por frame de combate); índices unidos escritos con NEON; paletas 8888 enteras copiadas de una vez; `t3Set` rehace sus
+  productos de matrices solo cuando cambian las palabras; huesos ordenados con NEON. Banco: `gow_combat` est 65,8 -> 55,7 ms (-15 %).
+  Línea nueva `gxm split` (costo de cada tipo de llamada GXM en la Vita), sumada por `tools/bottleneck.py`. No conviene: saltarse bloques
+  `nd_v5` repetidos (1 de 393 se repite); mandar solo las filas que lee una variante necesita otra disposición de `nd_v5`.
+- GPU (`it-gpu`): la línea `bottleneck pixels` no cuenta los dibujos del camino de GPU, por eso la superficie parecía de 2,6 M píxeles a
+  ~28 ns cada uno; un rasterizador en el PC sobre los frames del banco da 8,45 M enviados y 6,54 M sombreados en combate (~8 ns cada uno,
+  como Ridge Racer): la superficie la limitan los píxeles, el trabajo de vértices es chico (~3,4 M instrucciones contra 60-100 M de
+  fragmentos). `nd_f2` (`nd_fd` sin niebla, 9 instrucciones en vez de 16) para color doblado sin niebla (4,35 M píxeles sombreados en
+  combate), `nd_fr` (7 en vez de las 99 de `nd_ft`) para la función de textura replace; las escenas de la superficie cargan y guardan
+  profundidad y stencil solo si una posterior los lee (God of War: guardar / cargar / nada en vez de guardar / cargar+guardar /
+  cargar+guardar). `fx_log` da los píxeles 3D de la superficie por programa. Estimado: 9-22 ms por frame HD. Sin hacer: dibujar solo las
+  960 columnas visibles (no es exacto en el borde derecho para dibujos que leen la superficie), imágenes intermedias a tamaño PSP.
+Corrida pendiente en la Vita: combate de God of War con `hold_game`, `gate_sync`, `hd_mark`, `gpu_timer` y `fx_log`; después la misma con
+`cpu_verts` para separar el tiempo de vértices y de fragmentos de la GPU.
+
 ## D. Leer la memoria del PSP: foto en el sync (propuesta, 2026-11-06)
 **Por qué.** Tres hechos, todos de los logs:
 - Leer la RAM del PSP desde la Vita es la parte lenta: ~2 us por línea de 64 bytes sin caché. KBENCH, 1 MB: 34,6 ms sin

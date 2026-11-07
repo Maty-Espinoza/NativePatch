@@ -1,4 +1,5 @@
-// Vita and GXM functions the translator bench needs only to link: they do nothing. Their list comes from the linker.
+// Vita and GXM functions the translator bench needs only to link: they do nothing. Their list comes from the linker. The weak ones
+// are defined again by translate_bench.c, which fills the texture descriptor (an older bench, built by ab.sh, uses these).
 int regMapGpu(void) { return 0; }
 int regRelease(void) { return 0; }
 int regTake(void) { return 0; }
@@ -9,8 +10,6 @@ int sceGxmColorSurfaceInit(void) { return 0; }
 int sceGxmCreateRenderTarget(void) { return 0; }
 int sceGxmDepthStencilSurfaceInit(void) { return 0; }
 int sceGxmDepthStencilSurfaceSetBackgroundDepth(void) { return 0; }
-int sceGxmDepthStencilSurfaceSetForceLoadMode(void) { return 0; }
-int sceGxmDepthStencilSurfaceSetForceStoreMode(void) { return 0; }
 int sceGxmEndScene(void) { return 0; }
 int sceGxmFinish(void) { return 0; }
 int sceGxmGetNotificationRegion(void) { return 0; }
@@ -33,12 +32,12 @@ int sceGxmTextureGetHeight(void) { return 0; }
 int sceGxmTextureGetMagFilter(void) { return 0; }
 int sceGxmTextureGetMinFilter(void) { return 0; }
 int sceGxmTextureGetWidth(void) { return 0; }
-int sceGxmTextureSetData(void) { return 0; }
-int sceGxmTextureSetMagFilter(void) { return 0; }
-int sceGxmTextureSetMinFilter(void) { return 0; }
-int sceGxmTextureSetPalette(void) { return 0; }
-int sceGxmTextureSetUAddrMode(void) { return 0; }
-int sceGxmTextureSetVAddrMode(void) { return 0; }
+__attribute__((weak)) int sceGxmTextureSetData(void) { return 0; }
+__attribute__((weak)) int sceGxmTextureSetMagFilter(void) { return 0; }
+__attribute__((weak)) int sceGxmTextureSetMinFilter(void) { return 0; }
+__attribute__((weak)) int sceGxmTextureSetPalette(void) { return 0; }
+__attribute__((weak)) int sceGxmTextureSetUAddrMode(void) { return 0; }
+__attribute__((weak)) int sceGxmTextureSetVAddrMode(void) { return 0; }
 int sceIoClose(void) { return 0; }
 int sceIoMkdir(void) { return 0; }
 int sceIoOpen(void) { return 0; }

@@ -29,7 +29,7 @@ DEV(enum { BP_FAST, BP_MID, BP_TEX, BP_COL, BP_BASE, BP_N };
     enum { BW_FUNC, BW_DOUBLE, BW_ATEST, BW_FOG, BW_BLEND2X, BW_N };  // why a textured draw is not on the fast program
     static volatile uint32_t b_why[BW_N], b_fr;
     // on the sampled frames, 3D on the surface by effect (bit 0 blended, 1 fog, 2 reads an intermediate image): thousands of pixels, draws
-    static volatile uint32_t b_fx[8], b_fxd[8], b_fxn, b_lit[3];)  // b_lit: what nd_v4 lights: pixels, draws, vertices
+    static volatile uint32_t b_fx[8], b_fxd[8], b_fxn, b_lit[3], b_fxp[8];)  // b_lit: what nd_v4 lights: pixels, draws, vertices; b_fxp: pixels by fragProg kind, 7 the GPU path
 static uint32_t t_seen[TN];   // times each reason was seen (the first one is logged in detail)
 typedef struct { float x, y, z, w, u, v, f; uint32_t c; } TV;  // translated vertex (32 bytes, the nd_v format); f: fog (1: none)
 static TV *tv[2];            // translated vertices, one per surface
@@ -45,7 +45,7 @@ static uint32_t t_mark[RD_N / 32 + 1];  // a bit per draw not done
 static uint32_t t_prevd = ~0u, t_prev2 = ~0u;  // images shown by the last frames drawn, the latest first: t_prevd's surface is the one not being drawn
 DEV(static void failNote(RFrame *f, uint32_t i, int r);)  // dump.c
 static uint16_t *tib;        // 0, 1, 2... (indices for the GPU)
-#define TG_N (192 << 10)     // indices of the joined draws of the GPU path, per surface
+#define TG_N (192 << 10)     // indices of the joined draws of the GPU path, per surface (and 24 more: gAdd writes in blocks)
 static uint16_t *tgi[2];
 // Intermediate image: a game draw to another VRAM image (not the shown one) goes to a part of one of our two surfaces
 // (rsf, 1024x544, double size); if later in the same frame a texture is at that address, it is read from there. Each target
@@ -84,20 +84,21 @@ static RT *rtOf(uint32_t fb, uint32_t frame) {
 // Address of texture 0 of state e (GE registers 0xA0 and 0xA8)
 static uint32_t texAddr(const uint32_t *e) { return (RE(e, 0xA0) & 0xFFFFF0) | ((RE(e, 0xA8) << 8) & 0x0F000000); }
 
-// --- programs: one vertex program (nd_v) and five fragment programs: nd_fc without texture, nd_ft with texture, nd_fm, its fast path,
-// nd_fd, in between (modulate with doubling or fog, no alpha test), and nd_fa, nd_fd with a minimum alpha
+// --- programs: one vertex program (nd_v) and seven fragment programs: nd_fc without texture, nd_ft with texture, nd_fm, its fast path,
+// nd_fd, in between (modulate with doubling or fog, no alpha test), nd_f2, nd_fd without fog, nd_fa, nd_fd with a minimum alpha, and
+// nd_fr, nd_ft's replace without fog, doubling or alpha test
 // (swizzled ones arrive already sorted from the record). Each fragment program is built once per blend that appears
 // (fps, up to 64) ---
 static SceGxmVertexProgram *nvp, *gvp[79];  // gvp: the 3D vertices of the record as they are: nd_v3, nd_v4 with 16-bit UV, with float UV, nd_v3 with 16-bit UV; from 4, nd_v5 and its two variants, 25 each (skinProg)
 static uint32_t gsz[25], g5try[3], g5r[3][6];  // nd_v5: vertex size of each program, programs tried (bits) and resources of the attributes (~0u: none) of each variant
 static SceGxmShaderPatcherId i5[3];
-static const SceGxmProgram *pft, *pfc, *pfm, *pfd, *pfa, *pv;
-static SceGxmShaderPatcherId ift, ifc, ifm, ifd, ifa;
-static const SceGxmProgramParameter *g_m, *g_tu, *g_fg, *g_cm, *g_ca, *g4[14], *g4gu, *g5, *n_wvp, *n_tf, *n_tm, *n_td, *n_ta, *n_atx, *n_atc, *n_env, *n_fgx, *n_fgc, *n_fgd, *n_fga;
+static const SceGxmProgram *pft, *pfc, *pfm, *pfd, *pfa, *pf2, *pfr, *pv;
+static SceGxmShaderPatcherId ift, ifc, ifm, ifd, ifa, if2, ifr;
+static const SceGxmProgramParameter *g_m, *g_tu, *g_fg, *g_cm, *g_ca, *g4[14], *g4gu, *g5, *n_wvp, *n_tf, *n_tm, *n_td, *n_ta, *n_atx, *n_atc, *n_env, *n_fgx, *n_fgc, *n_fgd, *n_fga, *n_t2, *n_tr;
 typedef struct { uint64_t key; SceGxmFragmentProgram *p; } FP;
 static FP fps[128];
 static uint32_t nfps;
-// Fragment program for tex (0 no texture, 1 textured, 2 fast textured, 3 nd_fd, 4 nd_fa), key (0 no blending; otherwise the 4 bytes of SceGxmBlendInfo + 1,
+// Fragment program for tex (0 no texture, 1 textured, 2 fast textured, 3 nd_fd, 4 nd_fa, 5 nd_f2, 6 nd_fr), key (0 no blending; otherwise the 4 bytes of SceGxmBlendInfo + 1,
 // see blendKey) and mask (SCE_GXM_COLOR_MASK_*, see colorMask). Finds it in fps or creates it with the patcher; 0 on
 // failure.
 static SceGxmFragmentProgram *fragProg(int tex, uint32_t key, uint32_t mask) {
@@ -109,7 +110,7 @@ static SceGxmFragmentProgram *fragProg(int tex, uint32_t key, uint32_t mask) {
   else { sceClibMemset(&b, 0, sizeof b); b.colorFunc = b.alphaFunc = SCE_GXM_BLEND_FUNC_NONE; }
   b.colorMask = mask;
   SceGxmFragmentProgram *p = 0;
-  int r = sceGxmShaderPatcherCreateFragmentProgram(pat, tex == 4 ? ifa : tex == 3 ? ifd : tex == 2 ? ifm : tex ? ift : ifc, SCE_GXM_OUTPUT_REGISTER_FORMAT_UCHAR4,
+  int r = sceGxmShaderPatcherCreateFragmentProgram(pat, tex == 6 ? ifr : tex == 5 ? if2 : tex == 4 ? ifa : tex == 3 ? ifd : tex == 2 ? ifm : tex ? ift : ifc, SCE_GXM_OUTPUT_REGISTER_FORMAT_UCHAR4,
                                                    SCE_GXM_MULTISAMPLE_NONE, &b, pv, &p);
   if (r < 0) { alog("translator: fragment program %u %08x: %08x\n", tex, key, r); return 0; }
   fps[nfps].key = k; fps[nfps++].p = p;
@@ -143,8 +144,8 @@ static int trInit(void) {
   for (int i = 0; i < 2; i++)
     if (!(tv[i] = gmem(TV_N * sizeof(TV), RD)) || !(tpal[i] = gmem(TP_B, RD))) return -1;
   if (!(tib = gmem(TI_N * 2, RD))) return -1;
-  if (!(tgi[0] = gmem(TG_N * 4, RD))) return -1;
-  tgi[1] = tgi[0] + TG_N;
+  if (!(tgi[0] = gmem((TG_N + 24) * 4, RD))) return -1;
+  tgi[1] = tgi[0] + TG_N + 24;
   for (uint32_t i = 0; i < TI_N; i++) tib[i] = i;
   SceGxmShaderPatcherId iv;
   int r = sceGxmShaderPatcherRegisterProgram(pat, (const SceGxmProgram *)nd_v_gxp, &iv);
@@ -153,6 +154,8 @@ static int trInit(void) {
   if (r >= 0) r = sceGxmShaderPatcherRegisterProgram(pat, (const SceGxmProgram *)nd_fm_gxp, &ifm);
   if (r >= 0) r = sceGxmShaderPatcherRegisterProgram(pat, (const SceGxmProgram *)nd_fd_gxp, &ifd);
   if (r >= 0) r = sceGxmShaderPatcherRegisterProgram(pat, (const SceGxmProgram *)nd_fa_gxp, &ifa);
+  if (r >= 0) r = sceGxmShaderPatcherRegisterProgram(pat, (const SceGxmProgram *)nd_f2_gxp, &if2);
+  if (r >= 0) r = sceGxmShaderPatcherRegisterProgram(pat, (const SceGxmProgram *)nd_fr_gxp, &ifr);
   if (r < 0) { alog("translator: register shaders %08x\n", r); return r; }
   pv = sceGxmShaderPatcherGetProgramFromId(iv); pft = sceGxmShaderPatcherGetProgramFromId(ift); pfc = sceGxmShaderPatcherGetProgramFromId(ifc); pfm = sceGxmShaderPatcherGetProgramFromId(ifm);
   const SceGxmProgramParameter *pa = sceGxmProgramFindParameterByName(pv, "aPosition"), *pt = sceGxmProgramFindParameterByName(pv, "aTexcoord"),
@@ -160,10 +163,12 @@ static int trInit(void) {
   n_wvp = sceGxmProgramFindParameterByName(pv, "wvp");
   pfd = sceGxmShaderPatcherGetProgramFromId(ifd); n_td = sceGxmProgramFindParameterByName(pfd, "tf"); n_fgd = sceGxmProgramFindParameterByName(pfd, "fog");
   pfa = sceGxmShaderPatcherGetProgramFromId(ifa); n_ta = sceGxmProgramFindParameterByName(pfa, "tf"); n_fga = sceGxmProgramFindParameterByName(pfa, "fog");
+  pf2 = sceGxmShaderPatcherGetProgramFromId(if2); n_t2 = sceGxmProgramFindParameterByName(pf2, "tf");
+  pfr = sceGxmShaderPatcherGetProgramFromId(ifr); n_tr = sceGxmProgramFindParameterByName(pfr, "tf");
   n_tf = sceGxmProgramFindParameterByName(pft, "tf"); n_atx = sceGxmProgramFindParameterByName(pft, "at");
   n_atc = sceGxmProgramFindParameterByName(pfc, "at"); n_tm = sceGxmProgramFindParameterByName(pfm, "tf"); n_env = sceGxmProgramFindParameterByName(pft, "env");
   n_fgx = sceGxmProgramFindParameterByName(pft, "fog"); n_fgc = sceGxmProgramFindParameterByName(pfc, "fog");
-  if (!pa || !pt || !pc || !n_wvp || !n_tf || !n_atx || !n_atc || !n_env || !n_fgx || !n_fgc || !n_tm || !n_td || !n_fgd || !n_ta || !n_fga) { alog("translator: shader parameters not found\n"); return -2; }
+  if (!pa || !pt || !pc || !n_wvp || !n_tf || !n_atx || !n_atc || !n_env || !n_fgx || !n_fgc || !n_tm || !n_td || !n_fgd || !n_ta || !n_fga || !n_t2 || !n_tr) { alog("translator: shader parameters not found\n"); return -2; }
   SceGxmVertexAttribute at[3] = { { 0, 0, SCE_GXM_ATTRIBUTE_FORMAT_F32, 4, sceGxmProgramParameterGetResourceIndex(pa) },
                                   { 0, 16, SCE_GXM_ATTRIBUTE_FORMAT_F32, 3, sceGxmProgramParameterGetResourceIndex(pt) },
                                   { 0, 28, SCE_GXM_ATTRIBUTE_FORMAT_U8N, 4, sceGxmProgramParameterGetResourceIndex(pc) } };
@@ -445,6 +450,7 @@ typedef struct {
   uint32_t ei[4], ai[4], lc;                            // lit with no lights: emissive (0-255) and scene ambient (0-256) per channel, color
   float b[96];                                          // the 8 bones, 12 values each (vertices with weights)
   uint32_t kw, km, kl; const uint32_t *ke;              // what t3Set last read
+  uint32_t rw[12], rv[40];                              // the words of the world matrix and of view, projection and texture matrix
   LT l[4];
 } T3;
 static T3 t3;
@@ -464,21 +470,27 @@ static uint32_t t3Flat(const T3 *t, uint32_t m) {
   return r;
 }
 // Fills t for draw d of state e, reading only what changed since the last draw (kw, km, kl, ke; trFrame clears ke):
-// matrices (a 4x3 block is 3 words per basis vector and translation) and their product, registers, and with the block
-// of 0x53-0x9A materials and lights.
+// matrices (a 4x3 block is 3 words per basis vector and translation) and their product, only when their words are not those
+// of the last ones read (rw, rv), registers, and with the block of 0x53-0x9A materials and lights.
 static void t3Set(RFrame *f, RDraw *d, const uint32_t *e, T3 *t) {
   if (d->woff == t->kw && d->moff == t->km && d->loff == t->kl && e == t->ke) return;
   const uint32_t *w = (const uint32_t *)(f->a + d->woff - 1), *v = (const uint32_t *)(f->a + d->moff - 1);
   float vm[12], p[16];
-  for (int i = 0; i < 12; i++) { t->w[i] = f24(w[i]); vm[i] = f24(v[i]); t->tm[i] = f24(v[28 + i]); }
-  for (int i = 0; i < 16; i++) p[i] = f24(v[12 + i]);
-  for (int c = 0; c < 4; c++) {
-    const float *a = t->w + c * 3;
-    for (int r = 0; r < 3; r++) t->wv[c * 3 + r] = a[0] * vm[r] + a[1] * vm[3 + r] + a[2] * vm[6 + r] + (c == 3 ? vm[9 + r] : 0);
-    const float *b = t->wv + c * 3;
-    for (int r = 0; r < 4; r++) t->m[c * 4 + r] = b[0] * p[r] + b[1] * p[4 + r] + b[2] * p[8 + r] + (c == 3 ? p[12 + r] : 0);
+  uint32_t dw = 0;
+  for (int i = 0; i < 12; i++) dw |= w[i] ^ t->rw[i];
+  for (int i = 0; i < 40; i++) dw |= v[i] ^ t->rv[i];
+  if (dw) {
+    sceClibMemcpy(t->rw, w, sizeof t->rw); sceClibMemcpy(t->rv, v, sizeof t->rv);
+    for (int i = 0; i < 12; i++) { t->w[i] = f24(w[i]); vm[i] = f24(v[i]); t->tm[i] = f24(v[28 + i]); }
+    for (int i = 0; i < 16; i++) p[i] = f24(v[12 + i]);
+    for (int c = 0; c < 4; c++) {
+      const float *a = t->w + c * 3;
+      for (int r = 0; r < 3; r++) t->wv[c * 3 + r] = a[0] * vm[r] + a[1] * vm[3 + r] + a[2] * vm[6 + r] + (c == 3 ? vm[9 + r] : 0);
+      const float *b = t->wv + c * 3;
+      for (int r = 0; r < 4; r++) t->m[c * 4 + r] = b[0] * p[r] + b[1] * p[4 + r] + b[2] * p[8 + r] + (c == 3 ? p[12 + r] : 0);
+    }
   }
-  if (d->vt >> 9 & 3) for (int i = 0; i < 96; i++) t->b[i] = f24(w[12 + i]);  // (behind the world matrix in the same block)
+  if (d->vt >> 9 & 3) for (int i = 0; i < 96; i += 4) vst1q_f32(t->b + i, vreinterpretq_f32_u32(vshlq_n_u32(vld1q_u32(w + 12 + i), 8)));  // (behind the world matrix in the same block; f24, 4 at a time)
   t->kw = d->woff; t->km = d->moff;
   int ne = e != t->ke, nl = ne || d->loff != t->kl;
   t->ke = e; t->kl = d->loff;
@@ -524,6 +536,62 @@ static int t3Dl(const T3 *t) {
   for (int i = 0; i < 4; i++) if (t->l[i].on && (t->l[i].type > 1 || t->l[i].comp == 2)) return 0;
   return 1;
 }
+#ifdef NP_DEV
+// GXM calls of the translator by kind, and two CPU pieces around them (t3Set, t3Uni), for the "gxm split" line: each is counted
+// always (g_cn) and timed on 1 draw in 64 (gm). The time of a piece leaves out the calls timed inside it; every timed interval
+// carries one clock read per call timed in it plus one (g_rd), which gxLog takes off with the cost of a read measured on the
+// same draws (GK_CLK)
+enum { GK_VRES, GK_FRES, GK_U4, GK_U16, GK_UBIG, GK_VPROG, GK_FPROG, GK_TEX, GK_STREAM, GK_DRAW, GK_ZS, GK_T3SET, GK_T3UNI, GK_CLK, GK_N };
+static const char *gk_names[GK_N] = { "vres", "fres", "u4", "u16", "ubig", "vprog", "fprog", "tex", "stream", "draw", "zs", "t3set", "t3uni" };
+static volatile uint32_t g_cn[GK_N], g_tn[GK_N], g_us[GK_N], g_rd[GK_N], g_mx[GK_N], g_fr;
+static uint32_t gm, g_dn, g_in, g_inn;  // gm: the draw is timed; g_in, g_inn: us and number of the calls timed so far
+typedef struct { uint32_t t, in, inn; } GM;
+static inline GM gA(void) { GM m = { now(), g_in, g_inn }; return m; }
+static inline void gB(int k, GM m) {
+  uint32_t d = now() - m.t - (g_in - m.in);
+  g_us[k] += d; g_rd[k] += g_inn - m.inn + 1; g_tn[k]++; g_mx[k] = d > g_mx[k] ? d : g_mx[k];
+  if (k < GK_T3SET) g_in += d, g_inn++;
+}
+// At each draw not joined by the short path: times 1 in 64, and on those the cost of one clock read
+static inline void gTick(void) {
+  if ((gm = !(++g_dn & 63))) { uint32_t t = now(); g_us[GK_CLK] += now() - t; g_tn[GK_CLK]++; }
+}
+// Every second (bnLog): per kind, ns per call without the clock, calls per HD frame and the longest call (us); then the ms per
+// HD frame of the GXM calls and of each piece
+static void gxLog(void) {
+  static uint32_t c0[GK_N], t0[GK_N], u0[GK_N], r0[GK_N], f0;
+  uint32_t c[GK_N], t[GK_N], u[GK_N], r[GK_N], fr = g_fr - f0, mx[GK_N];
+  f0 += fr;
+  for (int k = 0; k < GK_N; k++) {
+    c[k] = g_cn[k] - c0[k]; c0[k] += c[k]; t[k] = g_tn[k] - t0[k]; t0[k] += t[k]; u[k] = g_us[k] - u0[k]; u0[k] += u[k];
+    r[k] = g_rd[k] - r0[k]; r0[k] += r[k]; mx[k] = g_mx[k]; g_mx[k] = 0;
+  }
+  if (!fr || !t[GK_CLK]) return;
+  int64_t clk = (int64_t)u[GK_CLK] * 1000 / t[GK_CLK], gx = 0, pc[2] = { 0, 0 };
+  char b[600]; int n = 0;
+  for (int k = 0; k < GK_CLK; k++) {
+    int64_t ns = t[k] ? ((int64_t)u[k] * 1000 - (int64_t)r[k] * clk) / t[k] : 0, us = ns * c[k] / fr / 1000;
+    if (k < GK_T3SET) gx += us; else pc[k - GK_T3SET] = us;
+    n += sceClibSnprintf(b + n, sizeof b - n, "%s%s=%d/%u/%u", !k ? "" : k == GK_T3SET ? " | " : " ", gk_names[k], (int)ns, c[k] / fr, mx[k]);
+  }
+  alog("gxm split (1 draw in 64, ns per call without the clock/calls per HD frame/longest us): frames=%u timed=%u clock=%d ns | %s | us per HD frame: "
+       "gxm=%d t3set=%d t3uni=%d\n", fr, t[GK_CLK], (int)clk, b, (int)gx, (int)pc[0], (int)pc[1]);
+}
+#define GX(k, x) do { if (gm) { GM m_ = gA(); x; gB(k, m_); } else x; g_cn[k]++; } while (0)
+#define sceGxmReserveVertexDefaultUniformBuffer(...) GX(GK_VRES, sceGxmReserveVertexDefaultUniformBuffer(__VA_ARGS__))
+#define sceGxmReserveFragmentDefaultUniformBuffer(...) GX(GK_FRES, sceGxmReserveFragmentDefaultUniformBuffer(__VA_ARGS__))
+#define sceGxmSetUniformDataF(u, p, o, n, d) GX((n) <= 4 ? GK_U4 : (n) <= 16 ? GK_U16 : GK_UBIG, sceGxmSetUniformDataF(u, p, o, n, d))
+#define sceGxmSetVertexProgram(...) GX(GK_VPROG, sceGxmSetVertexProgram(__VA_ARGS__))
+#define sceGxmSetFragmentProgram(...) GX(GK_FPROG, sceGxmSetFragmentProgram(__VA_ARGS__))
+#define sceGxmSetFragmentTexture(...) GX(GK_TEX, sceGxmSetFragmentTexture(__VA_ARGS__))
+#define sceGxmSetVertexStream(...) GX(GK_STREAM, sceGxmSetVertexStream(__VA_ARGS__))
+#define sceGxmDraw(...) GX(GK_DRAW, sceGxmDraw(__VA_ARGS__))
+#define sceGxmSetCullMode(...) GX(GK_ZS, sceGxmSetCullMode(__VA_ARGS__))
+#define sceGxmSetFrontDepthFunc(...) GX(GK_ZS, sceGxmSetFrontDepthFunc(__VA_ARGS__))
+#define sceGxmSetFrontDepthWriteEnable(...) GX(GK_ZS, sceGxmSetFrontDepthWriteEnable(__VA_ARGS__))
+#define sceGxmSetFrontStencilFunc(...) GX(GK_ZS, sceGxmSetFrontStencilFunc(__VA_ARGS__))
+#define sceGxmSetFrontStencilRef(...) GX(GK_ZS, sceGxmSetFrontStencilRef(__VA_ARGS__))
+#endif
 // Uniforms of nd_v3 (lv 0, 3 with 16-bit UV), nd_v4 (lv 1, 2: GVL) or nd_v5 and its variants (lv 4 on: skinProg) for a draw of t with texture size tw x th and material color mat, in the default buffer u; wm: the scene's matrix.
 // What trVerts does per vertex, as numbers: m is wm x viewport x t->m, column by column (model -> surface clip); 16-bit values count
 // 1 / 32768, as on the GE.
@@ -581,7 +649,10 @@ static void t3Uni(void *u, const T3 *t, float tw, float th, const float *wm, int
       md[3] = t->upd >> 1 & 1; ms[3] = t->upd >> 2 & 1;
     }
     if (k5 >= 16) q[51] = 1;
-    else for (uint32_t b = 0; b < wn; b++) for (int r = 0; r < 3; r++) for (int c = 0; c < 4; c++) q[124 + b * 12 + r * 4 + c] = t->b[b * 12 + c * 3 + r];
+    else for (uint32_t b = 0; b < wn; b++) {  // (each bone's 4 columns of 3 to 3 rows of 4)
+      float32x4x3_t x = vld3q_f32(t->b + b * 12);
+      vst1q_f32(q + 124 + b * 12, x.val[0]); vst1q_f32(q + 128 + b * 12, x.val[1]); vst1q_f32(q + 132 + b * 12, x.val[2]);
+    }
     sceGxmSetUniformDataF(u, g5, 0, 252, q);
     return;
   }
@@ -1448,14 +1519,28 @@ static inline int gOff(uint32_t vo, uint32_t gb, uint32_t vz, uint32_t *ix) {
   *ix = x;
   return vo >= gb && !(b & ((1u << k) - 1)) && x < 0x10000;
 }
-// Writes the triangles of a draw of nt triangles starting at vertex ix as indices; returns how many
+// Writes the triangles of a draw of nt triangles starting at vertex ix as indices; returns how many. Lists and strips go with NEON in
+// 16-byte stores, 8 indices or 8 triangles at a time (each pair of strip triangles is k + 0, 1, 2, 1, 3, 2): up to 23 indices past
+// the end get garbage, which the next draw overwrites and no draw sends (TG_N leaves room)
 static inline uint32_t gAdd(uint16_t *o, uint32_t ix, uint32_t prim, uint32_t nt) {
+  static const uint16_t sp[32] = { 0, 1, 2, 3, 4, 5, 6, 7, 0, 1, 2, 1, 3, 2, 2, 3, 4, 3, 5, 4, 4, 5, 6, 5, 7, 6, 6, 7, 8, 7, 9, 8 };
   uint16_t *p = o;
-  if (prim == 3) for (uint32_t k = 0; k < nt * 3; k++) *p++ = ix + k;
+  if (prim == 3) { for (uint32_t k = 0; k < nt * 3; k += 8) vst1q_u16(p + k, vaddq_u16(vdupq_n_u16(ix + k), vld1q_u16(sp))); p += nt * 3; }
   else if (prim == 5) for (uint32_t k = 0; k < nt; k++) { p[0] = ix; p[1] = ix + k + 1; p[2] = ix + k + 2; p += 3; }
-  else for (uint32_t k = 0; k < nt; k++) { p[0] = ix + k; p[1] = ix + k + 1 + (k & 1); p[2] = ix + k + 2 - (k & 1); p += 3; }
+  else {
+    uint16x8_t a = vld1q_u16(sp + 8), b = vld1q_u16(sp + 16), c = vld1q_u16(sp + 24);
+    for (uint32_t k = 0; k < nt; k += 8) {
+      uint16x8_t x = vdupq_n_u16(ix + k);
+      vst1q_u16(p + k * 3, vaddq_u16(x, a)); vst1q_u16(p + k * 3 + 8, vaddq_u16(x, b)); vst1q_u16(p + k * 3 + 16, vaddq_u16(x, c));
+    }
+    p += nt * 3;
+  }
   return p - o;
 }
+#ifdef NP_DEV
+#define t3Set(...) GX(GK_T3SET, t3Set(__VA_ARGS__))
+#define t3Uni(...) GX(GK_T3UNI, t3Uni(__VA_ARGS__))
+#endif
 static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base) {
   t3.ke = 0;
   DEV(uint32_t t_ss = 0; c_fr++;)
@@ -1466,17 +1551,20 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
   int r = trCheckFrame(f, &disp, &ord);
   if (r) return r;
   DEV(t_us[0] += now() - ta; if (p_on) pAdd(P_T_CHECK, now() - ta);)
+  DEV(gm = 0; g_fr++;)
   trRegions(f);
   trBoxed(f, disp, ord);
-  // Depth lives in one scene: if the surface is drawn with depth after its scene was cut, it is stored and loaded. The other
-  // scenes use the same memory without storing it, so they do not touch it
+  // Depth and stencil live in one scene: a surface scene loads them only if it or a later one reads them (depth or stencil test)
+  // and stores them only if a later one does, that is, if a draw to an intermediate image cuts it before the last read (OPEN).
+  // The other scenes use the same memory without storing it, so they do not touch it. zl: last surface draw that reads them;
+  // zc: last draw to an intermediate image before it (-1: none)
   SceGxmDepthStencilSurface dss = ds;
-  int zcut = 0;
-  for (uint32_t i = ord; i < f->nd && !zcut; i++) {
+  int zl = -1, zc = -1, cut = -1;
+  for (uint32_t i = ord; i < f->nd; i++) {
     const uint32_t *e = f->e[f->d[i].st];
-    zcut = (RE(e, 0x9C) & 0x1FFFF0) == disp && !(RE(e, 0xD3) & 1) && RE(e, 0x23) & 1;
+    if ((RE(e, 0x9C) & 0x1FFFF0) != disp) cut = i;
+    else if (!(RE(e, 0xD3) & 1) && (RE(e, 0x23) & 1 || RE(e, 0x24) & 1)) zl = i, zc = cut;
   }
-  if (zcut) sceGxmDepthStencilSurfaceSetForceStoreMode(&dss, SCE_GXM_DEPTH_STENCIL_FORCE_STORE_ENABLED);
   static uint32_t t_q[2];  // last scene that read the vertices and palettes of each surface
   // if the GPU is still reading them (unfinished scene) it waits
   if (gBusy(t_q[s])) { g_psurf++; gEv("vertices and palettes rewritten", t_q[s]); gWait(t_q[s]); }
@@ -1492,9 +1580,10 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
   // puts the normal image (or black: trBase) underneath
 #define OPEN(dst_) do { RUN(); pd = 0; if (opened) { SURF_WAIT(); DEV(h_at = 6;) sceGxmEndScene(c, 0, gEnd()); DEV(h_at = 4; CTAG();) cNote(cur_rt ? C_INT : C_TR, &gq_n, t_draws - d0, spx / 1000, ssw); } \
     d0 = t_draws; spx = 0; ssw = 0; cur_rt = (dst_); opened = 1; \
-    if (!cur_rt && has_base && zcut) sceGxmDepthStencilSurfaceSetForceLoadMode(&dss, SCE_GXM_DEPTH_STENCIL_FORCE_LOAD_ENABLED); \
+    if (!cur_rt) { sceGxmDepthStencilSurfaceSetForceLoadMode(&dss, has_base && (int)zi <= zl ? SCE_GXM_DEPTH_STENCIL_FORCE_LOAD_ENABLED : SCE_GXM_DEPTH_STENCIL_FORCE_LOAD_DISABLED); \
+                   sceGxmDepthStencilSurfaceSetForceStoreMode(&dss, zc > (int)zi ? SCE_GXM_DEPTH_STENCIL_FORCE_STORE_ENABLED : SCE_GXM_DEPTH_STENCIL_FORCE_STORE_DISABLED); } \
     SCENE(cur_rt ? &cur_rt->cs : &cs[s], cur_rt ? &cur_rt->vr : 0); \
-    if (!cur_rt && !has_base) { has_base = 1; nv = trBase(c, base, o, nv); spx += W * H; DEV(bpx[0][BP_BASE] += W * H;) } fp_cur = 0; } while (0)
+    if (!cur_rt && !has_base) { has_base = 1; nv = trBase(c, base, o, nv); spx += W * H; DEV(bpx[0][BP_BASE] += W * H;) } fp_cur = 0; tc_ok = 0; } while (0)
   // SURF_WAIT: the surface s is being sampled for the screen until the previous frame's scenes end, and its scene must not start before
 #define SURF_WAIT() do { if (!cur_rt) gWait(fq[0]); } while (0)
   // GRUN: sends the pending draw of the GPU path, triangles of indices gs to gn on the vertices of the record at gb
@@ -1511,11 +1600,14 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
   const SceGxmFragmentProgram *fp_cur = 0;  // fragment program in the context and the key of its uniforms (0: unknown)
   uint32_t fk_cur[4];
   const RDraw *pd = 0;  // last draw whose state is set in the context, which the next one may share (t, tw, th included)
-  SceGxmTexture t;
+  SceGxmTexture t, tc;  // tc: the texture in the context, known if tc_ok (cleared where fp_cur is and with each fragment program)
+  int tc_ok = 0;
   float tw = 1, th = 1;
   TV tl;  // last vertex of the pending draw
   RT *cur_rt = 0;  // destination of the open scene (0: the shown surface)
   int opened = 0, has_base = 0;
+  uint32_t zi = 0;  // draw being translated (OPEN: where a surface scene starts)
+  DEV(int kc = 0;)  // fragProg kind of the program in the context
   uint32_t d0 = t_draws, ssw = 0;  // timer: draws at scene start, swizzled draws and scene pixels
   float spx = 0;
   if (!ord) OPEN(0);  // (all in game order: the surface first, as on the PSP)
@@ -1537,6 +1629,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
   for (uint32_t pass = ord ? 0 : 2; pass < 3 && res == T_OK; pass++)
   for (uint32_t i = pass < 2 ? 0 : ord, ne = pass < 2 ? ord : f->nd; i < ne && res == T_OK; i++) {
     DEV(h_at = 4; h_i = i;)
+    zi = i;
     RDraw *d = &f->d[i];
     if (t_mark[i >> 5] >> (i & 31) & 1) continue;
     // Short path: same state as the draw before, already joined by indices: only its indices are added
@@ -1550,6 +1643,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
       }
     }
     gd = 0;
+    DEV(gTick();)
     const uint32_t *e = f->e[d->st];
     uint32_t clr = RE(e, 0xD3), tex = hasTex(e, d), fb = RE(e, 0x9C) & 0x1FFFF0, w3d = !(d->vt >> 23 & 1);
     if (fb != disp && trSkip(f, d)) continue;
@@ -1568,7 +1662,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
       sceGxmReserveVertexDefaultUniformBuffer(c, &u); sceGxmSetUniformDataF(u, p_wvp, 0, 16, wm);
       sceGxmSetFragmentTexture(c, 0, &ts); sceGxmSetVertexStream(c, 0, q);
       sceGxmDraw(c, SCE_GXM_PRIMITIVE_TRIANGLE_STRIP, SCE_GXM_INDEX_FORMAT_U16, ib, 4);
-      sceGxmSetVertexProgram(c, nvp); gv_cur = 0; pd = 0; fp_cur = 0;
+      sceGxmSetVertexProgram(c, nvp); gv_cur = 0; pd = 0; fp_cur = 0; tc_ok = 0;
       sceGxmReserveVertexDefaultUniformBuffer(c, &u); sceGxmSetUniformDataF(u, n_wvp, 0, 16, wm);
     }
     if (i < ord ? pass != (dst ? 0u : 1u) : pass != 2) continue;
@@ -1613,7 +1707,8 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
           uint32_t *pb = pbs[pi ^= 1];
           if ((np + ne) * 4 > TP_B) { res = T_LIMIT; break; }
           const uint8_t *src = f->a + d->clut - 1;
-          for (uint32_t k = 0; k < ne; k++) {
+          if (cf == 3 && !sh && mk == 0xFF && !st && ne <= max) sceClibMemcpy(pb, src, ne * 4);  // (8888, each entry as it is)
+          else for (uint32_t k = 0; k < ne; k++) {
             uint32_t j = ((k >> sh) & mk) | st;
             pb[k] = pal8888(j < max ? (bpe == 4 ? ((const uint32_t *)src)[j] : ((const uint16_t *)src)[j]) : 0, cf);
           }
@@ -1785,25 +1880,29 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     uint32_t afn = 1, aref = 0, c9 = RE(e, 0xC9), b2 = !(clr & 1) && blend2x(e);
     if (!(clr & 1) && (RE(e, 0x22) & 1)) alphaFn(e, &afn, &aref);
     int fast = tex && !(c9 & 0x10007) && afn == 1 && !b2 && !(w3d && t3.fog);
-    int mid = tex && !fast && !(c9 & 7) && afn == 1 && !b2;
+    int mid = tex && !fast && !(c9 & 7) && afn == 1 && !b2, dbl = mid && !(w3d && t3.fog);  // (dbl: doubling without fog, nd_f2)
     int mina = tex && !(c9 & 7) && (afn == 6 || afn == 7) && !b2;  // (afn 6 greater, 7 greater or equal: the rounded alpha passes from aref +- half a step up)
-    DEV(why = !tex || fast || mid || mina ? 0 : !!(c9 & 7) << BW_FUNC | !!(c9 & 0x10000) << BW_DOUBLE | (afn != 1) << BW_ATEST | (w3d && t3.fog) << BW_FOG | b2 << BW_BLEND2X;
-        pb = fast ? BP_FAST : !tex ? BP_COL : mid || mina ? BP_MID : BP_TEX;
+    int rep = tex && (c9 & 0x10007) == 3 && afn == 1 && !b2 && !(w3d && t3.fog);  // (replace, nd_fr)
+    DEV(why = !tex || fast || mid || mina || rep ? 0 : !!(c9 & 7) << BW_FUNC | !!(c9 & 0x10000) << BW_DOUBLE | (afn != 1) << BW_ATEST | (w3d && t3.fog) << BW_FOG | b2 << BW_BLEND2X;
+        pb = fast ? BP_FAST : !tex ? BP_COL : mid || mina || rep ? BP_MID : BP_TEX;
         t_c[fast ? TC_VFAST : tex ? TC_VTEX : TC_VCOL] += n; t_c[TC_FOG] += w3d && t3.fog; t_c[TC_ATEST] += afn != 1; t_c[TC_BLEND] += key != 0;)
-    int kind = fast ? 2 : mid ? 3 : mina ? 4 : tex;
+    int kind = fast ? 2 : dbl ? 5 : rep ? 6 : mid ? 3 : mina ? 4 : tex;
+    DEV(kc = kind;)
     SceGxmFragmentProgram *p = fragProg(kind, key, colorMask(e));
     if (!p) { res = T_PROG; break; }
     // The program and its uniforms (all made from fk) go to the context only when they change: until then the draws keep the
     // buffer reserved last, as joined draws do
     uint32_t fk[4] = { c9 & 0x10107, afn | aref << 8 | b2 << 16, RE(e, 0xCF) & 0xFFFFFF, RE(e, 0xCA) & 0xFFFFFF };
     if (p == fp_cur && !sceClibMemcmp(fk, fk_cur, sizeof fk)) goto ftex;
-    if (p != fp_cur) sceGxmSetFragmentProgram(c, p);
+    if (p != fp_cur) { sceGxmSetFragmentProgram(c, p); tc_ok = 0; }
     fp_cur = p; sceClibMemcpy(fk_cur, fk, sizeof fk);
     sceGxmReserveFragmentDefaultUniformBuffer(c, &u);
     // uniforms (see shaders/*.cg): at = alpha test function (1: always passes) and reference; tf = texture
     // function, TCC and color doubling
     float tf[4] = { (float)(c9 & 7), (float)(c9 >> 8 & 1), (float)(c9 >> 16 & 1), 0 };
     if (fast) sceGxmSetUniformDataF(u, n_tm, 0, 4, tf);
+    else if (dbl) { tf[2] += 1; sceGxmSetUniformDataF(u, n_t2, 0, 4, tf); }
+    else if (rep) sceGxmSetUniformDataF(u, n_tr, 0, 4, tf);
     else if (mid || mina) {
       float fg[4];
       tf[2] += 1;  // (a factor here: 1 or 2)
@@ -1823,8 +1922,9 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
       }
     }
   ftex:;
-    if (tex) {
+    if (tex && (!tc_ok || sceClibMemcmp(&t, &tc, sizeof t))) {  // (only when it is not the one in the context)
       sceGxmSetFragmentTexture(c, 0, &t);
+      tc = t; tc_ok = 1;
     }
     zsSet(c, e, gv ? 0 : w[n - 1].c >> 24);  // (the value only counts in clears)
     // GE cull (0x1D on, 0x9B which winding on screen goes); not in clears or rectangles
@@ -1833,7 +1933,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
   ready:;
     DEV(if (sfx && !dst && w3d && !(clr & 1)) {  // (the GPU path has no vertices here: they are done once more, as the CPU path)
           uint32_t z = n, cu = d->prim > 2 && prim != 6 && (RE(e, 0x1D) & 1), k = (key != 0) | (t3.fog != 0) << 1 | (tex && !d->toff) << 2;
-          if (!gv || (d->n * 22 + 8 <= sizeof ts / sizeof *ts && !trVerts(f, d, ts, tw, th, mat, sc, &z, &t3))) { float a = trPx3(gv ? ts : w, z, prim, cu) / 1000; b_fx[k] += a; b_fxd[k]++; if (gv == 2 || gv == 3) { b_lit[0] += a; b_lit[1]++; b_lit[2] += d->n; } }
+          if (!gv || (d->n * 22 + 8 <= sizeof ts / sizeof *ts && !trVerts(f, d, ts, tw, th, mat, sc, &z, &t3))) { float a = trPx3(gv ? ts : w, z, prim, cu) / 1000; b_fx[k] += a; b_fxd[k]++; b_fxp[kc] += a; b_fxp[7] += gv ? a : 0; if (gv == 2 || gv == 3) { b_lit[0] += a; b_lit[1]++; b_lit[2] += d->n; } }
         })
     if (gv) {
       if (nu) { sceGxmReserveVertexDefaultUniformBuffer(c, &u); t3Uni(u, &t3, tw, th, wm, gp, mat); }
@@ -1902,3 +2002,20 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
   if (res && !t_seen[res]++) alog("translator: first frame with '%s' on drawing\n", tnames[res]);
   return res;
 }
+#ifdef NP_DEV
+#undef t3Set
+#undef t3Uni
+#undef sceGxmReserveVertexDefaultUniformBuffer
+#undef sceGxmReserveFragmentDefaultUniformBuffer
+#undef sceGxmSetUniformDataF
+#undef sceGxmSetVertexProgram
+#undef sceGxmSetFragmentProgram
+#undef sceGxmSetFragmentTexture
+#undef sceGxmSetVertexStream
+#undef sceGxmDraw
+#undef sceGxmSetCullMode
+#undef sceGxmSetFrontDepthFunc
+#undef sceGxmSetFrontDepthWriteEnable
+#undef sceGxmSetFrontStencilFunc
+#undef sceGxmSetFrontStencilRef
+#endif
