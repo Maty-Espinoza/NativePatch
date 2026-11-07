@@ -31,6 +31,7 @@ Everything else is indexed in `docs/agent/en/README.md`.
 - Performance work follows one list, `docs/dev/en/performance-plan.md`; changes to the capturer or the record are measured
   on the PC first with `tools/perf/` (`docs/agent/en/perf-loop.md`) and then on the Vita.
 - Ask before anything that costs many tokens, changes the test environment or was not requested. Answer in Spanish.
+- If a web page cannot be reached (e.g. the HENkaku wiki), ask the user for its contents instead of giving up or guessing.
 
 ## General coding behavior
 Think before coding: state assumptions, ask when unclear, prefer the simpler approach. Minimum code that solves the
