@@ -87,7 +87,7 @@ The development measurements are listed in `nativedraw/measures.h`, one line eac
 | `gate_sync` | (v13.10) the wait for the Vita stays at the sync, as before dev66 (for comparison); see `etapa2_fase2_compuerta.md` |
 | `no_lookahead` | (v13.12) the readers do not do the look-ahead check of the plan (only on reaching each CALL, as before); see `etapa2_fase2_adelanto.md` |
 | `mirror_wait` | (NativeLink 0.0.3) the PSP flip waits for the mirror copy to finish (mailbox switch 32): in KOF 96 the frame's sprites are copied by the time the Vita asks for them. On the user's Vita it is set to `yes` |
-| `thread_split` | (development) every second in the capture log: on which core the capturer, the record thread and Adrenaline's drawing thread ran, how long, and how often they were preempted, interrupted and moved |
+| `thread_split` | (development) every second in the capture log: on which core the capturer, the record thread, Adrenaline's drawing thread and the translator's thread ran, how long, and how often they were preempted, interrupted and moved |
 | `vert_split` | (development) splits the vertex work of 1 HD frame in 8: `vertex split plain` and `vertex split warm` lines, summed up by `tools/bottleneck.py` |
 | `cpu_verts` | (development) no vertices go to the GPU's vertex program (`nd_v3`): every 3D draw takes the CPU path, to compare. Read when Adrenaline opens. |
 | `cap_split` | (development) times every part of the capturer on every frame (it costs ~0.7 us per clock read, ~64 ms per God of War combat frame, and in a heavy game the capturer falls behind: graphic errors and the normal image; warn before using it): `capture split` lines by kind of frame, summed up by `tools/bottleneck.py` |
@@ -150,7 +150,7 @@ The development measurements are listed in `nativedraw/measures.h`, one line eac
   In dev builds the first 40 also log `translator: vertex_out (n)` (frame, draw, vertex type and index) and the bytes of the vertex
   and the draw; each giant draw logs its vertex type and bytes. `late frame <n>` (capturer log, first 400): gate at its limit or a
   capture over 33 ms. `record: texture limit` (first 20): how many textures and bytes the frame had when it hit the cap.
-- Reason `bad_texture`: a draw reads a texture the translator cannot give it. In dev builds the first 40 that come from drawing (not
+- Reason `bad_texture`: a draw reads a texture the translator cannot give it. In dev builds the first draw of each case (40 cases) that comes from drawing (not
   from the check before) log `translator: bad_texture (n): frame, draw of N, check K | texture address, format, size, row width,
   copy in the record | target | read: image, alone, sh, place, surface | drawn: image, alone, place, surface, region`. Checks:
   1 the image read is the one being drawn and shares its surface with other images, 2 and 3 GXM refused the texture of an

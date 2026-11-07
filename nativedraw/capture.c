@@ -30,7 +30,7 @@ static inline uint32_t now(void) { return sceKernelGetProcessTimeLow(); }  // Vi
 #ifdef NP_DEV
 PStage P[PN];
 volatile uint32_t p_on;
-volatile SceUID nd_gfx_uid;  // Adrenaline's drawing thread (noted by the presenter)
+volatile SceUID nd_gfx_uid, nd_tr_uid;  // Adrenaline's drawing thread and the translator's (noted by the presenter)
 static uint32_t p_flip;      // time of the last PSP flip on the Vita clock
 static uint32_t p_draw;      // us of this frame in draw() (estimated from the timed ones)
 #endif
@@ -2198,14 +2198,15 @@ static uint32_t probe_ge;  // asks NativeLink for the thread watching the GE (T6
 #endif
 #ifdef NP_DEV
 static int tn_on;  // switch thread_split
-// Each mirror turn, notes the core where the capturer, the record thread and Adrenaline's drawing thread last ran; every 200 turns logs,
-// per thread, the turns on each core (3: any other value) and how much it ran, how often it was preempted or interrupted and moved
+// Each mirror turn, notes the core where the capturer, the record thread, Adrenaline's drawing thread and the translator's last ran;
+// every 200 turns logs, per thread, the turns on each core (3: any other value) and how much it ran, how often it was preempted or
+// interrupted and moved
 static void thrSample(void) {
-  static const char *nm[3] = { "capture", "record", "drawing" };
-  static uint32_t c[3][4], l[3][4], n;
-  SceUID u[3] = { cap_uid, rec_uid, nd_gfx_uid ? nd_gfx_uid : -1 };
+  static const char *nm[4] = { "capture", "record", "drawing", "translator" };
+  static uint32_t c[4][4], l[4][4], n;
+  SceUID u[4] = { cap_uid, rec_uid, nd_gfx_uid ? nd_gfx_uid : -1, nd_tr_uid ? nd_tr_uid : -1 };
   n++;
-  for (int i = 0; i < 3; i++) {
+  for (int i = 0; i < 4; i++) {
     SceKernelThreadInfo in; sceClibMemset(&in, 0, sizeof in); in.size = sizeof in;
     if (u[i] < 0 || sceKernelGetThreadInfo(u[i], &in) < 0) continue;
     c[i][(uint32_t)in.lastExecutedCpuId < 3 ? in.lastExecutedCpuId : 3]++;

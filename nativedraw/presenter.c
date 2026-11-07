@@ -38,7 +38,7 @@ static uint32_t thrRun(void) { SceKernelThreadInfo i; i.size = sizeof i; return 
 #include "prof.h"
 #include "measures.h"
 DEV(static int no_join, keep_hd, fx_log;)
-DEV(extern volatile SceUID nd_gfx_uid; uint32_t regState(void); void capHealth(void);
+DEV(extern volatile SceUID nd_gfx_uid, nd_tr_uid; uint32_t regState(void); void capHealth(void);
     // where Adrenaline's drawing thread is: 0 outside hookEnd, 1 its sceGxmEndScene, 2 checks, 3 the record, 4 translating
     // draw h_i, 5 sceGxmBeginScene, 6 sceGxmEndScene, 7 normal image
     static volatile uint32_t h_at, h_i;)
@@ -788,6 +788,7 @@ static int presThread(SceSize args, void *argp) {
   if (t_on) {  // its thread: any core, just below the capturer's record thread
     SceUID tt = sceKernelCreateThread("nativedraw_translator", trThread, 0x63, 0x10000, 0, 0x70000, NULL);
     if (tt < 0 || sceKernelStartThread(tt, 0, NULL) < 0) t_on = 0;
+    DEV(if (t_on) nd_tr_uid = tt;)
     alog("translator: thread %08x\n", tt);
   }
   DEV(if (t_on) failInit();)

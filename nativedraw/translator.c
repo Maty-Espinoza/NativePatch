@@ -484,13 +484,16 @@ static void trOutLog(RFrame *f, RDraw *d, uint32_t i, uint32_t k, uint32_t sz, c
   trRaw("translator: vertex_out vertex", p, sz);
   trRaw("translator: vertex_out draw", RV(f, d), d->vlen);
 }
-// First 40 draws refused as T_TEX while drawing: which check (1 the image read shares its surface with the one drawn,
-// 2 and 3 the GXM texture of an image, 4 another view of the image drawn overlaps what it reads, 5 a texture with no
-// copy in the record, 6 the GXM texture of a record texture), the draw, its texture and the images read (src) and drawn (dst)
+// Draws refused as T_TEX while drawing, the first of each case (check, texture, target, images read and drawn; 40 cases):
+// which check (1 the image read shares its surface with the one drawn, 2 and 3 the GXM texture of an image, 4 another view of
+// the image drawn overlaps what it reads, 5 a texture with no copy in the record, 6 the GXM texture of a record texture), the
+// draw, its texture and the images read (src) and drawn (dst)
 static void trTexLog(RFrame *f, uint32_t i, int k, const uint32_t *e, const RT *src, const RT *dst) {
-  static uint32_t cnt;
+  static uint32_t cnt, seen[40];
+  uint32_t h = (k * 0x9E3779B1u ^ texAddr(e)) * 31 ^ (RE(e, 0x9C) & 0xFFFFFF) * 131 ^ (src ? src->fb : 0) * 7 ^ (dst ? dst->fb : 1);
+  for (uint32_t j = 0; j < cnt; j++) if (seen[j] == h) return;
   if (cnt >= 40) return;
-  cnt++;
+  seen[cnt++] = h;
   alog("translator: bad_texture (%u): frame %u draw %u of %u check %d | texture %07x fmt %u %ux%u w %u copy %u | target %06x | "
        "read %06x alone %u sh %u at %u,%u in %u | drawn %06x alone %u at %u,%u in %u region %u,%u\n", cnt, f->frame, i, f->nd, k,
        texAddr(e), RE(e, 0xC3) & 15, 1u << (RE(e, 0xB8) & 15), 1u << (RE(e, 0xB8) >> 8 & 15), RE(e, 0xA8) & 0x7FF, f->d[i].toff != 0,
@@ -1748,9 +1751,11 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, int base) {
           if (sceGxmTextureInitLinearStrided(&t, src->mem, SCE_GXM_TEXTURE_FORMAT_A8B8G8R8, wp, hp, LINE * 4) < 0) { res = T_TEX; DEV(trTexLog(f, i, 3, e, src, dst);) break; }
           tw = wp / sc; th = hp / sc;
         }
-        // another view of the image being drawn: only if what it reads is not where it draws
+        // another view of the image being drawn: only if what it reads (its texture's size from where the view starts) is not where
+        // it draws
+        uint32_t rw = src && src->alone ? 1u << (b8 & 15) : tw, rh = src && src->alone ? 1u << (b8 >> 8 & 15) : th;
         if (src && dst && dst != &rtb && !self && src->sm == dst->sm && src->x0 == dst->x0 && src->y0 == dst->y0 && src->ox < dst->ox + dst->vr.xMax + 1 &&
-            dst->ox < src->ox + tw * (2 >> src->sh) && src->oy < dst->oy + dst->vr.yMax + 1 && dst->oy < src->oy + th * (2 >> src->sh)) { res = T_TEX; DEV(trTexLog(f, i, 4, e, src, dst);) break; }
+            dst->ox < src->ox + rw * (2 >> src->sh) && src->oy < dst->oy + dst->vr.yMax + 1 && dst->oy < src->oy + rh * (2 >> src->sh)) { res = T_TEX; DEV(trTexLog(f, i, 4, e, src, dst);) break; }
       } else if (!d->toff || sceGxmTextureInitLinear(&t, f->tx + d->toff - 1, gf[fmt], tbw, (uint32_t)th, 0) < 0) { res = T_TEX; DEV(trTexLog(f, i, d->toff ? 6 : 5, e, src, dst);) break; }
       if (fmt >= 4) {  // palette: to 8888, with shift, mask and start (0xC5)
         uint32_t c5 = RE(e, 0xC5), cf = c5 & 3, sh = c5 >> 2 & 31, mk = c5 >> 8 & 0xFF, st = (c5 >> 16 & 31) << 4;

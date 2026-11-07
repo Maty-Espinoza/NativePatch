@@ -67,7 +67,7 @@ static uint32_t zs_f, zs_n[2];  // surface scenes that load and that store depth
 void sceGxmDepthStencilSurfaceSetForceLoadMode(SceGxmDepthStencilSurface *s, SceGxmDepthStencilForceLoadMode m) { zs_f = (zs_f & 2) | (m == SCE_GXM_DEPTH_STENCIL_FORCE_LOAD_ENABLED); }
 void sceGxmDepthStencilSurfaceSetForceStoreMode(SceGxmDepthStencilSurface *s, SceGxmDepthStencilForceStoreMode m) { zs_f = (zs_f & 1) | (m == SCE_GXM_DEPTH_STENCIL_FORCE_STORE_ENABLED) << 1; }
 static uint32_t cur_w, set_w, in_rt;  // (in_rt: an intermediate image: the CPU path clips there, nd_v3 leaves it to the GPU, so its triangles differ)
-volatile SceUID nd_gfx_uid;
+volatile SceUID nd_gfx_uid, nd_tr_uid;
 void sceGxmSetVertexProgram(SceGxmContext *c, const SceGxmVertexProgram *p) { vprog = p; vpg = p ? (const SceGxmProgram *)(uintptr_t)((const int *)p)[1] : 0; g_ops++; }
 // The texture descriptor as the stubs fill it, in 4 words: format, filters and address modes (0), width and height (1), data (2),
 // palette or stride (3). When dumping, an address in the frame's tx is its offset there and one in the arena its block and offset in
