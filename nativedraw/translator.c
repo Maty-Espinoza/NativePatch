@@ -1686,7 +1686,8 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
           uint32_t *pb = pbs[pi ^= 1];
           if ((np + ne) * 4 > TP_B) { res = T_LIMIT; break; }
           const uint8_t *src = f->a + d->clut - 1;
-          for (uint32_t k = 0; k < ne; k++) {
+          if (cf == 3 && !sh && mk == 0xFF && !st && ne <= max) sceClibMemcpy(pb, src, ne * 4);  // (8888, each entry as it is)
+          else for (uint32_t k = 0; k < ne; k++) {
             uint32_t j = ((k >> sh) & mk) | st;
             pb[k] = pal8888(j < max ? (bpe == 4 ? ((const uint32_t *)src)[j] : ((const uint16_t *)src)[j]) : 0, cf);
           }
