@@ -247,6 +247,31 @@ per second, no GPU hang, the variants were made (9 programs `variant 1/2 0000000
   is a sum of per-draw work. `memory bench (256 B pieces)`: from cached memory filled by DMA 6.3 ns per byte, read once before 3.7,
   CPU-written 3.6, from the mirror 13.5; in cache 256-byte copies 2.0, position check 2.2; clock read 584 ns.
 
+**Long iteration on the three stages (branch `it-merge`, on top of 0.0.28.4; PC only, not run on the Vita yet).** Three agents,
+one per stage, each step checked on the PC:
+- Capturer (`it-cap`, records equal byte by byte with `tools/perf/rec_check.sh`): new bench scene `gow_gpu` (God of War's GPU path);
+  `rgBusy` no longer read per draw (a record being written can only go from busy to free; `record busy` left the `3D vertices`
+  line); light flag only when 0x53-0x9A change; state flag only when an RS register changes; `rgSrc` remembers the last readable
+  span; `rgVBad` without branches; `rgVGpu`'s answer kept until its registers change; one flag bit per matrix; a prefetch of the
+  next draw's vertices (Vita to judge). Fixed: the draw after a transfer drawn into the frame took the transfer's state. Bench
+  `gow_gpu` -13 % instructions; Vita estimate ~15 ms per combat frame (from the `record draw split` costs), +0-4 with the prefetch.
+- Translator (`it-tr`): `tr_check.sh` compares ARM with ARM and x86 with x86, all frames, and the GPU path too; the bench stubs model
+  the texture descriptor, garbage in fresh uniform buffers and palettes. The texture goes to GXM only when it differs (469 -> 96
+  per combat frame); joined indices written with NEON; whole 8888 palettes copied at once; `t3Set` redoes its matrix products only
+  when the words change; bones laid out with NEON. Bench: `gow_combat` est 65.8 -> 55.7 ms (-15 %). New `gxm split` line (cost of
+  each kind of GXM call on the Vita), summed by `tools/bottleneck.py`. Not worth it: skipping repeated `nd_v5` blocks (1 in 393
+  repeats); sending only the rows a variant reads needs a new `nd_v5` layout.
+- GPU (`it-gpu`): the `bottleneck pixels` line does not count GPU-path draws, so the surface looked like 2.6 M pixels at ~28 ns each;
+  a PC rasterizer on the bench frames gives 8.45 M sent, 6.54 M shaded in combat (~8 ns each, as Ridge Racer): the surface is
+  limited by pixels, vertex work is small (~3.4 M instructions against 60-100 M for fragments). `nd_f2` (`nd_fd` without fog, 9
+  instructions instead of 16) for doubled color without fog (4.35 M shaded pixels in combat), `nd_fr` (7 instead of `nd_ft`'s 99)
+  for texture function replace; surface scenes load and store depth and stencil only when a later one reads them (God of War:
+  store / load / nothing instead of store / load+store / load+store). `fx_log` gives the 3D surface pixels by program. Estimate:
+  9-22 ms per HD frame. Not done: drawing only the 960 visible columns (not exact at the right edge for draws that read the
+  surface), intermediate images at PSP size.
+Vita run to do: God of War combat with `hold_game`, `gate_sync`, `hd_mark`, `gpu_timer` and `fx_log`; then the same with `cpu_verts`
+to split GPU vertex and fragment time.
+
 ## D. Reading PSP memory: photo at the sync (proposal, 2026-11-06)
 **Why.** Three facts, all from the logs:
 - Reading the PSP RAM from the Vita is the slow part: ~2 us per uncached 64-byte line. KBENCH, 1 MB: 34.6 ms uncached,
