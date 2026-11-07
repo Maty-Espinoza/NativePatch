@@ -2027,7 +2027,7 @@ static int repThread(SceSize args, void *argp) {
       if (!level) goto sync;  // (minimum: only this line and the vram and sync one)
       if (reg_on) {  // frame record
         uint32_t g = gr.fr ? gr.fr : 1, dd = gr.draws ? gr.draws : 1;
-        clog("  3D vertices (per frame): runs %u, by DMA %u (%u KB read) | draws %u, near the list %u | not for the GPU: record busy %u, no room %u | garbage positions (draws in the second) %u | KB read from the transfer copy %u, from the mirror %u\n", gr.v_runs / g, gr.v_dma / g, gr.v_kb / g >> 10, gr.v_all / g, gr.v_list / g, gr.v_busy / g, gr.v_full / g, gr.v_bad, gr.v_st / g >> 10, gr.v_mir / g >> 10);
+        clog("  3D vertices (per frame): runs %u, by DMA %u (%u KB read) | draws %u, near the list %u | not for the GPU: no room %u | garbage positions (draws in the second) %u | KB read from the transfer copy %u, from the mirror %u\n", gr.v_runs / g, gr.v_dma / g, gr.v_kb / g >> 10, gr.v_all / g, gr.v_list / g, gr.v_full / g, gr.v_bad, gr.v_st / g >> 10, gr.v_mir / g >> 10);
 #ifdef NP_DEV
         vqLog(g);
         char nb[300]; int nk = 0; nb[0] = 0;

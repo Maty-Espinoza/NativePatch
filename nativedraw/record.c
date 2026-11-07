@@ -25,7 +25,7 @@ static const char *nr_names[NR_N] = { "vertices", "swizzle_width", "texture", "x
 // (same, changed, new); unswizzled bytes; distinct textures
 // per frame
 static struct { uint32_t fr, ok, memo, rd_fail, limit, curve, draws, st, kb, cl, us, d3, clear, blend, atest, swz, fmt[16], us_e, us_v, us_t, us_p, t_b, us_l, stomped, n_late, gpu, o_b, us_o,
-  t_n[2], t_kb[2], t_dma[2], t_ord[2], t_calls, t_size[5], t_rb[6], v_dma, v_kb, v_runs, v_list, v_all, v_busy, v_full, v_bad, v_st, v_mir, t_same, t_changed, t_lines, t_tex,
+  t_n[2], t_kb[2], t_dma[2], t_ord[2], t_calls, t_size[5], t_rb[6], v_dma, v_kb, v_runs, v_list, v_all, v_full, v_bad, v_st, v_mir, t_same, t_changed, t_lines, t_tex,
   c_hit, c_fill, c_chg, c_rec, c_fail, c_us, skip DEV(, nr[NR_N]); } ga, gr;
 // RN records: with fewer, the one the GPU just read would at times be the only free one, overwriting its textures
 #define RN 4
@@ -519,14 +519,14 @@ static uint32_t rgVLater(uint32_t s, uint32_t n, uint32_t gpu, uint32_t chk) {
 // between their pieces. VQ(k, b) adds to piece k the time since the last read (vq_c) and b bytes; vqEnd closes the draw with the
 // rest and one more read right after (VQ_CLK: what the clock adds to every piece, removed in the log). vq_s: us, times and bytes
 // of each piece in this second; vq_r: those of the last second, for the log thread
-enum { VQ_ST, VQ_IX, VQ_GPU, VQ_BUSY, VQ_SRC, VQ_FROM, VQ_MIR, VQ_BAD, VQ_TXS, VQ_TXM, VQ_LATER, VQ_COPY, VQ_MTX, VQ_BONE, VQ_LIGHT, VQ_REST, VQ_CLK, VQ_N };
+enum { VQ_ST, VQ_IX, VQ_GPU, VQ_SRC, VQ_FROM, VQ_MIR, VQ_BAD, VQ_TXS, VQ_TXM, VQ_LATER, VQ_COPY, VQ_MTX, VQ_BONE, VQ_LIGHT, VQ_REST, VQ_CLK, VQ_N };
 static uint32_t vq, vq_c, vq_s[3][VQ_N], vq_r[3][VQ_N];
 static void vqMark(int k, uint32_t b) { uint32_t t = now(); vq_s[0][k] += t - vq_c; vq_s[1][k]++; vq_s[2][k] += b; vq_c = t; }
 static void vqEnd(void) { vqMark(VQ_REST, 0); vqMark(VQ_CLK, 0); vq = 0; }
 // (log thread) The "record draw split" line: each piece in ns per timed draw without the clock / % of the timed draws it ran in,
 // bytes per timed draw, and the states and the index to the blocks in us per frame of fr frames (x64, as the record line)
 static void vqLog(uint32_t fr) {
-  static const char *nm[VQ_CLK] = { "state", "index", "gpu_check", "gpu_busy", "source", "from", "mirror", "check", "tx_copy", "tx_mirror",
+  static const char *nm[VQ_CLK] = { "state", "index", "gpu_check", "source", "from", "mirror", "check", "tx_copy", "tx_mirror",
                                     "ram", "copy", "matrix", "bones", "lights", "rest" };
   uint32_t *t = vq_r[0], *n = vq_r[1], *b = vq_r[2], s = n[VQ_CLK];
   if (!s) return;
@@ -810,8 +810,8 @@ static int rgDir(uint32_t on) {
 // The vertex size if the GPU can take the vertices of a draw as they are, 0 if not: no indices, triangles in a scissor that takes in the whole
 // image (what is seen of one 480 wide or more, all of a narrower one) or in the one of the last clear; for nd_v3 the types of GV3, no lights
 // and no generated UV (lit, those of GVS go to nd_v5), for nd_v4 16-bit position and normal, no color and one directional light or, with
-// no lighting, UV from the normal; for nd_v5 the types of GVS, directional and point lights and no generated UV or the environment map of two directional lights. The record must be
-// free of the GPU: it reads these bytes while drawing.
+// no lighting, UV from the normal; for nd_v5 the types of GVS, directional and point lights and no generated UV or the environment map of two directional lights. The record is
+// free of the GPU while it is written (regFlip skips a frame whose record the GPU still reads, and the GPU only finishes scenes).
 static uint32_t rgVGpu(uint32_t type, uint32_t vt, uint32_t idx) {
   uint32_t w = reg[0x9D] & 0x7FF, on = (reg[0x18] & 1) | (reg[0x19] & 1) << 1 | (reg[0x1A] & 1) << 2 | (reg[0x1B] & 1) << 3, l = 0;
   while (on >> l > 1) l++;  // (the last light on)
@@ -821,10 +821,7 @@ static uint32_t rgVGpu(uint32_t type, uint32_t vt, uint32_t idx) {
         ((!(reg[0xD4] & 0xFFFFF) && (reg[0xD5] & 0x3FF) + 1 >= (w < 480 ? w : 480) && (w < 480 || (reg[0xD5] >> 10 & 0x3FF) >= 271)) ||
          (!((reg[0xD4] ^ rg_box[0]) & 0xFFFFF) && !((reg[0xD5] ^ rg_box[1]) & 0xFFFFF) && !((reg[0x9C] ^ rg_box[2]) & 0xFFFFF0))))) { VQ(VQ_GPU, 0); return 0; }
   VQ(VQ_GPU, 0);
-  ga.v_busy += rgBusy(rg_w);
-  uint32_t r = rgBusy(rg_w) ? 0 : vs_sz;
-  VQ(VQ_BUSY, 0);
-  return r;
+  return vs_sz;
 }
 // (capturer, on each draw, before vaddr/iaddr advance) Adds the draw to the frame: the state (RS) if changed, the
 // indices and vertices up to the highest index, and the texture (only the rows the vertices use). If something does
