@@ -9,7 +9,7 @@ conversation follows it by hand. The rules of `good-practices.md` and `CLAUDE.md
 `sh tools/perf/bench.sh` builds `tools/perf/capture_bench.c` (the real `capture.c` with the Vita functions replaced, on ARM
 under qemu) and runs synthetic scenes shaped like the games measured on the Vita: `rr_crowd` (3400 3D strip draws,
 23.8k vertices in RAM, VRAM textures), `rr_race` (900 of the same), `sprites2d` (300 rects with swizzled RAM textures and
-palettes, texture cache), `sublists` (sublist memory and the readers, no record), and `gow_menu_xfer` / `gow_play_xfer`
+palettes, texture cache), `sublists` (sublist memory and the readers, no record), `gow_combat` (a God of War combat frame: ~7,600 3D strips that read the destination of the transfer before them piece by piece, RAM textures changing every 47 draws, 30 of them swizzled under 8 KB), and `gow_menu_xfer` / `gow_play_xfer`
 (God of War's RAM to VRAM transfers: the 59 logged transfers of a menu frame, and 97 transfers of 1.35 MB per play frame
 whose shapes were not logged, each followed by a draw reading its vertices from the destination). Each scene gives, per frame:
 - **`mem_us`**: an estimate of Vita microseconds from counters that do not depend on the PC (256-byte reads of PSP RAM,
@@ -31,7 +31,7 @@ whose shapes were not logged, each followed by a draw reading its vertices from 
 - **`qemu_min_us`**: CPU time of the fastest frame under qemu (interpretation, record bookkeeping, hashes, sorting). It is not
   Vita time and varies ~5 % between runs: it only counts for changes over 10 % (`RUNS=10` tightens it).
 - `complete`: frames the record published complete. It must not drop.
-What it cannot see: the real cost of uncached reads beyond the model, the readers running on other cores, the GE, the
+What it cannot see: the real cost of uncached reads beyond the model (reads through a plain pointer, as the old sort of small swizzled textures did, are not counted at all: moving them into a copy shows up as more `ucp_kb`, although on the Vita the copy is ~4 times cheaper), the readers running on other cores, the GE, the
 mirror timing, the translator and the GPU. A KEEP here is a candidate for the Vita, not a result.
 A change to `xferMirror` must also pass `tools/perf/xfer_diff.c` (build line at its top; 5000 cases with two seeds): random
 transfers compared byte by byte with the original word-by-word copy.

@@ -14,6 +14,12 @@ what was done is in `CHANGELOG.md`. Updated 2026-11-06 (NativeLink 0.0.8 + Nativ
   `claude/xfer_staging_c2.patch` in the claude.ai project, to merge with the DMA of `xferMirror`), then the textures; (3) the GPU:
   lighter `nd_v5` variants by number of weights and lights, and the pixels on the generic program; (4) the translator: fewer GXM calls
   per draw (uniform blocks of ~1 KB per state change of `nd_v5`). Bench: `tools/perf/tr_iterate.sh` (gow_combat + gow_enemies).
+  **(2) in test as NativeDraw 0.0.27.1** (`performance-plan.md`, "Capturer in God of War combat"): transfers through a cached copy
+  the record reads vertices from, repeated RAM textures without `rgTex`, small swizzled textures sorted from cached memory, photo
+  footprint only with `photo_probe`. Check on the Vita (combat, `cap_split`): `vertices` and `textures` columns, `KB read from the
+  transfer copy` against `from the mirror` in the `3D vertices` line, game fps, no corruption new to this version. Left of the
+  capturer: the interpreter (~35 ms per combat frame): first a bench scene from a real God of War list (VRAM sublists, ~8
+  commands per draw), then the change; the matrix blocks (~8 ms).
 - [ ] **God of War combat, corrupted frames** (0.0.26.1-0.0.26.6, a few per minute of combat, also at its start; probably the same as
   "the ship's deck sometimes disappears"): a flat gray-green layer covers the deck and Kratos is missing (auto dump 306 of 0.0.26.5,
   `stage3_0.0.26.5/dumps/306`). In that record several `0x7BE` draws in a row carry vertices that are not theirs (weight 5.09, position
@@ -41,7 +47,7 @@ what was done is in `CHANGELOG.md`. Updated 2026-11-06 (NativeLink 0.0.8 + Nativ
 - [ ] **Other games with 0.0.15** (KOF 96, Metal Slug XX, Retro City, Street Fighter, Gran Turismo): only Ridge Racer was tested with CPU and GPU in parallel. A GPU slower than the CPU now waits inside the hook instead of skipping the frame.
 - [ ] **GPU, the limit away from the crowd** (95 % busy, main scene ~30 ms): almost every 3D draw uses `nd_ft`, generic, with `discard`, because of the fog. A program with fog, no alpha test and no `discard`; `shacc` must be built in the container. Skip the image underneath when the frame covers it.
 - [ ] **Ridge Racer, capturer in the crowd:** ~16 ms per frame at 444 MHz (~3500 draws), `behind` 6-12 per second. Without the high clocks it does not fit.
-- [ ] **Memory:** under 1 MB free in one go after start, dumps fail (`peek` replaces them for now). Look at what can go (4 x 1.5 MB of textures, `fails`).
+- [ ] **Memory:** under 1 MB free in one go after start, dumps fail (`peek` replaces them for now). Look at what can go (4 x 1.5 MB of textures, `fails`). The cached copy of transfers takes 512 KB more since 0.0.27.1 (without it: `transfer copy: no memory` and the old path).
 - [ ] **Differential test of the translator:** this conversation ran old and new `trFrame` on the PC with GXM stubs over a real `f0_record.bin`, comparing all triangles and states. Worth keeping as a test tool in `tools/`.
 - [ ] **Translator failures left:** color test that is not black under an add (`fails/003_color_test_or_logic`), the first frame of the flare before its texture is in the mirror, T8 with no copy (`fails/006_bad_texture`, not understood), points on images that are read, memory free after start: 0 MB in one go with the dev reservations.
 - [ ] **Ridge Racer, opening movie no longer plays in HD versions** (user, 0.0.14.11): check it after the race. Also dump 255 and the 2 videos in the claude.ai conversation of 2026-11-03.
@@ -119,7 +125,9 @@ what was done is in `CHANGELOG.md`. Updated 2026-11-06 (NativeLink 0.0.8 + Nativ
       goes on with garbage data when a texture is bigger than the buffer and does not free memory on failure;
       `capture.c` `markRt` does not guard `n == 0` (`want` does) and could mark all 512 VRAM pages; installer: `hasLine()`
       counts a commented-out line as enabled, "Uninstall" deletes the dumps without warning and "Clean test leftovers" reports
-      files as deleted without checking. `dumpFrame`: f1 and f2 of each dump come out without `.bin` (confirmed in 0.0.8.20).
+      files as deleted without checking. `dumpFrame`: f1 and f2 of each dump come out without `.bin` (confirmed in 0.0.8.20). `regPend` writes the dump's PSP image
+      into `tx` without forgetting the sorted-group hashes there: a texture placed there again with the same layout could skip its sort
+      (since 0.0.27.1 small swizzled textures are hashed too).
 - [ ] A fixed dotted line over the date of Adrenaline's menu with the presenter (menu only). Check whether it appears
       with `draw` set to `no`.
 - [ ] Run **Ridge Racer** and the other installed games with NativeDraw 0.0.2 or later (only GT was retested after the

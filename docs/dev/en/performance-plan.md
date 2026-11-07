@@ -194,6 +194,30 @@ Update (0.0.27, `stage3_0.0.26.5/gow1`, combat seconds 318-368, per frame): the 
 ~50-58 ms per HD frame (GXM calls 21, vertices 13). Next, in this order: the capturer's vertex copy, then its textures; lighter `nd_v5`
 variants by weights and lights; fewer GXM calls per draw. The translator is measured on the PC with `tools/perf/tr_iterate.sh`.
 
+**Capturer in God of War combat (0.0.27.1, bench; to confirm on the Vita).** The `cap_split` columns of a combat frame
+(`tests/perf/runs/0.0.25.26_gow_cap_split`) also carry the clock reads: `index` is ~4 ms with 0 KB of indices, so each column
+has ~0.5 us per draw of clock; `flip` (6-52 ms) is mostly the `hold_game` wait for the presenter inside `regFlip` (total minus
+CPU is ~10-17 ms), not work. Real work left: vertices ~34 ms, textures ~24 (sort of small swizzled textures 4.8, cache check
+1.6, the rest `rgTex` on every draw), matrix blocks ~8, interpreter ~35. New bench scene `gow_combat` (shape of that frame).
+Four changes, against the confirmed 0.0.27 (`gow_combat`: mem_us 23.8 -> 14.0 ms, instructions -33 %):
+1. A 3D draw with the same RAM texture as the draw before, whole and in the same list, takes its place without `rgTex`
+   (until now only VRAM textures did): `rgTex` was 32 % of the capturer's instructions in `gow_combat`; -32 % instructions.
+2. Swizzled textures under 8 KB are copied to the cached transit before sorting, as those of 8 KB or more already were by DMA:
+   the sort read uncached PSP memory 16 bytes at a time, ~50 ns per byte on the Vita (97 KB in 4.8 ms per combat frame), against
+   ~11 for a copy. They are also hashed now, so a group already sorted at the same place is skipped. The bench does not price
+   plain-pointer reads, so it shows this as more `ucp_kb` (all scenes with swizzled textures under 8 KB, +8-38 % mem_us).
+3. Transfers through a cached copy (`rgStage`, 512 KB ring, the prototype of the claude.ai project joined with the runs and
+   DMA of `xferRun`): each run goes PSP RAM -> cached copy (DMA from 8 KB) -> mirror (CPU, 4.2 ns per byte on the Vita), and
+   `rgCopy`/`rgVNow` read the vertices, indices and palettes of the last 16 runs from it (`rgFrom`) instead of the uncached
+   mirror (24 ns per byte in small pieces). Bench: `gow_combat` mem -44 %, `gow_play_xfer` -51 %, `gow_menu_xfer` -49 %
+   (instructions +9-14 % in the last two: the second copy). `tools/perf/xfer_diff.c` also checks that every run of the copy
+   equals the mirror under it. New in the `3D vertices` line: KB read from the copy and from the mirror.
+4. The photo footprint measurement (`fpMark`, `fpFlip`, development builds) runs only with `photo_probe`: it cost a fixed
+   ~0.6 M instructions per frame in every scene (-17 to -40 %).
+Not done: the interpreter (~600 ns per command, 58,000 commands per combat frame). VADDR/PRIM in the tight loop gave nothing
+before (B.9), and `gow_combat` does not have God of War's mix (VRAM sublists, ~8 commands per draw): first a scene from a
+real list of the game, then the change.
+
 ## D. Reading PSP memory: photo at the sync (proposal, 2026-11-06)
 **Why.** Three facts, all from the logs:
 - Reading the PSP RAM from the Vita is the slow part: ~2 us per uncached 64-byte line. KBENCH, 1 MB: 34.6 ms uncached,

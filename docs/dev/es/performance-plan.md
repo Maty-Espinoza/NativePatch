@@ -201,6 +201,32 @@ Actualización (0.0.27, `stage3_0.0.26.5/gow1`, combate segundos 318-368, por fr
 capturador, luego sus texturas; variantes más livianas de `nd_v5` por pesos y luces; menos llamadas GXM por dibujo. El traductor se mide
 en el PC con `tools/perf/tr_iterate.sh`.
 
+**Capturador en el combate de God of War (0.0.27.1, banco; por confirmar en la Vita).** Las columnas de `cap_split` de un frame
+de combate (`tests/perf/runs/0.0.25.26_gow_cap_split`) también cargan las lecturas del reloj: `index` da ~4 ms con 0 KB de índices,
+así que cada columna lleva ~0,5 us de reloj por dibujo; `flip` (6-52 ms) es sobre todo la espera de `hold_game` por el
+presentador dentro de `regFlip` (el total menos la CPU da ~10-17 ms), no trabajo. Trabajo real que queda: vértices ~34 ms, texturas
+~24 (ordenar texturas chicas con swizzle 4,8, revisión del caché 1,6, el resto `rgTex` en cada dibujo), bloques de matrices ~8,
+intérprete ~35. Escena nueva del banco `gow_combat` (la forma de ese frame). Cuatro cambios, contra la 0.0.27 confirmada
+(`gow_combat`: mem_us 23,8 -> 14,0 ms, instrucciones -33 %):
+1. Un dibujo 3D con la misma textura en RAM que el anterior, entera y en la misma lista, toma su lugar sin pasar por `rgTex`
+   (hasta ahora solo las texturas de VRAM): `rgTex` era el 32 % de las instrucciones del capturador en `gow_combat`; -32 %.
+2. Las texturas con swizzle de menos de 8 KB se copian a la memoria de tránsito con caché antes de ordenarlas, como ya se hacía
+   por DMA con las de 8 KB o más: el orden leía la memoria del PSP sin caché de a 16 bytes, ~50 ns por byte en la Vita (97 KB en
+   4,8 ms por frame de combate), contra ~11 de una copia. Ahora también se les calcula el hash, así que un grupo ya ordenado en el
+   mismo lugar se salta. El banco no cobra las lecturas por puntero, así que lo muestra como más `ucp_kb` (todas las escenas con
+   texturas con swizzle de menos de 8 KB, +8-38 % de mem_us).
+3. Transferencias por una copia con caché (`rgStage`, anillo de 512 KB, el prototipo del proyecto de claude.ai unido a los tramos
+   y al DMA de `xferRun`): cada tramo va de la RAM del PSP a la copia con caché (DMA desde 8 KB) y de ahí al espejo (CPU, 4,2 ns por
+   byte en la Vita), y `rgCopy`/`rgVNow` leen de ahí (`rgFrom`) los vértices, índices y paletas de los últimos 16 tramos en vez del
+   espejo sin caché (24 ns por byte en pedazos chicos). Banco: `gow_combat` mem -44 %, `gow_play_xfer` -51 %, `gow_menu_xfer` -49 %
+   (instrucciones +9-14 % en las dos últimas: la segunda copia). `tools/perf/xfer_diff.c` revisa además que cada tramo de la copia
+   sea igual al espejo debajo. Nuevo en la línea `3D vertices`: KB leídos de la copia y del espejo.
+4. La medición de la huella de la foto (`fpMark`, `fpFlip`, compilaciones de desarrollo) corre solo con `photo_probe`: costaba
+   ~0,6 M de instrucciones fijas por frame en todas las escenas (-17 a -40 %).
+Sin hacer: el intérprete (~600 ns por comando, 58.000 comandos por frame de combate). Meter VADDR/PRIM en el camino rápido no dio
+nada antes (B.9), y `gow_combat` no tiene la mezcla de God of War (sublistas en VRAM, ~8 comandos por dibujo): primero una escena
+desde una lista real del juego, después el cambio.
+
 ## D. Leer la memoria del PSP: foto en el sync (propuesta, 2026-11-06)
 **Por qué.** Tres hechos, todos de los logs:
 - Leer la RAM del PSP desde la Vita es la parte lenta: ~2 us por línea de 64 bytes sin caché. KBENCH, 1 MB: 34,6 ms sin
