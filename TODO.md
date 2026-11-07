@@ -2,21 +2,23 @@
 
 The only list of pending work. Ordered from what comes next to what can wait. Each item says where it came from
 (a document in `docs/dev/en/`, `docs/agent/en/`, `docs/changelog/en/` or the claude.ai project). Done items are removed;
-what was done is in `CHANGELOG.md`. Updated 2026-11-07 (NativeDraw 0.0.28.9 test: the long iteration on the Vita, God of War combat 11.7 HD fps). How the work is done: `docs/agent/en/workflow.md`; stage 3 plan and results:
+what was done is in `CHANGELOG.md`. Updated 2026-11-07 (NativeDraw 0.0.28.10 test: one options file; God of War combat 12.0 HD fps without `fx_log`). How the work is done: `docs/agent/en/workflow.md`; stage 3 plan and results:
 `docs/agent/en/stage3-plan.md`.
 
 ## Next
-- [ ] **0.0.28.9 on the Vita, before confirming it** (`performance-plan.md`, end of C; runs `tests/perf/runs/0.0.28.9_gow*`). Keep
-  `hold_game` and `gate_sync` on in these runs, so the stages stay in step and the bottleneck reads clearly (user, 2026-11-07). In order:
-  1. **Jumps of 3-4 PSP frames** (37 in 0.0.28.9, 1 in 0.0.28.1; the user sees them as stutter): the same combat with `fx_log` off. If they
-     go, the cause is the `fx_log` frame passing the 100 ms of `hold_game` in `regFlip`; if not, look for which wait times out (a log
-     line for it is missing).
-  2. **Capturer walking ~400,000 commands per frame** (`0.0.28.9_gow_cpu_verts`, from ~187 s after a scene change with no draws, ~130 s,
-     `bad target` from 181 s, `list_too_long`): ask the user what was on screen; reproduce it without `cpu_verts`. If it comes back, check
-     against 0.0.28.8 (without the transfer copy `rgStage`) before touching code.
-  3. **Translator `gxm` piece** (35 ms per HD frame in combat, only ~7 ms in `gxm split`): find what the rest is (waiting inside GXM for
-     the ring or the GPU?) before more translator work.
-  4. Check the green glow (stencil) and flicker with the new depth/stencil loads; then confirm 0.0.28.9 as the next version.
+- [ ] **0.0.28.x on the Vita, before confirming it** (`performance-plan.md`, end of C; runs `tests/perf/runs/0.0.28.9_gow*`, `0.0.28.10_gow`).
+  Keep `hold_game` and `gate_sync` on in these runs, so the stages stay in step and the bottleneck reads clearly (user, 2026-11-07). Not
+  confirmed until the pending items of the components are done (user, 2026-11-07). Done in 0.0.28.10: the jumps of 3-4 PSP frames were
+  `fx_log` (37 -> 1 without it), and the translator's `gxm` piece is GXM calls 7.3 + `t3Set` 6.2 + `t3Uni` 7.7 ms (the missing part was
+  `fx_log` too). Left, in order:
+  1. **HD lost between two waves** (`0.0.28.10_gow`, 246-254 s): one frame in ~16 gives `bad_texture` from `trFrame` (no failure folder),
+     and each one holds HD back a second. Log which `T_TEX` check of `trFrame` fails, with the draw and its image, before changing anything.
+     The God of War menu (40-60 s) has the same reason.
+  2. **Cinematic dips** (25-31 fps, one second at 17): the gate waits ~1 ms per frame and the PSP CPU is 83 % idle, so it looks like
+     the game; check with `off=yes` in `options.txt` on the same cinematic.
+  3. **Capturer walking ~400,000 commands per frame** (`0.0.28.9_gow_cpu_verts`): not seen without `cpu_verts`. Ask the user what was on
+     screen; if it comes back, check against 0.0.28.8 (without `rgStage`) before touching code.
+  4. Check the green glow (stencil) and flicker with the new depth/stencil loads; then confirm as the next version.
 - [ ] **God of War combat, what limits it now** (NativeDraw 0.0.26.5, `stage3_0.0.26.5/gow1`, seconds 318-368, per frame): the capturer
   ~125 ms (record ~90: vertices 52-61 ms copying ~1.9 MB from uncached memory, textures ~28, states ~6), so with `hold_game` the game waits
   ~105 ms per frame and runs at ~8 fps; the Vita GPU ~82 ms per HD frame (surface 70: `nd_v5` always does 8 bones and 4 lights, textured

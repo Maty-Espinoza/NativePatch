@@ -290,6 +290,17 @@ interruptor distinto, rehace en la CPU los vértices del camino de GPU en 1 fram
 espera en `regFlip`. Con `cpu_verts` hubo solo ~20 s de combate (5 frames HD/s, vértices 133 ms por frame HD); después de un cambio de
 escena (~187 s) el capturador recorrió ~400.000 comandos por frame con 1 dibujo durante ~130 s (`bad target`, `list_too_long`), sin
 nada para el traductor. Solo apareció en esa corrida; causa sin encontrar (`TODO.md`).
+**En la Vita (0.0.28.10, `tests/perf/runs/0.0.28.10_gow`).** Igual que la 0.0.28.9 sin `fx_log` (y sin `cpu_verts`). Segundos de
+combate 189-244 contra la 0.0.28.9: 10,8 -> 12,0 frames HD/s; traductor 92,6 -> 70,6 ms por frame HD, su tramo `gxm` 43,8 -> 26,3
+(llamadas GXM 7,3, `t3Set` 6,2, `t3Uni` 7,7, ~5 ms de otro trabajo por dibujo): lo que `gxm split` no veía de `gxm` era `fx_log`
+rehaciendo vértices, no una espera dentro de GXM. Capturador 99,5 -> 86,4 ms por frame del juego (registro 45,9: estados 5,5, vértices
+29,8, texturas 10,7; procesador ~74 ms por frame, igual); GPU 63 ms por frame HD (libre 30 %). Saltos de 3-4 frames del PSP en el
+combate: 37 -> 1, así que la causa era `fx_log`. El capturador y el hilo de dibujo (traductor + resto, ~84 ms) quedaron parejos: los
+dos limitan. Sin recorridos largos (`list_too_long`) sin `cpu_verts`. En las cinemáticas el juego va a 25-31 fps con la compuerta
+esperando ~1 ms por frame y la CPU del PSP 83 % libre: las bajadas ahí no son el plugin esperando [comparar con NativeDraw apagado].
+Entre dos oleadas (246-254 s) se cortó el HD: un frame de cada ~16 da `bad_texture` y cada uno retiene el HD un segundo
+(`held_back`); ese frame nunca guardó una carpeta de fallo, así que el motivo sale de `trFrame` (una imagen intermedia leída mientras se
+dibuja), no de `trCheck`.
 
 ## D. Leer la memoria del PSP: foto en el sync (propuesta, 2026-11-06)
 **Por qué.** Tres hechos, todos de los logs:

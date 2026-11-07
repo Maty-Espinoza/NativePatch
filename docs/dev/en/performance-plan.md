@@ -278,6 +278,16 @@ differs, redoes the GPU-path vertices on the CPU in 1 frame of every 32; that fr
 With `cpu_verts` there were only ~20 s of combat (5 HD frames/s, vertices 133 ms per HD frame); after a scene change (~187 s) the
 capturer walked ~400,000 commands per frame with 1 draw for ~130 s (`bad target`, `list_too_long`), with nothing for the translator.
 Seen only in that run; cause not found (`TODO.md`).
+**On the Vita (0.0.28.10, `tests/perf/runs/0.0.28.10_gow`).** The same as 0.0.28.9 without `fx_log` (and without `cpu_verts`).
+Combat seconds 189-244 against 0.0.28.9: 10.8 -> 12.0 HD frames/s; translator 92.6 -> 70.6 ms per HD frame, its `gxm` piece 43.8 ->
+26.3 (GXM calls 7.3, `t3Set` 6.2, `t3Uni` 7.7, ~5 ms of other per-draw work): the part of `gxm` that `gxm split` did not see was
+`fx_log` redoing vertices, not a wait inside GXM. Capturer 99.5 -> 86.4 ms per game frame (record 45.9: states 5.5, vertices 29.8,
+textures 10.7; processor ~74 ms per frame, the same); GPU 63 ms per HD frame (idle 30 %). Jumps of 3-4 PSP frames in combat: 37 ->
+1, so `fx_log` was their cause. The capturer and the drawing thread (translator + rest, ~84 ms) are now even: both limit. No
+long walks (`list_too_long`) without `cpu_verts`. In the cinematics the game runs at 25-31 fps with the gate waiting ~1 ms per
+frame and the PSP CPU 83 % idle: the dips there are not the plugin waiting [to compare with NativeDraw off]. Between two waves
+(246-254 s) HD stopped: one frame in ~16 gives `bad_texture` and each one holds HD back a second (`held_back`); that frame never
+saved a failure folder, so the reason comes from `trFrame` (an intermediate image read while drawn), not from `trCheck`.
 
 ## D. Reading PSP memory: photo at the sync (proposal, 2026-11-06)
 **Why.** Three facts, all from the logs:
