@@ -68,6 +68,7 @@ Las mediciones de desarrollo están en `nativedraw/measures.h`, una línea cada 
 | `no_idle` | sin el hilo de CPU libre del PSP |
 | `no_capture` | la Vita no recorre nada: marca las listas como capturadas (casi NativeLink solo) |
 | `vram_direct` | (desarrollo) lee la VRAM del PSP directo a través de la mitad de kernel de NativeDraw (`nativedraw.skprx`, que mapea en el proceso de Adrenaline la "compat RAM" de 2 MB de la Vita, dirección física 0x1C000000) y compara cada página pedida, cuando termina su copia al espejo, con esa copia: líneas `vram direct:` en `nativedraw_capture.log` (abajo). No hace nada si la mitad de kernel no está cargada |
+| `vram_dma` | (desarrollo) con `vram_direct`, además lee una vez 64 KB del mapeo por DMA (`sceDmacMemcpy`) |
 | `vram_kread` | (desarrollo) con `vram_direct`, si no se puede hacer ningún mapeo de usuario de la compat RAM, el kernel la copia en cada lectura. Un fallo en esa lectura reinicia la Vita: solo con este archivo |
 | `gate_sync` | (v13.10) la espera a la Vita se queda en el sync, como antes de dev66 (para comparar); ver `etapa2_fase2_compuerta.md` |
 | `no_lookahead` | (v13.12) los lectores no comprueban el plan por adelantado (solo al llegar a cada CALL, como antes); ver `etapa2_fase2_adelanto.md` |

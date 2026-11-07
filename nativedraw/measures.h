@@ -16,7 +16,8 @@
   X(walk_trace, wtrace)         /* everything the walk does around VRAM sublists for 600 frames: nativedraw_trace.log */ \
   X(photo_probe, photo_probe)   /* at each sync, copies by DMA the pages the photo would copy, and throws them away */ \
   X(vram_direct, vd_on)         /* reads the PSP VRAM through the kernel half and compares it with the mirror */ \
-  X(vram_kread, vd_kread)       /* vram_direct may read through the kernel if no user mapping works (a fault restarts the Vita) */
+  X(vram_kread, vd_kread)       /* vram_direct may read through the kernel if no user mapping works (a fault restarts the Vita) */ \
+  X(vram_dma, vd_dma)           /* vram_direct also tries a DMA read of the mapping */
 // Drawing side
 #define MEASURES_DRAW(X) \
   X(gpu_timer, c_wanted)        /* how long the GPU takes on each scene */ \
