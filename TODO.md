@@ -55,6 +55,7 @@ what was done is in `CHANGELOG.md`. Updated 2026-11-06 (NativeLink 0.0.8 + Nativ
 - [ ] **Ridge Racer, capturer in the crowd:** ~16 ms per frame at 444 MHz (~3500 draws), `behind` 6-12 per second. Without the high clocks it does not fit.
 - [ ] **Memory:** under 1 MB free in one go after start, dumps fail (`peek` replaces them for now). Look at what can go (4 x 1.5 MB of textures, `fails`). The cached copy of transfers takes 512 KB more since 0.0.27.1 (without it: `transfer copy: no memory` and the old path).
 - [ ] **GPU as copier** (`performance-plan.md` C.6): measure when a `sceGxmTransferCopy` from the PSP's RAM runs against the flip before using it.
+- [ ] **`pld` on cached copies:** the L2 prefetches instructions only (`findings.md`); try a `pld` ahead of the reads of the photo and the transfer copy, measured with the bench first.
 - [ ] **PSP RAM past 32 MB for the GPU:** `sceGxmMapMemory` at 0x72000000 fails; try it in 16 MB pieces (`findings.md`). Only games with extended memory need it.
 - [ ] **Differential test of the translator:** this conversation ran old and new `trFrame` on the PC with GXM stubs over a real `f0_record.bin`, comparing all triangles and states. Worth keeping as a test tool in `tools/`.
 - [ ] **Translator failures left:** color test that is not black under an add (`fails/003_color_test_or_logic`), the first frame of the flare before its texture is in the mirror, T8 with no copy (`fails/006_bad_texture`, not understood), points on images that are read, memory free after start: 0 MB in one go with the dev reservations.

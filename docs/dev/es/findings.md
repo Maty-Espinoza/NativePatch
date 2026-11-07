@@ -54,9 +54,11 @@ directa.
   direcciones físicas 0x23000000/0x24000000). Registrarla en trozos de 16 MB no se ha probado (`TODO.md`).
 - ARM a 444 MHz, GPU SGX543MP4+ a 222 MHz, bus 222 MHz [medido, etapa 1]. En el proceso de Adrenaline hay ~33 MB de
   LPDDR libres y 4 MB de CDRAM.
-- **Caché L2:** un PL310 de 16 vías × 128 KB = 2 MB, compartido por los cuatro núcleos, con prefetch por hardware activado (wiki
-  de HENkaku *Caches*, valores configurados; el tamaño se calcula de ellos). El prefetch a mano aporta poco, como se midió
-  (`performance-plan.md`), y cada byte de la foto, el récord y el traductor compite ahí con el propio Adrenaline: mantenerlos
+- **Caché L2:** un PL310 de 16 vías × 128 KB = 2 MB, compartido por los cuatro núcleos (wiki de HENkaku *Caches*, valores
+  configurados; el tamaño se calcula de ellos). Su registro de prefetch (0x20000000 / 0x21000000) activa solo el prefetch de
+  instrucciones, no el de datos: un `pld` antes de leer copias con caché (la foto, la copia de transferencias) podría ayudar, sin
+  probar; para la RAM del PSP sin caché no aplica, y el costo de vértices del traductor no es memoria (`performance-plan.md`). Cada
+  byte de la foto, el récord y el traductor compite ahí con el propio Adrenaline: mantenerlos
   chicos vale más de lo que sugiere su tiempo de copia [deducido].
 - **Programas de la GPU (SGX543, wiki *SGX543*):** el descarte de píxeles (`kill`), la profundidad escrita por el programa
   (`depthf`) y los formatos de media precisión (f16, fx10) son instrucciones normales del shader. En las GPU PowerVR, que ordenan

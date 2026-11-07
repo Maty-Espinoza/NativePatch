@@ -54,9 +54,10 @@ proof.
   0x23000000/0x24000000). Registering it in 16 MB pieces is untried (`TODO.md`).
 - ARM at 444 MHz, SGX543MP4+ GPU at 222 MHz, bus at 222 MHz [measured, stage 1]. In the Adrenaline process there are
   ~33 MB of free LPDDR and 4 MB of CDRAM.
-- **L2 cache:** a PL310 of 16 ways × 128 KB = 2 MB, shared by the four cores, with hardware prefetch on (HENkaku wiki
-  *Caches*, configured values; the size is computed from them). Prefetching by hand adds little, as measured
-  (`performance-plan.md`), and every byte of the photo, the record and the translator competes there with Adrenaline itself:
+- **L2 cache:** a PL310 of 16 ways × 128 KB = 2 MB, shared by the four cores (HENkaku wiki *Caches*, configured values;
+  the size is computed from them). Its prefetch register (0x20000000 / 0x21000000) turns on instruction prefetch only, not data
+  prefetch: a `pld` ahead of reads of cached copies (the photo, the transfer copy) could still help, untried; for the uncached
+  PSP RAM it does not apply, and the translator's vertex cost is not memory (`performance-plan.md`). Every byte of the photo, the record and the translator competes there with Adrenaline itself:
   keeping them small is worth more than their own copy time suggests [deduced].
 - **GPU programs (SGX543, wiki *SGX543*):** pixel discard (`kill`), depth written by the program (`depthf`) and half-precision
   formats (f16, fx10) are ordinary shader instructions. On PowerVR GPUs, which sort each tile and shade only the visible
