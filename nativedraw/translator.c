@@ -1,7 +1,8 @@
 // translator.c: draws with the Vita GPU (GXM), at double size (960x544), a frame of the record (record.h: GE draws and
-// states saved by record.c in the capturer). Included inside presenter.c, it uses its patcher, surfaces and context;
-// the presenter calls trInit at startup and trFrame in the Adrenaline thread, instead of copying the PSP image. If the
-// frame has something it cannot draw it returns the reason (T_*) and the presenter shows the normal image.
+// states saved by record.c in the capturer). Included inside presenter.c, it uses its patcher and surfaces; the presenter
+// calls trInit at startup, and its translator thread calls trFrame, which records the frame's scenes in a deferred context
+// for the presenter to run in the Adrenaline thread instead of the PSP image. If the frame has something it cannot draw it
+// returns the reason (T_*) and the presenter shows the normal image.
 // Own shaders in shaders/*.cg.
 #include <arm_neon.h>
 #include "record.h"
@@ -32,21 +33,23 @@ DEV(enum { BP_FAST, BP_MID, BP_TEX, BP_COL, BP_BASE, BP_N };
     static volatile uint32_t b_fx[8], b_fxd[8], b_fxn, b_lit[3], b_fxp[8];)  // b_lit: what nd_v4 lights: pixels, draws, vertices; b_fxp: pixels by fragProg kind, 7 the GPU path
 static uint32_t t_seen[TN];   // times each reason was seen (the first one is logged in detail)
 typedef struct { float x, y, z, w, u, v, f; uint32_t c; } TV;  // translated vertex (32 bytes, the nd_v format); f: fog (1: none)
-static TV *tv[2];            // translated vertices, one per surface
+static TV *tv[NS];           // translated vertices, one per surface
 static TV ts[1 << 12];       // a draw being translated: cached, because reading tv back is slow
-static uint32_t *tpal[2];    // translated palettes (8888), aligned to 64: 16 entries (64 bytes) or 256 (1 KB)
+static uint32_t *tpal[NS];   // translated palettes (8888), aligned to 64: 16 entries (64 bytes) or 256 (1 KB)
 #define TV_N (96 << 10)      // vertices per surface
 #define TI_N (64 << 10)      // most vertices in one GXM draw (16-bit indices: tib holds 0 to TI_N - 1)
 #define TP_B (256 << 10)     // palette bytes per surface
 #define C_RGB (SCE_GXM_COLOR_MASK_R | SCE_GXM_COLOR_MASK_G | SCE_GXM_COLOR_MASK_B)  // alpha is never written
-// last record frame seen, whether it was drawn fine, how many times it was repeated and when one was last not drawable
-static uint32_t t_frame = ~0u, t_ok, t_rep, t_bad;
+// last record frame seen and when one was last not drawable (translator thread); whether the surface shown was drawn fine
+// and how many times it was repeated (presenter)
+static uint32_t t_frame = ~0u, t_bad;
+static volatile uint32_t t_ok, t_rep;
 static uint32_t t_mark[RD_N / 32 + 1];  // a bit per draw not done
 static uint32_t t_prevd = ~0u, t_prev2 = ~0u;  // images shown by the last frames drawn, the latest first: t_prevd's surface is the one not being drawn
 DEV(static void failNote(RFrame *f, uint32_t i, int r);)  // dump.c
 static uint16_t *tib;        // 0, 1, 2... (indices for the GPU)
 #define TG_N (192 << 10)     // indices of the joined draws of the GPU path, per surface (and 24 more: gAdd writes in blocks)
-static uint16_t *tgi[2];
+static uint16_t *tgi[NS];
 // Intermediate image: a game draw to another VRAM image (not the shown one) goes to a part of one of our two surfaces
 // (rsf, 1024x544, double size); if later in the same frame a texture is at that address, it is read from there. Each target
 // address is one RT (a view): its image is placed in a surface by trCheckFrame, and the view starts that far right
@@ -59,6 +62,47 @@ typedef struct { uint32_t fb, fr, sh, psm, sm, ox, oy, alone, x0, y0, x1, y1; vo
 // Scenes on different render targets may run at the same time: this object keeps those of a frame in order, because a
 // scene reads what the one before drew
 static SceGxmSyncObject *t_sync;
+// The translator runs in its own thread and records each scene in a command list of its deferred context (t_dc); the
+// presenter runs them in Adrenaline's thread, each inside a scene it opens on the same target (presenter.c, trRun). Each
+// surface has its list of scenes (tl_s) and its own memory for their commands (TL_B), reused only once the GPU has finished
+// every scene that reads that surface (t_q): recycling it earlier crashes the GPU.
+typedef struct { SceGxmCommandList cl; const SceGxmRenderTarget *rt; const SceGxmColorSurface *cs; SceGxmValidRegion vr;
+                 SceGxmDepthStencilSurface ds; uint8_t whole, base; DEV(uint8_t ty; uint32_t tag, fr, dr, px, sw;) } TScene;
+#define SC_N 128
+#define TL_B (6 << 20)
+typedef struct { TScene sc[SC_N]; uint32_t n, used, fail; uint8_t *mem; } TList;
+static TList tl_s[NS], *tcur;  // tcur: the one being recorded
+static SceGxmContext *t_dc;
+// (in SceGxm, not in vita-headers) the piece of memory the deferred context keeps filling: 0 makes it ask the callback again
+int sceGxmSetDeferredContextVdmBuffer(SceGxmContext *c, void *mem, SceSize size);
+int sceGxmSetDeferredContextVertexBuffer(SceGxmContext *c, void *mem, SceSize size);
+int sceGxmSetDeferredContextFragmentBuffer(SceGxmContext *c, void *mem, SceSize size);
+static volatile uint32_t t_q[NS];  // last scene of ours that reads surface k, or its vertices, palettes and commands
+static int t_ps;  // surface of the frame before, which "an image of a frame before" reads
+// The deferred context's memory (vdm, vertex and fragment): pieces of tcur's block; 0 when it is full (the frame fails)
+static void *tlMem(void *a, SceSize n, SceSize *got) {
+  uint32_t o = (tcur->used + 255) & ~255u, k = n > (64 << 10) ? n : 64 << 10;
+  if (o + k > TL_B) k = n;
+  if (o + k > TL_B) { tcur->fail = 1; return 0; }
+  tcur->used = o + k; *got = k;
+  return tcur->mem + o;
+}
+// Starts recording a scene on target rt, color surface cs and depth ds; reg: its valid region (0: the whole target)
+static void tsBegin(SceGxmContext *c, const SceGxmRenderTarget *rt, const SceGxmValidRegion *reg, const SceGxmColorSurface *cs,
+                    const SceGxmDepthStencilSurface *ds) {
+  if (tcur->n >= SC_N) { tcur->fail = 1; tcur->n--; }
+  TScene *q = &tcur->sc[tcur->n++];
+  q->rt = rt; q->cs = cs; q->ds = *ds; q->whole = !reg; q->base = 0;
+  if (reg) q->vr = *reg; else { q->vr.xMax = LINE - 1; q->vr.yMax = H - 1; }
+  if (sceGxmBeginCommandList(c) < 0) tcur->fail = 1;
+  sceGxmSetDefaultRegionClipAndViewport(c, q->vr.xMax, q->vr.yMax);
+}
+// Ends the scene being recorded (ty, dr, px, sw: what the GPU timer notes of it, cNote)
+static void tsEnd(SceGxmContext *c, int ty, uint32_t dr, uint32_t px, uint32_t sw) {
+  TScene *q = &tcur->sc[tcur->n - 1];
+  if (sceGxmEndCommandList(c, &q->cl) < 0) tcur->fail = 1;
+  DEV(q->ty = ty; q->tag = c_tag; q->fr = c_fr; q->dr = dr; q->px = px; q->sw = sw;)
+}
 #define RT_N 12
 static RT rts[RT_N], rsf[2], rtc;  // rtc: copy of the part of an image that a draw reads while drawing on that same image
 // rtb: the boxed stretch of a frame (trBoxed): draws t_b0 to t_b1 - 1 go here, moved so the corner t_bx, t_by of the box is at
@@ -141,11 +185,14 @@ static void trBench(void) {
 // shaders and finds their parameters, creates the basic programs, reserves the intermediate images and lets the GPU
 // read the PSP RAM and the record textures. 0 if ready; negative otherwise.
 static int trInit(void) {
-  for (int i = 0; i < 2; i++)
-    if (!(tv[i] = gmem(TV_N * sizeof(TV), RD)) || !(tpal[i] = gmem(TP_B, RD))) return -1;
+  for (int i = 0; i < NS; i++)
+    if (!(tv[i] = gmem(TV_N * sizeof(TV), RD)) || !(tpal[i] = gmem(TP_B, RD)) || !(tgi[i] = gmem((TG_N + 24) * 2, RD)) ||
+        !(tl_s[i].mem = gmem(TL_B, RD))) return -1;
   if (!(tib = gmem(TI_N * 2, RD))) return -1;
-  if (!(tgi[0] = gmem((TG_N + 24) * 4, RD))) return -1;
-  tgi[1] = tgi[0] + TG_N + 24;
+  static uint8_t host[16 << 10];
+  SceGxmDeferredContextParams dp = { host, sizeof host, tlMem, tlMem, tlMem, 0, 0, 0, 0, 0, 0, 0 };
+  int rd = sceGxmCreateDeferredContext(&dp, &t_dc);
+  if (rd < 0) { alog("translator: deferred context %08x\n", rd); return rd; }
   for (uint32_t i = 0; i < TI_N; i++) tib[i] = i;
   SceGxmShaderPatcherId iv;
   int r = sceGxmShaderPatcherRegisterProgram(pat, (const SceGxmProgram *)nd_v_gxp, &iv);
@@ -436,6 +483,20 @@ static void trOutLog(RFrame *f, RDraw *d, uint32_t i, uint32_t k, uint32_t sz, c
        f->nd, d->prim, d->vt, i, d->n, k, sz);
   trRaw("translator: vertex_out vertex", p, sz);
   trRaw("translator: vertex_out draw", RV(f, d), d->vlen);
+}
+// First 40 draws refused as T_TEX while drawing: which check (1 the image read shares its surface with the one drawn,
+// 2 and 3 the GXM texture of an image, 4 another view of the image drawn overlaps what it reads, 5 a texture with no
+// copy in the record, 6 the GXM texture of a record texture), the draw, its texture and the images read (src) and drawn (dst)
+static void trTexLog(RFrame *f, uint32_t i, int k, const uint32_t *e, const RT *src, const RT *dst) {
+  static uint32_t cnt;
+  if (cnt >= 40) return;
+  cnt++;
+  alog("translator: bad_texture (%u): frame %u draw %u of %u check %d | texture %07x fmt %u %ux%u w %u copy %u | target %06x | "
+       "read %06x alone %u sh %u at %u,%u in %u | drawn %06x alone %u at %u,%u in %u region %u,%u\n", cnt, f->frame, i, f->nd, k,
+       texAddr(e), RE(e, 0xC3) & 15, 1u << (RE(e, 0xB8) & 15), 1u << (RE(e, 0xB8) >> 8 & 15), RE(e, 0xA8) & 0x7FF, f->d[i].toff != 0,
+       RE(e, 0x9C) & 0xFFFFFF, src ? src->fb : 0, src ? src->alone : 0, src ? src->sh : 0, src ? src->ox : 0, src ? src->oy : 0,
+       src ? src->sm : 0, dst ? dst->fb : 0, dst ? dst->alone : 0, dst ? dst->ox : 0, dst ? dst->oy : 0, dst ? dst->sm : 0,
+       dst ? dst->vr.xMax : 0, dst ? dst->vr.yMax : 0);
 }
 #endif
 
@@ -1043,18 +1104,12 @@ static void trWvp(float *m, const SceGxmValidRegion *r) {
   sceClibMemcpy(m, tr_wvp, sizeof tr_wvp);
   if (r) { m[0] = 2.0f / (r->xMax + 1); m[5] = -2.0f / (r->yMax + 1); }
 }
-// What goes underneath in the surface (scene already open): the normal image base stretched, with the presenter's
-// program; without base, full-screen black (4 vertices at o + nv). Returns the vertices used from o.
-static uint32_t trBase(SceGxmContext *c, const SceGxmTexture *base, TV *o, uint32_t nv) {
+// What goes underneath in the surface (scene already open): with base, the normal image stretched, which the presenter draws
+// when it runs the scene (it has this frame's image); without, full-screen black (4 vertices at o + nv). Returns the vertices
+// used from o.
+static uint32_t trBase(SceGxmContext *c, int base, TV *o, uint32_t nv) {
   void *u;
-  if (base) {
-    sceGxmSetVertexProgram(c, vp); sceGxmSetFragmentProgram(c, fp);
-    sceGxmReserveVertexDefaultUniformBuffer(c, &u); sceGxmSetUniformDataF(u, p_wvp, 0, 16, tr_wvp);
-    sceGxmSetFragmentTexture(c, 0, base); sceGxmSetVertexStream(c, 0, vb);
-    sceGxmDraw(c, SCE_GXM_PRIMITIVE_TRIANGLE_STRIP, SCE_GXM_INDEX_FORMAT_U16, ib, 4);
-    sceGxmSetVertexProgram(c, nvp); sceGxmReserveVertexDefaultUniformBuffer(c, &u); sceGxmSetUniformDataF(u, n_wvp, 0, 16, tr_wvp);
-    return nv;
-  }
+  if (base) { tcur->sc[tcur->n - 1].base = 1; return nv; }
   TV q[4] = { { 0, 0, .5f, 1, 0, 0, 1, 0xFF000000u }, { W, 0, .5f, 1, 0, 0, 1, 0xFF000000u }, { 0, H, .5f, 1, 0, 0, 1, 0xFF000000u }, { W, H, .5f, 1, 0, 0, 1, 0xFF000000u } };
   sceClibMemcpy(o + nv, q, sizeof q);
   sceGxmSetFragmentProgram(c, fragProg(0, 0, C_RGB));
@@ -1498,13 +1553,13 @@ static void trBoxed(RFrame *f, uint32_t disp, uint32_t ord) {
   }
 }
 
-// Draws frame f of the record to surface s (cs[s]), in the Adrenaline thread. base: the normal image, which goes
-// underneath stretched (what the game does not redraw stays as on the PSP); 0: black background. First checks the frame
+// Records frame f of the record for surface s (cs[s]) in tl_s[s], in the translator thread (c: the deferred context). base:
+// the normal image goes underneath stretched (what the game does not redraw stays as on the PSP); 0: black background. First checks the frame
 // (trCheckFrame): if a draw fails, returns the reason without drawing. Then opens
 // one scene per destination change (surface s or an intermediate image; if possible, all intermediates first and the
 // surface last, in a single scene: each scene reads and writes its whole surface), sets up texture, palette (to 8888 in
 // tpal), vertices (trVerts, in tv) and uniforms of each draw, and draws it. T_OK if ready; if it fails midway
-// returns the reason and the surface is not used.
+// returns the reason and its scenes are not run.
 // The fields that make two draws share their state
 static inline int gSame(const RDraw *a, const RDraw *b) {
   return a->st == b->st && a->vt == b->vt && a->prim == b->prim && a->toff == b->toff && a->clut == b->clut && a->clen == b->clen &&
@@ -1541,7 +1596,7 @@ static inline uint32_t gAdd(uint16_t *o, uint32_t ix, uint32_t prim, uint32_t nt
 #define t3Set(...) GX(GK_T3SET, t3Set(__VA_ARGS__))
 #define t3Uni(...) GX(GK_T3UNI, t3Uni(__VA_ARGS__))
 #endif
-static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base) {
+static int trFrame(SceGxmContext *c, RFrame *f, int s, int base) {
   t3.ke = 0;
   DEV(uint32_t t_ss = 0; c_fr++;)
   DEV(static uint32_t fxn; int sfx = fx_log && !(++fxn & 31); b_fr++; b_fxn += sfx;)
@@ -1565,27 +1620,28 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
     if ((RE(e, 0x9C) & 0x1FFFF0) != disp) cut = i;
     else if (!(RE(e, 0xD3) & 1) && (RE(e, 0x23) & 1 || RE(e, 0x24) & 1)) zl = i, zc = cut;
   }
-  static uint32_t t_q[2];  // last scene that read the vertices and palettes of each surface
-  // if the GPU is still reading them (unfinished scene) it waits
-  if (gBusy(t_q[s])) { g_psurf++; gEv("vertices and palettes rewritten", t_q[s]); gWait(t_q[s]); }
+  // if the GPU is still reading the surface's vertices, palettes or commands (unfinished scene) it waits until it ends:
+  // rewriting commands the GPU is running would crash it
+  if (gBusy(t_q[s])) { g_psurf++; gEv("vertices, palettes and commands waited for", t_q[s]); while (gBusy(t_q[s])) gWait(t_q[s]); }
+  // the context keeps writing in the last piece it was given: it is taken away, so this frame's commands go to its own block
+  tcur = &tl_s[s]; tcur->n = tcur->used = tcur->fail = 0;
+  sceGxmSetDeferredContextVdmBuffer(c, 0, 0); sceGxmSetDeferredContextVertexBuffer(c, 0, 0); sceGxmSetDeferredContextFragmentBuffer(c, 0, 0);
   TV *o = tv[s];
   uint32_t *pal = tpal[s], np = 0, nv = 0, pal_prev = ~0u, pn = 0;  // np: words used; pal_prev/pn: the previous palette
   void *u;
   // CTAG: tag of the scene being closed, for the GPU timer
 #define CTAG() (c_tag = cur_rt == &rtb ? CK_BOX : cur_rt ? cur_rt->fb | CK_IMG : t_ss++ ? CK_SURF2 : CK_SURF)
   // SCENE: starts a scene on surface surf_tex with the vertex program and the matrix
-#define SCENE(surf_tex, reg) do { DEV(h_at = 5;) sceGxmBeginScene(c, 0, cur_rt ? rt_i : rt, reg, 0, t_sync, surf_tex, cur_rt ? &ds : &dss); DEV(h_at = 4;) t_zs = t_st = t_sr = t_cl = ~0u; zsSet(c, 0, 0); sceGxmSetVertexProgram(c, nvp); gv_cur = 0; \
+#define SCENE(surf_tex, reg) do { DEV(h_at = 5;) tsBegin(c, cur_rt ? rt_i : rt, reg, surf_tex, cur_rt ? &ds : &dss); DEV(h_at = 4;) t_zs = t_st = t_sr = t_cl = ~0u; zsSet(c, 0, 0); sceGxmSetVertexProgram(c, nvp); gv_cur = 0; \
     trWvp(wm, reg); if (cur_rt == &rtb) { wm[12] -= t_bx * wm[0]; wm[13] -= t_by * wm[5]; } if (cur_rt && cur_rt->sh) { wm[0] /= 2; wm[5] /= 2; } sceGxmReserveVertexDefaultUniformBuffer(c, &u); sceGxmSetUniformDataF(u, n_wvp, 0, 16, wm); } while (0)
   // OPEN: closes the open scene (if any) and opens one on dst (0: surface s); the first time on the surface,
   // puts the normal image (or black: trBase) underneath
-#define OPEN(dst_) do { RUN(); pd = 0; if (opened) { SURF_WAIT(); DEV(h_at = 6;) sceGxmEndScene(c, 0, gEnd()); DEV(h_at = 4; CTAG();) cNote(cur_rt ? C_INT : C_TR, &gq_n, t_draws - d0, spx / 1000, ssw); } \
+#define OPEN(dst_) do { RUN(); pd = 0; if (opened) { DEV(h_at = 6; CTAG();) tsEnd(c, cur_rt ? C_INT : C_TR, t_draws - d0, spx / 1000, ssw); DEV(h_at = 4;) } \
     d0 = t_draws; spx = 0; ssw = 0; cur_rt = (dst_); opened = 1; \
     if (!cur_rt) { sceGxmDepthStencilSurfaceSetForceLoadMode(&dss, has_base && (int)zi <= zl ? SCE_GXM_DEPTH_STENCIL_FORCE_LOAD_ENABLED : SCE_GXM_DEPTH_STENCIL_FORCE_LOAD_DISABLED); \
                    sceGxmDepthStencilSurfaceSetForceStoreMode(&dss, zc > (int)zi ? SCE_GXM_DEPTH_STENCIL_FORCE_STORE_ENABLED : SCE_GXM_DEPTH_STENCIL_FORCE_STORE_DISABLED); } \
     SCENE(cur_rt ? &cur_rt->cs : &cs[s], cur_rt ? &cur_rt->vr : 0); \
     if (!cur_rt && !has_base) { has_base = 1; nv = trBase(c, base, o, nv); spx += W * H; DEV(bpx[0][BP_BASE] += W * H;) } fp_cur = 0; tc_ok = 0; } while (0)
-  // SURF_WAIT: the surface s is being sampled for the screen until the previous frame's scenes end, and its scene must not start before
-#define SURF_WAIT() do { if (!cur_rt) gWait(fq[0]); } while (0)
   // GRUN: sends the pending draw of the GPU path, triangles of indices gs to gn on the vertices of the record at gb
 #define GRUN() do { if (gn > gs) { sceGxmSetVertexStream(c, 0, f->tx + gb); \
     sceGxmDraw(c, SCE_GXM_PRIMITIVE_TRIANGLES, SCE_GXM_INDEX_FORMAT_U16, gi + gs, gn - gs); gs = gn; } } while (0)
@@ -1683,19 +1739,19 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
       RT *src = (d->toff && !(key && fixBlend(e))) || shown || prev ? 0 : rtOf(texAddr(e) & 0x1FFFF0, f->frame);
       if (src || shown || prev) {  // intermediate or shown image: its double-size surface (512 x 272 of the PSP -> 1024 x 544)
         self = src && src == dst;
-        if (self && !src->alone) { res = T_TEX; break; }  // (the image itself when it shares its surface: not done)
-        if (sceGxmTextureInitLinear(&t, shown ? surf[s] : prev ? surf[s ^ 1] : src->mem, SCE_GXM_TEXTURE_FORMAT_A8B8G8R8, LINE, H, 0) < 0) { res = T_TEX; break; }
+        if (self && !src->alone) { res = T_TEX; DEV(trTexLog(f, i, 1, e, src, dst);) break; }  // (the image itself when it shares its surface: not done)
+        if (sceGxmTextureInitLinear(&t, shown ? surf[s] : prev ? surf[t_ps] : src->mem, SCE_GXM_TEXTURE_FORMAT_A8B8G8R8, LINE, H, 0) < 0) { res = T_TEX; DEV(trTexLog(f, i, 2, e, src, dst);) break; }
         tw = src && src->sh ? LINE : LINE / 2; th = src && src->sh ? H : H / 2; fmt = 3;
         if (src && !src->alone) {  // (an image sharing its surface: only the texture's part, so wrap and clamp stop at its edge)
           uint32_t sc = 2 >> src->sh, wp = (1u << (b8 & 15)) * sc, hp = (1u << (b8 >> 8 & 15)) * sc;
           wp = wp < LINE - src->ox ? wp : LINE - src->ox; hp = hp < H - src->oy ? hp : H - src->oy;
-          if (sceGxmTextureInitLinearStrided(&t, src->mem, SCE_GXM_TEXTURE_FORMAT_A8B8G8R8, wp, hp, LINE * 4) < 0) { res = T_TEX; break; }
+          if (sceGxmTextureInitLinearStrided(&t, src->mem, SCE_GXM_TEXTURE_FORMAT_A8B8G8R8, wp, hp, LINE * 4) < 0) { res = T_TEX; DEV(trTexLog(f, i, 3, e, src, dst);) break; }
           tw = wp / sc; th = hp / sc;
         }
         // another view of the image being drawn: only if what it reads is not where it draws
         if (src && dst && dst != &rtb && !self && src->sm == dst->sm && src->x0 == dst->x0 && src->y0 == dst->y0 && src->ox < dst->ox + dst->vr.xMax + 1 &&
-            dst->ox < src->ox + tw * (2 >> src->sh) && src->oy < dst->oy + dst->vr.yMax + 1 && dst->oy < src->oy + th * (2 >> src->sh)) { res = T_TEX; break; }
-      } else if (!d->toff || sceGxmTextureInitLinear(&t, f->tx + d->toff - 1, gf[fmt], tbw, (uint32_t)th, 0) < 0) { res = T_TEX; break; }
+            dst->ox < src->ox + tw * (2 >> src->sh) && src->oy < dst->oy + dst->vr.yMax + 1 && dst->oy < src->oy + th * (2 >> src->sh)) { res = T_TEX; DEV(trTexLog(f, i, 4, e, src, dst);) break; }
+      } else if (!d->toff || sceGxmTextureInitLinear(&t, f->tx + d->toff - 1, gf[fmt], tbw, (uint32_t)th, 0) < 0) { res = T_TEX; DEV(trTexLog(f, i, d->toff ? 6 : 5, e, src, dst);) break; }
       if (fmt >= 4) {  // palette: to 8888, with shift, mask and start (0xC5)
         uint32_t c5 = RE(e, 0xC5), cf = c5 & 3, sh = c5 >> 2 & 31, mk = c5 >> 8 & 0xFF, st = (c5 >> 16 & 31) << 4;
         uint32_t ne = fmt == 4 ? 16 : 256, bpe = cf == 3 ? 4 : 2, max = d->clen / bpe, *pp;
@@ -1824,15 +1880,15 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
         sceClibMemcpy(q, qv, sizeof qv); extra = 4;
         RUN();
         sceGxmTextureInitLinear(&ts, dst->mem, SCE_GXM_TEXTURE_FORMAT_A8B8G8R8, LINE, H, 0);
-        sceGxmEndScene(c, 0, gEnd()); DEV(CTAG();) cNote(C_INT, &gq_n, t_draws - d0, spx / 1000, ssw); opened = 0;
-        sceGxmBeginScene(c, 0, rt_c, &vr, 0, t_sync, &rtc.cs, &ds);
+        DEV(CTAG();) tsEnd(c, C_INT, t_draws - d0, spx / 1000, ssw); opened = 0;
+        tsBegin(c, rt_c, &vr, &rtc.cs, &ds);
         t_zs = t_st = t_sr = t_cl = ~0u; zsSet(c, 0, 0); sceGxmSetCullMode(c, SCE_GXM_CULL_NONE);
         sceGxmSetVertexProgram(c, vp); sceGxmSetFragmentProgram(c, fp);
         float wm[16]; trWvp(wm, &vr);
         sceGxmReserveVertexDefaultUniformBuffer(c, &u); sceGxmSetUniformDataF(u, p_wvp, 0, 16, wm);
         sceGxmSetFragmentTexture(c, 0, &ts); sceGxmSetVertexStream(c, 0, q);
         sceGxmDraw(c, SCE_GXM_PRIMITIVE_TRIANGLE_STRIP, SCE_GXM_INDEX_FORMAT_U16, ib, 4);
-        sceGxmEndScene(c, 0, gEnd()); DEV(c_tag = dst->fb | CK_COPY;) cNote(C_INT, &gq_n, 1, 0, 0);
+        DEV(c_tag = dst->fb | CK_COPY;) tsEnd(c, C_INT, 1, 0, 0);
         OPEN(dst);
         sceClibMemcpy(hv, b, sizeof b); dy[0] = dy[1] = 1e9f; dy[2] = dy[3] = -1e9f;
       }
@@ -1974,26 +2030,19 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
   if (!has_base && res == T_OK) OPEN(0);  // (frame with no draws to the surface: it still gets the image underneath)
   RUN();
   if (opened) {  // (if something failed midway, the surface keeps what was drawn: not used)
-    sceGxmSetCullMode(c, SCE_GXM_CULL_NONE);
-    sceGxmSetFrontDepthFunc(c, SCE_GXM_DEPTH_FUNC_ALWAYS);  // the context is Adrenaline's: its defaults back
-    sceGxmSetFrontDepthWriteEnable(c, SCE_GXM_DEPTH_WRITE_ENABLED);
-    sceGxmSetFrontStencilFunc(c, SCE_GXM_STENCIL_FUNC_ALWAYS, SCE_GXM_STENCIL_OP_KEEP, SCE_GXM_STENCIL_OP_KEEP, SCE_GXM_STENCIL_OP_KEEP, 0, 0);
     if (hd_mark && res == T_OK && !cur_rt) trMark(c);
-    SURF_WAIT();
     DEV(tb = PT();)
-    DEV(h_at = 6;)
-    sceGxmEndScene(c, 0, gEnd());
-    DEV(PA(P_T_END, tb); CTAG();)
-    cNote(cur_rt ? C_INT : C_TR, &gq_n, t_draws - d0, spx / 1000, ssw);
+    DEV(h_at = 6; CTAG();)
+    tsEnd(c, cur_rt ? C_INT : C_TR, t_draws - d0, spx / 1000, ssw);
+    DEV(PA(P_T_END, tb);)
   }
+  if (tcur->fail && res == T_OK) res = T_LIMIT;  // (the command memory or the scene list was full)
 #undef VT
 #undef OPEN
-#undef SURF_WAIT
 #undef RUN
 #undef GRUN
 #undef SCENE
 #undef CTAG
-  t_q[s] = gq;
   DEV(if (smp) { for (int a = 0; a < 2; a++) for (int i = 0; i < BP_N; i++) b_px[a][i] += bpx[a][i] / 1000; for (int k = 0; k < BW_N; k++) b_why[k] += bwy[k] / 1000; b_pxn++; })
   if (res == T_OK && disp != t_prevd) { t_prev2 = t_prevd; t_prevd = disp; }
   DEV(if (vm) { vu[VS_TKB] = tkb >> 10; vu[VS_FR] = 1; vu[VS_ALL] = now() - ta; vu[VS_RUN] = thrRun() - vr0; for (int i = 0; i < VS_N; i++) v_us[vm - 1][i] += vu[i]; })

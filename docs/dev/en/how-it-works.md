@@ -31,7 +31,7 @@ and what limits were found: `findings.md`. How each piece was reached, version b
 | Capturer, readers, sublist memory, mirror requests, capture logs | `nativedraw/capture.c` | Vita |
 | Frame record (what each frame needs to be drawn) | `nativedraw/record.c`, `record.h` | Vita (inside `capture.c`) |
 | Presenter: takes Adrenaline's screen, L+R+START menu | `nativedraw/presenter.c` | Vita, Adrenaline's drawing thread |
-| Translator: draws the record with the Vita's GPU | `nativedraw/translator.c`, `shaders/` | Vita (inside `presenter.c`) |
+| Translator: draws the record with the Vita's GPU | `nativedraw/translator.c`, `shaders/` | Vita, its own thread (inside `presenter.c`) |
 | GPU timer, dumps, dump replay | `gpu_timer.c`, `dump.c`, `replay.c` | Vita (inside `presenter.c`) |
 | Test of the capturer off the Vita (qemu) | `nativedraw/capture_test.c` | PC |
 | Installer (`NativePatch.vpk`) | `installer/main.c` | Vita (app) |
@@ -103,11 +103,11 @@ unused: `SB[0x47]`, bits 4 and 8 of 0x4A and events 7, 8, 9, 10 and 12.
    writes its statistics to the log every 600 frames (~10 s). The capturer closes the frame: if the record is
    complete (all draws went through it) it publishes it; if it is missing VRAM textures, it waits for the mirror copy of
    that flip and then publishes it.
-5. The presenter, hooked at the end of each Adrenaline scene, takes the last complete frame published and the translator
-   draws it with the Vita's GPU on its own 1024x544 surface (960x544 visible), with the normal image
-   stretched underneath (what the game does not redraw stays as on the PSP). In Adrenaline's next scene, when
-   Adrenaline is about to draw the PSP's image, that surface is passed to it instead. The image appears one frame after
-   the PSP's.
+5. The translator thread takes the last complete frame published and records, in a deferred GXM context, what the Vita's
+   GPU must draw on one of its 1024x544 surfaces (960x544 visible). The presenter, hooked at the end of each Adrenaline scene,
+   runs those recorded scenes with the normal image stretched underneath (what the game does not redraw stays as on the PSP).
+   In Adrenaline's next scene, when Adrenaline is about to draw the PSP's image, that surface is passed to it instead. The
+   image appears one frame or more after the PSP's.
 6. If the frame has something the translator does not know how to draw (3D, a blend with no equivalent, a texture with no copy...),
    the normal image is shown and the reason is counted in the log (`translator:` in `nativedraw.log`).
 
@@ -121,8 +121,9 @@ unused: `SB[0x47]`, bits 4 and 8 of 0x4A and events 7, 8, 9, 10 and 12.
 | log | (0xB0) | writes `nativedraw_capture.log` every second |
 | writer | (0xA0) | writes the NativeLink log and `nativedraw.log` to the card (both go through a ring: writing to the card blocks for tens of ms, and some lines come from Adrenaline's drawing thread) |
 | presenter | (0xA0) | hooks Adrenaline, paints the menu, handles dumps and replay, writes `nativedraw.log` every 10 s |
+| translator | any (0x63, below the record) | records each frame of the record in a deferred GXM context (`trFrame`), one frame at a time; waits for the GPU here, not in Adrenaline's thread |
 | GPU timer | (0x40) | development build, with `gpu_timer`: measures how long the GPU takes in each scene |
-| Adrenaline's drawing thread | Adrenaline's own | the translator and the presenter proper run here (in the GXM hooks) |
+| Adrenaline's drawing thread | Adrenaline's own | the presenter proper runs here (in the GXM hooks): it runs the scenes the translator recorded (~30 µs per 2,000 draws in the stage 1 bench) or draws the normal image |
 
 - **Reading the PSP's RAM is the expensive part** (~2 µs per uncached line): hence the look-ahead readers and the reads of
   256 bytes at a time with NEON.
@@ -176,10 +177,12 @@ unused: `SB[0x47]`, bits 4 and 8 of 0x4A and events 7, 8, 9, 10 and 12.
   that cannot be drawn looks like a jump back. When a frame cannot be drawn, HD only resumes once the frames have been
   drawable for a whole second (`held_back` in the log); meanwhile they are only checked and the normal image is shown.
 - **Synchronization with the GPU:** each scene of its own writes its number in a free word of the GXM notifications
-  when it finishes. The CPU prepares the next frame while the GPU draws the last one: the surface scene waits for it before being sent, and
-  no other frame starts if two are unfinished. Before
-  rewriting vertices, palettes or the copy of the normal image it waits for the scene that was reading them to finish (at
-  most 30 ms). This way there are no broken frames of one frame.
+  when it finishes. There are three surfaces: one shown, one the translator records on, one free or still read by the GPU.
+  Each surface has its own vertices, palettes, indices and command memory (6 MB), and the translator only reuses a surface once
+  the GPU has finished every scene that reads it (the one drawn, the frame after it that reads it as "the frame before", and
+  Adrenaline's that showed it); that wait happens in the translator's thread and has no limit, because rewriting commands
+  the GPU is running would crash it. The presenter does not wait: if the GPU has two frames unfinished, or no surface is
+  free for the normal image, the last surface is repeated. This way there are no broken frames of one frame.
 - **"Covered":** the PS button dialog and the PSP's system notices are drawn on top of the game without going through the
   lists. Every frame, 64 points of the normal image are compared with the Vita's drawing; if they do not look alike for 6 frames
   in a row, the normal image is shown until they look alike again.

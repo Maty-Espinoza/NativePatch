@@ -38,16 +38,18 @@ static uint32_t c_tfr, c_tlast;  // frames seen since the report, the last one
 static volatile uint32_t b_gus[CN], b_idle;  // GPU us per type and idle us, never cleared ("bottleneck:" line)
 
 // notes in the queue a scene just sent (n: its end notification; dr: draws; px: thousands of pixels drawn,
-// adding up each draw; sw: draws with textures that had swizzle on the PSP)
-static void cNote(int ty, const SceGxmNotification *n, uint32_t dr, uint32_t px, uint32_t sw) {
+// adding up each draw; sw: draws with textures that had swizzle on the PSP; tag, fr: its c_tag and c_fr, kept by the
+// translator when it recorded the scene)
+static void cNoteAt(int ty, const SceGxmNotification *n, uint32_t dr, uint32_t px, uint32_t sw, uint32_t tag, uint32_t fr) {
   if (!c_on || !n) return;
   uint32_t i = c_in;
   if (i - c_out >= CQ) { c_full++; return; }  // (the next scene takes its time)
   CScene *e = &cq[i % CQ];
-  e->a = n->address; e->v = n->value; e->ty = ty; e->dr = dr; e->px = px; e->sw = sw; e->t = now(); e->tag = c_tag; e->fr = c_fr;
+  e->a = n->address; e->v = n->value; e->ty = ty; e->dr = dr; e->px = px; e->sw = sw; e->t = now(); e->tag = tag; e->fr = fr;
   __sync_synchronize();
   c_in = i + 1;
 }
+static void cNote(int ty, const SceGxmNotification *n, uint32_t dr, uint32_t px, uint32_t sw) { cNoteAt(ty, n, dr, px, sw, c_tag, c_fr); }
 // for Adrenaline's sceGxmEndScene hook: if its scene has no end notification, ours
 static const SceGxmNotification *cAdr(const SceGxmNotification *f) {
   if (!c_on || f) return f;

@@ -2,7 +2,7 @@
 
 The only list of pending work. Ordered from what comes next to what can wait. Each item says where it came from
 (a document in `docs/dev/en/`, `docs/agent/en/`, `docs/changelog/en/` or the claude.ai project). Done items are removed;
-what was done is in `CHANGELOG.md`. Updated 2026-11-07 (NativeDraw 0.0.28.10 test: one options file; God of War combat 12.0 HD fps without `fx_log`). How the work is done: `docs/agent/en/workflow.md`; stage 3 plan and results:
+what was done is in `CHANGELOG.md`. Updated 2026-11-07 (NativeDraw 0.0.28.11 test: the translator in its own thread, `bad_texture` detail log). How the work is done: `docs/agent/en/workflow.md`; stage 3 plan and results:
 `docs/agent/en/stage3-plan.md`.
 
 ## Next
@@ -11,14 +11,24 @@ what was done is in `CHANGELOG.md`. Updated 2026-11-07 (NativeDraw 0.0.28.10 tes
   confirmed until the pending items of the components are done (user, 2026-11-07). Done in 0.0.28.10: the jumps of 3-4 PSP frames were
   `fx_log` (37 -> 1 without it), and the translator's `gxm` piece is GXM calls 7.3 + `t3Set` 6.2 + `t3Uni` 7.7 ms (the missing part was
   `fx_log` too). Left, in order:
+  0. **Translator in its own thread (0.0.28.11, test; `performance-plan.md` C.7 and "Order from here (2026-11-07)")**: run God of War
+     (same route) and the Ridge Racer race; check `translator: thread`, HD frames per second, the drawing thread's `rest`, no GPU crash or
+     flicker. Then follow that order: the capturer first in God of War (photo at the sync, thin record), the translator one frame ahead
+     after the thin record, the GPU in Ridge Racer.
   1. **HD lost between two waves** (`0.0.28.10_gow`, 246-254 s): one frame in ~16 gives `bad_texture` from `trFrame` (no failure folder),
-     and each one holds HD back a second. Log which `T_TEX` check of `trFrame` fails, with the draw and its image, before changing anything.
-     The God of War menu (40-60 s) has the same reason.
+     and each one holds HD back a second. 0.0.28.11 logs which check fails (`translator: bad_texture (n)`, `logs-and-switches.md`): read
+     it before changing anything. The God of War menu (40-60 s) has the same reason.
   2. **Cinematic dips** (25-31 fps, one second at 17): the gate waits ~1 ms per frame and the PSP CPU is 83 % idle, so it looks like
      the game; check with `off=yes` in `options.txt` on the same cinematic.
   3. **Capturer walking ~400,000 commands per frame** (`0.0.28.9_gow_cpu_verts`): not seen without `cpu_verts`. Ask the user what was on
      screen; if it comes back, check against 0.0.28.8 (without `rgStage`) before touching code.
   4. Check the green glow (stencil) and flicker with the new depth/stencil loads; then confirm as the next version.
+- [ ] **Photo at the sync** (moved up 2026-11-07: with the translator in its own thread the capturer is the slowest stage in God of War; `docs/dev/en/performance-plan.md` §D, proposed 2026-11-06 from the user's frame-sync idea of 2026-11-05, instead of waiting at the sync only when needed): at each sync the RAM the frame used is copied to the Vita and the capturer walks that copy, so nothing the game writes after the sync reaches the frame and the reads have cache. Phase 0 measured in 0.0.25.21 (§D, "Phase 0 results"): `xferMirror` 30 ms per menu frame and 70 ms per play frame in God of War; DMA into cached memory 429 MB/s with ~170 us per call; the photo would copy 3.3-5.7 MB per God of War frame (the 8-page margin almost triples it) with 21-22 % of frames missing a page; in Ridge Racer 70-90 % of frames have no history because the list start moves every frame. 0.0.25.22: by the last frames no frame lacks history (Ridge Racer by list: 63 %), God of War still misses in 15 % of frames, and in the Ridge Racer race the photo would cost more than it gives. 0.0.25.23: every missed page was never read before in the run (new memory: vertices, transfer sources, textures), so no history predicts it; the photo needs a way for frames that read new memory (read them live and keep the frame only if the page was not written after the sync, or wait like hold). Next: `photo_probe` with God of War without `hold_game`; then decide phase 1 (transfers by copy: DMA from ~20 KB, CPU copy below, model 9.7 -> 12.5 fps in the menu with hold) and the photo as a switch. Lab and model: `tools/perf/sync_lab.sh`.
+- [ ] **Thin record** (analysis `claude/analisis_estructura_60fps_2026-11-06.md` §4.C, after the photo): the record keeps offsets into
+  the photo instead of copies of vertices, indices and palettes, and textures live in a cache across frames. Frees memory for more
+  records, which the translator one frame ahead needs.
+- [ ] **Translator one frame ahead** (`performance-plan.md`, "Order from here (2026-11-07)" 3, after the thin record): record the next
+  frame while the last waits for the presenter (today up to one Adrenaline frame idle per HD frame); needs two records held by the translator.
 - [ ] **God of War combat, what limits it now** (NativeDraw 0.0.26.5, `stage3_0.0.26.5/gow1`, seconds 318-368, per frame): the capturer
   ~125 ms (record ~90: vertices 52-61 ms copying ~1.9 MB from uncached memory, textures ~28, states ~6), so with `hold_game` the game waits
   ~105 ms per frame and runs at ~8 fps; the Vita GPU ~82 ms per HD frame (surface 70: `nd_v5` always does 8 bones and 4 lights, textured
@@ -49,10 +59,12 @@ what was done is in `CHANGELOG.md`. Updated 2026-11-07 (NativeDraw 0.0.28.10 tes
   cannot see?), then find why the record gets those vertices (VRAM vertices from a stale mirror page, or transfers after the sync).
 - [ ] **God of War after the fight, garbage VRAM sublist** (0.0.25.23, from frame 7805, second ~334, to the end of the run): the walk goes into the VRAM sublist `04190400`, whose words look like floats (`40a567de bfb585f6 c1f35ba1 3f2aaaab`), walks 400,000 commands (the limit) and drops the frame (`list_too_long`): 116 ms per frame, the game at 9 fps with `hold_game`, no HD. Same family as the garbage chain of 0.0.25.17 (mirror or BASE). Look at the transfers that fill that sublist and the mirror pages around it. Seen again in 0.0.25.25 and 0.0.25.26 (`stage3_0.0.25.26/gow2_cap_split`, second ~408): right after transfers met after the sync (`xfer_after_sync`), a VRAM sublist at `0418da34` sets BASE to 1 (`register 10: capture 000001 real 000000`), then `list_unreadable` and `bad target` from `04190400`; from there every frame has 1-2 draws, the gate stops waiting and the game runs at 31-38 fps without HD (what the user saw as fps going up at the end of the fight).
 - [ ] **God of War menu, image `162000` left out for `mask`:** an alpha test the translator cannot convert (`alphaFn`); what reads that image gives `other_target`. Log the alpha test register (0xDB) of that draw first.
-- [ ] **Photo at the sync** (`docs/dev/en/performance-plan.md` §D, proposed 2026-11-06 from the user's frame-sync idea of 2026-11-05, instead of waiting at the sync only when needed): at each sync the RAM the frame used is copied to the Vita and the capturer walks that copy, so nothing the game writes after the sync reaches the frame and the reads have cache. Phase 0 measured in 0.0.25.21 (§D, "Phase 0 results"): `xferMirror` 30 ms per menu frame and 70 ms per play frame in God of War; DMA into cached memory 429 MB/s with ~170 us per call; the photo would copy 3.3-5.7 MB per God of War frame (the 8-page margin almost triples it) with 21-22 % of frames missing a page; in Ridge Racer 70-90 % of frames have no history because the list start moves every frame. 0.0.25.22: by the last frames no frame lacks history (Ridge Racer by list: 63 %), God of War still misses in 15 % of frames, and in the Ridge Racer race the photo would cost more than it gives. 0.0.25.23: every missed page was never read before in the run (new memory: vertices, transfer sources, textures), so no history predicts it; the photo needs a way for frames that read new memory (read them live and keep the frame only if the page was not written after the sync, or wait like hold). Next: `photo_probe` with God of War without `hold_game`; then decide phase 1 (transfers by copy: DMA from ~20 KB, CPU copy below, model 9.7 -> 12.5 fps in the menu with hold) and the photo as a switch. Lab and model: `tools/perf/sync_lab.sh`.
 - [ ] **`sync_lab` does not model yet:** several syncs per frame, games that never call a sync (photo before the next enqueue or at the flip), CPU writes to VRAM, the GE slowed by the copy (bus), and the cost of the copy itself (the model `sync_model.py` does).
 - [ ] **God of War closes (C1-2858-3) with `hold_game`:** twice, the PSP stopped first (`capture health:` the capturer was idle); not with `hold_game` off; not seen with `gate_sync`. Suspected: frames of 200+ ms the game does not tolerate. Not proven.
 - [ ] **God of War, still to check once the menu and play are in HD:** the gray blocks of the menu (dumps 287-289: 9 draws with garbage state, from the mixed-frame captures; check again with the sync) and whether an image kept at PSP size was something sharp (`keep_hd`).
+- [ ] **Translator thread, left from C.7:** `thread_split` and `nd_gfx_uid` only follow Adrenaline's drawing thread, not the translator's;
+  at the extreme level the profile marks the translator's GPU wait as Adrenaline's (`P_A_WAIT`). The `bottleneck:` line now gives the
+  translator thread's time under `translator` (`logs-and-switches.md`): `tools/bottleneck.py` still calls it the drawing thread.
 - [ ] **Diagnostics added for God of War, remove when closed:** `walk_log`, `walk_trace` (flight recorder), `capture health:`, the `hold: flip walk` lines.
 - [ ] **PSP jingle when Adrenaline opens sounds slow** (user, 2026-11-05, with NativeDraw 0.0.25.14): not looked at. Possibly related to the memory work of 0.0.25.1-0.0.25.10 (spare block, `no_memo`); check with NativeDraw off.
 - [ ] **`dump: no memory` also in `auto` level:** God of War only got peeks, no record.

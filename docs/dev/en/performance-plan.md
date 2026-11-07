@@ -289,6 +289,20 @@ frame and the PSP CPU 83 % idle: the dips there are not the plugin waiting [to c
 (246-254 s) HD stopped: one frame in ~16 gives `bad_texture` and each one holds HD back a second (`held_back`); that frame never
 saved a failure folder, so the reason comes from `trFrame` (an intermediate image read while drawn), not from `trCheck`.
 
+## Order from here (2026-11-07, translator in its own thread)
+The translator no longer runs in Adrenaline's drawing thread (C.7, NativeDraw 0.0.28.11, test). What follows from it, in order:
+1. **Confirm C.7 on the Vita:** God of War combat (HD frames per second, the drawing thread's `rest`, no GPU crash, no
+   flicker) and the Ridge Racer race, where the translator and its waits in the drawing thread gave steps of 60/n (~30 HD
+   frames per second with ~16 ms of translator CPU): it should get closer to what the GPU allows.
+2. **The capturer becomes the stage to cut in God of War** (86 ms per game frame against the translator's 70, which now overlap
+   the drawing thread): D (photo at the sync) and the thin record (offsets into the photo instead of copies, a cache of
+   textures that lives across frames) move ahead of more translator work.
+3. **Translator one frame ahead:** today it records a frame and waits for the presenter to take it (up to one Adrenaline
+   frame, ~8 ms on average). Recording the next while the last waits needs two records held by the translator, which the
+   capturer's 4 do not allow today: after the thin record (more records in the same memory).
+4. **GPU (C.3) in Ridge Racer:** without the waits in the drawing thread, the GPU (~30 ms per HD frame) is what limits the race.
+5. **Translator CPU per draw (C.4):** after 2-4, since it no longer adds to the time of the thread that presents.
+
 ## D. Reading PSP memory: photo at the sync (proposal, 2026-11-06)
 **Why.** Three facts, all from the logs:
 - Reading the PSP RAM from the Vita is the slow part: ~2 us per uncached 64-byte line. KBENCH, 1 MB: 34.6 ms uncached,
@@ -439,6 +453,15 @@ reading less with the ARM or letting the DMA, the GE (C.2) or the GPU (C.1) read
    (RAM textures, vertices with C.1): no CPU and none of the ~65-100 µs per DMA call. Risks: the GPU runs the copy when its
    queue gets there, perhaps after the game rewrote the data (as in 0.0.19.1-0.0.19.2), and the result is not coherent with
    the ARM's cache. First measure when the copy runs against the flip. Verify: Vita.
+7. **Translator in its own thread** (analysis `claude/analisis_estructura_60fps_2026-11-06.md` §4.A, in test as NativeDraw
+   0.0.28.11): the translator thread records each frame in a deferred GXM context (one command list per scene), and
+   Adrenaline's drawing thread only opens each scene, draws the normal image underneath and runs the list (~30 µs per 2,000
+   draws in the stage 1 bench). Three surfaces instead of two, with their own vertices, palettes, indices and 6 MB of command
+   memory each, reused only when the GPU has finished every scene that reads them (recycling deferred memory early crashed the
+   GPU in stage 1); the deferred context is given no piece from another surface (`sceGxmSetDeferredContext*Buffer` to 0 at each
+   frame). The record stays taken until its scenes are sent. The presenter no longer waits for the GPU: it repeats the last
+   surface. Removes the 60/n steps and the GPU waits from the thread that presents; the translator's CPU per draw is the same.
+   Verify: Vita (`translator: thread`, `bottleneck:` drawing thread, HD frames per second, no GPU crash).
 
 ## Realistic targets
 - Game at 60 fps with the plugin on, in every part of Ridge Racer: B.2 + B.4 (+ B.1/B.3) should do it.

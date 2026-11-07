@@ -125,6 +125,19 @@ int sceGxmTextureInitLinearStrided(SceGxmTexture *t, const void *d, SceGxmTextur
   uint32_t x[4] = { f | 1 << 11, w | h << 16, rel(d), s }; memcpy(t, x, 16); cur_w = w; return 0;
 }
 int sceGxmBeginScene(SceGxmContext *context, unsigned int flags, const SceGxmRenderTarget *renderTarget, const SceGxmValidRegion *validRegion, SceGxmSyncObject *vertexSyncObject, SceGxmSyncObject *fragmentSyncObject, const SceGxmColorSurface *colorSurface, const SceGxmDepthStencilSurface *depthStencil) { in_rt = validRegion && colorSurface != &rtb.cs; if (depthStencil != &ds) zs_n[0] += zs_f & 1, zs_n[1] += zs_f >> 1; if (dmp) fprintf(dmp, "S\n"); return 0; }
+// The translator records each scene in a deferred command list (tsBegin): its start counts as the scene's start, on the
+// target tsBegin noted (a surface scene is the one that may load or store depth and stencil)
+int sceGxmBeginCommandList(SceGxmContext *c) {
+  TScene *q = &tcur->sc[tcur->n - 1];
+  return sceGxmBeginScene(c, 0, q->rt, q->whole ? 0 : &q->vr, 0, 0, q->cs, q->cs >= cs && q->cs < cs + NS ? &q->ds : &ds);
+}
+int sceGxmEndCommandList(SceGxmContext *c, SceGxmCommandList *l) { return 0; }
+void sceGxmSetDefaultRegionClipAndViewport(SceGxmContext *c, unsigned int x, unsigned int y) {}
+int sceGxmCreateDeferredContext(const SceGxmDeferredContextParams *p, SceGxmContext **c) { static uint32_t dc[16]; *c = (SceGxmContext *)dc; return 0; }
+int sceGxmExecuteCommandList(SceGxmContext *c, SceGxmCommandList *l) { return 0; }
+int sceGxmSetDeferredContextVdmBuffer(SceGxmContext *c, void *m, SceSize n) { return 0; }
+int sceGxmSetDeferredContextVertexBuffer(SceGxmContext *c, void *m, SceSize n) { return 0; }
+int sceGxmSetDeferredContextFragmentBuffer(SceGxmContext *c, void *m, SceSize n) { return 0; }
 // Value of parameter p (by name) of the vertex program in the context
 static const float *uni(const SceGxmProgramParameter *p) { return ((typeof(&par[0]))p)->v; }
 #ifdef GVS
@@ -375,7 +388,8 @@ int main(int argc, char **argv) {
   for (int i = 0; i < n; i++) {
     f->frame += 2;
     CALLGRIND_TOGGLE_COLLECT;
-    res = trFrame((SceGxmContext *)fake, f, i & 1, (const SceGxmTexture *)fake);
+    t_ps = (i & 1) ^ 1;  // (the frame before was drawn on the other surface)
+    res = trFrame((SceGxmContext *)fake, f, i & 1, 1);
     CALLGRIND_TOGGLE_COLLECT;
     if (dmp) fprintf(dmp, "F %s\n", tnames[res]);
   }

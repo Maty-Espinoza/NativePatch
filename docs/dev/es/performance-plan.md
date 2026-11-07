@@ -302,6 +302,20 @@ Entre dos oleadas (246-254 s) se cortó el HD: un frame de cada ~16 da `bad_text
 (`held_back`); ese frame nunca guardó una carpeta de fallo, así que el motivo sale de `trFrame` (una imagen intermedia leída mientras se
 dibuja), no de `trCheck`.
 
+## Orden desde aquí (2026-11-07, traductor en su propio hilo)
+El traductor ya no corre en el hilo de dibujo de Adrenaline (C.7, NativeDraw 0.0.28.11, de prueba). Lo que sigue de eso, en orden:
+1. **Confirmar C.7 en la Vita:** combate de God of War (frames HD por segundo, el `rest` del hilo de dibujo, sin cuelgue de la
+   GPU, sin parpadeos) y la carrera de Ridge Racer, donde el traductor y sus esperas en el hilo de dibujo daban escalones de
+   60/n (~30 frames HD por segundo con ~16 ms de CPU del traductor): debería acercarse a lo que permite la GPU.
+2. **El capturador pasa a ser la etapa a recortar en God of War** (86 ms por frame del juego contra los 70 del traductor, que
+   ahora se solapan con el hilo de dibujo): D (foto en el sync) y el registro delgado (desplazamientos dentro de la foto en vez
+   de copias, una caché de texturas que vive entre frames) pasan antes de más trabajo en el traductor.
+3. **Traductor un frame adelantado:** hoy graba un frame y espera a que el presentador lo tome (hasta un frame de Adrenaline,
+   ~8 ms en promedio). Grabar el siguiente mientras el último espera necesita que el traductor tenga dos registros tomados, y
+   los 4 del capturador hoy no lo permiten: después del registro delgado (más registros en la misma memoria).
+4. **GPU (C.3) en Ridge Racer:** sin las esperas en el hilo de dibujo, la GPU (~30 ms por frame HD) es lo que limita la carrera.
+5. **CPU del traductor por dibujo (C.4):** después de 2-4, porque ya no suma al tiempo del hilo que presenta.
+
 ## D. Leer la memoria del PSP: foto en el sync (propuesta, 2026-11-06)
 **Por qué.** Tres hechos, todos de los logs:
 - Leer la RAM del PSP desde la Vita es la parte lenta: ~2 us por línea de 64 bytes sin caché. KBENCH, 1 MB: 34,6 ms sin
@@ -463,6 +477,16 @@ el GE (C.2) o la GPU (C.1).
    lee la GPU (texturas de RAM, vértices con C.1): sin CPU y sin los ~65-100 µs por llamada al DMA. Riesgos: la GPU hace la
    copia cuando su cola llega a ella, quizá después de que el juego reescribió los datos (como en 0.0.19.1-0.0.19.2), y el
    resultado no queda coherente con la caché del ARM. Primero medir cuándo corre la copia respecto del flip. Verificar: Vita.
+7. **Traductor en su propio hilo** (análisis `claude/analisis_estructura_60fps_2026-11-06.md` §4.A, de prueba como NativeDraw
+   0.0.28.11): el hilo del traductor graba cada frame en un contexto diferido de GXM (una lista de órdenes por escena), y el
+   hilo de dibujo de Adrenaline solo abre cada escena, dibuja la imagen normal debajo y ejecuta la lista (~30 µs por 2.000
+   dibujos en el banco de la etapa 1). Tres superficies en vez de dos, cada una con sus vértices, paletas, índices y 6 MB de
+   memoria de órdenes, que se reutilizan solo cuando la GPU terminó todas las escenas que las leen (reciclar antes la memoria
+   diferida colgó la GPU en la etapa 1); al contexto diferido no le queda ningún trozo de otra superficie
+   (`sceGxmSetDeferredContext*Buffer` a 0 en cada frame). El registro queda tomado hasta que se envían sus escenas. El
+   presentador ya no espera a la GPU: repite la última superficie. Quita los escalones 60/n y las esperas a la GPU del hilo que
+   presenta; la CPU del traductor por dibujo es la misma. Verificar: Vita (`translator: thread`, hilo de dibujo en
+   `bottleneck:`, frames HD por segundo, sin cuelgue de la GPU).
 
 ## Metas realistas
 - Juego a 60 fps con el plugin encendido en toda Ridge Racer: B.2 + B.4 (+ B.1/B.3) deberían lograrlo.

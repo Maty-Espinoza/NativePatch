@@ -1,8 +1,8 @@
 // replay.c: draws again on the Vita, with the same translator (trFrame), a frame saved by a dump
 // (fK_record.bin, dumpBin format in dump.c). Used to separate an error that depends on timing (changing data,
 // races with the GPU) from one that always appears with the same data (translator, shaders).
-// Included inside presenter.c: presStart calls repStart, the presenter thread repTick and the Adrenaline thread
-// repDraw. Usage: replay=<.bin path> in options.txt. Leaves fK_replay.bmp and
+// Included inside presenter.c: presStart calls repStart, the presenter thread repTick, the translator thread records the
+// frame (trThread) and the Adrenaline thread runs it and calls repDraw. Usage: replay=<.bin path> in options.txt. Leaves fK_replay.bmp and
 // fK_replay_intermediate.bmp next to the .bin and sets the option to "no" (once per game).
 static char rep_path[128];
 // rep_on: what the replay is doing (REP_READY: loaded, drawn by the Adrenaline thread; REP_DRAWN: drawn, to write)
@@ -62,17 +62,14 @@ static void repLoad(void) {
   rep_on = REP_READY;
 }
 
-// In the Adrenaline thread, instead of the game frame: draws the loaded frame to surface s (base: the normal image,
-// underneath), waits for the GPU and copies the surface and the first surface of intermediate images. 1 if drawn (rep_on = REP_DRAWN).
-static int repDraw(SceGxmContext *c, int s, const SceGxmTexture *base) {
-  if (rep_on != REP_READY) return 0;
-  int r = trFrame(c, rep_f, s, base);
+// In the Adrenaline thread, once the scenes the translator thread recorded for the loaded frame on surface s were run (r: the
+// translator's result): waits for the GPU and copies the surface and the first surface of intermediate images (rep_on = REP_DRAWN).
+static void repDraw(SceGxmContext *c, int s, int r) {
   sceGxmFinish(c);
   sceDmacMemcpy(rep_hd, surf[s], LINE * H * 4);
   if (rsf[0].mem) sceDmacMemcpy(rep_rt, rsf[0].mem, LINE * H * 4);
   alog("replay: drawn (translator result: %s)\n", tnames[r]);
   rep_on = REP_DRAWN;
-  return 1;
 }
 
 // In the presenter thread: loads the .bin when the translator is ready and, once drawn, writes the two BMPs

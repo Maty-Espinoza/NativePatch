@@ -151,6 +151,19 @@ Las mediciones de desarrollo están en `nativedraw/measures.h`, una línea cada 
   En compilaciones de desarrollo, los primeros 40 también anotan `translator: vertex_out (n)` (frame, draw, tipo e índice de vértice) y los bytes del vértice
   y del draw; cada giant draw anota su tipo de vértice y sus bytes. `late frame <n>` (log del capturador, primeros 400): compuerta en su tope o
   captura de más de 33 ms. `record: texture limit` (primeros 20): cuántas texturas y bytes tenía el frame al llegar al tope.
+- Motivo `bad_texture`: un dibujo lee una textura que el traductor no le puede dar. En compilaciones de desarrollo, los primeros 40
+  que salen al dibujar (no de la revisión previa) anotan `translator: bad_texture (n): frame, draw of N, check K | dirección de la
+  textura, formato, tamaño, ancho de fila, copia en el registro | destino | leída: imagen, sola, sh, lugar, superficie | dibujada:
+  imagen, sola, lugar, superficie, región`. Comprobaciones: 1 la imagen leída es la que se dibuja y comparte su superficie con
+  otras, 2 y 3 GXM rechazó la textura de una imagen, 4 otra vista de la imagen que se dibuja se superpone con lo que lee el
+  dibujo, 5 una textura sin copia en el registro, 6 GXM rechazó la textura de una textura del registro.
+- `translator: thread X` (al arrancar, `nativedraw.log`): el hilo propio del traductor (negativo: no pudo arrancar y no hay HD).
+  Desde NativeDraw 0.0.28.11 el traductor graba en ese hilo y el de Adrenaline solo ejecuta lo grabado: en la línea
+  `bottleneck:`, `translator` y la espera a la GPU son tiempo del hilo del traductor, no del de dibujo, y `gxm split` mide la
+  grabación de cada llamada (su costo del lado de la GPU aparece como `draw` en el hilo de Adrenaline solo al ejecutar la
+  escena). `gpu: ... rewritten with the GPU unfinished: vertices and palettes N` ahora cuenta las veces que el traductor esperó
+  una superficie que la GPU aún leía (`vertices, palettes and commands waited for` en las primeras líneas): nunca las reescribe
+  sin terminar.
 - `screen:` (0.0.8.13, cada 1 s y solo si algo cambia): escenas y frames a la pantalla de Adrenaline y de ScePspemu,
   diálogo del sistema, estado de la superficie. `notifications:`: otro escribió una palabra de notificación de GXM.
 - En `nativedraw_capture.log`, línea `textures (per frame):` (0.0.8.19): copias, KB y tiempo de DMA y de ordenar de la

@@ -161,12 +161,14 @@ static int initProgs(void) {
   return r;
 }
 
-// --- destination: two alternating surfaces (Adrenaline reads one while the other is drawn) + z ---
+// --- destination: three surfaces (Adrenaline reads one, the translator records the next frame on another, the third is free
+// or still read by the GPU) + z ---
+#define NS 3
 static SceGxmRenderTarget *rt, *rt_i, *rt_c;
-static SceGxmColorSurface cs[2];
+static SceGxmColorSurface cs[NS];
 static SceGxmDepthStencilSurface ds;
-static SceGxmTexture surf_tex[2];
-static void *surf[2], *zbuf, *img[4];  // img: copies of the PSP image (512x272 8888), alternating
+static SceGxmTexture surf_tex[NS];
+static void *surf[NS], *zbuf, *img[4];  // img: copies of the PSP image (512x272 8888), alternating
 static SceGxmTexture itex[4];
 // copies in use: with 4 the GPU has almost always finished reading the rewritten one (auto dump compares with all 4)
 static uint32_t n_img = 4;
@@ -216,7 +218,8 @@ static void gWait(uint32_t q) {
   DEV(b_c[B_WAIT] += now() - t0; if (p_on) pAdd(P_A_WAIT, now() - t0);)
 }
 
-// Creates the destination: 1024x544 render target, the two surfaces with their textures, the z, the PSP image copies
+// Creates the destination: 1024x544 render target, the three surfaces with their textures (in physical LPDDR, or the spare
+// block if it is full), the z, the PSP image copies
 // (img/itex: the first 2 in physical LPDDR), the menu texture and the vertex quads (full screen and menu).
 // Returns < 0 on failure.
 static int initDest(void) {
@@ -229,8 +232,8 @@ static int initDest(void) {
   if (r >= 0) r = sceGxmCreateRenderTarget(&rp, &rt_i);
   if (r >= 0) r = sceGxmCreateRenderTarget(&rp, &rt_c);
   if (r < 0) return r;
-  for (int i = 0; i < 2; i++) {
-    if (!(surf[i] = gmem1(PHY, LINE * H * 4, RW))) return -3;
+  for (int i = 0; i < NS; i++) {
+    if (!(surf[i] = gmem1(PHY, LINE * H * 4, RW)) && !(surf[i] = gmem(LINE * H * 4, RW))) return -3;
     sceClibMemset(surf[i], 0, LINE * H * 4);
     sceGxmColorSurfaceInit(&cs[i], SCE_GXM_COLOR_FORMAT_A8B8G8R8, SCE_GXM_COLOR_SURFACE_LINEAR, SCE_GXM_COLOR_SURFACE_SCALE_NONE,
                            SCE_GXM_OUTPUT_REGISTER_SIZE_32BIT, LINE, H, LINE, surf[i]);
@@ -272,6 +275,7 @@ static int initDest(void) {
 #else
 #define cNote(ty, n, dr, px, sw) ((void)sizeof((dr) + (px) + (sw)))
 #define cAdr(f) (f)
+enum { C_ADR, C_NORMAL, C_TR, C_INT };  // (scene kinds, as in gpu_timer.c)
 #define c_on 0
 #define c_slot 0
 #endif
@@ -284,7 +288,8 @@ static tai_hook_ref_t ref_end, ref_tex, ref_dma;
 static SceUID hk_end = -1, hk_tex = -1, hk_dma = -1;
 static const SceGxmTexture *psp_tex;    // Adrenaline's 512x272 texture (the PSP game image)
 static volatile uint32_t fr, ready, n_us;  // fr: Adrenaline scenes finished; n_us: those with the PSP image
-static uint32_t used, drawn, cur;   // scene in which Adrenaline used psp_tex / in which surf[cur] was drawn
+static uint32_t used, drawn;  // scene in which Adrenaline used psp_tex / in which surf[cur] was drawn
+static volatile uint32_t cur, prv;  // surface shown and the one shown before (also read by the translator thread)
 static volatile uint32_t n_pres, n_swap, n_black_j, n_black_p, us_sum, us_max;  // (read in the record thread)
 static volatile uint32_t n_chk, n_bad;  // Vita frames checked and different from the normal image
 // draw_on: switch draw (always replace the image; otherwise only with the menu open); t_on: translator ready
@@ -346,7 +351,7 @@ static int hookTex(SceGxmContext *c, unsigned int i, const SceGxmTexture *t) {
   if (t && !psp_tex && sceGxmTextureGetWidth(t) == 512 && sceGxmTextureGetHeight(t) == 272) { psp_tex = t; psp_data = sceGxmTextureGetData(t); }
   if (t && t == psp_tex) {
     used = fr + 1;
-    if (ready && drawn == fr && !(covered && copy_fr == fr)) { old_shown = gBusy(fq[0]); t = &surf_tex[old_shown ? cur ^ 1 : cur]; n_swap++; }
+    if (ready && drawn == fr && !(covered && copy_fr == fr)) { old_shown = gBusy(fq[0]); t = &surf_tex[old_shown ? prv : cur]; n_swap++; }
     else if (copy_fr == fr) t = &itex[ki];  // (no surface: this frame's copy, psp_tex is no longer updated)
   }
   return TAI_CONTINUE(int, ref_tex, c, i, t);
@@ -403,7 +408,43 @@ static void bnLog(void) {
   gxLog();
 }
 #endif
+// State of each surface: free, the translator thread recording on it, ready (its scenes or the reason it could not, for the
+// presenter), shown. With it, of the frame left ready: the result (T_*), whether the last surface may stay instead (keep),
+// the record taken (released by the presenter once its scenes are sent), the surface "an image of a frame before" reads
+// and whether it is a dump replay
+enum { S_FREE, S_REC, S_READY, S_SHOWN };
+static volatile int s_st[NS] = { S_SHOWN };
+static int t_res[NS], t_keep[NS], t_pv[NS], t_rp[NS];
+static RFrame *t_rg[NS];
 #include "replay.c"  // draw a dumped frame again
+
+// Runs, in Adrenaline's thread and context, the scenes the translator recorded for surface k: each one inside a scene opened
+// on its target; the first one on the surface gets the normal image base underneath (no depth or stencil test or write). Then
+// the context gets Adrenaline's defaults back
+static void trRun(SceGxmContext *c, int k, const SceGxmTexture *base) {
+  TList *l = &tl_s[k];
+  void *u;
+  for (uint32_t i = 0; i < l->n; i++) {
+    TScene *q = &l->sc[i];
+    sceGxmBeginScene(c, 0, q->rt, q->whole ? 0 : &q->vr, 0, t_sync, q->cs, &q->ds);
+    if (q->base) {
+      sceGxmSetCullMode(c, SCE_GXM_CULL_NONE);
+      sceGxmSetFrontDepthFunc(c, SCE_GXM_DEPTH_FUNC_ALWAYS); sceGxmSetFrontDepthWriteEnable(c, SCE_GXM_DEPTH_WRITE_DISABLED);
+      sceGxmSetFrontStencilFunc(c, SCE_GXM_STENCIL_FUNC_ALWAYS, SCE_GXM_STENCIL_OP_KEEP, SCE_GXM_STENCIL_OP_KEEP, SCE_GXM_STENCIL_OP_KEEP, 0, 0);
+      sceGxmSetVertexProgram(c, vp); sceGxmSetFragmentProgram(c, fp);
+      sceGxmReserveVertexDefaultUniformBuffer(c, &u); sceGxmSetUniformDataF(u, p_wvp, 0, 16, tr_wvp);
+      sceGxmSetFragmentTexture(c, 0, base); sceGxmSetVertexStream(c, 0, vb);
+      sceGxmDraw(c, SCE_GXM_PRIMITIVE_TRIANGLE_STRIP, SCE_GXM_INDEX_FORMAT_U16, ib, 4);
+    }
+    sceGxmExecuteCommandList(c, &q->cl);
+    sceGxmEndScene(c, 0, gEnd());
+    DEV(cNoteAt(q->ty, &gq_n, q->dr, q->px, q->sw, q->tag, q->fr);)
+  }
+  sceGxmSetCullMode(c, SCE_GXM_CULL_NONE);
+  sceGxmSetFrontDepthFunc(c, SCE_GXM_DEPTH_FUNC_ALWAYS);
+  sceGxmSetFrontDepthWriteEnable(c, SCE_GXM_DEPTH_WRITE_ENABLED);
+  sceGxmSetFrontStencilFunc(c, SCE_GXM_STENCIL_FUNC_ALWAYS, SCE_GXM_STENCIL_OP_KEEP, SCE_GXM_STENCIL_OP_KEEP, SCE_GXM_STENCIL_OP_KEEP, 0, 0);
+}
 
 static uint32_t g_adr[16];  // bits: words of the notification region used by Adrenaline (to avoid using the same one)
 // marks the word of notification n as used by Adrenaline
@@ -413,10 +454,10 @@ static void gAdr(const SceGxmNotification *n) {
   if (i < 512) g_adr[i >> 5] |= 1u << (i & 31);
 }
 // Hook on sceGxmEndScene: after each Adrenaline scene that used the PSP image, in its thread and context, prepares the
-// surface not being shown (surf[s]) for the next frame: playback of a dump, the last complete frame of the record drawn
-// by the translator, a repeat of the previous surface or, otherwise, the PSP image stretched to double size with the menu
-// on top. Also: covered check, different-frames check, dump and statistics. If Adrenaline did not use the PSP image (its
-// menu, PS1, Original filter), nothing.
+// surface for the next frame: the scenes the translator thread recorded (a frame of the record or a dump replay), a repeat
+// of the previous surface or, otherwise, the PSP image stretched to double size with the menu on top. Also: covered
+// check, different-frames check, dump and statistics. If Adrenaline did not use the PSP image (its menu, PS1, Original
+// filter), nothing.
 // fr counts Adrenaline's scenes.
 static int hookEnd(SceGxmContext *c, const SceGxmNotification *v, const SceGxmNotification *f) {
   gAdr(v); gAdr(f);
@@ -474,43 +515,40 @@ static int hookEnd(SceGxmContext *c, const SceGxmNotification *v, const SceGxmNo
       g_chk_us += now() - t1;
     }
     DEV(if (p_on) pAdd(P_A_PRE, now() - t0);)
-    int s = cur ^ 1, hd = 0;
-    if (draw_on && t_on && !menu && rep_on == REP_READY && repDraw(c, s, src)) { hd = 1; t_frame = ~0u; }  // playback
-    else if (draw_on && t_on && !menu) {  // the last complete frame of the record, drawn by the Vita
+    // What the translator thread left (a surface READY): the scenes it recorded, or a frame it could not draw. Otherwise the
+    // last surface is repeated (up to 20 frames) or the normal image goes on a free surface
+    int s = -1, hd = 0, k = -1;
+    for (int i = 0; i < NS; i++) if (s_st[i] == S_READY) k = i;
+    if (draw_on && t_on && !menu && k >= 0) {
       DEV(h_at = 3;)
-      RFrame *rg = regTake();
-      int cause = T_NEW;
-      if (!rg) { t_cnt[T_NEW]++; DEV(b_c[B_NOREC]++; if (p_on) pAdd(P_F_NOREC, 0);) }
-      else if (rg->frame == t_frame) {  // same frame: the surface is repeated up to 20 times (the capturer may not record every frame); otherwise, normal
-        DEV(b_c[B_REP]++;)
-        if (t_ok && t_rep < 20) { t_rep++; hd = 2; cause = 0; t_skip[0]++; DEV(if (p_on) pAdd(P_F_REPEAT, 0);) } else t_cnt[T_NEW]++;
-      } else {
-        if (t_frame != ~0u && rg->frame > t_frame) { uint32_t g = rg->frame - t_frame; t_skip[g < 5 ? g : 5]++; }
-        // The Vita drawing shows one frame behind the normal image, so an HD frame among frames that are not drawable
-        // looks like a jump back: HD only resumes once the frames have been drawable for a whole second; until then
-        // they are only checked (held back)
-        DEV(if (p_on) trCensus(rg); trImages(rg);)
-        uint32_t t1 = now(), dp, od;
-        int chk = t1 - t_bad < 1000000 && t_frame != ~0u, r = chk ? trCheckFrame(rg, &dp, &od) : trFrame(c, rg, s, src);
-        if (chk && !r) r = T_HOLD;
-        // One frame that cannot be drawn among drawable ones: the last surface stays (up to 20 frames), not a jump to the normal image
-        int keep = r && r != T_HOLD && t_ok && t_rep < 20;
-        if (r && r != T_HOLD && !keep) t_bad = t1;
-        g_tr_us += now() - t1; t_cnt[r]++; t_frame = rg->frame; cause = r;
-        if (keep) { t_rep++; hd = 2; } else { t_ok = !r; hd = !r; t_rep = 0; }
-        DEV(b_c[r ? B_NORMAL : B_DRAWN]++; b_c[B_TR] += now() - t1; trReason(rg->frame, r); if (p_on) pAdd(r ? P_F_NORMAL : P_F_DRAWN, 0);)
-        if (!r) regGpu(gq, gq_done);  // the scene that reads this record's textures
-      }
-      if (dump_on == DUMP_TAKING || dump_on == DUMP_ARMED) dumpText(rg, hd == 2 ? "repeats the Vita drawing of the previous frame" : hd ? "Vita drawing" :
-                                "normal image (copy of the PSP image)", cause);
-      regRelease();
-    } else if (dump_on == DUMP_TAKING || dump_on == DUMP_ARMED) dumpText(0, menu ? "normal image with the menu" : "normal image (no draw or no translator)", -1);
+      int r = t_res[k];
+      if (!r) { trRun(c, k, src); hd = 1; s = k; if (t_rg[k]) regGpu(gq, gq_done); }  // (the scenes that read this record's textures)
+      else if (t_keep[k] && t_ok && t_rep < 20) { t_rep++; hd = 2; }  // one frame that cannot be drawn among drawable ones
+      else s = k;
+      if (t_rp[k]) repDraw(c, k, r);
+      DEV(b_c[r ? B_NORMAL : B_DRAWN]++; if (p_on) pAdd(r ? P_F_NORMAL : P_F_DRAWN, 0);)
+      if (dump_on == DUMP_TAKING || dump_on == DUMP_ARMED) dumpText(t_rg[k], hd == 2 ? "repeats the Vita drawing of the previous frame" : hd ? "Vita drawing" :
+                                "normal image (copy of the PSP image)", r);
+      if (t_rg[k]) regRelease();
+      __sync_synchronize();
+      s_st[k] = s == k ? S_SHOWN : S_FREE;
+    } else if (draw_on && t_on && !menu && t_ok && t_rep < 20) {  // the translator has nothing new: the surface is repeated
+      DEV(b_c[B_REP]++; if (p_on) pAdd(P_F_REPEAT, 0);)
+      t_rep++; hd = 2; t_skip[0]++;
+      if (dump_on == DUMP_TAKING || dump_on == DUMP_ARMED) dumpText(0, "repeats the Vita drawing of the previous frame", 0);
+    } else {
+      if (draw_on && t_on && !menu) { t_cnt[T_NEW]++; DEV(b_c[B_NOREC]++; if (p_on) pAdd(P_F_NOREC, 0);) }
+      if (dump_on == DUMP_TAKING || dump_on == DUMP_ARMED) dumpText(0, menu ? "normal image with the menu" : draw_on && t_on ? "normal image (no new frame)" :
+                                "normal image (no draw or no translator)", -1);
+      for (int i = 0; i < NS && s < 0; i++)  // a free surface the GPU no longer reads
+        if (i != (int)cur && s_st[i] == S_FREE && !gBusy(t_q[i]) && __sync_bool_compare_and_swap(&s_st[i], S_FREE, S_SHOWN)) s = i;
+      if (s < 0) { g_behind++; DEV(b_c[B_BEHIND]++;) drawn = fr + 1; goto finish; }  // (none: the last one is repeated)
+    }
     // hd: 2 keeps the previous surface, 1 drawn by the translator, 0 the PSP image at double size (below)
     if (hd == 2) { drawn = fr + 1; t_hd++; goto finish; }
-    if (hd) { t_hd++; cur_hd = 1; goto ready_hd; }
-    t_nat++; cur_hd = 0;
+    if (hd) { t_hd++; cur_hd = 1; t_ok = 1; t_rep = 0; goto ready_hd; }
+    t_nat++; cur_hd = 0; t_ok = 0; t_rep = 0;
     DEV(h_at = 7;)
-    gWait(fq[0]);
     sceGxmBeginScene(c, 0, rt, 0, 0, 0, &cs[s], &ds);
     sceGxmSetVertexProgram(c, vp);
     sceGxmSetFragmentProgram(c, fp);
@@ -534,6 +572,11 @@ static int hookEnd(SceGxmContext *c, const SceGxmNotification *v, const SceGxmNo
   ready_hd:
     if (src == &itex[ki]) img_q[ki] = gq;  // scene that reads that copy
     fq[1] = fq[0]; fq[0] = gq;
+    // the surfaces this frame's scenes read stay until they finish: the one drawn, the one shown before (Adrenaline samples it
+    // until then) and the frame before's, which "an image of a frame before" reads
+    t_q[s] = t_q[cur] = gq;
+    if (hd) t_q[t_pv[s]] = gq;
+    if (s != (int)cur) { s_st[cur] = S_FREE; prv = cur; }
     cur = s; drawn = fr + 1; n_pres++;
     uint32_t d = now() - t0;
     DEV(if (p_on) pAdd(P_A_TOTAL, d);)
@@ -669,8 +712,52 @@ static void paintMenu(void) {
   drawText(16, 102, "L+R+START: close", 0xFFA0A0A0u);
 }
 
+// Translator thread: takes the last complete frame of the record (or the dump to replay), records it with trFrame on a free
+// surface (the oldest the GPU no longer reads, waiting for it if needed) and leaves it ready for hookEnd, one frame at a time:
+// the next once the presenter has taken it. The Vita drawing shows one frame behind the normal image, so an HD frame among
+// frames that are not drawable looks like a jump back: HD only resumes once the frames have been drawable for a whole second;
+// until then they are only checked (held back). One frame that cannot be drawn among drawable ones may keep the last surface
+static int trThread(SceSize args, void *argp) {
+  for (;;) {
+    int k = -1, busy = 0;
+    for (int i = 0; i < NS; i++) busy |= s_st[i] == S_READY;
+    RFrame *rg = 0;
+    int rp = rep_on == REP_READY;
+    if (!busy && ACTIVE && draw_on && !menu && !rp && (rg = regTake()) && rg->frame == t_frame) { regRelease(); rg = 0; }
+    if (busy || (!rg && !rp)) { sceKernelDelayThread(1000); continue; }
+    while (k < 0) {
+      for (int i = 0; i < NS; i++)
+        if (i != (int)cur && s_st[i] == S_FREE && (k < 0 || (int)(t_q[i] - t_q[k]) < 0)) k = i;
+      if (k < 0) { sceKernelDelayThread(500); continue; }
+      while (gBusy(t_q[k])) gWait(t_q[k]);
+      if (!__sync_bool_compare_and_swap(&s_st[k], S_FREE, S_REC)) k = -1;
+    }
+    t_pv[k] = t_ps = cur;
+    int r, keep = 0;
+    uint32_t t1 = now(), dp, od;
+    if (rp) { r = trFrame(t_dc, rep_f, k, 1); t_frame = ~0u; }
+    else {
+      if (t_frame != ~0u && rg->frame > t_frame) { uint32_t g = rg->frame - t_frame; t_skip[g < 5 ? g : 5]++; }
+      DEV(if (p_on) trCensus(rg); trImages(rg);)
+      int chk = t1 - t_bad < 1000000 && t_frame != ~0u;
+      r = chk ? trCheckFrame(rg, &dp, &od) : trFrame(t_dc, rg, k, 1);
+      if (chk && !r) r = T_HOLD;
+      keep = r && r != T_HOLD && t_ok && t_rep < 20;
+      if (r && r != T_HOLD && !keep) t_bad = t1;
+      t_frame = rg->frame;
+      DEV(trReason(rg->frame, r);)
+    }
+    g_tr_us += now() - t1; t_cnt[r]++;
+    DEV(b_c[B_TR] += now() - t1;)
+    t_res[k] = r; t_keep[k] = keep; t_rg[k] = rg; t_rp[k] = rp;
+    __sync_synchronize();
+    s_st[k] = S_READY;
+  }
+  return 0;
+}
+
 // Presenter thread: hooks the Adrenaline functions (retries for up to 60 s), waits 30 scenes, creates programs,
-// destination and translator, picks the scene-end word and marks ready. Then, every 50 ms: paints the menu, serves
+// destination, translator and its thread, picks the scene-end word and marks ready. Then, every 50 ms: paints the menu, serves
 // dumps and playback and logs changes; every 10 s, the statistics.
 static int presThread(SceSize args, void *argp) {
   for (int i = 0; i < 600 && (hk_end < 0 || hk_tex < 0); i++) {  // AdrenalineUser loads after NativeDraw
@@ -698,9 +785,14 @@ static int presThread(SceSize args, void *argp) {
   if (ndExoMap) ndExoMap();
   int r1 = initProgs(), r2 = r1 >= 0 ? initDest() : 0;
   t_on = r1 >= 0 && r2 >= 0 && draw_on && trInit() >= 0;  // translator: only with draw
+  if (t_on) {  // its thread: any core, just below the capturer's record thread
+    SceUID tt = sceKernelCreateThread("nativedraw_translator", trThread, 0x63, 0x10000, 0, 0x70000, NULL);
+    if (tt < 0 || sceKernelStartThread(tt, 0, NULL) < 0) t_on = 0;
+    alog("translator: thread %08x\n", tt);
+  }
   DEV(if (t_on) failInit();)
-  alog("presenter: programs %08x, target %08x (surfaces in %s and %s) | free afterwards (MB in one go): CDRAM %u, "
-       "LPDDR physical %u, LPDDR %u\n", r1, r2, ty(surf[0]), ty(surf[1]), probe(CDRAM), probe(PHY), probe(UNC));
+  alog("presenter: programs %08x, target %08x (surfaces in %s, %s and %s) | free afterwards (MB in one go): CDRAM %u, "
+       "LPDDR physical %u, LPDDR %u\n", r1, r2, ty(surf[0]), ty(surf[1]), ty(surf[2]), probe(CDRAM), probe(PHY), probe(UNC));
   DEV(memMap();)
   DEV(alog("memory free in small chunks: LPDDR uncached %u KB, LPDDR cached %u KB, LPDDR physical %u KB, CDRAM %u KB\n", probeAll(UNC, 256), probeAll(SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, 256), probeAll(PHY, 1024), probeAll(CDRAM, 256));)
   if (r1 < 0 || r2 < 0) return sceKernelExitDeleteThread(0);

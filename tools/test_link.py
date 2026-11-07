@@ -45,5 +45,10 @@ else:
     # Means of rates, not totals (minimum log level: one "sec:" line every 10 s) nor medians (menus and gameplay differ).
     a, b = statistics.mean(frames or [0]), statistics.mean(fps or [0])
     check('flips agree on both sides (within 20%)', a and b and abs(a - b) <= .2 * b, 'NativeDraw %.1f/s, NativeLink %.1f/s' % (a, b))
+# With draw on, the translator runs in its own thread and its frames reach the screen
+th = re.findall(r'translator: thread ([0-9a-f]{8})', nd)
+if 'always replaces the image (draw)' in nd:
+    hd = nums(r'translator: HD frames (\d+)', nd)
+    check('translator thread started and HD frames shown', th and int(th[-1], 16) < 0x80000000 and sum(hd) > 0, 'thread %s, HD frames %d' % (th[-1] if th else 'not in the log', sum(hd)))
 print('FAILED: %d' % bad if bad else 'all ok')
 sys.exit(1 if bad else 0)
