@@ -87,7 +87,7 @@ Las mediciones de desarrollo están en `nativedraw/measures.h`, una línea cada 
 | `gate_sync` | (v13.10) la espera a la Vita se queda en el sync, como antes de dev66 (para comparar); ver `etapa2_fase2_compuerta.md` |
 | `no_lookahead` | (v13.12) los lectores no comprueban el plan por adelantado (solo al llegar a cada CALL, como antes); ver `etapa2_fase2_adelanto.md` |
 | `mirror_wait` | (NativeLink 0.0.3) el flip del PSP espera a que termine la copia del espejo (interruptor 32 del buzón): en KOF 96 los sprites del frame están copiados cuando la Vita los pide. En la Vita del usuario está en `yes` |
-| `thread_split` | (desarrollo) cada segundo en el log de captura: en qué núcleo corrieron el capturador, el hilo del registro y el hilo de dibujo de Adrenaline, cuánto, y cuántas veces los desplazaron, interrumpieron y movieron |
+| `thread_split` | (desarrollo) cada segundo en el log de captura: en qué núcleo corrieron el capturador, el hilo del registro, el hilo de dibujo de Adrenaline y el del traductor, cuánto, y cuántas veces los desplazaron, interrumpieron y movieron |
 | `vert_split` | (desarrollo) separa el trabajo de vértices de 1 frame HD de cada 8: líneas `vertex split plain` y `vertex split warm`, resumidas por `tools/bottleneck.py` |
 | `cpu_verts` | (desarrollo) ningún vértice va al programa de vértices de la GPU (`nd_v3`): todo dibujo 3D sigue por la CPU, para comparar. Se lee al abrir Adrenaline. |
 | `cap_split` | (desarrollo) mide cada parte del capturador en todos los frames (cuesta ~0,7 us por lectura del reloj, ~64 ms por frame de combate de God of War, y en un juego pesado el capturador se atrasa: errores gráficos y la imagen normal; avisar antes de usarla): líneas `capture split` por tipo de frame, resumidas por `tools/bottleneck.py` Cuesta ~0,7 us por lectura de reloj y en un juego pesado atrasa al capturador: errores gráficos e imagen normal; avisar antes de usarlo. |
@@ -151,8 +151,8 @@ Las mediciones de desarrollo están en `nativedraw/measures.h`, una línea cada 
   En compilaciones de desarrollo, los primeros 40 también anotan `translator: vertex_out (n)` (frame, draw, tipo e índice de vértice) y los bytes del vértice
   y del draw; cada giant draw anota su tipo de vértice y sus bytes. `late frame <n>` (log del capturador, primeros 400): compuerta en su tope o
   captura de más de 33 ms. `record: texture limit` (primeros 20): cuántas texturas y bytes tenía el frame al llegar al tope.
-- Motivo `bad_texture`: un dibujo lee una textura que el traductor no le puede dar. En compilaciones de desarrollo, los primeros 40
-  que salen al dibujar (no de la revisión previa) anotan `translator: bad_texture (n): frame, draw of N, check K | dirección de la
+- Motivo `bad_texture`: un dibujo lee una textura que el traductor no le puede dar. En compilaciones de desarrollo, el primer dibujo de cada
+  caso (40 casos) que sale al dibujar (no de la revisión previa) anota `translator: bad_texture (n): frame, draw of N, check K | dirección de la
   textura, formato, tamaño, ancho de fila, copia en el registro | destino | leída: imagen, sola, sh, lugar, superficie | dibujada:
   imagen, sola, lugar, superficie, región`. Comprobaciones: 1 la imagen leída es la que se dibuja y comparte su superficie con
   otras, 2 y 3 GXM rechazó la textura de una imagen, 4 otra vista de la imagen que se dibuja se superpone con lo que lee el

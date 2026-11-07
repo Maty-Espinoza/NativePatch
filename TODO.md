@@ -17,13 +17,13 @@ what was done is in `CHANGELOG.md`. Updated 2026-11-07 (NativeDraw 0.0.28.11 tes
      after the thin record, the GPU in Ridge Racer. **Run (`tests/perf/runs/0.0.28.11_gow`):** it works, but God of War combat 12.0 -> 9.0
      HD fps: the translator thread takes ~94 ms per HD frame (70.6 before), every part slower and recording `sceGxmDraw` 4.6 -> 9.8 us.
      Find out why before the order above (`performance-plan.md`, 0.0.28.11): `thread_split` with the translator's thread (preempted or
-     really busy?). Ridge Racer: only menus were run; the race is still to do.
+     really busy?), in 0.0.28.12 (test); if it does not explain it, a run with timing logs inside the translator (user, 2026-11-07). Ridge Racer: only menus were run; the race is still to do.
   1. **HD lost between two waves** (`0.0.28.10_gow`, 246-254 s): one frame in ~16 gives `bad_texture` from `trFrame` (no failure folder),
      and each one holds HD back a second. 0.0.28.11 logs which check fails (`translator: bad_texture (n)`, `logs-and-switches.md`): read
      it before changing anything. The God of War menu (40-60 s) has the same reason. **0.0.28.11:** all 40 lines came from the menu
      (one case: check 4, draw 27 reads view `162000`, the left 256 px of an image alone in surface 0, while drawing view `162400`, its next
      256 px; the check takes the read area of an image alone as the whole surface instead of its 256 px texture, so it sees an overlap
-     that is not there). The cap of 40 hid the combat case (1 frame at 333 s): log one line per distinct case instead.
+     that is not there). The cap of 40 hid the combat case (1 frame at 333 s). 0.0.28.12 (test): one line per distinct case, and check 4 takes the read area of an image alone as its texture's size (the menu case); to confirm on the Vita, then a CI test with a dump of that menu frame.
   2. **Cinematic dips** (25-31 fps, one second at 17): the gate waits ~1 ms per frame and the PSP CPU is 83 % idle, so it looks like
      the game; check with `off=yes` in `options.txt` on the same cinematic.
   3. **Capturer walking ~400,000 commands per frame** (`0.0.28.9_gow_cpu_verts`): not seen without `cpu_verts`. Ask the user what was on
