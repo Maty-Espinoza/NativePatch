@@ -399,6 +399,7 @@ static void bnLog(void) {
          fn, q[0], e[0], q[1], e[1], q[2], e[2], q[3], e[3], q[4], e[4], q[5], e[5], q[6], e[6], q[7], e[7], l[0], l[1], l[2]);
   }
   if (n) alog("bottleneck why generic (thousands of pixels per frame, a draw can have several): function %u double %u alpha_test %u fog %u blend2x %u\n", w[BW_FUNC] / n, w[BW_DOUBLE] / n, w[BW_ATEST] / n, w[BW_FOG] / n, w[BW_BLEND2X] / n);
+  gxLog();
 }
 #endif
 #include "replay.c"  // draw a dumped frame again
