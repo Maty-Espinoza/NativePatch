@@ -485,7 +485,7 @@ static void t3Set(RFrame *f, RDraw *d, const uint32_t *e, T3 *t) {
       for (int r = 0; r < 4; r++) t->m[c * 4 + r] = b[0] * p[r] + b[1] * p[4 + r] + b[2] * p[8 + r] + (c == 3 ? p[12 + r] : 0);
     }
   }
-  if (d->vt >> 9 & 3) for (int i = 0; i < 96; i++) t->b[i] = f24(w[12 + i]);  // (behind the world matrix in the same block)
+  if (d->vt >> 9 & 3) for (int i = 0; i < 96; i += 4) vst1q_f32(t->b + i, vreinterpretq_f32_u32(vshlq_n_u32(vld1q_u32(w + 12 + i), 8)));  // (behind the world matrix in the same block; f24, 4 at a time)
   t->kw = d->woff; t->km = d->moff;
   int ne = e != t->ke, nl = ne || d->loff != t->kl;
   t->ke = e; t->kl = d->loff;
@@ -644,7 +644,10 @@ static void t3Uni(void *u, const T3 *t, float tw, float th, const float *wm, int
       md[3] = t->upd >> 1 & 1; ms[3] = t->upd >> 2 & 1;
     }
     if (k5 >= 16) q[51] = 1;
-    else for (uint32_t b = 0; b < wn; b++) for (int r = 0; r < 3; r++) for (int c = 0; c < 4; c++) q[124 + b * 12 + r * 4 + c] = t->b[b * 12 + c * 3 + r];
+    else for (uint32_t b = 0; b < wn; b++) {  // (each bone's 4 columns of 3 to 3 rows of 4)
+      float32x4x3_t x = vld3q_f32(t->b + b * 12);
+      vst1q_f32(q + 124 + b * 12, x.val[0]); vst1q_f32(q + 128 + b * 12, x.val[1]); vst1q_f32(q + 132 + b * 12, x.val[2]);
+    }
     sceGxmSetUniformDataF(u, g5, 0, 252, q);
     return;
   }

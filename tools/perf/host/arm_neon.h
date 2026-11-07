@@ -17,6 +17,10 @@ static inline float32x4_t vmulq_n_f32(float32x4_t a, float s) { for (int i = 0; 
 static inline float32x4_t vmlaq_n_f32(float32x4_t a, float32x4_t b, float s) { for (int i = 0; i < 4; i++) a.v[i] += b.v[i] * s; return a; }
 static inline float32x4_t vmulq_f32(float32x4_t a, float32x4_t b) { for (int i = 0; i < 4; i++) a.v[i] *= b.v[i]; return a; }
 #define vgetq_lane_f32(a, i) ((a).v[i])
+typedef struct { float32x4_t val[3]; } float32x4x3_t;
+static inline float32x4x3_t vld3q_f32(const float *p) { float32x4x3_t r; for (int i = 0; i < 12; i++) r.val[i % 3].v[i / 3] = p[i]; return r; }
+static inline uint32x4_t vshlq_n_u32(uint32x4_t a, int n) { for (int i = 0; i < 4; i++) a.v[i] <<= n; return a; }
+static inline float32x4_t vreinterpretq_f32_u32(uint32x4_t a) { float32x4_t r; memcpy(&r, &a, 16); return r; }
 typedef struct { uint16_t v[8]; } uint16x8_t;
 static inline uint16x8_t vld1q_u16(const uint16_t *p) { uint16x8_t r; memcpy(&r, p, 16); return r; }
 static inline void vst1q_u16(uint16_t *p, uint16x8_t a) { memcpy(p, &a, 16); }
