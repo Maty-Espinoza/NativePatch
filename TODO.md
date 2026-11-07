@@ -2,7 +2,7 @@
 
 The only list of pending work. Ordered from what comes next to what can wait. Each item says where it came from
 (a document in `docs/dev/en/`, `docs/agent/en/`, `docs/changelog/en/` or the claude.ai project). Done items are removed;
-what was done is in `CHANGELOG.md`. Updated 2026-11-06 (NativeLink 0.0.8 + NativeDraw 0.0.27 confirmed: God of War combat in HD with skinning and lights on the GPU). How the work is done: `docs/agent/en/workflow.md`; stage 3 plan and results:
+what was done is in `CHANGELOG.md`. Updated 2026-11-06 (NativeLink 0.0.8 + NativeDraw 0.0.28 confirmed: God of War combat at 11 fps, capturer, translator and GPU even). How the work is done: `docs/agent/en/workflow.md`; stage 3 plan and results:
 `docs/agent/en/stage3-plan.md`.
 
 ## Next
@@ -14,7 +14,7 @@ what was done is in `CHANGELOG.md`. Updated 2026-11-06 (NativeLink 0.0.8 + Nativ
   `claude/xfer_staging_c2.patch` in the claude.ai project, to merge with the DMA of `xferMirror`), then the textures; (3) the GPU:
   lighter `nd_v5` variants by number of weights and lights, and the pixels on the generic program; (4) the translator: fewer GXM calls
   per draw (uniform blocks of ~1 KB per state change of `nd_v5`). Bench: `tools/perf/tr_iterate.sh` (gow_combat + gow_enemies).
-  **(2) in test as NativeDraw 0.0.27.1** (`performance-plan.md`, "Capturer in God of War combat"): transfers through a cached copy
+  **(2) done in NativeDraw 0.0.28 (test 0.0.27.1)** (`performance-plan.md`, "Capturer in God of War combat"): transfers through a cached copy
   the record reads vertices from, repeated RAM textures without `rgTex`, small swizzled textures sorted from cached memory, photo
   footprint only with `photo_probe`. Vita (`tests/perf/runs/0.0.27.1_gow_cap_split`): combat 5.4 -> 6.9 fps, capturer 195 -> 158 ms,
   textures 23 -> 8 ms; vertices only 40 -> 30 ms with the transfers 10 -> 15: split the `vertices` column first (the read is not the

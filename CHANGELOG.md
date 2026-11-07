@@ -10,6 +10,19 @@ the Vita but not yet confirmed as a numbered release.
   KEEP/REVERT step (`iterate.sh`) and the unattended loop with Claude Code (`ai_loop.sh`, `docs/agent/en/perf-loop.md`).
 - `docs/dev/*/performance-plan.md`: the ordered plan towards 60 fps, from the analysis of the capturer on `stage3_0.0.16.4/rr1`.
 
+## NativeDraw 0.0.28 (2026-11-06)
+Test 0.0.27.1, checked on the Vita with God of War Ghost of Sparta (`hold_game` + `gate_sync`, combat): game ~8 -> 11.2 fps,
+capturer ~125 -> ~94 ms per frame, every game frame in HD. Capturer, translator and GPU are now even (~85-95 ms each).
+- **Capturer, textures:** a 3D draw with the same RAM texture as the one before, whole and in the same list, skips the lookup;
+  swizzled textures under 8 KB are copied to cached memory before sorting (and hashed, so groups already sorted are skipped).
+  Textures 23 -> 8 ms per combat frame.
+- **Capturer, transfers:** RAM to VRAM transfers go through a 512 KB cached copy that the record reads vertices, indices and
+  palettes from (`KB read from the transfer copy` in the `3D vertices` line). Vertices 40 -> 30 ms; the copy adds ~5 ms.
+- **Development builds:** the photo footprint measurement runs only with `photo_probe` (it cost a fixed share of the capturer's
+  work on every frame).
+- **Tools and tests:** bench scene `gow_combat`; `xfer_diff` also checks the cached copy; `test_ci` runs `xfer_diff` and the
+  combat scene. `cap_split` costs ~64 ms per combat frame: do not judge speed with it on.
+
 ## NativeDraw 0.0.27 (2026-11-06)
 Tests 0.0.26.1-0.0.26.6, checked on the Vita with God of War Ghost of Sparta (`hold_game` + `gate_sync`): the whole combat in
 HD with the green glow, translator ~230 -> ~50 ms per HD frame. The game still runs at ~8 fps in combat: the capturer is the
