@@ -266,8 +266,9 @@ static void neon64(uint32_t *dst, uint32_t b) {
   __builtin_memcpy(dst, src, 64);
 #endif
 }
-// Copies 256 bytes from Vita address src to dst: the 8 NEON loads go before any store so the waits overlap
-static void neon256v(uint32_t *dst, const void *src) {
+// Copies 256 bytes of PSP RAM to dst: the 8 NEON loads go before any store so the waits overlap
+static void neon256(uint32_t *dst, uint32_t b) {
+  const void *src = (const void *)PSP(b);
 #ifdef __arm__
   asm volatile("vld1.32 {d0-d3}, [%1]!\n\tvld1.32 {d4-d7}, [%1]!\n\tvld1.32 {d8-d11}, [%1]!\n\tvld1.32 {d12-d15}, [%1]!\n\t"
                "vld1.32 {d16-d19}, [%1]!\n\tvld1.32 {d20-d23}, [%1]!\n\tvld1.32 {d24-d27}, [%1]!\n\tvld1.32 {d28-d31}, [%1]\n\t"
@@ -280,8 +281,6 @@ static void neon256v(uint32_t *dst, const void *src) {
   __builtin_memcpy(dst, src, 256);
 #endif
 }
-// Copies 256 bytes of PSP RAM (PSP address b) to dst
-static void neon256(uint32_t *dst, uint32_t b) { neon256v(dst, (const void *)PSP(b)); }
 // Reads word a of list ord with buffer r: from the buffer if present; otherwise fetches its line from the shared cache
 // or reads 256 bytes of PSP RAM (64 at the end of a range) and shares them. Leaves the line in r->buf
 static uint32_t rdc(Rd *r, uint32_t a, uint32_t ord) {
@@ -2219,14 +2218,15 @@ static void thrSample(void) {
 }
 // --- Direct VRAM (switch vram_direct) ---
 // The kernel half (kernel.c, nativedraw.skprx) maps into this process the Vita's compat RAM (physical 0x1C000000, 2 MB),
-// where the PSP's VRAM is thought to live. To check it, each requested page whose mirror copy just finished is also read
-// there and compared with the copy: equal words, and where the copy's first line turns up in the direct memory when
-// they differ. Once: how fast it reads by CPU (and by DMA, with vram_dma). With vram_kread, if no user mapping can be
-// made, the kernel copies it on each read instead (a fault there restarts the Vita: only with that switch).
+// where the PSP's VRAM lives. To check it, each requested page whose mirror copy just finished is also read there and
+// compared with the copy: equal words, and where the copy's first line turns up in the direct memory when they differ.
+// Reads are single 32-bit loads by the CPU or, with vram_dma, DMA copies; with vram_kread, if no user mapping can be
+// made, the kernel copies instead. A refused read is a bus error, which stops the Vita: the switches are set to "no"
+// before the first read, so each try runs once.
 int ndkVramMap(uint32_t type, uint32_t size, void **ubase) __attribute__((weak));  // (weak: the PC tests have no kernel half)
 int ndkVramRead(uint32_t off, void *udst, uint32_t n) __attribute__((weak));
 #define VD_N 0x1FE000  // bytes mapped (the camera SRAM: the 2 MB minus the last 8 KB)
-static int vd_on, vd_kread, vd_dma, vd_mode, vd_tried;  // vd_mode: 0 not available, 1 user mapping, 2 the kernel copies
+static int vd_on, vd_kread, vd_dma, vd_mode, vd_tried;  // vd_mode: 0 not available, 1 CPU words, 2 the kernel copies, 3 DMA
 static volatile uint8_t *vd_base;
 static uint32_t vd_pages, vd_eq, vd_words, vd_search, vd_t, vd_seen[512];  // pages compared, all equal, equal words, searches done
 static uint32_t vd_a[1024] __attribute__((aligned(16))), vd_b[1024] __attribute__((aligned(16)));
@@ -2235,12 +2235,16 @@ static int unresolved(const void *f) { const uint32_t *w = (const uint32_t *)((u
 // n bytes (multiple of 256) of the direct VRAM from offset off to dst; 0 or an error
 static int vdRead(uint32_t *dst, uint32_t off, uint32_t n) {
   if (vd_mode == 2) return ndkVramRead(off, dst, n);
-  for (uint32_t o = 0; o < n; o += 256) neon256v(dst + o / 4, (const void *)(vd_base + off + o));
+  if (vd_mode == 3) return sceDmacMemcpy(dst, (const void *)(vd_base + off), n) ? 0 : -1;
+  const volatile uint32_t *s = (const volatile uint32_t *)(vd_base + off);
+  for (uint32_t i = 0; i < n / 4; i++) dst[i] = s[i];
   return 0;
 }
-// Maps the compat RAM (one user type after another; with vram_kread, the kernel copies if none works) and measures a 64 KB read.
-// Each step is logged and the log given 1.5 s to reach the card before the next, so if one of them takes the Vita down the
-// log says which. The DMA read only with vram_dma.
+// Writes "no" into switch file p
+static void swOff(const char *p) { SceUID fd = sceIoOpen(p, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0666); if (fd >= 0) { sceIoWrite(fd, "no\n", 3); sceIoClose(fd); } }
+// Maps the compat RAM (one user type after another; with vram_kread, the kernel copies if none works), reads one word (256
+// bytes by DMA), then 256 bytes, then 64 KB timed. Each step is logged and the log given 1.5 s to reach the card before the
+// next, so if one of them takes the Vita down the log says which.
 static void vdInit(void) {
   vd_tried = 1;
   if (unresolved(ndkVramMap)) { clog("vram direct: nativedraw.skprx is not loaded (*KERNEL in config.txt)\n"); return; }
@@ -2252,9 +2256,15 @@ static void vdInit(void) {
     sceKernelDelayThread(3000000);
     if (r >= 0 && b) { vd_base = b; vd_mode = 1; }
   }
+  if (vd_mode && vd_dma) vd_mode = 3;
+  swOff("ux0:data/nativedraw/vram_direct"); swOff("ux0:data/nativedraw/vram_dma"); swOff("ux0:data/nativedraw/vram_kread");
   if (!vd_mode && vd_kread) { clog("vram direct: kernel copy of 256 bytes next\n"); sceKernelDelayThread(1500000); int r = ndkVramRead(0, vd_a, 256); clog("vram direct: kernel copy -> %08x\n", r); if (r >= 0) vd_mode = 2; }
   if (!vd_mode) return;
-  clog("vram direct: first read (256 bytes) next\n");
+  clog("vram direct: switches set to no; first read by %s next (%s)\n", vd_mode == 3 ? "DMA" : vd_mode == 2 ? "the kernel" : "CPU", vd_mode == 3 ? "256 bytes" : "one word");
+  sceKernelDelayThread(1500000);
+  if (vd_mode == 1) vd_a[0] = *(const volatile uint32_t *)vd_base;
+  else vdRead(vd_a, 0, 256);
+  clog("vram direct: first read done: %08x; 256 bytes next\n", vd_a[0]);
   sceKernelDelayThread(1500000);
   vdRead(vd_a, 0, 256);
   clog("vram direct: first words %08x %08x %08x %08x; 64 KB next\n", vd_a[0], vd_a[1], vd_a[2], vd_a[3]);
@@ -2263,18 +2273,6 @@ static void vdInit(void) {
   for (uint32_t o = 0; o < 65536; o += 4096) vdRead(vd_a, o, 4096);
   uint32_t t1 = now();
   clog("vram direct: read 64 KB in %u us (%u MB/s)\n", t1 - t0, t1 - t0 ? 65536 / (t1 - t0) : 0);
-  if (vd_mode != 1 || !vd_dma) return;
-  void *c = 0;
-  SceUID mb = sceKernelAllocMemBlock("nativedraw_vd", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, 65536, NULL);
-  if (mb < 0 || sceKernelGetMemBlockBase(mb, &c) < 0) return;
-  clog("vram direct: DMA of 64 KB next\n");
-  sceKernelDelayThread(1500000);
-  t0 = now();
-  void *r = sceDmacMemcpy(c, (const void *)vd_base, 65536);
-  t1 = now();
-  uint32_t eq = 0;
-  for (uint32_t o = 0; o < 65536; o += 4096) { vdRead(vd_a, o, 4096); for (int i = 0; i < 1024; i++) eq += vd_a[i] == ((uint32_t *)c)[o / 4 + i]; }
-  clog("vram direct: DMA of 64 KB -> %08x in %u us, %u of 16384 words equal to the CPU read\n", (uint32_t)r, t1 - t0, eq);
 }
 // Compares page p (copy sq just finished) in the mirror and in the direct memory; when they differ, the first few times, looks for
 // the copy's first line anywhere in the direct memory
