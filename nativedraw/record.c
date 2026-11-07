@@ -973,6 +973,7 @@ static void regXfer(uint32_t s, uint32_t t, uint32_t bp) {
   for (int i = 0; i < NRS; i++) { e[i] = reg[RS[i]]; reg[RS[i]] = v[i]; }
   if (!toff) { RG_READ(NR_X_TEX, sa, da); return; }
   sceClibMemcpy(f->e[f->ne++], e, sizeof e);
+  rg_chg = 1;  // (the next draw does not have this state)
   uint32_t a = (f->na + 15) & ~15u, c = 0xFFFFFFFFu;
   uint16_t vx[16] = { u, 0, c, c >> 16, dx, dy, 0, 0, u + w, h, c, c >> 16, dx + w, dy + h, 0, 0 };
   sceClibMemcpy(f->a + a, vx, sizeof vx);

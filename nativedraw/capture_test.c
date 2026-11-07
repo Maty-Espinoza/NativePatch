@@ -207,7 +207,7 @@ static int checkAll(void) {
   bad += report("VRAM per frame: the change is detected, no MISMATCH", same(r + V3, r + V3REF, 0, 1) && r[V3].fail && !r[V3].bad);
   bad += report("frame record: complete without memory; memory waits for frames over the record", same(r + REG0, r + RAM, 0, 1) && r[REG0].whole == 8 && r[REG1].whole == 8 && r[REG2].whole < 8);
   bad += report("frame record: lost events leave the frame incomplete", r[REG0].lost);
-  bad += report("frame record: a TRANSFER on the drawn image becomes a draw", r[REG0].xf);
+  bad += report("frame record: a TRANSFER on the drawn image becomes a draw, and the next draw keeps its own state", r[REG0].xf);
   bad += report("frame record: a texture rewritten between lists gets a new copy", r[REG0].tex2);
   bad += report("texture cache: reused between frames, a change goes to the record, then back", r[REG0].tc);
   bad += report("sorted textures skip what did not change; vertices queued for DMA come out right", r[REG0].srt);
@@ -351,11 +351,13 @@ int main(int argc, char **argv) {
     RFrame *x = rf[rg_w];  // 64x64 from RAM to (8, 14) of the image being drawn, and one that is not on it
     reg[0x9C] = 0x88000; reg[0x9D] = 512; reg[0xD2] = 3; reg[0xD5] = 479 | 271 << 10; reg[0xB3] = 64 | 0x080000; reg[0xB2] = 0xC30000;
     reg[0xB4] = 0x88000; reg[0xB5] = 512 | 0x040000; reg[0xEB] = 0; reg[0xEC] = 8 | 14 << 10; reg[0xEE] = 63 | 63 << 10;
-    regXfer(0x08C30000, 0x04088000, 4);
+    rg_chg = 0; regXfer(0x08C30000, 0x04088000, 4);
     int16_t *xv = (int16_t *)(x->a + x->d[0].voff - 1);
     res->xf = x->nd == 1 && !x->flags && x->d[0].toff && xv[4] == 8 && xv[5] == 14 && xv[12] == 72 && xv[13] == 78 && xv[8] == 64 && RE(x->e[0], 0x9C) == 0x88000;
     regXfer(0x08C30000, 0x04154000, 4);
     res->xf = res->xf && x->nd == 1 && !x->flags;
+    reg[0x1E] = 0; vaddr = 0x08C30000; vs_vt = 0x80011E; vs_sz = vsize(vs_vt); regDraw(2, 6, 0x80011E, 0);  // (a draw after it, no state change)
+    res->xf = res->xf && x->nd == 2 && RE(x->e[x->d[1].st], 0xD5) == reg[0xD5];
     *W(0x08C20000) = 0x11223344; reg[0xB0] = 0xC20000; reg[0xB1] = 0x080000; last_clut[0] = CLUTADDR(); regClut(1);
     *W(0x08C20000) = 0; tFlip(0x04000000, 512, 0);
     res->pal = *(uint32_t *)(rf[rg_w]->a + rg_clut - 1) == 0x11223344;
