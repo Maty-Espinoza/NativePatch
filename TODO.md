@@ -14,10 +14,16 @@ what was done is in `CHANGELOG.md`. Updated 2026-11-07 (NativeDraw 0.0.28.11 tes
   0. **Translator in its own thread (0.0.28.11, test; `performance-plan.md` C.7 and "Order from here (2026-11-07)")**: run God of War
      (same route) and the Ridge Racer race; check `translator: thread`, HD frames per second, the drawing thread's `rest`, no GPU crash or
      flicker. Then follow that order: the capturer first in God of War (photo at the sync, thin record), the translator one frame ahead
-     after the thin record, the GPU in Ridge Racer.
+     after the thin record, the GPU in Ridge Racer. **Run (`tests/perf/runs/0.0.28.11_gow`):** it works, but God of War combat 12.0 -> 9.0
+     HD fps: the translator thread takes ~94 ms per HD frame (70.6 before), every part slower and recording `sceGxmDraw` 4.6 -> 9.8 us.
+     Find out why before the order above (`performance-plan.md`, 0.0.28.11): `thread_split` with the translator's thread (preempted or
+     really busy?). Ridge Racer: only menus were run; the race is still to do.
   1. **HD lost between two waves** (`0.0.28.10_gow`, 246-254 s): one frame in ~16 gives `bad_texture` from `trFrame` (no failure folder),
      and each one holds HD back a second. 0.0.28.11 logs which check fails (`translator: bad_texture (n)`, `logs-and-switches.md`): read
-     it before changing anything. The God of War menu (40-60 s) has the same reason.
+     it before changing anything. The God of War menu (40-60 s) has the same reason. **0.0.28.11:** all 40 lines came from the menu
+     (one case: check 4, draw 27 reads view `162000`, the left 256 px of an image alone in surface 0, while drawing view `162400`, its next
+     256 px; the check takes the read area of an image alone as the whole surface instead of its 256 px texture, so it sees an overlap
+     that is not there). The cap of 40 hid the combat case (1 frame at 333 s): log one line per distinct case instead.
   2. **Cinematic dips** (25-31 fps, one second at 17): the gate waits ~1 ms per frame and the PSP CPU is 83 % idle, so it looks like
      the game; check with `off=yes` in `options.txt` on the same cinematic.
   3. **Capturer walking ~400,000 commands per frame** (`0.0.28.9_gow_cpu_verts`): not seen without `cpu_verts`. Ask the user what was on
@@ -57,7 +63,8 @@ what was done is in `CHANGELOG.md`. Updated 2026-11-07 (NativeDraw 0.0.28.11 tes
   `garbage positions` in the `3D vertices` line) but the user still saw the corruption: the run's logs stayed on the Windows PC
   (`stage3_0.0.26.6`), not read. Next: read them (are frames refused? does the corruption come with plausible-looking garbage the check
   cannot see?), then find why the record gets those vertices (VRAM vertices from a stale mirror page, or transfers after the sync).
-- [ ] **God of War after the fight, garbage VRAM sublist** (0.0.25.23, from frame 7805, second ~334, to the end of the run): the walk goes into the VRAM sublist `04190400`, whose words look like floats (`40a567de bfb585f6 c1f35ba1 3f2aaaab`), walks 400,000 commands (the limit) and drops the frame (`list_too_long`): 116 ms per frame, the game at 9 fps with `hold_game`, no HD. Same family as the garbage chain of 0.0.25.17 (mirror or BASE). Look at the transfers that fill that sublist and the mirror pages around it. Seen again in 0.0.25.25 and 0.0.25.26 (`stage3_0.0.25.26/gow2_cap_split`, second ~408): right after transfers met after the sync (`xfer_after_sync`), a VRAM sublist at `0418da34` sets BASE to 1 (`register 10: capture 000001 real 000000`), then `list_unreadable` and `bad target` from `04190400`; from there every frame has 1-2 draws, the gate stops waiting and the game runs at 31-38 fps without HD (what the user saw as fps going up at the end of the fight).
+- [ ] **God of War after the fight, garbage VRAM sublist** (seen again in 0.0.28.11, from 388 s to the end of the run: `register 10:
+  capture 071616 real 000000`, `bad target 0c160000`, 400,000 commands per frame, no HD) (0.0.25.23, from frame 7805, second ~334, to the end of the run): the walk goes into the VRAM sublist `04190400`, whose words look like floats (`40a567de bfb585f6 c1f35ba1 3f2aaaab`), walks 400,000 commands (the limit) and drops the frame (`list_too_long`): 116 ms per frame, the game at 9 fps with `hold_game`, no HD. Same family as the garbage chain of 0.0.25.17 (mirror or BASE). Look at the transfers that fill that sublist and the mirror pages around it. Seen again in 0.0.25.25 and 0.0.25.26 (`stage3_0.0.25.26/gow2_cap_split`, second ~408): right after transfers met after the sync (`xfer_after_sync`), a VRAM sublist at `0418da34` sets BASE to 1 (`register 10: capture 000001 real 000000`), then `list_unreadable` and `bad target` from `04190400`; from there every frame has 1-2 draws, the gate stops waiting and the game runs at 31-38 fps without HD (what the user saw as fps going up at the end of the fight).
 - [ ] **God of War menu, image `162000` left out for `mask`:** an alpha test the translator cannot convert (`alphaFn`); what reads that image gives `other_target`. Log the alpha test register (0xDB) of that draw first.
 - [ ] **`sync_lab` does not model yet:** several syncs per frame, games that never call a sync (photo before the next enqueue or at the flip), CPU writes to VRAM, the GE slowed by the copy (bus), and the cost of the copy itself (the model `sync_model.py` does).
 - [ ] **God of War closes (C1-2858-3) with `hold_game`:** twice, the PSP stopped first (`capture health:` the capturer was idle); not with `hold_game` off; not seen with `gate_sync`. Suspected: frames of 200+ ms the game does not tolerate. Not proven.

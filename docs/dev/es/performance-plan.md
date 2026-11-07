@@ -315,6 +315,14 @@ El traductor ya no corre en el hilo de dibujo de Adrenaline (C.7, NativeDraw 0.0
    los 4 del capturador hoy no lo permiten: después del registro delgado (más registros en la misma memoria).
 4. **GPU (C.3) en Ridge Racer:** sin las esperas en el hilo de dibujo, la GPU (~30 ms por frame HD) es lo que limita la carrera.
 5. **CPU del traductor por dibujo (C.4):** después de 2-4, porque ya no suma al tiempo del hilo que presenta.
+**En la Vita (0.0.28.11, `tests/perf/runs/0.0.28.11_gow`, mismos interruptores que la 0.0.28.10).** El hilo del traductor funciona:
+sin cuelgues de la GPU, nada reescrito con la GPU sin terminar, el hilo de dibujo repite en vez de esperar. Pero el combate de God of
+War (segundos 344-387) bajó de 12,0 a 9,0 frames HD por segundo: el hilo del traductor está ocupado ~94 % del tiempo y tarda ~94 ms por
+frame HD (70,6 en la 0.0.28.10). Todas las partes se hicieron más lentas: revisión +40 %, vértices +28 %, `t3Set` +25 %, `t3Uni` +43 %, y
+grabar `sceGxmDraw` 4,6 -> 9,8 us. Dos sospechas [sin medir]: el hilo comparte los 3 núcleos con el capturador, el registro y los hilos
+de Adrenaline (prioridad 0x63, bajo el capturador) y lo desalojan; y grabar en el contexto diferido escribe las órdenes en memoria sin
+caché (el bloque de reserva). `thread_split` todavía no ve el hilo del traductor, así que no puede distinguirlas. Ridge Racer: solo ~30 s
+de menús, sin carrera.
 
 ## D. Leer la memoria del PSP: foto en el sync (propuesta, 2026-11-06)
 **Por qué.** Tres hechos, todos de los logs:

@@ -302,6 +302,13 @@ The translator no longer runs in Adrenaline's drawing thread (C.7, NativeDraw 0.
    capturer's 4 do not allow today: after the thin record (more records in the same memory).
 4. **GPU (C.3) in Ridge Racer:** without the waits in the drawing thread, the GPU (~30 ms per HD frame) is what limits the race.
 5. **Translator CPU per draw (C.4):** after 2-4, since it no longer adds to the time of the thread that presents.
+**On the Vita (0.0.28.11, `tests/perf/runs/0.0.28.11_gow`, same switches as 0.0.28.10).** The translator thread works: no GPU crash,
+nothing rewritten with the GPU unfinished, the drawing thread repeats instead of waiting. But God of War combat (seconds 344-387) went
+12.0 -> 9.0 HD frames per second: the translator thread is busy ~94 % of the time and takes ~94 ms per HD frame (70.6 in 0.0.28.10).
+Every part got slower: check +40 %, vertices +28 %, `t3Set` +25 %, `t3Uni` +43 %, and recording `sceGxmDraw` 4.6 -> 9.8 us. Two
+suspects [not measured]: the thread shares the 3 cores with the capturer, the record and Adrenaline's threads (priority 0x63, below
+the capturer) and gets preempted; and recording into the deferred context writes the commands to uncached memory (the spare block).
+`thread_split` does not see the translator's thread yet, so it cannot tell them apart. Ridge Racer: only ~30 s of menus, no race.
 
 ## D. Reading PSP memory: photo at the sync (proposal, 2026-11-06)
 **Why.** Three facts, all from the logs:

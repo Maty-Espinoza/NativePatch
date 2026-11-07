@@ -36,6 +36,7 @@ rr_crowd.bin.gz                 Crowd, ends in vertex_out
 0.0.28.9_gow: God of War combat with the long iteration (it-merge) on the Vita (hold_game, gate_sync, hd_mark, gpu_timer, fx_log): combat 10.4 -> 11.7 HD fps, capturer 61 -> 50 ms per game frame, GPU 82 -> 62 ms per HD frame; 37 jumps of 3-4 PSP frames (1 in 0.0.28.1).
 0.0.28.9_gow_cpu_verts: the same with cpu_verts: combat only ~20 s (5 HD fps, vertices 133 ms per HD frame); after a scene change at ~187 s the capturer walks ~400,000 commands per frame with 1 draw for ~130 s (bad target, list_too_long), nothing reaches the translator.
 0.0.28.10_gow: the same as 0.0.28.9_gow without fx_log (options.txt): combat 10.8 -> 12.0 HD fps, translator 92.6 -> 70.6 ms per HD frame (gxm 43.8 -> 26.3), capturer 99.5 -> 86.4 ms per game frame; jumps of 3-4 PSP frames 37 -> 1; HD lost at 246-254 s (bad_texture once every ~16 frames, held_back).
+0.0.28.11_gow: the translator in its own thread (deferred GXM context), same switches: works (no GPU crash, nothing rewritten unfinished) but combat 12.0 -> 9.0 HD fps, translator 70.6 -> ~94 ms per HD frame (gxm calls 7.3 -> 11.8, sceGxmDraw 4.6 -> 9.8 us, t3Set/t3Uni +25-45 %); menu HD lost 191-221 s by bad_texture check 4 (view 162000 read while drawing view 162400 of the same image); from 388 s to the end the garbage VRAM sublist after the fight (BASE, list_too_long).
 
 Still only in the relays
 Mac: stage3_0.0.16.4/rr1 (run behind the capturer analysis), if it is kept there; stage3_0.0.22.1/rr1.
