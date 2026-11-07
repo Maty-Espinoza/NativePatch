@@ -21,7 +21,8 @@
 #endif
 
 // --- Vita functions replaced ---
-SceUInt32 sceKernelGetProcessTimeLow(void) { return 0; }
+static uint32_t clk;  // (1 us per read and nothing else: the gxm split line gives 0 ns for every call once the clock is taken off)
+SceUInt32 sceKernelGetProcessTimeLow(void) { return ++clk; }
 SceUInt64 sceKernelGetProcessTimeWide(void) { return 0; }
 int sceKernelGetThreadInfo(SceUID t, SceKernelThreadInfo *i) { return -1; }
 SceUID sceKernelGetThreadId(void) { return 0; }
@@ -330,5 +331,8 @@ int main(int argc, char **argv) {
   }
   printf("frames=%d draws=%u result=%s gpu_vertices=%u,%u,%u,%u,%u gxm_draws=%u gxm_ops=%u uniform_floats=%u vertices_in=%u cpu_vertices=%u nd_v5=%u,%u,%u\n", n, f->nd, tnames[res],
          gn[0] / n, gn[1] / n, gn[2] / n, gn[3] / n, gn[4] / n, gxm_calls / n, g_ops / n, g_uf / n, t_c[TC_VIN] / n, (t_c[TC_VIN] - t_c[TC_VGPU]) / n, gn5[0] / n, gn5[1] / n, gn5[2] / n);
+#ifdef GX  // (an older translator, built by tr_check.sh, has no gxm split)
+  gxLog();  // (with TR_LOG=1: the gxm split line of these frames)
+#endif
   return 0;
 }

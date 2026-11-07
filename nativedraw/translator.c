@@ -524,6 +524,62 @@ static int t3Dl(const T3 *t) {
   for (int i = 0; i < 4; i++) if (t->l[i].on && (t->l[i].type > 1 || t->l[i].comp == 2)) return 0;
   return 1;
 }
+#ifdef NP_DEV
+// GXM calls of the translator by kind, and two CPU pieces around them (t3Set, t3Uni), for the "gxm split" line: each is counted
+// always (g_cn) and timed on 1 draw in 64 (gm). The time of a piece leaves out the calls timed inside it; every timed interval
+// carries one clock read per call timed in it plus one (g_rd), which gxLog takes off with the cost of a read measured on the
+// same draws (GK_CLK)
+enum { GK_VRES, GK_FRES, GK_U4, GK_U16, GK_UBIG, GK_VPROG, GK_FPROG, GK_TEX, GK_STREAM, GK_DRAW, GK_ZS, GK_T3SET, GK_T3UNI, GK_CLK, GK_N };
+static const char *gk_names[GK_N] = { "vres", "fres", "u4", "u16", "ubig", "vprog", "fprog", "tex", "stream", "draw", "zs", "t3set", "t3uni" };
+static volatile uint32_t g_cn[GK_N], g_tn[GK_N], g_us[GK_N], g_rd[GK_N], g_mx[GK_N], g_fr;
+static uint32_t gm, g_dn, g_in, g_inn;  // gm: the draw is timed; g_in, g_inn: us and number of the calls timed so far
+typedef struct { uint32_t t, in, inn; } GM;
+static inline GM gA(void) { GM m = { now(), g_in, g_inn }; return m; }
+static inline void gB(int k, GM m) {
+  uint32_t d = now() - m.t - (g_in - m.in);
+  g_us[k] += d; g_rd[k] += g_inn - m.inn + 1; g_tn[k]++; g_mx[k] = d > g_mx[k] ? d : g_mx[k];
+  if (k < GK_T3SET) g_in += d, g_inn++;
+}
+// At each draw not joined by the short path: times 1 in 64, and on those the cost of one clock read
+static inline void gTick(void) {
+  if ((gm = !(++g_dn & 63))) { uint32_t t = now(); g_us[GK_CLK] += now() - t; g_tn[GK_CLK]++; }
+}
+// Every second (bnLog): per kind, ns per call without the clock, calls per HD frame and the longest call (us); then the ms per
+// HD frame of the GXM calls and of each piece
+static void gxLog(void) {
+  static uint32_t c0[GK_N], t0[GK_N], u0[GK_N], r0[GK_N], f0;
+  uint32_t c[GK_N], t[GK_N], u[GK_N], r[GK_N], fr = g_fr - f0, mx[GK_N];
+  f0 += fr;
+  for (int k = 0; k < GK_N; k++) {
+    c[k] = g_cn[k] - c0[k]; c0[k] += c[k]; t[k] = g_tn[k] - t0[k]; t0[k] += t[k]; u[k] = g_us[k] - u0[k]; u0[k] += u[k];
+    r[k] = g_rd[k] - r0[k]; r0[k] += r[k]; mx[k] = g_mx[k]; g_mx[k] = 0;
+  }
+  if (!fr || !t[GK_CLK]) return;
+  int64_t clk = (int64_t)u[GK_CLK] * 1000 / t[GK_CLK], gx = 0, pc[2] = { 0, 0 };
+  char b[600]; int n = 0;
+  for (int k = 0; k < GK_CLK; k++) {
+    int64_t ns = t[k] ? ((int64_t)u[k] * 1000 - (int64_t)r[k] * clk) / t[k] : 0, us = ns * c[k] / fr / 1000;
+    if (k < GK_T3SET) gx += us; else pc[k - GK_T3SET] = us;
+    n += sceClibSnprintf(b + n, sizeof b - n, "%s%s=%d/%u/%u", !k ? "" : k == GK_T3SET ? " | " : " ", gk_names[k], (int)ns, c[k] / fr, mx[k]);
+  }
+  alog("gxm split (1 draw in 64, ns per call without the clock/calls per HD frame/longest us): frames=%u timed=%u clock=%d ns | %s | us per HD frame: "
+       "gxm=%d t3set=%d t3uni=%d\n", fr, t[GK_CLK], (int)clk, b, (int)gx, (int)pc[0], (int)pc[1]);
+}
+#define GX(k, x) do { if (gm) { GM m_ = gA(); x; gB(k, m_); } else x; g_cn[k]++; } while (0)
+#define sceGxmReserveVertexDefaultUniformBuffer(...) GX(GK_VRES, sceGxmReserveVertexDefaultUniformBuffer(__VA_ARGS__))
+#define sceGxmReserveFragmentDefaultUniformBuffer(...) GX(GK_FRES, sceGxmReserveFragmentDefaultUniformBuffer(__VA_ARGS__))
+#define sceGxmSetUniformDataF(u, p, o, n, d) GX((n) <= 4 ? GK_U4 : (n) <= 16 ? GK_U16 : GK_UBIG, sceGxmSetUniformDataF(u, p, o, n, d))
+#define sceGxmSetVertexProgram(...) GX(GK_VPROG, sceGxmSetVertexProgram(__VA_ARGS__))
+#define sceGxmSetFragmentProgram(...) GX(GK_FPROG, sceGxmSetFragmentProgram(__VA_ARGS__))
+#define sceGxmSetFragmentTexture(...) GX(GK_TEX, sceGxmSetFragmentTexture(__VA_ARGS__))
+#define sceGxmSetVertexStream(...) GX(GK_STREAM, sceGxmSetVertexStream(__VA_ARGS__))
+#define sceGxmDraw(...) GX(GK_DRAW, sceGxmDraw(__VA_ARGS__))
+#define sceGxmSetCullMode(...) GX(GK_ZS, sceGxmSetCullMode(__VA_ARGS__))
+#define sceGxmSetFrontDepthFunc(...) GX(GK_ZS, sceGxmSetFrontDepthFunc(__VA_ARGS__))
+#define sceGxmSetFrontDepthWriteEnable(...) GX(GK_ZS, sceGxmSetFrontDepthWriteEnable(__VA_ARGS__))
+#define sceGxmSetFrontStencilFunc(...) GX(GK_ZS, sceGxmSetFrontStencilFunc(__VA_ARGS__))
+#define sceGxmSetFrontStencilRef(...) GX(GK_ZS, sceGxmSetFrontStencilRef(__VA_ARGS__))
+#endif
 // Uniforms of nd_v3 (lv 0, 3 with 16-bit UV), nd_v4 (lv 1, 2: GVL) or nd_v5 and its variants (lv 4 on: skinProg) for a draw of t with texture size tw x th and material color mat, in the default buffer u; wm: the scene's matrix.
 // What trVerts does per vertex, as numbers: m is wm x viewport x t->m, column by column (model -> surface clip); 16-bit values count
 // 1 / 32768, as on the GE.
@@ -1456,6 +1512,10 @@ static inline uint32_t gAdd(uint16_t *o, uint32_t ix, uint32_t prim, uint32_t nt
   else for (uint32_t k = 0; k < nt; k++) { p[0] = ix + k; p[1] = ix + k + 1 + (k & 1); p[2] = ix + k + 2 - (k & 1); p += 3; }
   return p - o;
 }
+#ifdef NP_DEV
+#define t3Set(...) GX(GK_T3SET, t3Set(__VA_ARGS__))
+#define t3Uni(...) GX(GK_T3UNI, t3Uni(__VA_ARGS__))
+#endif
 static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base) {
   t3.ke = 0;
   DEV(uint32_t t_ss = 0; c_fr++;)
@@ -1466,6 +1526,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
   int r = trCheckFrame(f, &disp, &ord);
   if (r) return r;
   DEV(t_us[0] += now() - ta; if (p_on) pAdd(P_T_CHECK, now() - ta);)
+  DEV(gm = 0; g_fr++;)
   trRegions(f);
   trBoxed(f, disp, ord);
   // Depth lives in one scene: if the surface is drawn with depth after its scene was cut, it is stored and loaded. The other
@@ -1550,6 +1611,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
       }
     }
     gd = 0;
+    DEV(gTick();)
     const uint32_t *e = f->e[d->st];
     uint32_t clr = RE(e, 0xD3), tex = hasTex(e, d), fb = RE(e, 0x9C) & 0x1FFFF0, w3d = !(d->vt >> 23 & 1);
     if (fb != disp && trSkip(f, d)) continue;
@@ -1902,3 +1964,20 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
   if (res && !t_seen[res]++) alog("translator: first frame with '%s' on drawing\n", tnames[res]);
   return res;
 }
+#ifdef NP_DEV
+#undef t3Set
+#undef t3Uni
+#undef sceGxmReserveVertexDefaultUniformBuffer
+#undef sceGxmReserveFragmentDefaultUniformBuffer
+#undef sceGxmSetUniformDataF
+#undef sceGxmSetVertexProgram
+#undef sceGxmSetFragmentProgram
+#undef sceGxmSetFragmentTexture
+#undef sceGxmSetVertexStream
+#undef sceGxmDraw
+#undef sceGxmSetCullMode
+#undef sceGxmSetFrontDepthFunc
+#undef sceGxmSetFrontDepthWriteEnable
+#undef sceGxmSetFrontStencilFunc
+#undef sceGxmSetFrontStencilRef
+#endif

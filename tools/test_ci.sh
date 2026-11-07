@@ -30,6 +30,14 @@ echo "$G" | grep 'draws=6642' | grep -q 'result=ok' || { echo "FAIL: God of War 
 [ "$(echo "$G" | grep 'draws=8429' | sed 's/.*nd_v5=[0-9]*,[0-9]*,\([0-9]*\).*/\1/')" -gt 50000 ] || { echo "FAIL: God of War 0x1BE with one light not on nd_v5_b0l1"; exit 1; }
 # God of War's glow: the scene goes to 162000 times a colored fixed blend color (3f5343), carried by the vertex color
 TR_LOG=1 $(command -v qemu-arm-static || command -v qemu-arm) $R/build/perf/tr_gv $R/build/perf/gow_combat.bin 1 2>&1 | grep -q "left out.*'blend'" && { echo "FAIL: God of War glow (colored fixed blend) left out"; exit 1; }
+# gxm split (development): with the bench's clock (1 us per read and nothing else) every call and piece is 0 ns once the clock is taken
+# off, and it counts every GXM call the bench counts (the bench does not count draws with no indices: the image underneath)
+TR_GV=1 TR_LOG=1 $(command -v qemu-arm-static || command -v qemu-arm) $R/build/perf/tr_gv $R/build/perf/gow_combat.bin 1 2>&1 | python3 -c '
+import re, sys
+t = sys.stdin.read(); b = re.search(r"gxm_draws=(\d+) gxm_ops=(\d+)", t); g = re.search(r"gxm split .*? ns \| (.*) \| us per", t)
+k = {m[0]: (int(m[1]), int(m[2])) for m in re.findall(r"(\w+)=(-?\d+)/(\d+)/\d+", g[1])} if g and b else {}
+n = sum(v[1] for x, v in k.items() if x not in ("draw", "zs", "t3set", "t3uni"))
+sys.exit(not k or any(v[0] for v in k.values()) or n != int(b[2]) - int(b[1]) or k["draw"][1] < int(b[1]))' || { echo "FAIL: gxm split"; exit 1; }
 echo "== capturer bench (builds and runs one scene)"
 arm-linux-gnueabihf-gcc -static -O2 -mthumb -mfpu=neon -mfloat-abi=hard -w -I$B/inc -o $B/bench $R/tools/perf/capture_bench.c
 $(command -v qemu-arm-static || command -v qemu-arm) $B/bench rr_race | grep -q "complete=38" || { echo "FAIL: capture_bench"; exit 1; }
@@ -65,6 +73,8 @@ echo "ok   prof_summary.py"
 
 printf ' 1000 bottleneck: slots 40 drawn 20 repeated 5 behind 10 no_record 0 normal 0 | ms: translator 600 gpu_wait 100 | translator ms: check 5 textures 50 vertices 300 gxm 100 scenes 45 | gpu ms: adrenaline 40 normal 0 surface 500 intermediate 300 idle 100\n' > $B/bn.log
 python3 $R/tools/bottleneck.py $B/bn.log | grep -q 'translator limits' || { echo "FAIL: bottleneck.py"; exit 1; }
+printf ' 1000 gxm split (1 draw in 64, ns per call without the clock/calls per HD frame/longest us): frames=10 timed=20 clock=600 ns | vres=1000/500/5 draw=3000/500/30 | t3set=500/400/3 t3uni=3000/400/9 | us per HD frame: gxm=2000 t3set=200 t3uni=1200\n' >> $B/bn.log
+python3 $R/tools/bottleneck.py $B/bn.log | grep -q 'GXM calls 2.0 ms per HD frame; t3set 0.2, t3uni 1.2' || { echo "FAIL: bottleneck.py gxm split"; exit 1; }
 mkdir $B/bn; mv $B/bn.log $B/bn/nativedraw.log
 printf ' 1000   capture split complete: frames=20 commands=8000 draws=900 | us/f: total=10000 cpu=9000 events=500 flip=200 walk=9000 hit=500 own=800 draw=4000 record=3000 state=500 index=0 vertices=1000 blocks=0 rows=0 textures=1000 vflush=100\n' > $B/bn/nativedraw_capture.log
 python3 $R/tools/bottleneck.py $B/bn | grep -q 'interpreter 3.7' || { echo "FAIL: bottleneck.py capture split"; exit 1; }
