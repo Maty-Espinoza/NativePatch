@@ -38,9 +38,8 @@ GitHub release built by `.github/workflows/toolchain.yml` on push.
 - The package is x86_64 only: the Mac's ARM64 VM keeps `tools/mac/setup_vm.sh`.
 
 ## What `tools/build.sh` leaves
-- `build/nativelink.prx`, `build/nativedraw.suprx`, `build/nativedraw.skprx` (NativeDraw's kernel half, from `nativedraw/kernel.c`
-  and `kernel.yml`, linked with the vitasdk ForDriver stubs; `nativedraw.suprx` imports it weakly, so it loads without it),
-  `build/NativePatch.vpk` (the installer with the three and a `version.txt`), plus the md5s on screen.
+- `build/nativelink.prx`, `build/nativedraw.suprx`, `build/NativePatch.vpk` (the installer with both plugins and a
+  `version.txt`), plus the md5s on screen.
 - With a version: copies `build/<plugin>_<version>.*`, `NativePatch_<version>.vpk` and `changes_<version>.patch` (the
   `git diff`).
 - With `V=<relay folder>`: the plugins to `V/send/ux0/...` (the relay uploads them to the Vita), the plugins and the VPK

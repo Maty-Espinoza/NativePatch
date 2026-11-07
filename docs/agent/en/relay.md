@@ -27,9 +27,6 @@ renamed at the end: the relay may pick up a half-written file.
 - **NativeDraw:** `send/ux0/data/nativedraw/nativedraw.suprx`. Adrenaline loads it when it opens: after uploading it,
   **always** send `cmd_close.txt` with `destroy` (or `reboot` if a restart is needed). Adrenaline keeps the old plugin
   loaded until it is closed.
-- **NativeDraw's kernel half:** `send/ux0/data/nativedraw/nativedraw.skprx`. taiHEN loads it at boot from the `*KERNEL`
-  section of `config.txt` (the installer adds the line): a new version needs `cmd_*.txt` with `reboot`. If the Vita does
-  not boot because of it, holding L while powering on skips every plugin (ensō).
 - **Installer** (`NativePatch.vpk`): only to install for the first time or to test the installer: it is uploaded to
   `send/ux0/data/nativepatch/` and the user installs it with VitaShell. For test versions the relay is enough (the
   plugins are already enabled in `plugins.txt` and `config.txt`).

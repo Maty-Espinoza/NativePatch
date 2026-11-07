@@ -34,7 +34,6 @@ and what limits were found: `findings.md`. How each piece was reached, version b
 | Translator: draws the record with the Vita's GPU | `nativedraw/translator.c`, `shaders/` | Vita (inside `presenter.c`) |
 | GPU timer, dumps, dump replay | `gpu_timer.c`, `dump.c`, `replay.c` | Vita (inside `presenter.c`) |
 | Test of the capturer off the Vita (qemu) | `nativedraw/capture_test.c` | PC |
-| Kernel half: maps the compat RAM (PSP VRAM) for NativeDraw | `nativedraw/kernel.c`, `kernel.yml` | Vita kernel (taiHEN, `*KERNEL`) |
 | Installer (`NativePatch.vpk`) | `installer/main.c` | Vita (app) |
 | PC tools: relay with the Vita, log summaries, dump drawing | `tools/` | PC |
 
@@ -46,10 +45,6 @@ and what limits were found: `findings.md`. How each piece was reached, version b
 - **NativeDraw:** taiHEN loads it in the Adrenaline process (`*PSPEMUCFW` section of `config.txt`), when Adrenaline
   is opened. For a new version to load, Adrenaline has to be closed. A change in `config.txt` requires restarting
   the Vita.
-- **NativeDraw's kernel half** (`nativedraw.skprx`, `nativedraw/kernel.c`): taiHEN loads it at boot (`*KERNEL` section of
-  `config.txt`). It only answers NativeDraw: it maps into Adrenaline's process the Vita's 2 MB compat RAM (the PSP's VRAM,
-  physical address 0x1C000000), which no process maps. NativeDraw works without it (today only the `vram_direct`
-  measurement uses it, `logs-and-switches.md`).
 - If `ux0:data/nativedraw/off` exists, NativeDraw does nothing. Without `ux0:data/nativedraw/draw`, NativeDraw captures and
   measures but only replaces the image while the L+R+START menu is open.
 

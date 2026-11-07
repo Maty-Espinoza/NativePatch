@@ -11,6 +11,25 @@ proof.
   Vita's ARM through remote calls (Kermit). Details: `adrenaline.md`.
 - **The PSP's VRAM (2 MB) is not mapped in the Adrenaline process** [measured]: the Vita cannot read it. That is why
   the mirror exists: NativeLink asks the GE to copy to normal RAM the pages the Vita needs.
+- **Nor can it be read from the Vita's kernel** [measured, NativeDraw 0.0.28.2-0.0.28.7, a kernel half that is no longer in the
+  repo]. The VRAM is the Vita's "Compati SRAM" (Tachyon eDRAM, 2 MB at physical address 0x1C000000, HENkaku wiki *Physical
+  Memory*). A kernel plugin maps it into Adrenaline's process without trouble (`USER_IO_DEVICE_R`), but while the PSP runs:
+  the **CPU**'s first read (even a single 32-bit word) stops the Vita; a **DMA** copy never finishes (the calling thread is
+  stuck); the **GPU** driver refuses to map it (`sceGxmMapMemory` → `SCE_GXM_ERROR_DRIVER`), and asked for a CDRAM block at that
+  address the kernel ignores the address. The cause fits the wiki's *Memory System* page: that memory has its own firewall on
+  the bus (`Compati_2MiB`), set by the secure side, and every bus error from the CPU stops the system. Out of reach for a
+  non-secure kernel plugin. Detail: `claude/analisis_estructura_60fps_2026-11-06.md` §10 (project) and the logs in
+  `vitabridge/stage3_0.0.28.{2..7}/`.
+- **A "proxy" on the PSP side** (NativeLink serving the Vita's reads of the VRAM) is what the mirror already is: only
+  hardware on the PSP side can touch the VRAM, and the choice is who copies and when. The GE at the flip (today, 1.3-3 ms of GE
+  per frame) copies the VRAM as it was at the end of the frame. The PSP's DMA costs about the same (~2.3-2.7 ms per MB) and
+  slows the game's CPU 10-20 % on the bus. A PSP CPU thread answering the Vita's requests at once would read the VRAM in the
+  middle of the frame the game is drawing (mixed images) and would charge the game's CPU. The Media Engine is not a free core on
+  the Vita (Adrenaline emulates it from the ARM, the `ScePspemuRemoteMe` thread). Worth it for errors (stale pages, textures
+  one frame late), not for fps: the mirror is a small part of the frame cost. Ideas, if it is ever needed: copy a target's
+  pages when the list that draws it finishes instead of at the flip (one frame less of latency), and measure which requested
+  pages NativeDraw already has (its own HD intermediate images, transfers repeated from RAM) to leave in the mirror only what
+  the game writes into VRAM with the CPU (`TODO.md`, "VRAM mirror").
 - The PSP's RAM is seen from the ARM at `0x68000000 + address`, uncached. **Reading it is the expensive part** (~2 µs
   per 64-byte line) [measured]: almost all of the capturer's cost is that wait, not interpreting. Reading 256 bytes at a
   time with NEON overlaps the waits; DMA (`sceDmacMemcpy`) copies at ~512 MB/s versus ~74 MB/s for the CPU, but each

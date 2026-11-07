@@ -11,6 +11,25 @@ directa.
   la Vita a través de llamadas remotas (Kermit). Detalle: `adrenaline.md`.
 - **La VRAM del PSP (2 MB) no está mapeada en el proceso de Adrenaline** [medido]: la Vita no puede leerla. Por eso
   existe el espejo: NativeLink le pide al GE que copie a la RAM normal las páginas que la Vita necesita.
+- **Tampoco se puede leer desde el kernel de la Vita** [medido, NativeDraw 0.0.28.2-0.0.28.7, con una mitad de kernel que ya no está
+  en el repo]. La VRAM es la "Compati SRAM" de la Vita (eDRAM Tachyon, 2 MB en la dirección física 0x1C000000, wiki de HENkaku
+  *Physical Memory*). Un plugin de kernel la mapea en el proceso de Adrenaline sin problema (`USER_IO_DEVICE_R`), pero mientras el
+  PSP corre: la primera lectura de la **CPU** (aunque sea una sola palabra de 32 bits) detiene la Vita; una copia por **DMA** nunca
+  termina (el hilo que la pide queda bloqueado); el driver de la **GPU** se niega a mapearla (`sceGxmMapMemory` →
+  `SCE_GXM_ERROR_DRIVER`), y si se pide un bloque CDRAM en esa dirección el kernel ignora la dirección. La causa calza con la página
+  *Memory System* de la wiki: esa memoria tiene un firewall propio en el bus (`Compati_2MiB`), configurado por la parte segura, y
+  todo bus error de la CPU detiene el sistema. Fuera del alcance de un plugin de kernel no seguro. Detalle:
+  `claude/analisis_estructura_60fps_2026-11-06.md` §10 (proyecto) y los logs en `vitabridge/stage3_0.0.28.{2..7}/`.
+- **Un "proxy" del lado PSP** (NativeLink atendiendo las lecturas de la VRAM que pide la Vita) es lo que ya es el espejo: solo el
+  hardware del lado PSP puede tocar la VRAM, y lo que se elige es quién copia y cuándo. El GE en el flip (hoy, 1,3-3 ms de GE por
+  frame) copia la VRAM tal como quedó al terminar el frame. El DMA del PSP cuesta lo mismo (~2,3-2,7 ms por MB) y frena la CPU del
+  juego un 10-20 % por el bus. Un hilo de la CPU del PSP que responda al instante leería la VRAM a mitad del frame que el juego está
+  dibujando (imágenes mezcladas) y le cobraría el trabajo a la CPU del juego. El Media Engine no es un núcleo libre en la Vita
+  (Adrenaline lo emula desde el ARM, el hilo `ScePspemuRemoteMe`). Serviría para errores (páginas viejas, texturas un frame tarde),
+  no para fps: el espejo es una parte chica del costo del frame. Ideas, si algún día hace falta: copiar las páginas de una imagen
+  intermedia al terminar la lista que la dibuja, no en el flip (un frame menos de latencia), y medir qué páginas pedidas ya tiene
+  NativeDraw (sus propias imágenes intermedias en HD, copias repetidas desde la RAM) para dejar en el espejo solo lo que el juego
+  escribe en la VRAM con la CPU (`TODO.md`, "VRAM mirror").
 - La RAM del PSP se ve desde el ARM en `0x68000000 + dirección` sin caché. **Leerla es lo caro** (~2 µs por línea de 64
   bytes) [medido]: casi todo el costo del capturador es esa espera, no interpretar. Leer de a 256 bytes con NEON solapa
   las esperas; el DMA (`sceDmacMemcpy`) copia a ~512 MB/s contra ~74 MB/s de la CPU, pero cada llamada cuesta ~100 µs.
