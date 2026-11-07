@@ -2220,13 +2220,17 @@ static void thrSample(void) {
 // The kernel half (kernel.c, nativedraw.skprx) maps into this process the Vita's compat RAM (physical 0x1C000000, 2 MB),
 // where the PSP's VRAM lives. To check it, each requested page whose mirror copy just finished is also read there and
 // compared with the copy: equal words, and where the copy's first line turns up in the direct memory when they differ.
-// Reads are single 32-bit loads by the CPU or, with vram_dma, DMA copies; with vram_kread, if no user mapping can be
-// made, the kernel copies instead. A refused read is a bus error, which stops the Vita: the switches are set to "no"
+// Reads are single 32-bit loads by the CPU or, with vram_dma, DMA copies, or, with vram_gpu, GPU transfer copies into a
+// GPU-mapped buffer; with vram_kread, if no user mapping can be made, the kernel copies instead. A refused read is a bus error, which stops the Vita: the switches are set to "no"
 // before the first read, so each try runs once.
 int ndkVramMap(uint32_t type, uint32_t size, void **ubase) __attribute__((weak));  // (weak: the PC tests have no kernel half)
 int ndkVramRead(uint32_t off, void *udst, uint32_t n) __attribute__((weak));
+int sceGxmTransferCopy(uint32_t w, uint32_t h, uint32_t ck, uint32_t ckm, int ckmode, uint32_t sf, uint32_t st, const void *sa, uint32_t sx, uint32_t sy,
+                       int32_t ss, uint32_t df, uint32_t dt, void *da, uint32_t dx, uint32_t dy, int32_t ds, void *sync, uint32_t sflags, const void *notif) __attribute__((weak));
+int sceGxmTransferFinish(void) __attribute__((weak));
 #define VD_N 0x1FE000  // bytes mapped (the camera SRAM: the 2 MB minus the last 8 KB)
-static int vd_on, vd_kread, vd_dma, vd_mode, vd_tried;  // vd_mode: 0 not available, 1 CPU words, 2 the kernel copies, 3 DMA
+static int vd_on, vd_kread, vd_dma, vd_gpu, vd_mode, vd_tried;  // vd_mode: 0 not available, 1 CPU words, 2 the kernel copies, 3 DMA, 4 GPU
+static uint32_t *vd_g;  // with vram_gpu: 4 KB the GPU copies into (uncached, GPU-mapped)
 static volatile uint8_t *vd_base;
 static uint32_t vd_pages, vd_eq, vd_words, vd_search, vd_t, vd_seen[512];  // pages compared, all equal, equal words, searches done
 static uint32_t vd_a[1024] __attribute__((aligned(16))), vd_b[1024] __attribute__((aligned(16)));
@@ -2236,6 +2240,16 @@ static int unresolved(const void *f) { const uint32_t *w = (const uint32_t *)((u
 static int vdRead(uint32_t *dst, uint32_t off, uint32_t n) {
   if (vd_mode == 2) return ndkVramRead(off, dst, n);
   if (vd_mode == 3) return sceDmacMemcpy(dst, (const void *)(vd_base + off), n) ? 0 : -1;
+  if (vd_mode == 4) {  // raw 32-bit pixels, 4 KB rows (or one row of n bytes)
+    for (uint32_t o = 0; o < n; o += 4096) {
+      uint32_t m = n - o < 4096 ? n - o : 4096;
+      int r = sceGxmTransferCopy(m / 4, 1, 0, 0, 0, 0x00110000u, 0, (const void *)(vd_base + off + o), 0, 0, m, 0x00110000u, 0, vd_g, 0, 0, m, 0, 0, 0);
+      if (r < 0) return r;
+      sceGxmTransferFinish();
+      for (uint32_t i = 0; i < m / 4; i++) dst[o / 4 + i] = vd_g[i];
+    }
+    return 0;
+  }
   const volatile uint32_t *s = (const volatile uint32_t *)(vd_base + off);
   for (uint32_t i = 0; i < n / 4; i++) dst[i] = s[i];
   return 0;
@@ -2243,7 +2257,7 @@ static int vdRead(uint32_t *dst, uint32_t off, uint32_t n) {
 // Writes "no" into switch file p
 static void swOff(const char *p) { SceUID fd = sceIoOpen(p, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0666); if (fd >= 0) { sceIoWrite(fd, "no\n", 3); sceIoClose(fd); } }
 // Maps the compat RAM (one user type after another; with vram_kread, the kernel copies if none works), reads one word (256
-// bytes by DMA), then 256 bytes, then 64 KB timed. Each step is logged and the log given 1.5 s to reach the card before the
+// bytes by DMA or GPU), then 256 bytes, then 64 KB timed. Each step is logged and the log given 1.5 s to reach the card before the
 // next, so if one of them takes the Vita down the log says which.
 static void vdInit(void) {
   vd_tried = 1;
@@ -2257,10 +2271,20 @@ static void vdInit(void) {
     if (r >= 0 && b) { vd_base = b; vd_mode = 1; }
   }
   if (vd_mode && vd_dma) vd_mode = 3;
-  swOff("ux0:data/nativedraw/vram_direct"); swOff("ux0:data/nativedraw/vram_dma"); swOff("ux0:data/nativedraw/vram_kread");
+  if (vd_mode && vd_gpu) {  // the GPU must have both the mapping and the buffer it copies into in its own map
+    void *g = 0;
+    SceUID gb = sceKernelAllocMemBlock("nativedraw_vdg", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW_UNCACHE, 4096, NULL);
+    int r1 = gb >= 0 ? sceKernelGetMemBlockBase(gb, &g) : gb, r2 = r1 >= 0 ? sceGxmMapMemory(g, 4096, 3) : r1;
+    int r3 = r2 >= 0 ? sceGxmMapMemory((void *)vd_base, VD_N, 1) : r2;
+    clog("vram direct: GPU buffer %08x map %08x, compat RAM GPU map %08x\n", r1, r2, r3);
+    sceKernelDelayThread(1500000);
+    if (r3 < 0 || unresolved(sceGxmTransferCopy)) return;
+    vd_g = g; vd_mode = 4;
+  }
+  swOff("ux0:data/nativedraw/vram_direct"); swOff("ux0:data/nativedraw/vram_dma"); swOff("ux0:data/nativedraw/vram_gpu"); swOff("ux0:data/nativedraw/vram_kread");
   if (!vd_mode && vd_kread) { clog("vram direct: kernel copy of 256 bytes next\n"); sceKernelDelayThread(1500000); int r = ndkVramRead(0, vd_a, 256); clog("vram direct: kernel copy -> %08x\n", r); if (r >= 0) vd_mode = 2; }
   if (!vd_mode) return;
-  clog("vram direct: switches set to no; first read by %s next (%s)\n", vd_mode == 3 ? "DMA" : vd_mode == 2 ? "the kernel" : "CPU", vd_mode == 3 ? "256 bytes" : "one word");
+  clog("vram direct: switches set to no; first read by %s next (%s)\n", vd_mode == 4 ? "GPU" : vd_mode == 3 ? "DMA" : vd_mode == 2 ? "the kernel" : "CPU", vd_mode == 1 ? "one word" : "256 bytes");
   sceKernelDelayThread(1500000);
   if (vd_mode == 1) vd_a[0] = *(const volatile uint32_t *)vd_base;
   else vdRead(vd_a, 0, 256);

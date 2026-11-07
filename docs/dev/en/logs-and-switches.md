@@ -70,6 +70,7 @@ The development measurements are listed in `nativedraw/measures.h`, one line eac
 | `no_capture` | the Vita does not walk anything: it marks the lists as captured (almost NativeLink alone) |
 | `vram_direct` | (development) reads the PSP's VRAM directly through NativeDraw's kernel half (`nativedraw.skprx`, which maps the Vita's 2 MB compat RAM at physical address 0x1C000000 into Adrenaline's process) and compares each requested page, when its mirror copy finishes, with that copy: `vram direct:` lines in `nativedraw_capture.log` (below). Does nothing if the kernel half is not loaded |
 | `vram_dma` | (development) with `vram_direct`, reads the mapping by DMA (`sceDmacMemcpy`) instead of single 32-bit CPU loads |
+| `vram_gpu` | (development) with `vram_direct`, maps the compat RAM for the GPU (`sceGxmMapMemory`) and reads it with GPU transfer copies (`sceGxmTransferCopy`) into a 4 KB GPU-mapped buffer instead of CPU loads: `vram direct: GPU buffer R map R, compat RAM GPU map R` |
 | `vram_kread` | (development) with `vram_direct`, if no user mapping of the compat RAM can be made, the kernel copies it on every read instead. A fault in that read restarts the Vita: only with this file |
 | `gate_sync` | (v13.10) the wait for the Vita stays at the sync, as before dev66 (for comparison); see `etapa2_fase2_compuerta.md` |
 | `no_lookahead` | (v13.12) the readers do not do the look-ahead check of the plan (only on reaching each CALL, as before); see `etapa2_fase2_adelanto.md` |
