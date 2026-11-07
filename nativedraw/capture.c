@@ -2262,26 +2262,28 @@ static void swOff(const char *p) { SceUID fd = sceIoOpen(p, SCE_O_WRONLY | SCE_O
 static void vdInit(void) {
   vd_tried = 1;
   if (unresolved(ndkVramMap)) { clog("vram direct: nativedraw.skprx is not loaded (*KERNEL in config.txt)\n"); return; }
-  static const uint32_t types[4] = { 0x0B100840, 0x0B100240, 0x0C200860, 0x0C208060 };  // USER_IO_DEVICE_R, USER_IO_SO_R, USER_MAIN_DEVICE_RW, USER_RW_UNCACHE
-  for (int i = 0; i < 4 && !vd_mode; i++) {
+  // USER_IO_DEVICE_R, USER_IO_SO_R, USER_MAIN_DEVICE_RW, USER_RW_UNCACHE; with vram_gpu only USER_CDRAM_RW (2 MB), the kind
+  // of block the GPU driver maps
+  static const uint32_t types[5] = { 0x0B100840, 0x0B100240, 0x0C200860, 0x0C208060, 0x09408060 };
+  for (int i = vd_gpu ? 4 : 0; i < (vd_gpu ? 5 : 4) && !vd_mode; i++) {
     void *b = 0;
-    int r = ndkVramMap(types[i], VD_N, &b);
+    int r = ndkVramMap(types[i], vd_gpu ? 0x200000 : VD_N, &b);
     clog("vram direct: map type %08x -> %08x base %08x\n", types[i], r, (uint32_t)b);
     sceKernelDelayThread(3000000);
     if (r >= 0 && b) { vd_base = b; vd_mode = 1; }
   }
+  swOff("ux0:data/nativedraw/vram_direct"); swOff("ux0:data/nativedraw/vram_dma"); swOff("ux0:data/nativedraw/vram_gpu"); swOff("ux0:data/nativedraw/vram_kread");
   if (vd_mode && vd_dma) vd_mode = 3;
   if (vd_mode && vd_gpu) {  // the GPU must have both the mapping and the buffer it copies into in its own map
     void *g = 0;
     SceUID gb = sceKernelAllocMemBlock("nativedraw_vdg", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW_UNCACHE, 4096, NULL);
     int r1 = gb >= 0 ? sceKernelGetMemBlockBase(gb, &g) : gb, r2 = r1 >= 0 ? sceGxmMapMemory(g, 4096, 3) : r1;
-    int r3 = r2 >= 0 ? sceGxmMapMemory((void *)vd_base, VD_N, 1) : r2;
+    int r3 = r2 >= 0 ? sceGxmMapMemory((void *)vd_base, 0x200000, 1) : r2;
     clog("vram direct: GPU buffer %08x map %08x, compat RAM GPU map %08x\n", r1, r2, r3);
     sceKernelDelayThread(1500000);
-    if (r3 < 0 || unresolved(sceGxmTransferCopy)) return;
+    if (r3 < 0 || unresolved(sceGxmTransferCopy)) { vd_mode = 0; return; }
     vd_g = g; vd_mode = 4;
   }
-  swOff("ux0:data/nativedraw/vram_direct"); swOff("ux0:data/nativedraw/vram_dma"); swOff("ux0:data/nativedraw/vram_gpu"); swOff("ux0:data/nativedraw/vram_kread");
   if (!vd_mode && vd_kread) { clog("vram direct: kernel copy of 256 bytes next\n"); sceKernelDelayThread(1500000); int r = ndkVramRead(0, vd_a, 256); clog("vram direct: kernel copy -> %08x\n", r); if (r >= 0) vd_mode = 2; }
   if (!vd_mode) return;
   clog("vram direct: switches set to no; first read by %s next (%s)\n", vd_mode == 4 ? "GPU" : vd_mode == 3 ? "DMA" : vd_mode == 2 ? "the kernel" : "CPU", vd_mode == 1 ? "one word" : "256 bytes");
