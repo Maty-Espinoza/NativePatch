@@ -55,7 +55,7 @@ static struct { const SceGxmProgram *p; char name[8]; float v[256]; } par[64];
 static const void *stream; static uint32_t fprog, tex_w;
 static FILE *dmp, *tri;
 static const SceGxmVertexProgram *vprog;
-static uint32_t gn[5];  // vertices drawn by each GPU vertex program (4: all of nd_v5)
+static uint32_t gn[5], gn5[3];  // vertices drawn by each GPU vertex program (4: all of nd_v5), and by nd_v5 and each of its variants
 static uint32_t cur_w, set_w, in_rt;  // (in_rt: an intermediate image: the CPU path clips there, nd_v3 leaves it to the GPU, so its triangles differ)
 volatile SceUID nd_gfx_uid;
 void sceGxmSetVertexProgram(SceGxmContext *c, const SceGxmVertexProgram *p) { vprog = p; g_ops++; }
@@ -85,12 +85,14 @@ int sceGxmBeginScene(SceGxmContext *context, unsigned int flags, const SceGxmRen
 // Value of parameter p (by name) of the vertex program in the context
 static const float *uni(const SceGxmProgramParameter *p) { return ((typeof(&par[0]))p)->v; }
 #ifdef GVS
-// Which nd_v5 program (skinProg) is in the context; -1 if none
-static int skI(void) { for (int k = 0; k < 25; k++) if (gvp[4 + k] && vprog == gvp[4 + k]) return k; return -1; }
-// triV for nd_v5 program sk (skinProg): its attributes laid out as in trVerts; components not given are 0, w 1
+// Which nd_v5 program or variant (skinProg) is in the context, from the place in gvp each program keeps; -1 if none
+static int skI(void) { return vprog && *(const int *)vprog >= 4 ? *(const int *)vprog - 4 : -1; }
+// triV for nd_v5 program sk (skinProg; variant sk / 25 goes through nb bones and nl lights): its attributes laid out as in trVerts;
+// components not given are 0, w 1
 static void triS(int sk, uint32_t k, float *o, float *ou, float *ov, float *og, float *c) {
   float u, v, g;
-  static const uint8_t s4[4] = { 0, 1, 2, 4 }, cs[8] = { 0, 0, 0, 0, 2, 2, 2, 4 };
+  static const uint8_t s4[4] = { 0, 1, 2, 4 }, cs[8] = { 0, 0, 0, 0, 2, 2, 2, 4 }, nb[3] = { 8, 4, 0 }, nl[3] = { 4, 0, 1 };
+  int vr = sk / 25; sk %= 25;
   uint32_t vt = (sk >> 3 & 1 ? 0x7BE : 0x7B9) & (sk >= 16 ? 0x1FF : ~0u), wn = (sk & 7) + 1, z = 0, of[5] = { 0 }, fn[5] = { wn, 2, 1, 3, 3 },
            fs[5] = { sk < 16 ? 4 : 0, s4[vt & 3], cs[vt >> 2 & 7], s4[vt >> 5 & 3], 4 };
   for (int i = 0; i < 5; i++) if (fs[i]) { z = (z + fs[i] - 1) / fs[i] * fs[i]; of[i] = z; z += fn[i] * fs[i]; }
@@ -103,7 +105,7 @@ static void triS(int sk, uint32_t k, float *o, float *ou, float *ov, float *og, 
   for (int i = 0; i < 2; i++) t2[i] = (vt & 3) == 2 ? ((const uint16_t *)(p + of[1]))[i] : p[of[1] + i];
   for (int i = 0; i < ((vt >> 2 & 7) == 6 ? 2 : 4); i++) a[i] = p[of[2] + i];
   for (int r = 0; r < 3; r++) { s3[r] = q[51] * x[r]; sn[r] = q[51] * nr[r]; }
-  for (int b = 0; b < 8; b++) for (int r = 0; r < 3; r++) {
+  for (int b = 0; b < nb[vr]; b++) for (int r = 0; r < 3; r++) {
     const float *m = q + (31 + b * 3 + r) * 4;
     s3[r] += w8[b] * (x[0] * m[0] + x[1] * m[1] + x[2] * m[2] + m[3]); sn[r] += w8[b] * (nr[0] * m[0] + nr[1] * m[1] + nr[2] * m[2]);
   }
@@ -114,7 +116,7 @@ static void triS(int sk, uint32_t k, float *o, float *ou, float *ov, float *og, 
   const float c4[4] = { l[0] / 15, h[0] / 15, l[1] / 15, h[1] / 15 };
   for (int i = 0; i < 4; i++) cv[i] = q[47] > 0 ? a[i] / 255 : c4[i];
   for (int r = 0; r < 3; r++) wp[r] = s3[0] * q[236 + r * 4] + s3[1] * q[237 + r * 4] + s3[2] * q[238 + r * 4] + q[239 + r * 4];
-  for (int i = 0; i < 4; i++) {
+  for (int i = 0; i < nl[vr]; i++) {
     const float *z = q + 60 + i * 16;
     float L[3], hv[3];
     for (int j = 0; j < 3; j++) L[j] = z[j] - z[3] * wp[j];
@@ -138,7 +140,6 @@ static void triS(int sk, uint32_t k, float *o, float *ou, float *ov, float *og, 
 #else  // (an older translator, built by tr_check.sh)
 #define GVS(vt) 0
 static uint32_t gsz[1];
-static SceGxmShaderPatcherId i5;
 static int skI(void) { return -1; }
 static void triS(int sk, uint32_t k, float *o, float *ou, float *ov, float *og, float *c) {}
 #endif
@@ -202,15 +203,18 @@ static void triDump(SceGxmPrimitiveType t, const uint16_t *ix, unsigned n) {
   }
 }
 static uint32_t gxm_calls;
+// 1 if program p has a parameter u
+static int hasU(const SceGxmProgram *p) { for (int i = 0; i < 64 && par[i].p; i++) if (par[i].p == p && !strcmp(par[i].name, "u")) return 1; return 0; }
 int sceGxmDraw(SceGxmContext *c, SceGxmPrimitiveType t, SceGxmIndexFormat f, const void *ix, unsigned n) {
   if (ix) gxm_calls++, g_ops++;
   if (tri && ix && !in_rt) triDump(t, ix, n);
   for (int i = 0; i < 4; i++) if (vprog == gvp[i]) gn[i] += n;
-  if (skI() >= 0) gn[4] += n;
+  int sk = skI();
+  if (sk >= 0) gn[4] += n, gn5[sk / 25] += n;
   if (!dmp || !ix) return 0;  // (no ix: the presenter's quad, not the translator's)
   fprintf(dmp, "D %d %u %08x %08x", t, n, fprog, tex_w);
-  // (not nd_v5's: an older translator, built by tr_check.sh, has none)
-  for (int i = 0; i < 64 && par[i].p; i++) if (strcmp(par[i].name, "wvp") && par[i].p != (const SceGxmProgram *)i5) for (int k = 0; k < 4; k++) fprintf(dmp, " %.5g", par[i].v[k]);
+  // (not those of nd_v5 and its variants, the programs with a parameter u: an older translator, built by tr_check.sh, has none)
+  for (int i = 0; i < 64 && par[i].p; i++) if (strcmp(par[i].name, "wvp") && !hasU(par[i].p)) for (int k = 0; k < 4; k++) fprintf(dmp, " %.5g", par[i].v[k]);
   fputc('\n', dmp);
   for (unsigned i = 0; i < n; i++) {
     const TV *q = (const TV *)stream + ((const uint16_t *)ix)[i];
@@ -219,7 +223,10 @@ int sceGxmDraw(SceGxmContext *c, SceGxmPrimitiveType t, SceGxmIndexFormat f, con
   return 0;
 }
 int sceGxmShaderPatcherCreateVertexProgram(SceGxmShaderPatcher *s, SceGxmShaderPatcherId i, const SceGxmVertexAttribute *a, unsigned na, const SceGxmVertexStream *st,
-    unsigned ns, SceGxmVertexProgram **o) { static int x[32], n; *o = (void *)&x[n++ & 31]; return 0; }
+    unsigned ns, SceGxmVertexProgram **o) {  // (each program keeps its place in gvp, -1 outside it)
+  static int x[128], n;
+  x[n & 127] = o >= gvp && o < gvp + sizeof gvp / sizeof *gvp ? o - gvp : -1; *o = (void *)&x[n++ & 127]; return 0;
+}
 
 // Reads a dump's record like repLoad, into plain memory
 static RFrame *load(const char *path) {
@@ -321,7 +328,7 @@ int main(int argc, char **argv) {
     CALLGRIND_TOGGLE_COLLECT;
     if (dmp) fprintf(dmp, "F %s\n", tnames[res]);
   }
-  printf("frames=%d draws=%u result=%s gpu_vertices=%u,%u,%u,%u,%u gxm_draws=%u gxm_ops=%u uniform_floats=%u vertices_in=%u cpu_vertices=%u\n", n, f->nd, tnames[res],
-         gn[0] / n, gn[1] / n, gn[2] / n, gn[3] / n, gn[4] / n, gxm_calls / n, g_ops / n, g_uf / n, t_c[TC_VIN] / n, (t_c[TC_VIN] - t_c[TC_VGPU]) / n);
+  printf("frames=%d draws=%u result=%s gpu_vertices=%u,%u,%u,%u,%u gxm_draws=%u gxm_ops=%u uniform_floats=%u vertices_in=%u cpu_vertices=%u nd_v5=%u,%u,%u\n", n, f->nd, tnames[res],
+         gn[0] / n, gn[1] / n, gn[2] / n, gn[3] / n, gn[4] / n, gxm_calls / n, g_ops / n, g_uf / n, t_c[TC_VIN] / n, (t_c[TC_VIN] - t_c[TC_VGPU]) / n, gn5[0] / n, gn5[1] / n, gn5[2] / n);
   return 0;
 }

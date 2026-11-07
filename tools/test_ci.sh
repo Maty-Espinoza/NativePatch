@@ -23,6 +23,9 @@ echo "$G" | grep 'draws=6642' | grep -q 'result=ok' || { echo "FAIL: God of War 
 [ "$(echo "$G" | grep 'draws=6642' | sed 's/.*gpu_vertices=[0-9]*,[0-9]*,[0-9]*,\([0-9]*\).*/\1/')" -gt 50000 ] || { echo "FAIL: God of War type 0x1BE not on the GPU"; exit 1; }
 # God of War with enemies: skinned vertices with a point light and lit 0x1BE on the GPU (nd_v5)
 [ "$(echo "$G" | grep 'draws=8429' | sed 's/.*cpu_vertices=\([0-9]*\).*/\1/')" -lt 10000 ] || { echo "FAIL: God of War lit vertices not on the GPU"; exit 1; }
+# God of War: skinned with no lights on and 4 weights at most go through nd_v5_b4l0, 0x1BE with one light through nd_v5_b0l1
+[ "$(echo "$G" | grep 'draws=6642' | sed 's/.*nd_v5=[0-9]*,\([0-9]*\),.*/\1/')" -gt 50000 ] || { echo "FAIL: God of War unlit skinned vertices not on nd_v5_b4l0"; exit 1; }
+[ "$(echo "$G" | grep 'draws=8429' | sed 's/.*nd_v5=[0-9]*,[0-9]*,\([0-9]*\).*/\1/')" -gt 50000 ] || { echo "FAIL: God of War 0x1BE with one light not on nd_v5_b0l1"; exit 1; }
 # God of War's glow: the scene goes to 162000 times a colored fixed blend color (3f5343), carried by the vertex color
 TR_LOG=1 $(command -v qemu-arm-static || command -v qemu-arm) $R/build/perf/tr_gv $R/build/perf/gow_combat.bin 1 2>&1 | grep -q "left out.*'blend'" && { echo "FAIL: God of War glow (colored fixed blend) left out"; exit 1; }
 echo "== capturer bench (builds and runs one scene)"
