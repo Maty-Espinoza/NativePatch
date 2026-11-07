@@ -891,10 +891,10 @@ static void regDraw(uint32_t n, uint32_t type, uint32_t vt, uint32_t idx) {
   DEV(CSA(CS_RVT, tc); tc = CST();)
   d->woff = d->moff = d->loff = 0;
   static uint32_t lw, lwb, lm, ll;  // last matrix and light blocks of this frame (lwb: world and the 8 bones, for vertices with weights)
-  if (!f->nd) lw = lm = ll = 0, rg_mchg = 1;
+  if (!f->nd) lw = lm = ll = 0, rg_mchg = 31;
   if (!(vt >> 23 & 1)) {
     ga.v_all++; ga.v_list += vaddr - pub_pc + 0x40000 < 0x80000;
-    if (rg_mchg) lwb = 0;
+    if (rg_mchg & 17) lwb = 0, rg_mchg &= 15;  // (world or bones: the bones block; the others only need the matrix blocks)
     if (rg_mchg || !lw || !lm) {
       uint32_t vm[40];
       rg_mchg = 0;

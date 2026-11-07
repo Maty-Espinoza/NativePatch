@@ -395,7 +395,7 @@ static struct { volatile uint32_t n[4], ch1[4], ch2[4], warn[4], wall[4], ms1, m
 #endif
 
 static uint32_t vs_vt = ~0u, vs_sz;  // last vertex type and its size
-static int rg_chg = 1, rg_lchg = 1, rg_mchg = 1, rg_tchg = 1;  // since the last recorded draw: state (RS), light block (0x53-0x9A) or matrix values changed
+static int rg_chg = 1, rg_lchg = 1, rg_mchg = 31, rg_tchg = 1;  // since the last recorded draw: state (RS), light block (0x53-0x9A) or matrix values changed (bit m: mtx[m])
 static int reg_on, reg_big;  // frame record (switch draw); last frame had more draws than a record holds
 // Until when (Vita time) each frame carries the exact PSP image: set by dump.c for an
 // L+R+SELECT dump and used by record.c
@@ -505,7 +505,7 @@ static void stSave(GeState *g) {
   sceClibMemcpy(g->v, v, sizeof v);
 }
 static void stLoad(GeState *g) {
-  rg_chg = rg_lchg = rg_mchg = 1; sceClibMemcpy(reg, g->reg, sizeof reg); sceClibMemcpy(mtx, g->mtx, sizeof mtx); sceClibMemcpy(mi, g->mi, sizeof mi);
+  rg_chg = rg_lchg = 1; rg_mchg = 31; sceClibMemcpy(reg, g->reg, sizeof reg); sceClibMemcpy(mtx, g->mtx, sizeof mtx); sceClibMemcpy(mi, g->mi, sizeof mi);
   dirty = g->v[0]; vaddr = g->v[1]; iaddr = g->v[2]; vset = g->v[3]; last_prim = g->v[4]; last_vend = g->v[5];
   last_fb = g->v[6];
 }
@@ -664,7 +664,7 @@ static void baseLog(const char *who, uint32_t pc, uint32_t d) {
 #endif
 // Leaves the GE state as if sublist e had been walked
 static void memoApply(Memo *e) {
-  rg_chg = rg_lchg = rg_mchg = 1;
+  rg_chg = rg_lchg = 1; rg_mchg = 31;
   DEV(for (uint32_t i = 0; i < e->nreg; i++) if (e->rc[i] == 0x10) baseLog("saved sublist", e->t, e->rv[i]);)
   for (uint32_t i = 0; i < e->nreg; i++) reg[e->rc[i]] = e->rv[i];
   for (int m = 0; m < 5; m++) if (e->mmask >> m & 1) { mi[m] = e->mi[m]; sceClibMemcpy(mtx[m], e->mtx + moff[m], msz[m] * 4); }
@@ -1199,7 +1199,7 @@ static int __attribute__((noinline)) walkList(List *l) {
       if (plain[c] == 2) {
         int m = c == 0x2B ? 4 : (c - 0x3B) / 2, max = m == 4 ? 96 : m == 2 ? 16 : 12;
         if (rec) rec->mmask |= 1 << m;
-        if (mi[m] < (uint32_t)max) { if (mtx[m][mi[m]] != d) { mtx[m][mi[m]] = d; dirty |= C_MTX; rg_mchg = 1; } mi[m]++; }
+        if (mi[m] < (uint32_t)max) { if (mtx[m][mi[m]] != d) { mtx[m][mi[m]] = d; dirty |= C_MTX; rg_mchg |= 1 << m; } mi[m]++; }
       } else {
         if (cls[c] && reg[c] != d) { rg_chg |= RI[c] != 0; rg_lchg |= c - 0x53 < 72; rg_tchg |= cls[c] & C_TEX; dirty |= cls[c]; if (cls[c] & (C_OTHER | C_TL)) acc.chg[c]++; }
         DEV(if (c == 0x10) baseLog("list", pc, d);
