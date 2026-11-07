@@ -56,6 +56,9 @@ static const void *stream; static uint32_t fprog, fid, tex_w, gfn[3][2];  // (fi
 static FILE *dmp, *tri;
 static const SceGxmVertexProgram *vprog;
 static uint32_t gn[5], gn5[3];  // vertices drawn by each GPU vertex program (4: all of nd_v5), and by nd_v5 and each of its variants
+static uint32_t zs_f, zs_n[2];  // surface scenes that load and that store depth and stencil (zs_f: what the surface has set now)
+void sceGxmDepthStencilSurfaceSetForceLoadMode(SceGxmDepthStencilSurface *s, SceGxmDepthStencilForceLoadMode m) { zs_f = (zs_f & 2) | (m == SCE_GXM_DEPTH_STENCIL_FORCE_LOAD_ENABLED); }
+void sceGxmDepthStencilSurfaceSetForceStoreMode(SceGxmDepthStencilSurface *s, SceGxmDepthStencilForceStoreMode m) { zs_f = (zs_f & 1) | (m == SCE_GXM_DEPTH_STENCIL_FORCE_STORE_ENABLED) << 1; }
 static uint32_t cur_w, set_w, in_rt;  // (in_rt: an intermediate image: the CPU path clips there, nd_v3 leaves it to the GPU, so its triangles differ)
 volatile SceUID nd_gfx_uid;
 void sceGxmSetVertexProgram(SceGxmContext *c, const SceGxmVertexProgram *p) { vprog = p; g_ops++; }
@@ -81,7 +84,7 @@ void sceGxmSetFragmentProgram(SceGxmContext *c, const SceGxmFragmentProgram *p) 
 int sceGxmSetVertexStream(SceGxmContext *c, unsigned i, const void *d) { stream = d; g_ops++; return 0; }
 int sceGxmTextureInitLinear(SceGxmTexture *t, const void *d, SceGxmTextureFormat f, unsigned w, unsigned h, unsigned m) { tex_w = w << 16 ^ h ^ f; cur_w = w; return 0; }
 int sceGxmTextureInitLinearStrided(SceGxmTexture *t, const void *d, SceGxmTextureFormat f, unsigned w, unsigned h, unsigned s) { tex_w = w << 16 ^ h ^ f; cur_w = w; return 0; }
-int sceGxmBeginScene(SceGxmContext *context, unsigned int flags, const SceGxmRenderTarget *renderTarget, const SceGxmValidRegion *validRegion, SceGxmSyncObject *vertexSyncObject, SceGxmSyncObject *fragmentSyncObject, const SceGxmColorSurface *colorSurface, const SceGxmDepthStencilSurface *depthStencil) { in_rt = validRegion && colorSurface != &rtb.cs; if (dmp) fprintf(dmp, "S\n"); return 0; }
+int sceGxmBeginScene(SceGxmContext *context, unsigned int flags, const SceGxmRenderTarget *renderTarget, const SceGxmValidRegion *validRegion, SceGxmSyncObject *vertexSyncObject, SceGxmSyncObject *fragmentSyncObject, const SceGxmColorSurface *colorSurface, const SceGxmDepthStencilSurface *depthStencil) { in_rt = validRegion && colorSurface != &rtb.cs; if (depthStencil != &ds) zs_n[0] += zs_f & 1, zs_n[1] += zs_f >> 1; if (dmp) fprintf(dmp, "S\n"); return 0; }
 // Value of parameter p (by name) of the vertex program in the context
 static const float *uni(const SceGxmProgramParameter *p) { return ((typeof(&par[0]))p)->v; }
 #ifdef GVS
@@ -333,7 +336,7 @@ int main(int argc, char **argv) {
     CALLGRIND_TOGGLE_COLLECT;
     if (dmp) fprintf(dmp, "F %s\n", tnames[res]);
   }
-  printf("frames=%d draws=%u result=%s gpu_vertices=%u,%u,%u,%u,%u gxm_draws=%u gxm_ops=%u uniform_floats=%u vertices_in=%u cpu_vertices=%u nd_v5=%u,%u,%u nd_f2=%u,%u nd_fr=%u,%u\n", n, f->nd, tnames[res],
-         gn[0] / n, gn[1] / n, gn[2] / n, gn[3] / n, gn[4] / n, gxm_calls / n, g_ops / n, g_uf / n, t_c[TC_VIN] / n, (t_c[TC_VIN] - t_c[TC_VGPU]) / n, gn5[0] / n, gn5[1] / n, gn5[2] / n, gfn[1][0] / n, gfn[1][1], gfn[2][0] / n, gfn[2][1]);
+  printf("frames=%d draws=%u result=%s gpu_vertices=%u,%u,%u,%u,%u gxm_draws=%u gxm_ops=%u uniform_floats=%u vertices_in=%u cpu_vertices=%u nd_v5=%u,%u,%u nd_f2=%u,%u nd_fr=%u,%u depth_load_store=%u,%u\n", n, f->nd, tnames[res],
+         gn[0] / n, gn[1] / n, gn[2] / n, gn[3] / n, gn[4] / n, gxm_calls / n, g_ops / n, g_uf / n, t_c[TC_VIN] / n, (t_c[TC_VIN] - t_c[TC_VGPU]) / n, gn5[0] / n, gn5[1] / n, gn5[2] / n, gfn[1][0] / n, gfn[1][1], gfn[2][0] / n, gfn[2][1], zs_n[0] / n, zs_n[1] / n);
   return 0;
 }

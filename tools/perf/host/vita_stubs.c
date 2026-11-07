@@ -9,8 +9,6 @@ int sceGxmColorSurfaceInit(void) { return 0; }
 int sceGxmCreateRenderTarget(void) { return 0; }
 int sceGxmDepthStencilSurfaceInit(void) { return 0; }
 int sceGxmDepthStencilSurfaceSetBackgroundDepth(void) { return 0; }
-int sceGxmDepthStencilSurfaceSetForceLoadMode(void) { return 0; }
-int sceGxmDepthStencilSurfaceSetForceStoreMode(void) { return 0; }
 int sceGxmEndScene(void) { return 0; }
 int sceGxmFinish(void) { return 0; }
 int sceGxmGetNotificationRegion(void) { return 0; }

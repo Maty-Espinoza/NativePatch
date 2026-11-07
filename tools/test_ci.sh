@@ -31,7 +31,10 @@ echo "$G" | grep 'draws=6642' | grep -q 'result=ok' || { echo "FAIL: God of War 
 # God of War: doubled color with no fog goes through nd_f2, and none of its vertices has fog (nd_f2 leaves it out)
 echo "$G" | grep 'draws=6642' | grep -q 'nd_f2=[4-9][0-9][0-9][0-9][0-9],0 ' || { echo "FAIL: God of War doubled color without fog not on nd_f2"; exit 1; }
 # God of War with enemies: texture function replace (large blended draws) goes through nd_fr, none of its vertices with fog
-echo "$G" | grep 'draws=8429' | grep -q 'nd_fr=[1-9][0-9]*,0$' || { echo "FAIL: God of War replace not on nd_fr"; exit 1; }
+echo "$G" | grep 'draws=8429' | grep -q 'nd_fr=[1-9][0-9]*,0 ' || { echo "FAIL: God of War replace not on nd_fr"; exit 1; }
+# God of War combat: of its three surface scenes, the second reads the stencil of the first: one stores depth and stencil, one
+# loads them (the third, the glow pasted on top, does neither)
+echo "$G" | grep 'draws=6642' | grep -q 'depth_load_store=1,1$' || { echo "FAIL: God of War depth and stencil stored or loaded where no later scene reads them"; exit 1; }
 # God of War's glow: the scene goes to 162000 times a colored fixed blend color (3f5343), carried by the vertex color
 TR_LOG=1 $(command -v qemu-arm-static || command -v qemu-arm) $R/build/perf/tr_gv $R/build/perf/gow_combat.bin 1 2>&1 | grep -q "left out.*'blend'" && { echo "FAIL: God of War glow (colored fixed blend) left out"; exit 1; }
 echo "== capturer bench (builds and runs one scene)"

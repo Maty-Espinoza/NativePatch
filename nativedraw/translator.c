@@ -1473,15 +1473,17 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
   DEV(t_us[0] += now() - ta; if (p_on) pAdd(P_T_CHECK, now() - ta);)
   trRegions(f);
   trBoxed(f, disp, ord);
-  // Depth lives in one scene: if the surface is drawn with depth after its scene was cut, it is stored and loaded. The other
-  // scenes use the same memory without storing it, so they do not touch it
+  // Depth and stencil live in one scene: a surface scene loads them only if it or a later one reads them (depth or stencil test)
+  // and stores them only if a later one does, that is, if a draw to an intermediate image cuts it before the last read (OPEN).
+  // The other scenes use the same memory without storing it, so they do not touch it. zl: last surface draw that reads them;
+  // zc: last draw to an intermediate image before it (-1: none)
   SceGxmDepthStencilSurface dss = ds;
-  int zcut = 0;
-  for (uint32_t i = ord; i < f->nd && !zcut; i++) {
+  int zl = -1, zc = -1, cut = -1;
+  for (uint32_t i = ord; i < f->nd; i++) {
     const uint32_t *e = f->e[f->d[i].st];
-    zcut = (RE(e, 0x9C) & 0x1FFFF0) == disp && !(RE(e, 0xD3) & 1) && RE(e, 0x23) & 1;
+    if ((RE(e, 0x9C) & 0x1FFFF0) != disp) cut = i;
+    else if (!(RE(e, 0xD3) & 1) && (RE(e, 0x23) & 1 || RE(e, 0x24) & 1)) zl = i, zc = cut;
   }
-  if (zcut) sceGxmDepthStencilSurfaceSetForceStoreMode(&dss, SCE_GXM_DEPTH_STENCIL_FORCE_STORE_ENABLED);
   static uint32_t t_q[2];  // last scene that read the vertices and palettes of each surface
   // if the GPU is still reading them (unfinished scene) it waits
   if (gBusy(t_q[s])) { g_psurf++; gEv("vertices and palettes rewritten", t_q[s]); gWait(t_q[s]); }
@@ -1497,7 +1499,8 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
   // puts the normal image (or black: trBase) underneath
 #define OPEN(dst_) do { RUN(); pd = 0; if (opened) { SURF_WAIT(); DEV(h_at = 6;) sceGxmEndScene(c, 0, gEnd()); DEV(h_at = 4; CTAG();) cNote(cur_rt ? C_INT : C_TR, &gq_n, t_draws - d0, spx / 1000, ssw); } \
     d0 = t_draws; spx = 0; ssw = 0; cur_rt = (dst_); opened = 1; \
-    if (!cur_rt && has_base && zcut) sceGxmDepthStencilSurfaceSetForceLoadMode(&dss, SCE_GXM_DEPTH_STENCIL_FORCE_LOAD_ENABLED); \
+    if (!cur_rt) { sceGxmDepthStencilSurfaceSetForceLoadMode(&dss, has_base && (int)zi <= zl ? SCE_GXM_DEPTH_STENCIL_FORCE_LOAD_ENABLED : SCE_GXM_DEPTH_STENCIL_FORCE_LOAD_DISABLED); \
+                   sceGxmDepthStencilSurfaceSetForceStoreMode(&dss, zc > (int)zi ? SCE_GXM_DEPTH_STENCIL_FORCE_STORE_ENABLED : SCE_GXM_DEPTH_STENCIL_FORCE_STORE_DISABLED); } \
     SCENE(cur_rt ? &cur_rt->cs : &cs[s], cur_rt ? &cur_rt->vr : 0); \
     if (!cur_rt && !has_base) { has_base = 1; nv = trBase(c, base, o, nv); spx += W * H; DEV(bpx[0][BP_BASE] += W * H;) } fp_cur = 0; } while (0)
   // SURF_WAIT: the surface s is being sampled for the screen until the previous frame's scenes end, and its scene must not start before
@@ -1521,6 +1524,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
   TV tl;  // last vertex of the pending draw
   RT *cur_rt = 0;  // destination of the open scene (0: the shown surface)
   int opened = 0, has_base = 0;
+  uint32_t zi = 0;  // draw being translated (OPEN: where a surface scene starts)
   uint32_t d0 = t_draws, ssw = 0;  // timer: draws at scene start, swizzled draws and scene pixels
   float spx = 0;
   if (!ord) OPEN(0);  // (all in game order: the surface first, as on the PSP)
@@ -1542,6 +1546,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
   for (uint32_t pass = ord ? 0 : 2; pass < 3 && res == T_OK; pass++)
   for (uint32_t i = pass < 2 ? 0 : ord, ne = pass < 2 ? ord : f->nd; i < ne && res == T_OK; i++) {
     DEV(h_at = 4; h_i = i;)
+    zi = i;
     RDraw *d = &f->d[i];
     if (t_mark[i >> 5] >> (i & 31) & 1) continue;
     // Short path: same state as the draw before, already joined by indices: only its indices are added
