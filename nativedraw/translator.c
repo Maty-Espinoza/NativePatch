@@ -445,6 +445,7 @@ typedef struct {
   uint32_t ei[4], ai[4], lc;                            // lit with no lights: emissive (0-255) and scene ambient (0-256) per channel, color
   float b[96];                                          // the 8 bones, 12 values each (vertices with weights)
   uint32_t kw, km, kl; const uint32_t *ke;              // what t3Set last read
+  uint32_t rw[12], rv[40];                              // the words of the world matrix and of view, projection and texture matrix
   LT l[4];
 } T3;
 static T3 t3;
@@ -464,19 +465,25 @@ static uint32_t t3Flat(const T3 *t, uint32_t m) {
   return r;
 }
 // Fills t for draw d of state e, reading only what changed since the last draw (kw, km, kl, ke; trFrame clears ke):
-// matrices (a 4x3 block is 3 words per basis vector and translation) and their product, registers, and with the block
-// of 0x53-0x9A materials and lights.
+// matrices (a 4x3 block is 3 words per basis vector and translation) and their product, only when their words are not those
+// of the last ones read (rw, rv), registers, and with the block of 0x53-0x9A materials and lights.
 static void t3Set(RFrame *f, RDraw *d, const uint32_t *e, T3 *t) {
   if (d->woff == t->kw && d->moff == t->km && d->loff == t->kl && e == t->ke) return;
   const uint32_t *w = (const uint32_t *)(f->a + d->woff - 1), *v = (const uint32_t *)(f->a + d->moff - 1);
   float vm[12], p[16];
-  for (int i = 0; i < 12; i++) { t->w[i] = f24(w[i]); vm[i] = f24(v[i]); t->tm[i] = f24(v[28 + i]); }
-  for (int i = 0; i < 16; i++) p[i] = f24(v[12 + i]);
-  for (int c = 0; c < 4; c++) {
-    const float *a = t->w + c * 3;
-    for (int r = 0; r < 3; r++) t->wv[c * 3 + r] = a[0] * vm[r] + a[1] * vm[3 + r] + a[2] * vm[6 + r] + (c == 3 ? vm[9 + r] : 0);
-    const float *b = t->wv + c * 3;
-    for (int r = 0; r < 4; r++) t->m[c * 4 + r] = b[0] * p[r] + b[1] * p[4 + r] + b[2] * p[8 + r] + (c == 3 ? p[12 + r] : 0);
+  uint32_t dw = 0;
+  for (int i = 0; i < 12; i++) dw |= w[i] ^ t->rw[i];
+  for (int i = 0; i < 40; i++) dw |= v[i] ^ t->rv[i];
+  if (dw) {
+    sceClibMemcpy(t->rw, w, sizeof t->rw); sceClibMemcpy(t->rv, v, sizeof t->rv);
+    for (int i = 0; i < 12; i++) { t->w[i] = f24(w[i]); vm[i] = f24(v[i]); t->tm[i] = f24(v[28 + i]); }
+    for (int i = 0; i < 16; i++) p[i] = f24(v[12 + i]);
+    for (int c = 0; c < 4; c++) {
+      const float *a = t->w + c * 3;
+      for (int r = 0; r < 3; r++) t->wv[c * 3 + r] = a[0] * vm[r] + a[1] * vm[3 + r] + a[2] * vm[6 + r] + (c == 3 ? vm[9 + r] : 0);
+      const float *b = t->wv + c * 3;
+      for (int r = 0; r < 4; r++) t->m[c * 4 + r] = b[0] * p[r] + b[1] * p[4 + r] + b[2] * p[8 + r] + (c == 3 ? p[12 + r] : 0);
+    }
   }
   if (d->vt >> 9 & 3) for (int i = 0; i < 96; i++) t->b[i] = f24(w[12 + i]);  // (behind the world matrix in the same block)
   t->kw = d->woff; t->km = d->moff;
