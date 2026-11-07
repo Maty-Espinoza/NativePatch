@@ -1,0 +1,7 @@
+// nd_ft's texture function replace for draws without fog, color doubling or alpha test: the texture color, with the texture
+// alpha (tf.y 1) or the vertex alpha.
+float4 main(float3 uv : TEXCOORD0, float4 col : COLOR, uniform sampler2D tex, uniform float4 tf) : COLOR
+{
+  float4 t = tex2D(tex, uv.xy);
+  return float4(t.rgb, tf.y > 0.5 ? t.a : col.a);
+}

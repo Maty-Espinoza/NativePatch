@@ -1,0 +1,7 @@
+// nd_fd for draws without fog (there uv.z is 1 and its lerp gives the color as it is): modulate with color doubling as a factor
+// (tf.z 1 or 2), no alpha test. tf.y 1 = texture alpha.
+float4 main(float3 uv : TEXCOORD0, float4 col : COLOR, uniform sampler2D tex, uniform float4 tf) : COLOR
+{
+  float4 t = tex2D(tex, uv.xy);
+  return float4(min(t.rgb * col.rgb * tf.z, 1.0), lerp(1.0, t.a, tf.y) * col.a);
+}

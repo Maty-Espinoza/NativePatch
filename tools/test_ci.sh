@@ -28,6 +28,13 @@ echo "$G" | grep 'draws=6642' | grep -q 'result=ok' || { echo "FAIL: God of War 
 # God of War: skinned with no lights on and 4 weights at most go through nd_v5_b4l0, 0x1BE with one light through nd_v5_b0l1
 [ "$(echo "$G" | grep 'draws=6642' | sed 's/.*nd_v5=[0-9]*,\([0-9]*\),.*/\1/')" -gt 50000 ] || { echo "FAIL: God of War unlit skinned vertices not on nd_v5_b4l0"; exit 1; }
 [ "$(echo "$G" | grep 'draws=8429' | sed 's/.*nd_v5=[0-9]*,[0-9]*,\([0-9]*\).*/\1/')" -gt 50000 ] || { echo "FAIL: God of War 0x1BE with one light not on nd_v5_b0l1"; exit 1; }
+# God of War: doubled color with no fog goes through nd_f2, and none of its vertices has fog (nd_f2 leaves it out)
+echo "$G" | grep 'draws=6642' | grep -q 'nd_f2=[4-9][0-9][0-9][0-9][0-9],0 ' || { echo "FAIL: God of War doubled color without fog not on nd_f2"; exit 1; }
+# God of War with enemies: texture function replace (large blended draws) goes through nd_fr, none of its vertices with fog
+echo "$G" | grep 'draws=8429' | grep -q 'nd_fr=[1-9][0-9]*,0 ' || { echo "FAIL: God of War replace not on nd_fr"; exit 1; }
+# God of War combat: of its three surface scenes, the second reads the stencil of the first: one stores depth and stencil, one
+# loads them (the third, the glow pasted on top, does neither)
+echo "$G" | grep 'draws=6642' | grep -q 'depth_load_store=1,1$' || { echo "FAIL: God of War depth and stencil stored or loaded where no later scene reads them"; exit 1; }
 # God of War's glow: the scene goes to 162000 times a colored fixed blend color (3f5343), carried by the vertex color
 TR_LOG=1 $(command -v qemu-arm-static || command -v qemu-arm) $R/build/perf/tr_gv $R/build/perf/gow_combat.bin 1 2>&1 | grep -q "left out.*'blend'" && { echo "FAIL: God of War glow (colored fixed blend) left out"; exit 1; }
 # gxm split (development): with the bench's clock (1 us per read and nothing else) every call and piece is 0 ns once the clock is taken
