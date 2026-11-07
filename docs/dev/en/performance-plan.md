@@ -230,8 +230,22 @@ Without `cap_split` (`tests/perf/runs/0.0.27.1_gow`, combat seconds 178-306, 118
 per second; capturer ~94 ms per frame (13 us per draw; 0.0.26.5: ~125 ms), so `cap_split` itself costs ~64 ms per combat frame (its
 clock reads, ~9 us per draw). The three stages are now even (`tools/bottleneck.py`): drawing thread ~93 ms per HD frame (translator
 72.8: GXM 28, vertices 15.3, textures 6.9, check 5.8, scenes 5.9; it limits 95 of 98 s), GPU 84.6 ms (surface 72.6, intermediate 12;
-idle 13-16 %; 3.4 M pixels, 534 thousand of them off the fast program because of the blend function), capturer ~94 ms (record 54:
+idle 13-16 %; 3.4 M pixels, 534 thousand of them off the fast program because of the texture function, register 0xC9), capturer ~94 ms (record 54:
 vertices 37.5 sampled, textures 9.7, states 6.5). Lowering one stage alone gives little: all three must come down.
+
+**NativeDraw 0.0.28.1 (three changes at once, `tests/perf/runs/0.0.28.1_gow`, combat seconds 190-328, against `0.0.27.1_gow`; this
+run has 9 % more draws per frame, 7,883 against 7,246, so per draw is the fair comparison):** game 11.2 -> 10.3 fps, HD 10.7 -> 10.2
+per second, no GPU hang, the variants were made (9 programs `variant 1/2 00000000`).
+- Translator, fragment program and uniforms only when they change (bench: GXM calls -36 %): translator 72.8 -> 73.3 ms per HD frame,
+  GXM 28.0 -> 27.7 (per draw -9 %). The calls removed were cheap: the GXM time is in the others (vertex reserve and the 252-float
+  `nd_v5` sets, textures, streams, draws), not measured one by one on the Vita yet.
+- GPU, `nd_v5_b4l0` and `nd_v5_b0l1`: GPU 84.6 -> 82.3 ms per HD frame (surface 72.6 -> 69.8; per draw -11 %), idle 16 -> 25 %.
+- Capturer, `record draw split` (129 combat seconds, ns per timed draw with the clock removed; ~6.3 us per draw, ~50 ms per frame):
+  position check `rgVBad` 1,036, copy into `tx` 917 (~200 bytes from the transfer copy, ~4.6 ns per byte), the two reads of the GPU
+  notification word in `rgVGpu` (`rgBusy`) 719, `rgSrc` 538, state copy and compare 523, light block 509 (93 % of draws: the light
+  flag is set by any state change), `rgVGpu`'s checks 482, `rgFrom` 359, index 286, matrix 257, bones 184. No single cause: the time
+  is a sum of per-draw work. `memory bench (256 B pieces)`: from cached memory filled by DMA 6.3 ns per byte, read once before 3.7,
+  CPU-written 3.6, from the mirror 13.5; in cache 256-byte copies 2.0, position check 2.2; clock read 584 ns.
 
 ## D. Reading PSP memory: photo at the sync (proposal, 2026-11-06)
 **Why.** Three facts, all from the logs:

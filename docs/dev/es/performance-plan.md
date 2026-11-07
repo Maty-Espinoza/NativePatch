@@ -240,8 +240,23 @@ Sin `cap_split` (`tests/perf/runs/0.0.27.1_gow`, segundos de combate 178-306, 11
 por segundo; capturador ~94 ms por frame (13 us por dibujo; 0.0.26.5: ~125 ms), así que `cap_split` mismo cuesta ~64 ms por frame de
 combate (sus lecturas del reloj, ~9 us por dibujo). Las tres etapas quedaron parejas (`tools/bottleneck.py`): hilo de dibujo ~93 ms por
 frame HD (traductor 72,8: GXM 28, vértices 15,3, texturas 6,9, revisión 5,8, escenas 5,9; limita 95 de 98 s), GPU 84,6 ms (superficie
-72,6, intermedias 12; ociosa 13-16 %; 3,4 M de píxeles, 534 mil fuera del programa rápido por la función de mezcla), capturador ~94 ms
+72,6, intermedias 12; ociosa 13-16 %; 3,4 M de píxeles, 534 mil fuera del programa rápido por la función de textura, registro 0xC9), capturador ~94 ms
 (registro 54: vértices 37,5 muestreados, texturas 9,7, estados 6,5). Bajar una sola etapa da poco: hay que bajar las tres.
+
+**NativeDraw 0.0.28.1 (tres cambios juntos, `tests/perf/runs/0.0.28.1_gow`, segundos de combate 190-328, contra `0.0.27.1_gow`; esta
+corrida tiene 9 % más dibujos por frame, 7.883 contra 7.246, así que lo justo es comparar por dibujo):** juego 11,2 -> 10,3 fps, HD
+10,7 -> 10,2 por segundo, sin cuelgues de la GPU, las variantes se crearon (9 programas `variant 1/2 00000000`).
+- Traductor, programa de fragmentos y uniformes solo cuando cambian (banco: llamadas GXM -36 %): traductor 72,8 -> 73,3 ms por frame HD,
+  GXM 28,0 -> 27,7 (por dibujo -9 %). Las llamadas quitadas eran baratas: el tiempo de GXM está en las otras (reserva de vértices y los
+  sets de 252 floats de `nd_v5`, texturas, streams, draws), todavía sin medir una por una en la Vita.
+- GPU, `nd_v5_b4l0` y `nd_v5_b0l1`: GPU 84,6 -> 82,3 ms por frame HD (superficie 72,6 -> 69,8; por dibujo -11 %), ociosa 16 -> 25 %.
+- Capturador, `record draw split` (129 segundos de combate, ns por dibujo medido sin el reloj; ~6,3 us por dibujo, ~50 ms por frame):
+  revisión de posiciones `rgVBad` 1.036, copia a `tx` 917 (~200 bytes desde la copia de transferencias, ~4,6 ns por byte), las dos
+  lecturas de la palabra de aviso de la GPU en `rgVGpu` (`rgBusy`) 719, `rgSrc` 538, copia y comparación del estado 523, bloque de
+  luces 509 (93 % de los dibujos: la marca de luces la pone cualquier cambio de estado), revisiones de `rgVGpu` 482, `rgFrom` 359,
+  índices 286, matriz 257, huesos 184. No hay una sola causa: el tiempo es la suma del trabajo por dibujo. `memory bench (256 B
+  pieces)`: desde memoria con caché llenada por DMA 6,3 ns por byte, leída una vez antes 3,7, escrita por la CPU 3,6, desde el espejo
+  13,5; en caché copias de 256 bytes 2,0, revisión de posiciones 2,2; lectura del reloj 584 ns.
 
 ## D. Leer la memoria del PSP: foto en el sync (propuesta, 2026-11-06)
 **Por qué.** Tres hechos, todos de los logs:

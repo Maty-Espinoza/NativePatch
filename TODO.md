@@ -19,7 +19,11 @@ what was done is in `CHANGELOG.md`. Updated 2026-11-06 (NativeLink 0.0.8 + Nativ
   footprint only with `photo_probe`. Vita (`tests/perf/runs/0.0.27.1_gow_cap_split`): combat 5.4 -> 6.9 fps, capturer 195 -> 158 ms,
   textures 23 -> 8 ms; vertices only 40 -> 30 ms with the transfers 10 -> 15: split the `vertices` column first (the read is not the
   cost). Without `cap_split` (`tests/perf/runs/0.0.27.1_gow`): 11.2 fps (0.0.26.5: ~8), capturer ~94 ms, drawing thread ~93 ms per HD
-  frame (translator 73, GXM 28), GPU ~85 ms: the three stages even; the user felt it much better. Left of the
+  frame (translator 73, GXM 28), GPU ~85 ms: the three stages even; the user felt it much better.
+  **0.0.28.1 (test, `tests/perf/runs/0.0.28.1_gow`):** fewer fragment GXM calls (GXM time per draw only -9 %: the time is in other
+  calls, measure them one by one on the Vita), `nd_v5` variants (GPU per draw -11 %), `record draw split`: the capturer's ~6.3 us per
+  draw is a sum, led by `rgVBad` 1.0, copy to `tx` 0.9, `rgBusy` read twice 0.7, `rgSrc` 0.5, state 0.5, light block 0.5 (set by any
+  state change), `rgVGpu` checks 0.5, `rgFrom` 0.4 (performance-plan.md). Left of the
   capturer: the interpreter (~35 ms per combat frame): first a bench scene from a real God of War list (VRAM sublists, ~8
   commands per draw), then the change; the matrix blocks (~8 ms).
 - [ ] **God of War combat, corrupted frames** (0.0.26.1-0.0.26.6, a few per minute of combat, also at its start; probably the same as
