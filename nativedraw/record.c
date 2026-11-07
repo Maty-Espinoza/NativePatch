@@ -466,11 +466,16 @@ static uint32_t vpn;
 // Copies what waits: a run of entries close to each other in memory (gaps under 2 KB) goes by DMA once and is then
 // handed out piece by piece; a run under 4 KB is read directly, where a DMA call costs more than the bytes
 // 1 if a float position of the n bytes of vertices of size vz at p is garbage: NaN, infinite or 2^32 or more in size. The CPU path
-// refuses such frames (vertex_out); the GPU path draws what it gets, so the record refuses them before (not_read)
+// refuses such frames (vertex_out); the GPU path draws what it gets, so the record refuses them before (not_read). Without
+// branches: an exponent of 0x9F or more is the one whose field plus 0x61 << 23 reaches bit 31; the words are joined with OR.
 static int rgVBad(const uint8_t *p, uint32_t n, uint32_t vz) {
-  for (uint32_t o = vz - 12; o + 12 <= n; o += vz)
-    for (uint32_t k = 0; k < 12; k += 4) if ((*(const uint32_t *)(p + o + k) >> 23 & 0xFF) >= 0x9F) return 1;
-  return 0;
+  typedef uint32_t U __attribute__((aligned(1)));  // (single word loads, which also take an address the game left unaligned)
+  uint32_t m = 0;
+  for (uint32_t o = vz - 12; o + 12 <= n; o += vz) {
+    const U *w = (const U *)(p + o);
+    m |= ((w[0] & 0x7F800000) + 0x30800000) | ((w[1] & 0x7F800000) + 0x30800000) | ((w[2] & 0x7F800000) + 0x30800000);
+  }
+  return m >> 31;
 }
 static void rgVFlush(void) {
   for (uint32_t i = 0, j; i < vpn; i = j) {
