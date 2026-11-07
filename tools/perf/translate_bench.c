@@ -67,11 +67,16 @@ static uint32_t cur_w, set_w, in_rt;  // (in_rt: an intermediate image: the CPU 
 volatile SceUID nd_gfx_uid;
 void sceGxmSetVertexProgram(SceGxmContext *c, const SceGxmVertexProgram *p) { vprog = p; vpg = p ? (const SceGxmProgram *)(uintptr_t)((const int *)p)[1] : 0; g_ops++; }
 // The texture descriptor as the stubs fill it, in 4 words: format, filters and address modes (0), width and height (1), data (2),
-// palette or stride (3); addresses in the frame's tx or in the arena relative to them, so two builds give the same words
+// palette or stride (3). When dumping, an address in the frame's tx is its offset there and one in the arena its block and offset in
+// the block, so two builds give the same words
 static RFrame *frm;
 static uint32_t rel(const void *p) {
-  uint32_t a = (uintptr_t)p, t = (uintptr_t)frm->tx, r = (uintptr_t)arena;
-  return a - t < TX_N + 0x40000 ? 0x80000000 | (a - t) : a - r < sizeof arena ? 0x40000000 | (a - r) : a;
+  uint32_t a = (uintptr_t)p, t = (uintptr_t)frm->tx, b = 0;
+  if (!dmp && !tri) return a;
+  if (a - t < TX_N + 0x40000) return 0x80000000 | (a - t);
+  if (a - (uintptr_t)arena >= sizeof arena) return a;
+  while (b + 1 < nblk && (uintptr_t)blk[b + 1] <= a) b++;
+  return 0x40000000 | b << 22 | (a - (uintptr_t)blk[b]);
 }
 static uint32_t *tw4(SceGxmTexture *t) { return (uint32_t *)t; }
 int sceGxmTextureSetWidth(SceGxmTexture *t, unsigned w) { cur_w = w; tw4(t)[1] = (tw4(t)[1] & ~0xFFFFu) | w; return 0; }
