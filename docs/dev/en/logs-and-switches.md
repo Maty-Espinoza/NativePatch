@@ -78,7 +78,7 @@ The development measurements are listed in `nativedraw/measures.h`, one line eac
 | `crowd_log` | (development) every second in the capture log: commands by type, bounding box jumps, what a frame needs from the one before |
 | `no_join` | (development) draws of the GPU path are not joined, to compare |
 | `keep_hd` | (development) images that only blur stay at double size, to compare |
-| `fx_log` | (development) `bottleneck effects:` pixels and draws of the 3D on the surface by effect, 1 frame in 32 |
+| `fx_log` | (development) `bottleneck effects:` pixels and draws of the 3D on the surface by effect, 1 frame in 32; at the end its pixels by fragment program (`fm` for `nd_fm`, `f2`, `fd`, `fa`, `fr`, `ft`, `fc`) and those of the GPU path (unlike `bottleneck pixels`, it counts them: their vertices are done once more on the CPU) |
 | `hold_game` | (development) the game waits for the whole chain (gate up to 200 ms, the flip until the frame is walked, the capturer for the presenter and the GPU): every frame complete and in HD, and the game slower. Read when Adrenaline opens. For measuring |
 | `rec_cost` | (development) keeps recording a frame already incomplete, without publishing it, to measure what recording costs |
 | `hd_mark` | a green circle in the top right corner on frames drawn in HD (the translator draws it last on the surface). Read when Adrenaline opens. Also in production |

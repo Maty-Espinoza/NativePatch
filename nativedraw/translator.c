@@ -29,7 +29,7 @@ DEV(enum { BP_FAST, BP_MID, BP_TEX, BP_COL, BP_BASE, BP_N };
     enum { BW_FUNC, BW_DOUBLE, BW_ATEST, BW_FOG, BW_BLEND2X, BW_N };  // why a textured draw is not on the fast program
     static volatile uint32_t b_why[BW_N], b_fr;
     // on the sampled frames, 3D on the surface by effect (bit 0 blended, 1 fog, 2 reads an intermediate image): thousands of pixels, draws
-    static volatile uint32_t b_fx[8], b_fxd[8], b_fxn, b_lit[3];)  // b_lit: what nd_v4 lights: pixels, draws, vertices
+    static volatile uint32_t b_fx[8], b_fxd[8], b_fxn, b_lit[3], b_fxp[8];)  // b_lit: what nd_v4 lights: pixels, draws, vertices; b_fxp: pixels by fragProg kind, 7 the GPU path
 static uint32_t t_seen[TN];   // times each reason was seen (the first one is logged in detail)
 typedef struct { float x, y, z, w, u, v, f; uint32_t c; } TV;  // translated vertex (32 bytes, the nd_v format); f: fog (1: none)
 static TV *tv[2];            // translated vertices, one per surface
@@ -1525,6 +1525,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
   RT *cur_rt = 0;  // destination of the open scene (0: the shown surface)
   int opened = 0, has_base = 0;
   uint32_t zi = 0;  // draw being translated (OPEN: where a surface scene starts)
+  DEV(int kc = 0;)  // fragProg kind of the program in the context
   uint32_t d0 = t_draws, ssw = 0;  // timer: draws at scene start, swizzled draws and scene pixels
   float spx = 0;
   if (!ord) OPEN(0);  // (all in game order: the surface first, as on the PSP)
@@ -1802,6 +1803,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
         pb = fast ? BP_FAST : !tex ? BP_COL : mid || mina || rep ? BP_MID : BP_TEX;
         t_c[fast ? TC_VFAST : tex ? TC_VTEX : TC_VCOL] += n; t_c[TC_FOG] += w3d && t3.fog; t_c[TC_ATEST] += afn != 1; t_c[TC_BLEND] += key != 0;)
     int kind = fast ? 2 : dbl ? 5 : rep ? 6 : mid ? 3 : mina ? 4 : tex;
+    DEV(kc = kind;)
     SceGxmFragmentProgram *p = fragProg(kind, key, colorMask(e));
     if (!p) { res = T_PROG; break; }
     // The program and its uniforms (all made from fk) go to the context only when they change: until then the draws keep the
@@ -1846,7 +1848,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, const SceGxmTexture *base
   ready:;
     DEV(if (sfx && !dst && w3d && !(clr & 1)) {  // (the GPU path has no vertices here: they are done once more, as the CPU path)
           uint32_t z = n, cu = d->prim > 2 && prim != 6 && (RE(e, 0x1D) & 1), k = (key != 0) | (t3.fog != 0) << 1 | (tex && !d->toff) << 2;
-          if (!gv || (d->n * 22 + 8 <= sizeof ts / sizeof *ts && !trVerts(f, d, ts, tw, th, mat, sc, &z, &t3))) { float a = trPx3(gv ? ts : w, z, prim, cu) / 1000; b_fx[k] += a; b_fxd[k]++; if (gv == 2 || gv == 3) { b_lit[0] += a; b_lit[1]++; b_lit[2] += d->n; } }
+          if (!gv || (d->n * 22 + 8 <= sizeof ts / sizeof *ts && !trVerts(f, d, ts, tw, th, mat, sc, &z, &t3))) { float a = trPx3(gv ? ts : w, z, prim, cu) / 1000; b_fx[k] += a; b_fxd[k]++; b_fxp[kc] += a; b_fxp[7] += gv ? a : 0; if (gv == 2 || gv == 3) { b_lit[0] += a; b_lit[1]++; b_lit[2] += d->n; } }
         })
     if (gv) {
       if (nu) { sceGxmReserveVertexDefaultUniformBuffer(c, &u); t3Uni(u, &t3, tw, th, wm, gp, mat); }
