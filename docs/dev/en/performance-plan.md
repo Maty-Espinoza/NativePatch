@@ -309,6 +309,14 @@ Every part got slower: check +40 %, vertices +28 %, `t3Set` +25 %, `t3Uni` +43 %
 suspects [not measured]: the thread shares the 3 cores with the capturer, the record and Adrenaline's threads (priority 0x63, below
 the capturer) and gets preempted; and recording into the deferred context writes the commands to uncached memory (the spare block).
 `thread_split` does not see the translator's thread yet, so it cannot tell them apart. Ridge Racer: only ~30 s of menus, no race.
+**0.0.28.12 (`tests/perf/runs/0.0.28.12_*`, `thread_split` with the translator's thread).** God of War combat: the translator thread
+runs ~47 % of the time it is translating and is never preempted (count 0), so the other half it is waiting for a core or blocked;
+the capturer runs ~66 % of a core, Adrenaline's drawing thread ~44 % and the emulator threads ~0.7 of a core. Ridge Racer race: 25.6 HD
+frames per second against 32.4 in 0.0.23.5 (a version from before many other changes: not a clean comparison), vertices 4.4 -> 8.1 ms
+per HD frame; the translator thread runs ~72 % of its working time and the drawing thread ~76 % of a core. In both games the
+different-frame check of `dump=auto` now costs the drawing thread 43-163 ms per second (it runs whenever the shown surface is finished,
+which with three surfaces is far more often). Not explained yet: 0.0.28.13 splits the translator's time (check, CPU only, against
+recording, with the GXM calls) by clock and by the thread's run time.
 
 ## D. Reading PSP memory: photo at the sync (proposal, 2026-11-06)
 **Why.** Three facts, all from the logs:

@@ -323,6 +323,14 @@ grabar `sceGxmDraw` 4,6 -> 9,8 us. Dos sospechas [sin medir]: el hilo comparte l
 de Adrenaline (prioridad 0x63, bajo el capturador) y lo desalojan; y grabar en el contexto diferido escribe las órdenes en memoria sin
 caché (el bloque de reserva). `thread_split` todavía no ve el hilo del traductor, así que no puede distinguirlas. Ridge Racer: solo ~30 s
 de menús, sin carrera.
+**0.0.28.12 (`tests/perf/runs/0.0.28.12_*`, `thread_split` con el hilo del traductor).** Combate de God of War: el hilo del traductor
+corre ~47 % del tiempo que está traduciendo y nunca lo desalojan (contador en 0), así que la otra mitad espera un núcleo o queda
+bloqueado; el capturador corre ~66 % de un núcleo, el hilo de dibujo de Adrenaline ~44 % y los hilos del emulador ~0,7 de núcleo. Carrera
+de Ridge Racer: 25,6 frames HD por segundo contra 32,4 en la 0.0.23.5 (una versión anterior a muchos otros cambios: no es una comparación
+limpia), vértices 4,4 -> 8,1 ms por frame HD; el hilo del traductor corre ~72 % de su tiempo de trabajo y el de dibujo ~76 % de un núcleo.
+En los dos juegos la revisión de frames distintos de `dump=auto` ahora le cuesta al hilo de dibujo 43-163 ms por segundo (corre cada vez
+que la superficie mostrada está terminada, y con tres superficies eso pasa mucho más seguido). Sin explicar todavía: la 0.0.28.13 separa el
+tiempo del traductor (revisión, solo CPU, contra grabación, con las llamadas a GXM) por reloj y por el tiempo que el hilo corrió.
 
 ## D. Leer la memoria del PSP: foto en el sync (propuesta, 2026-11-06)
 **Por qué.** Tres hechos, todos de los logs:

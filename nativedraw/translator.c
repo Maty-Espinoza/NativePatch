@@ -15,6 +15,8 @@ static const char *tnames[TN] = { "ok", "no_new_frame", "primitive", "format", "
 static volatile uint32_t t_cnt[TN], t_hd, t_nat, t_draws;
 static volatile uint32_t t_skip[6];  // PSP frames advanced by each drawn frame (0: repeated, 5: 5 or more)
 DEV(static volatile uint32_t t_us[6];)  // us in trFrame: check, textures and palettes, vertices, GXM setup, scene changes, all
+// trFrame's two halves, wall and the thread's own run time (us): the check (CPU only) and the recording (with the GXM calls)
+DEV(static volatile uint32_t t_pw[2], t_pr[2];)
 // Vertices and draws in detail: see the translator detail lines of the log
 DEV(enum { TC_VIN, TC_VOUT, TC_D3, TC_CUT, TC_FLAT, TC_SCIS, TC_LIT, TC_SAME, TC_VFAST, TC_VTEX, TC_VCOL, TC_FOG, TC_ATEST, TC_BLEND, TC_VGPU, TC_L0, TC_LPT, TC_LSP, TC_ENV, TC_NC };)
 DEV(static volatile uint32_t t_c[TC_NC];)
@@ -1603,12 +1605,13 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, int base) {
   t3.ke = 0;
   DEV(uint32_t t_ss = 0; c_fr++;)
   DEV(static uint32_t fxn; int sfx = fx_log && !(++fxn & 31); b_fr++; b_fxn += sfx;)
-  DEV(uint32_t ta = now(), tb, ut[6]; sceClibMemcpy(ut, (void *)t_us, sizeof ut);
+  DEV(uint32_t ta = now(), ra = thrRun(), tb, ut[6]; sceClibMemcpy(ut, (void *)t_us, sizeof ut);
       static uint32_t hdn; int smp = !(++hdn & 3), pb = BP_COL, why = 0; float bpx[2][BP_N] = { { 0 } }, bwy[BW_N] = { 0 };)
   uint32_t disp, ord;
   int r = trCheckFrame(f, &disp, &ord);
   if (r) return r;
   DEV(t_us[0] += now() - ta; if (p_on) pAdd(P_T_CHECK, now() - ta);)
+  DEV(uint32_t tc_ = now(), rc_ = thrRun(); t_pw[0] += tc_ - ta; t_pr[0] += rc_ - ra;)
   DEV(gm = 0; g_fr++;)
   trRegions(f);
   trBoxed(f, disp, ord);
@@ -2051,6 +2054,7 @@ static int trFrame(SceGxmContext *c, RFrame *f, int s, int base) {
   DEV(if (smp) { for (int a = 0; a < 2; a++) for (int i = 0; i < BP_N; i++) b_px[a][i] += bpx[a][i] / 1000; for (int k = 0; k < BW_N; k++) b_why[k] += bwy[k] / 1000; b_pxn++; })
   if (res == T_OK && disp != t_prevd) { t_prev2 = t_prevd; t_prevd = disp; }
   DEV(if (vm) { vu[VS_TKB] = tkb >> 10; vu[VS_FR] = 1; vu[VS_ALL] = now() - ta; vu[VS_RUN] = thrRun() - vr0; for (int i = 0; i < VS_N; i++) v_us[vm - 1][i] += vu[i]; })
+  DEV(t_pw[1] += now() - tc_; t_pr[1] += thrRun() - rc_;)
   DEV(t_us[5] += now() - ta;
       for (int i = 1; p_on && i < 6; i++) if ((int)(t_us[i] - ut[i]) >= 0) pAdd(P_T_CHECK + i, t_us[i] - ut[i]);)  // (t_us is zeroed every 10 s)
   if (res && !t_seen[res]++) alog("translator: first frame with '%s' on drawing\n", tnames[res]);

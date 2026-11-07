@@ -144,7 +144,8 @@ The development measurements are listed in `nativedraw/measures.h`, one line eac
   0.0.8.13): how long the GPU takes for each type of scene (Adrenaline, normal image, translator on the surface, intermediate
   image). `gpu times: detail`: 16 consecutive scenes (A Adrenaline, N normal image, T translator, I intermediate:
   draws, GPU ms / queue ms).
-- `gpu: slow scene: <type>, draws, thousand pixels, ms` (0.0.8.20): each of our scenes over 30 ms.
+- `gpu: slow scene: <type>, draws, thousand pixels, ms` (0.0.8.20): each of our scenes over 30 ms, the first 100 of the session (in God of War
+  almost every scene is slow and they filled the 4000 lines of `nativedraw.log`).
   `translator: giant draw`: the first 40 draws with an area of more than 2 screens.
 - Reason `vertex_out` (0.0.8.21): a vertex outside ±4096 or NaN (data read too late): the frame goes with the normal image.
   In dev builds the first 40 also log `translator: vertex_out (n)` (frame, draw, vertex type and index) and the bytes of the vertex
@@ -163,6 +164,10 @@ The development measurements are listed in `nativedraw/measures.h`, one line eac
   scene runs). `gpu: ... rewritten with the GPU unfinished: vertices and palettes N` now counts the times the translator waited
   for a surface the GPU was still reading (`vertices, palettes and commands waited for` in the first lines): it never
   rewrites them unfinished.
+- Development builds only, every 10 s with the translator lines: `translator: thread, us per recorded frame: check wall W ran R |
+  recording wall W ran R | running its scenes in Adrenaline's thread U (N frames)`: the two halves of `trFrame` in the translator's
+  thread, by the clock (wall) and by the thread's own run time (`runClocks`: what it really ran; the rest it was waiting for a core or
+  blocked), and what `trRun` costs Adrenaline's drawing thread per frame. The check is CPU only; the recording has the GXM calls.
 - `screen:` (0.0.8.13, every 1 s and only if something changes): scenes and frames to the Adrenaline and ScePspemu screen,
   system dialog, surface state. `notifications:`: someone else wrote a GXM notification word.
 - In `nativedraw_capture.log`, the `textures (per frame):` line (0.0.8.19): copies, KB and DMA and sorting time for

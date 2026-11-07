@@ -421,7 +421,9 @@ static RFrame *t_rg[NS];
 // Runs, in Adrenaline's thread and context, the scenes the translator recorded for surface k: each one inside a scene opened
 // on its target; the first one on the surface gets the normal image base underneath (no depth or stencil test or write). Then
 // the context gets Adrenaline's defaults back
+DEV(static volatile uint32_t t_runw, t_runn;)  // trRun: us and frames, for the 10 s log
 static void trRun(SceGxmContext *c, int k, const SceGxmTexture *base) {
+  DEV(uint32_t t0 = now();)
   TList *l = &tl_s[k];
   void *u;
   for (uint32_t i = 0; i < l->n; i++) {
@@ -444,6 +446,7 @@ static void trRun(SceGxmContext *c, int k, const SceGxmTexture *base) {
   sceGxmSetFrontDepthFunc(c, SCE_GXM_DEPTH_FUNC_ALWAYS);
   sceGxmSetFrontDepthWriteEnable(c, SCE_GXM_DEPTH_WRITE_ENABLED);
   sceGxmSetFrontStencilFunc(c, SCE_GXM_STENCIL_FUNC_ALWAYS, SCE_GXM_STENCIL_OP_KEEP, SCE_GXM_STENCIL_OP_KEEP, SCE_GXM_STENCIL_OP_KEEP, 0, 0);
+  DEV(t_runw += now() - t0; t_runn++;)
 }
 
 static uint32_t g_adr[16];  // bits: words of the notification region used by Adrenaline (to avoid using the same one)
@@ -812,10 +815,10 @@ static int presThread(SceSize args, void *argp) {
     if (!(k % 20)) { screenLog(); DEV(stuckLog(); capHealth();) }
     notifs(nr);
 #ifdef NP_DEV
-    static uint32_t ln0;  // slow scenes already logged
+    static uint32_t ln0, lsn;  // slow scenes already seen, and logged (the first 100: in a heavy game almost every scene is slow)
     while (ln0 != c_ln) {
       uint32_t j = ln0++ % CL;
-      alog("gpu: slow scene: %s, %u draws, %u thousand pixels, %u.%u ms of GPU (%u.%u ms in queue)\n", cnames[c_slow[j].ty], c_slow[j].dr,
+      if (lsn++ < 100) alog("gpu: slow scene: %s, %u draws, %u thousand pixels, %u.%u ms of GPU (%u.%u ms in queue)\n", cnames[c_slow[j].ty], c_slow[j].dr,
            c_slow[j].px, c_slow[j].us / 1000, c_slow[j].us / 100 % 10, c_slow[j].queue / 1000, c_slow[j].queue / 100 % 10);
     }
 #endif
@@ -844,6 +847,9 @@ static int presThread(SceSize args, void *argp) {
       b[k] = 0;
       alog("translator: HD frames %u, normal image %u%s%s | draws drawn %u\n", h, nn, k ? " | reasons:" : "", b, dr);
       DEV(if (h) alog("translator: us per HD frame: all %u | check %u, textures %u, vertices %u, GXM %u, scene changes %u\n", t_us[5] / h, t_us[0] / h, t_us[1] / h, t_us[2] / h, t_us[3] / h, t_us[4] / h);
+          if (t_runn) alog("translator: thread, us per recorded frame: check wall %u ran %u | recording wall %u ran %u | running its scenes in Adrenaline's thread %u (%u frames)\n",
+                           t_pw[0] / t_runn, t_pr[0] / t_runn, t_pw[1] / t_runn, t_pr[1] / t_runn, t_runw / t_runn, t_runn);
+          t_pw[0] = t_pw[1] = t_pr[0] = t_pr[1] = t_runw = t_runn = 0;
           for (int i = 0; i < 6; i++) t_us[i] = b_t0[i] = 0;
           if (h) { alog("translator: per HD frame: vertices in %u out %u lit %u | 3D draws %u (scissor under the surface %u), rewritten by trTris %u, flat %u, same state as the previous draw %u\n",
                  t_c[TC_VIN] / h, t_c[TC_VOUT] / h, t_c[TC_LIT] / h, t_c[TC_D3] / h, t_c[TC_SCIS] / h, t_c[TC_CUT] / h, t_c[TC_FLAT] / h, t_c[TC_SAME] / h);
