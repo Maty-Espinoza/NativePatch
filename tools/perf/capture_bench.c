@@ -298,6 +298,26 @@ static const Scene S[] = {
 #define FRAMES 40
 typedef struct { uint32_t cmds, draws, verts, own, hits, complete; uint64_t ucp, ucmp, ucw, xw, dma_b; uint32_t dma_n, clock, qemu_us, qemu_min, ok, want; } Out;
 
+// (REC_DUMP=<file>) Writes frame f of the record: header, draws, states, area, vertices for the GPU and the texture rows it
+// holds, with a texture of the cache written as its entry (where the cache sits in memory changes between runs), so
+// tools/perf/rec_check.sh can compare two versions of the capturer byte by byte
+static FILE *rec_out;
+static void recDump(RFrame *f) {
+  uint32_t h[13] = { f->frame, f->fb, f->fbw, f->nd, f->ne, f->na, f->flags, f->draws_seen, f->nt, f->ntx, f->nvx, f->mir, f->mirf };
+  fwrite(h, 4, 13, rec_out);
+  for (uint32_t k = 0; k < f->nd; k++) {
+    RDraw d = f->d[k];
+    for (uint32_t i = 0; i < f->nt; i++) if (f->tc[i] && d.toff == f->to[i] + 1) d.toff = ~i;
+    fwrite(&d, sizeof d, 1, rec_out);
+  }
+  fwrite(f->e, sizeof *f->e, f->ne, rec_out); fwrite(f->a, 1, f->na, rec_out); fwrite(f->tx + TX_N - f->nvx, 1, f->nvx, rec_out);
+  for (uint32_t i = 0; i < f->nt; i++) {
+    const uint8_t *p = f->tc[i] ? rc_tx + rc[f->tc[i] - 1].o : f->tx + f->to[i];
+    uint32_t n = f->tn[i] & 0x7FFFFFFF, gb = f->tr[i], t[6] = { f->ta[i], f->tn[i], f->tc[i] ? ~0u : f->to[i], gb, f->tq[i], f->tc[i] };
+    fwrite(t, 4, 6, rec_out); fwrite(&f->tm[i], 8, 1, rec_out);
+    for (uint32_t g = 0; g < 64 && g * gb < n; g++) if (f->tm[i] >> g & 1) fwrite(p + g * gb, 1, n - g * gb < gb ? n - g * gb : gb, rec_out);
+  }
+}
 static uint32_t cpuUs(void) { struct timespec t; clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &t); return t.tv_sec * 1000000 + t.tv_nsec / 1000; }
 // Runs scene s for FRAMES frames through the real event path (enqueue, drawsync, flip) and adds up the counters of all
 // frames in *o. The "GE" copies the requested VRAM pages after each flip and the presenter takes every frame.
@@ -311,6 +331,7 @@ static void run(const Scene *s, Out *o) {
   if (s->memo) { MEMO_N = 512; POOL_N = 8192; memo_sh = 23; memo = calloc(MEMO_N, sizeof(Memo)); pool = calloc(POOL_N, 64); memo_on = 1; }
   if (s->readers) { cl_data = calloc(CL_N, 64); cl_tag = calloc(CL_N, 4); for (int i = 0; i < CL_N; i++) cl_tag[i] = 0xFFFFFFFFu; }
   mir_on = s->vram; pv_on = s->readers;
+  if (getenv("REC_DUMP") && s->record) rec_out = fopen(getenv("REC_DUMP"), "wb");
   for (int f = 0; f < FRAMES; f++) {
     s->build(f, s->n);
     SB[0x40] = f; SB[0x44] = f + 1;  // copies finished / requested at this flip
@@ -337,11 +358,16 @@ static void run(const Scene *s, Out *o) {
     o->qemu_us += dt; if (f && (!o->qemu_min || dt < o->qemu_min)) o->qemu_min = dt;
     o->own += R0.own - own0; o->hits += R0.hits - hit0; o->ucp += M.ucp; o->ucmp += M.ucmp; o->ucw += M.ucw; o->xw += bx_w - xw0; o->dma_b += M.dma_b; o->dma_n += M.dma_n; o->clock += M.clock;
     o->cmds += acc.cmds; o->draws += acc.draws; o->verts += acc.verts;
-    if (reg_on) { o->complete += rg_pub >= 0 && rf[rg_pub]->frame == gen - 1 && !rf[rg_pub]->flags; if (!s->late || !(f % 3)) rg_last = rg_pub; }
+    if (reg_on) {
+      int c = rg_pub >= 0 && rf[rg_pub]->frame == gen - 1 && !rf[rg_pub]->flags;
+      o->complete += c; if (c && rec_out) recDump(rf[rg_pub]);
+      if (!s->late || !(f % 3)) rg_last = rg_pub;
+    }
     o->want = 0; for (int w = 0; w < 16; w++) o->want += __builtin_popcount(want_l[w] | want_d[w]);
     sceClibMemset(&acc, 0, sizeof acc);
   }
   o->ok = !acc.memo_bad;
+  if (rec_out) fclose(rec_out);
 }
 int main(int argc, char **argv) {
   Out *r = mmap(0, SN * sizeof(Out), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
