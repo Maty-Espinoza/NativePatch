@@ -580,13 +580,21 @@ int regMapGpu(void) {
   return r;
 }
 // Where to read [a, a + n) from: the same address if it is readable RAM; if VRAM, its copy in the mirror, only if all
-// pages have a valid copy and sit contiguous in the same mirror span. 0 if not possible.
+// pages have a valid copy and sit contiguous in the same mirror span. 0 if not possible. A VRAM span found readable is
+// remembered up to the end of its last page ([rg_sca, rg_sce) at rg_scs, with mirror copy rg_scu): a page stays valid once
+// it is, so what falls inside it needs no new look (forgotten when the mirror starts over).
+static uint32_t rg_sca, rg_sce, rg_scs, rg_scu;
 static uint32_t rgSrc(uint32_t a, uint32_t n) {
   if (!isVram(a)) return ramEnd(a) >= a + n ? a : 0;
+  uint32_t u = mir_u;
+  if (a - rg_sca < rg_sce - rg_sca && a + n - 1 - rg_sca < rg_sce - rg_sca && u == rg_scu) return rg_scs + (a - rg_sca);
   // draw() already requested it: available from the next frame
   for (uint32_t k = 0; k < n; k += 4096 - ((a + k) & 4095)) if (!vtr(a + k)) return 0;
-  uint32_t s = vtr(a);
-  return vtr(a + n - 1) == s + n - 1 && ramEnd(s) >= s + n ? s : 0;
+  uint32_t s = vtr(a), e = ramEnd(s);
+  if (vtr(a + n - 1) != s + n - 1 || e < s + n) return 0;
+  rg_sca = a; rg_scs = s; rg_scu = u; rg_sce = ((a + n - 1) | 4095) + 1;
+  if (rg_sce - a > e - s) rg_sce = a + (e - s);
+  return s;
 }
 // 1 if every VRAM page of [a, a + n) has a copy in one of the mirrors (a page may be missing in the current one for a few frames)
 static int rgMirrored(uint32_t a, uint32_t n) {

@@ -1780,7 +1780,7 @@ static int capThread(SceSize args, void *argp) {
       // the ring starts at 0 with the mailbox: the first lists are walked too, they may set state the game never repeats
       on = 1; tail = 0; resetQueue(); sec_t0 = now(); sceClibMemset(&acc, 0, sizeof acc);
       for (int w = 0; w < 16; w++) want_l[w] = want_d[w] = want_i[w] = want_in[w] = rt_pg[w] = mir_ok[0][w] = mir_ok[1][w] = 0;
-      mir_u = 0; mir_reset = 1; mir_on = SB[1] >= 4;
+      mir_u = 0; mir_reset = 1; mir_on = SB[1] >= 4; rg_sca = rg_sce = 0;
       clog("NativeLink mailbox (shadow mode) found: events=%u lists=%u -> capture active%s\n", tail, SB[6],
            mir_on ? ", with VRAM mirror" : " (NativeLink without VRAM mirror)");
       if (reg_on) regBench();  // measures once the speed of the frame record copies
